@@ -15,3 +15,5 @@ Mobile formula-car racing game in Unity, with physics calibrated to the FIA Form
   licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changes: all logos, decals, numbers and the cockpit
   interior removed, geometry simplified to ~53k triangles, repainted. Converted with `Tools/convert_car_model.py`.
   Note: this is a replica of a real team car; replace it with an original design before any public release.
+
+- Circuit data: [f1-circuits](https://github.com/bacinger/f1-circuits) by Tomislav Bacinger, MIT licence.
