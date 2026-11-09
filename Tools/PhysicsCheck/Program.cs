@@ -87,3 +87,34 @@ foreach (var (nm, data, w) in new[] { ("Monaco", TrackData.Monaco, TrackData.Mon
     foreach (var p in t.pts) if (Math.Abs(p.curv) > 1e-6) minR = Math.Min(minR, 1 / Math.Abs(p.curv));
     Console.WriteLine($"{nm}: length {t.length:F0} m, {t.N} points, tightest radius {minR:F1} m, size {bb.maxX - bb.minX:F0} x {bb.maxY - bb.minY:F0} m");
 }
+
+// racing line + speed profile (port of racingline.js): parity with the JS on the default track, then the real circuits
+{
+    var cfg = new CarConfig();
+    var gpath = Path.Combine(dir, "racingline_golden.csv");
+    var rl = RacingLine.Compute(Track.Build(), cfg);
+    if (File.Exists(gpath))
+    {
+        var rows = File.ReadAllLines(gpath).Select(l => l.Split(',').Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray()).ToArray();
+        double dOff = 0, dPos = 0, dV = 0;
+        if (rows.Length != rl.N) Console.WriteLine($"Racing line: point count differs, JS {rows.Length} vs C# {rl.N}");
+        else for (int i = 0; i < rl.N; i++)
+        {
+            dOff = Math.Max(dOff, Math.Abs(rl.off[i] - rows[i][0]));
+            dPos = Math.Max(dPos, Math.Max(Math.Abs(rl.x[i] - rows[i][1]), Math.Abs(rl.y[i] - rows[i][2])));
+            dV = Math.Max(dV, Math.Abs(rl.speed[i] - rows[i][3]));
+        }
+        Console.WriteLine($"Racing line JS vs C# (default track, {rows.Length} pts): max offset diff {dOff:E2} m, position {dPos:E2} m, speed {dV:E2} m/s; {(dOff < 1e-6 && dPos < 1e-6 && dV < 1e-4 ? "MATCH" : "DIFFERENT")}");
+    }
+    foreach (var (nm, t) in new[] { ("Test track", Track.Build()), ("Monaco", Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth)), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)) })
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = RacingLine.Compute(t, cfg);
+        double ms = sw.Elapsed.TotalMilliseconds;
+        double vmin = r.speed.Min() * 3.6, vmax = r.speed.Max() * 3.6, offMax = r.off.Max(o => Math.Abs(o));
+        int nb = r.phase.Count(p => p < 0), nc = r.phase.Count(p => p == 0), na = r.phase.Count(p => p > 0);
+        var lt = TimeSpan.FromSeconds(r.lapTime);
+        Console.WriteLine($"{nm,-10} line: lap {(int)lt.TotalMinutes}:{lt.Seconds:00}.{lt.Milliseconds:000}, speed {vmin:F0}-{vmax:F0} km/h, max offset {offMax:F2} m (limit {t.width / 2 - 1.3:F2}), " +
+                          $"brake/coast/throttle {100.0 * nb / r.N:F0}/{100.0 * nc / r.N:F0}/{100.0 * na / r.N:F0}%, {ms:F0} ms");
+    }
+}
