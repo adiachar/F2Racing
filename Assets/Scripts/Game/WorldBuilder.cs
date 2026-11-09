@@ -263,7 +263,7 @@ public static class WorldBuilder
         probe.mode = UnityEngine.Rendering.ReflectionProbeMode.Realtime;
         probe.refreshMode = UnityEngine.Rendering.ReflectionProbeRefreshMode.ViaScripting;
         probe.size = new Vector3(5000, 2000, 5000); probe.resolution = 128; probe.hdr = false;
-        probe.cullingMask = ~0; probe.farClipPlane = 3000;
+        probe.cullingMask = 0; probe.farClipPlane = 3000; // sky only: grass reflected in the glossy paint showed as green patches
         probe.RenderProbe();
         return root.gameObject;
     }

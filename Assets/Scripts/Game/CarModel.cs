@@ -8,6 +8,7 @@ using UnityEngine;
 public class CarModel : MonoBehaviour
 {
     public Transform body;
+    public GameObject cockpitFloor;
     public Transform[] frontPivots = new Transform[2], frontSpin = new Transform[2], rearSpin = new Transform[2];
     public Transform helmet;
 
@@ -304,7 +305,8 @@ public class CarModel : MonoBehaviour
                     if (key[0] == 'F') { int k = key[1] == 'L' ? 0 : 1; cm.frontPivots[k] = pivot; cm.frontSpin[k] = spin; }
                     else cm.rearSpin[key[1] == 'L' ? 0 : 1] = spin;
                 }
-                parent = spin;
+                // calipers/uprights only steer; rim and tyre also spin
+                parent = name.EndsWith("_hubstatic") ? spin.parent : spin;
             }
             go.transform.SetParent(parent, false);
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
@@ -318,12 +320,39 @@ public class CarModel : MonoBehaviour
             h.GetComponent<MeshRenderer>().sharedMaterial = WorldBuilder.Mat(new Color(1f, 0.82f, 0.18f), null, 0.9f, 0.2f);
             cm.helmet = h.transform;
         }
+        cm.cockpitFloor = CockpitTub(cm.body);
         var sh = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(sh.GetComponent<Collider>());
         sh.name = "ContactShadow"; sh.transform.SetParent(root.transform, false);
         sh.transform.localPosition = new Vector3(0, 0.035f, 0.3f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
         sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = WorldBuilder.ShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         return cm;
+    }
+
+    // A dark, inward-facing tub (floor, side walls, front bulkhead) inside the cockpit. Only shown in the
+    // cockpit camera, so the driver never sees through the model to the car's underside or the road.
+    static GameObject CockpitTub(Transform body)
+    {
+        float x0 = -0.34f, x1 = 0.34f, y0 = 0.22f, y1 = 0.5f, z0 = -0.25f, z1 = 1.05f;
+        var v = new[] {
+            // floor (faces up)
+            new Vector3(x0,y0,z0), new Vector3(x0,y0,z1), new Vector3(x1,y0,z1), new Vector3(x1,y0,z0),
+            // left wall (faces +x, inward)
+            new Vector3(x0,y0,z0), new Vector3(x0,y1,z0), new Vector3(x0,y1,z1), new Vector3(x0,y0,z1),
+            // right wall (faces -x)
+            new Vector3(x1,y0,z1), new Vector3(x1,y1,z1), new Vector3(x1,y1,z0), new Vector3(x1,y0,z0),
+            // front bulkhead (faces -z, toward the driver)
+            new Vector3(x0,y0,z1), new Vector3(x0,0.42f,z1), new Vector3(x1,0.42f,z1), new Vector3(x1,y0,z1),
+        };
+        var t = new int[24];
+        for (int q = 0; q < 4; q++) { int b = q * 4, i = q * 6; t[i] = b; t[i + 1] = b + 1; t[i + 2] = b + 2; t[i + 3] = b; t[i + 4] = b + 2; t[i + 5] = b + 3; }
+        var m = new Mesh { vertices = v, triangles = t }; m.RecalculateNormals(); m.RecalculateBounds();
+        var go = new GameObject("CockpitTub"); go.transform.SetParent(body, false);
+        go.AddComponent<MeshFilter>().sharedMesh = m;
+        var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = WorldBuilder.Mat(new Color(0.035f, 0.035f, 0.04f), null, 0.15f, 0f);
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        go.SetActive(false);
+        return go;
     }
 
     // physics -> visuals. heading: rad CCW from +x (physics); delta: + = left; spin: wheel angle (rad)

@@ -15,7 +15,7 @@ public class GameManager : MonoBehaviour
     Camera cam;
     double acc, simTime;
     int surface, idx = -1, prevIdx = -1;
-    double frontSpin;
+    double frontSpin, px, py, ph, pd;
 
     // settings (saved)
     TcMode tc; bool tilt, playground, invertTilt, sound = true; int camMode;
@@ -24,7 +24,7 @@ public class GameManager : MonoBehaviour
     // aero balance (share of downforce on the front axle): the main real-world setup knob for under/oversteer
     static readonly float[] Balances = { 0.45f, 0.48f, 0.50f, 0.53f }; int balIdx;
     EngineAudio audioEngine;
-    static readonly string[] CamNames = { "Chase", "Far chase", "Cockpit" };
+    static readonly string[] CamNames = { "Chase", "Far chase", "Cockpit", "Halo cam" };
 
     // laps / recover / test bench
     double? lapStart, lastLap, bestLap; bool cut; int lapNo = 1;
@@ -146,31 +146,43 @@ public class GameManager : MonoBehaviour
     }
     static float PedalAmount(Rect r, Vector2 p) => Mathf.Clamp01(0.2f + 0.8f * (r.yMax - p.y) / r.height); // low on the pedal = light, high = full
 
-    float tiltCenter, tiltSmooth;
+    float tiltCenter, tiltSmooth, tiltAxis = float.NaN, tiltAxisT, tiltConf;
+    // Steering-wheel angle of the phone held sideways, from gravity only.
+    // Gravity's direction in the screen plane is measured against a LOCKED "down" axis (one of +x,-x,+y,-y,
+    // whichever the OS reports for landscape). The lock only moves after gravity has sat clearly on another
+    // axis for 0.6 s, so holding a big tilt never flips the steering the other way.
+    // When the phone lies flat, gravity is almost perpendicular to the screen and the angle is pure noise:
+    // tiltConf fades steering to zero there instead of letting it jitter.
     float TiltRaw()
     {
-        // phone held sideways like a steering wheel: rotation angle of the screen in its own plane, from gravity
-        // Steering-wheel angle of the phone, from gravity only (no guessing of the screen orientation,
-        // which caused a constant pull to one side). Gravity lies mostly along the phone's long axis when
-        // it is held sideways; the angle is the rotation of gravity within the screen plane.
-        // Works whichever way round the phone is held, and whether or not the OS reports rotated axes.
         var a = Input.acceleration;
-        float deg;
-        if (Mathf.Abs(a.x) >= Mathf.Abs(a.y)) deg = Mathf.Atan2(a.x < 0 ? -a.y : a.y, Mathf.Abs(a.x)) * Mathf.Rad2Deg;
-        else deg = Mathf.Atan2(a.y < 0 ? a.x : -a.x, Mathf.Abs(a.y)) * Mathf.Rad2Deg;
+        float inPlane = Mathf.Sqrt(a.x * a.x + a.y * a.y);
+        tiltConf = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.3f, 0.6f, inPlane));
+        if (inPlane < 0.2f) return 0;
+        float th = Mathf.Atan2(a.y, a.x) * Mathf.Rad2Deg;
+        float nearest = Mathf.Round(th / 90f) * 90f;
+        if (float.IsNaN(tiltAxis)) tiltAxis = nearest;
+        bool clearlyOther = Mathf.Abs(Mathf.DeltaAngle(th, nearest)) < 25f && Mathf.Abs(Mathf.DeltaAngle(nearest, tiltAxis)) > 1f && inPlane > 0.6f;
+        if (clearlyOther) { tiltAxisT += Time.unscaledDeltaTime; if (tiltAxisT > 0.6f) { tiltAxis = nearest; tiltAxisT = 0; } }
+        else tiltAxisT = 0;
+        float deg = Mathf.Clamp(Mathf.DeltaAngle(tiltAxis, th), -80, 80);
         return invertTilt ? -deg : deg;
     }
     float TiltSteer()
     {
-        tiltSmooth += (TiltRaw() - tiltCenter - tiltSmooth) * Mathf.Min(1, Time.deltaTime * 20);
+        float target = (TiltRaw() - tiltCenter) * tiltConf;
+        // smoothing: ~0.08 s, plus a tiny hysteresis band that swallows sensor noise
+        float k = Mathf.Min(1, Time.deltaTime * 12);
+        float d = target - tiltSmooth;
+        if (Mathf.Abs(d) < 0.25f) d = 0;
+        tiltSmooth += d * k;
         return TiltToSteer();
     }
     float TiltToSteer()
     {
-        float dz = 1.5f, a = Mathf.Abs(tiltSmooth); // 1.5 deg dead zone, full lock at ~26 deg
+        float dz = 2f, a = Mathf.Abs(tiltSmooth); // 2 deg dead zone, full lock at ~27 deg
         return a < dz ? 0 : Mathf.Clamp(Mathf.Sign(tiltSmooth) * (a - dz) / 25f, -1, 1);
     }
-
     // ---------------------------------------------------------------- loop
     void Update()
     {
@@ -180,13 +192,29 @@ public class GameManager : MonoBehaviour
         while (acc >= H)
         {
             SetSurface();
+            px = car.x; py = car.y; ph = car.heading; pd = car.delta;
             car.Step(input, H);
             simTime += H; acc -= H;
             frontSpin += car.vx / car.cfg.wheelRadius * H;
             if (playground) TestBench();
         }
         if (!playground) LapsAndRecover(dt);
-        model.Apply(car.x, car.y, car.heading, car.delta, frontSpin, car.wheelSpin, car.axLong, car.ay);
+        // g-forces for body pitch/roll and camera are low-passed, so tiny physics wobble never shakes the picture
+        float kg = Mathf.Min(1, dt * 6);
+        gLon += ((float)car.axLong - gLon) * kg; gLat += ((float)car.ay - gLat) * kg;
+        if (car.vx * car.vx + car.vy * car.vy < 0.25) { gLon *= 1 - kg; gLat *= 1 - kg; }
+        // visual wheel angle: cap the turn per frame so fast wheels never strobe backwards
+        // (above ~0.5 rad per frame the eye sees the spokes stand still or run backwards, so the step is capped;
+        // the wheels then read as "spinning fast" instead of wobbling)
+        float wF = (float)(car.vx / car.cfg.wheelRadius), wRr = double.IsNaN(car.wR) ? wF : (float)car.wR;
+        visF = Mathf.Repeat(visF + Mathf.Clamp(wF * dt, -0.5f, 0.5f), Mathf.PI * 2);
+        visR = Mathf.Repeat(visR + Mathf.Clamp(wRr * dt, -0.5f, 0.5f), Mathf.PI * 2);
+        // draw the car between the last two physics steps (frames don't line up with the 240 Hz steps;
+        // without this the car moved 3, 4 or 5 steps per frame, a small rhythmic judder)
+        if ((car.x - px) * (car.x - px) + (car.y - py) * (car.y - py) > 25) { px = car.x; py = car.y; ph = car.heading; pd = car.delta; } // reset / recover
+        double al = acc / H, dh = System.Math.Atan2(System.Math.Sin(car.heading - ph), System.Math.Cos(car.heading - ph));
+        double rx = px + (car.x - px) * al, ry = py + (car.y - py) * al, rh = ph + dh * al, rd = pd + (car.delta - pd) * al;
+        model.Apply(rx, ry, rh, rd, visF, visR, gLon, gLat);
         audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
         audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
         audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR, car.lockF || car.lockR || car.spinR ? 1.1f : 0f); audioEngine.onAsphalt = surface == 0;
@@ -246,18 +274,20 @@ public class GameManager : MonoBehaviour
     static string Fmt(double? t) { if (!t.HasValue) return "--:--.---"; int m = (int)(t.Value / 60); return $"{m}:{t.Value - m * 60:00.000}"; }
 
     // ---------------------------------------------------------------- camera
-    Vector3 camVel;
+    Vector3 camVel; float gLon, gLat, visF, visR;
     void LateUpdate()
     {
         var tr = model.transform;
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
         Vector3 pos, look; float fov;
-        float lonG = (float)car.axLong / 9.81f;
-        if (camMode == 2)
+        float lonG = gLon / 9.81f;
+        if (camMode >= 2)
         {
-            pos = tr.TransformPoint(new Vector3(0, 0.82f, 0.05f - lonG * 0.04f));
-            look = tr.TransformPoint(new Vector3(0, 0.5f + lonG * 0.3f, 30));
-            fov = 72 + Mathf.Min(speed, 90) * 0.06f;
+            // 2 = cockpit (driver's eyes, low behind the halo); 3 = halo cam (just above the driver's head)
+            bool halo = camMode == 3;
+            pos = tr.TransformPoint(halo ? new Vector3(0, 1.02f, 0.12f - lonG * 0.03f) : new Vector3(0, 0.66f, 0.28f - lonG * 0.03f));
+            look = tr.TransformPoint(new Vector3(0, (halo ? 0.55f : 0.5f) + lonG * 0.2f, 30));
+            fov = (halo ? 66 : 70) + Mathf.Min(speed, 90) * 0.06f;
             cam.transform.position = pos;
         }
         else
@@ -270,9 +300,11 @@ public class GameManager : MonoBehaviour
             cam.transform.position = Vector3.SmoothDamp(cam.transform.position, pos, ref camVel, 0.06f);
         }
         cam.transform.LookAt(look);
-        if (tilt && camMode == 2) cam.transform.Rotate(0, 0, -TiltRaw() + tiltCenter, Space.Self);
+        if (tilt && camMode == 2) cam.transform.Rotate(0, 0, -tiltSmooth * 0.6f, Space.Self);
         cam.fieldOfView += (fov - cam.fieldOfView) * Mathf.Min(1, Time.deltaTime * 4);
         model.helmet.gameObject.SetActive(camMode != 2);
+        if (model.cockpitFloor) model.cockpitFloor.SetActive(camMode == 2);
+        cam.nearClipPlane = camMode >= 2 ? 0.05f : 0.3f;
     }
 
     // ---------------------------------------------------------------- HUD

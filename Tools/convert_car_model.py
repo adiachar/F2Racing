@@ -98,15 +98,24 @@ for g, tgt in (('carbon', 26000), ('white', 800), ('metal', 1500), ('light', 400
 # wheels: split tyre + hub per wheel, pivot at the wheel centre (so it can spin and steer)
 hub = get(GROUPS['hub'])
 for key, nm in (((front_sign, 1), 'FL'), ((front_sign, -1), 'FR'), ((-front_sign, 1), 'RL'), ((-front_sign, -1), 'RR')):
+    piv = None
     for src, kind, tgt in ((tyre, 'tyre', 1600), (hub, 'hub', 1100)):
         c2 = src.triangles_center
         sel = (np.sign(c2[:, L_AX] - mid_l) == key[0]) & (np.sign(c2[:, W_AX]) == key[1])
         sub = src.submesh([np.where(sel)[0]], append=True)
-        pivot = to_unity(((sub.bounds[0] + sub.bounds[1]) / 2)[None])[0] if kind == 'tyre' else None
-        if kind == 'tyre': piv = pivot
-        r = export_mesh(sub, tgt, smooth_angle=50)
-        pos = r[0] - piv.astype(np.float32)
-        out.append((f'wheel_{nm}_{kind}', MAT[kind], tuple(piv)) + (pos, r[1], r[2]))
+        if kind == 'tyre':
+            piv = to_unity(((sub.bounds[0] + sub.bounds[1]) / 2)[None])[0]
+            pieces = [('tyre', sub, tgt)]
+        else:
+            # rim/wheel cover sits on the outboard half and spins; brake caliper, upright and duct sit
+            # inboard and must only steer (spinning them made the wheels look disconnected)
+            cu = to_unity(sub.triangles_center); outward = np.sign(piv[0]) * (cu[:, 0] - piv[0]) > 0.0
+            pieces = [('hub', sub.submesh([np.where(outward)[0]], append=True), 800),
+                      ('hubstatic', sub.submesh([np.where(~outward)[0]], append=True), 500)]
+        for kname, mesh, t2 in pieces:
+            r = export_mesh(mesh, t2, smooth_angle=50)
+            pos = r[0] - piv.astype(np.float32)
+            out.append((f'wheel_{nm}_{kname}', MAT['hub' if kname != 'tyre' else 'tyre'], tuple(piv)) + (pos, r[1], r[2]))
 # helmet position: just ahead of the airbox, above the cockpit
 total = 0
 with open('car.bytes', 'wb') as f:
