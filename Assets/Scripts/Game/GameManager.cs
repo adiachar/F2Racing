@@ -115,6 +115,22 @@ public class GameManager : MonoBehaviour
         Fill(new Rect(cx - S(4), cy - S(4), S(8), S(8)), new Color(1f, 0.25f, 0.2f));
     }
 
+    // low-end phones: if the game can't hold ~50 fps for 4 s, step quality down (AA off, then shorter
+    // shadows, then no shadows). It only ever steps down, so it can't flicker between levels.
+    float fpsAvg = 60, slowT; int qLevel;
+    void AutoQuality()
+    {
+        if (Time.realtimeSinceStartup < 6f || qLevel >= 3) return;
+        float fps = 1f / Mathf.Max(Time.unscaledDeltaTime, 0.001f);
+        fpsAvg += (fps - fpsAvg) * 0.05f;
+        slowT = fpsAvg < 50f ? slowT + Time.unscaledDeltaTime : 0;
+        if (slowT < 4f) return;
+        slowT = 0; fpsAvg = 60; qLevel++;
+        if (qLevel == 1) QualitySettings.antiAliasing = 0;
+        else if (qLevel == 2) QualitySettings.shadowDistance = 35;
+        else QualitySettings.shadows = ShadowQuality.Disable;
+    }
+
     SkidMarks skids;
     void UpdateSkids()
     {
@@ -285,6 +301,7 @@ public class GameManager : MonoBehaviour
         double rx = px + (car.x - px) * al, ry = py + (car.y - py) * al, rh = ph + dh * al, rd = pd + (car.delta - pd) * al;
         model.Apply(rx, ry, rh, rd, visF, visR, gLon, gLat);
         UpdateSkids();
+        AutoQuality();
         audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
         audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
         audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR, car.lockF || car.lockR || car.spinR ? 1.1f : 0f); audioEngine.onAsphalt = surface == 0;
