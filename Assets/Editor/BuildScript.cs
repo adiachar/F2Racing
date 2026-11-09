@@ -31,6 +31,11 @@ public static class BuildScript
             var m = new Material(Shader.Find("Standard"));
             AssetDatabase.CreateAsset(m, "Assets/Resources/Base.mat");
         }
+        // materials that keep the shaders we create at runtime inside the build
+        if (!File.Exists("Assets/Resources/Sky.mat"))
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Skybox/Procedural")), "Assets/Resources/Sky.mat");
+        if (!File.Exists("Assets/Resources/Shadow.mat"))
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Transparent")), "Assets/Resources/Shadow.mat");
         if (!File.Exists(ScenePath))
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);

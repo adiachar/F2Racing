@@ -56,6 +56,29 @@ public static class WorldBuilder
     }
     static byte B(float v) => (byte)Mathf.Clamp(v, 0, 255);
 
+    // tyre: dark rubber, slightly lighter worn tread, yellow sidewall band (generic compound marking)
+    public static Texture2D TyreTex() => Tex(64, 4, (u, v, x, y) =>
+    {
+        bool band = (u > 0.07f && u < 0.13f) || (u > 0.87f && u < 0.93f);
+        bool tread = u > 0.3f && u < 0.7f;
+        return band ? new Color32(235, 200, 40, 255) : tread ? new Color32(30, 30, 32, 255) : new Color32(16, 16, 18, 255);
+    });
+
+    static Material shadowMat;
+    public static Material ShadowMat()
+    {
+        if (shadowMat != null) return shadowMat;
+        shadowMat = new Material(Resources.Load<Material>("Shadow"));
+        shadowMat.mainTexture = Tex(64, 128, (u, v, x, y) =>
+        {
+            float dx = (u - 0.5f) * 2, dy = (v - 0.5f) * 2, d = Mathf.Sqrt(dx * dx * 1.1f + dy * dy * 0.9f);
+            float a = Mathf.Clamp01(1 - d); a = a * a * (3 - 2 * a);
+            return new Color32(0, 0, 0, (byte)(a * 200));
+        });
+        shadowMat.mainTexture.wrapMode = TextureWrapMode.Clamp;
+        return shadowMat;
+    }
+
     public static Texture2D AsphaltTex() => Tex(256, 256, (u, v, x, y) =>
     {
         float c = 54 + Fbm(u, v, 8, 3, 21) * 16 + Fbm(u, v, 64, 2, 5) * 18;
@@ -116,8 +139,17 @@ public static class WorldBuilder
         var root = new GameObject("World").transform;
         float Wd = (float)t.width;
 
-        // sky, light, fog
-        var sky = new Color(0.66f, 0.80f, 0.93f);
+        // sky, light, fog: procedural skybox (sun, atmosphere), fog matched to its horizon
+        var skyMat = Resources.Load<Material>("Sky");
+        if (skyMat != null)
+        {
+            skyMat = new Material(skyMat);
+            skyMat.SetFloat("_SunSize", 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f);
+            skyMat.SetFloat("_AtmosphereThickness", 0.85f); skyMat.SetFloat("_Exposure", 1.25f);
+            skyMat.SetColor("_SkyTint", new Color(0.5f, 0.6f, 0.75f)); skyMat.SetColor("_GroundColor", new Color(0.38f, 0.42f, 0.36f));
+            RenderSettings.skybox = skyMat;
+        }
+        var sky = new Color(0.72f, 0.80f, 0.88f);
         RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = sky;
         RenderSettings.fogStartDistance = 300; RenderSettings.fogEndDistance = 1800;
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
@@ -215,6 +247,16 @@ public static class WorldBuilder
             }
         }
         StaticBatchingUtility.Combine(root.gameObject);
+
+        // one reflection capture of sky + ground, rendered once: cheap, and makes the paint look real
+        QualitySettings.realtimeReflectionProbes = true;
+        var probeGo = new GameObject("SkyReflection"); probeGo.transform.SetParent(root); probeGo.transform.position = new Vector3(240, 2, 300);
+        var probe = probeGo.AddComponent<ReflectionProbe>();
+        probe.mode = UnityEngine.Rendering.ReflectionProbeMode.Realtime;
+        probe.refreshMode = UnityEngine.Rendering.ReflectionProbeRefreshMode.ViaScripting;
+        probe.size = new Vector3(5000, 2000, 5000); probe.resolution = 128; probe.hdr = false;
+        probe.cullingMask = ~0; probe.farClipPlane = 3000;
+        probe.RenderProbe();
     }
 
     static void Box(Transform root, Vector3 pos, Vector3 size, Material m)
