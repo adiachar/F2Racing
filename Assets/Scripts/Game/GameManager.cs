@@ -132,15 +132,14 @@ public class GameManager : MonoBehaviour
     float TiltRaw()
     {
         // phone held sideways like a steering wheel: rotation angle of the screen in its own plane, from gravity
-        // Input.acceleration is in the phone's portrait axes (x right, y up), pointing along gravity.
-        // Landscape-left (top of phone on the left): turning the phone clockwise = steer right
-        //   gives acc = (-cos t, -sin t)  ->  t = atan2(-y, -x)
-        // Landscape-right: acc = (cos t, sin t)  ->  t = atan2(y, x)
+        // Steering-wheel angle of the phone, from gravity only (no guessing of the screen orientation,
+        // which caused a constant pull to one side). Gravity lies mostly along the phone's long axis when
+        // it is held sideways; the angle is the rotation of gravity within the screen plane.
+        // Works whichever way round the phone is held, and whether or not the OS reports rotated axes.
         var a = Input.acceleration;
-        var o = Screen.orientation;
-        if (o != ScreenOrientation.LandscapeLeft && o != ScreenOrientation.LandscapeRight)
-            o = Input.deviceOrientation == DeviceOrientation.LandscapeRight ? ScreenOrientation.LandscapeRight : ScreenOrientation.LandscapeLeft;
-        float deg = o == ScreenOrientation.LandscapeRight ? Mathf.Atan2(a.y, a.x) * Mathf.Rad2Deg : Mathf.Atan2(-a.y, -a.x) * Mathf.Rad2Deg;
+        float deg;
+        if (Mathf.Abs(a.x) >= Mathf.Abs(a.y)) deg = Mathf.Atan2(a.x < 0 ? -a.y : a.y, Mathf.Abs(a.x)) * Mathf.Rad2Deg;
+        else deg = Mathf.Atan2(a.y < 0 ? a.x : -a.x, Mathf.Abs(a.y)) * Mathf.Rad2Deg;
         return invertTilt ? -deg : deg;
     }
     float TiltSteer()
@@ -172,7 +171,7 @@ public class GameManager : MonoBehaviour
         model.Apply(car.x, car.y, car.heading, car.delta, frontSpin, car.wheelSpin, car.axLong, car.ay);
         audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
         audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
-        audioEngine.slide = car.surfaceMu < 0.9 ? 0 : Mathf.Clamp01(((float)System.Math.Max(car.useF, car.useR) - 1f) * 12f + (car.lockF || car.lockR || car.spinR ? 0.6f : 0f));
+        audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR, car.lockF || car.lockR || car.spinR ? 1.1f : 0f); audioEngine.onAsphalt = surface == 0;
         if (flashT > 0) flashT -= dt;
     }
 

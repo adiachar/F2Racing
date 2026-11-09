@@ -40,7 +40,7 @@ namespace FormulaSim
         public double[] gearTopSpeeds = { 128, 168, 207, 245, 283, 320 }; // km/h at the limiter
         public double driveEff = 0.80;
         public double shiftTime = 0.05;
-        public double clutchEngage = 10;     // m/s by which the launch clutch is fully engaged
+        public double clutchEngage = 13;     // m/s (47 km/h) by which the launch clutch is fully engaged
         public double brakeForce = 22500;    // N total at full pedal
         public double brakeBias = 0.60;      // front share
         public double maxLockDeg = 18;
@@ -311,7 +311,8 @@ namespace FormulaSim
             double KapOf(double ww) => (ww * rw - vxNow) / vden;
             if (fdrive > 0 && c.tc != TcMode.Off)
             {
-                double sMax = c.tc == TcMode.High ? 0.95 : 1.15;
+                // low TC lets the tyres spin up more at a standing start (break traction, then hook up)
+                double sMax = c.tc == TcMode.High ? 0.95 : 1.15 + 3.5 * Clamp(1 - Math.Abs(vxNow) / 25, 0, 1);
                 double sxMax = Math.Max(c.tc == TcMode.High ? 0.3 : 0.6, Math.Sqrt(Math.Max(0, sMax * sMax - syR * syR)));
                 if (KapOf(wv) > sxMax * kPk) { wv = (vxNow + sxMax * kPk * vden) / rw; tcActive = true; }
             }
