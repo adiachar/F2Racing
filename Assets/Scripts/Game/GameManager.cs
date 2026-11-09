@@ -18,7 +18,8 @@ public class GameManager : MonoBehaviour
     double frontSpin;
 
     // settings (saved)
-    TcMode tc; bool tilt, playground, invertTilt; int camMode;
+    TcMode tc; bool tilt, playground, invertTilt, sound = true; int camMode;
+    EngineAudio audioEngine;
     static readonly string[] CamNames = { "Chase", "Far chase", "Cockpit" };
 
     // laps / recover / test bench
@@ -39,7 +40,7 @@ public class GameManager : MonoBehaviour
 
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
-        playground = PlayerPrefs.GetInt("pg", 0) == 1; camMode = PlayerPrefs.GetInt("cam", 0);
+        playground = PlayerPrefs.GetInt("pg", 0) == 1; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1;
 
         track = Track.Build();
         WorldBuilder.Build(track);
@@ -49,13 +50,14 @@ public class GameManager : MonoBehaviour
         cam.nearClipPlane = 0.2f; cam.farClipPlane = 2500; cam.fieldOfView = 62;
         cam.clearFlags = RenderSettings.skybox != null ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor; cam.backgroundColor = RenderSettings.fogColor;
         camGo.AddComponent<AudioListener>();
+        audioEngine = camGo.AddComponent<EngineAudio>(); audioEngine.muted = !sound;
         ResetCar();
     }
 
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("pg", playground ? 1 : 0); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.Save();
+        PlayerPrefs.SetInt("pg", playground ? 1 : 0); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.Save();
     }
 
     void ResetCar()
@@ -118,15 +120,25 @@ public class GameManager : MonoBehaviour
     float TiltRaw()
     {
         // phone held sideways like a steering wheel: rotation angle of the screen in its own plane, from gravity
+        // Input.acceleration is in the phone's portrait axes (x right, y up), pointing along gravity.
+        // Landscape-left (top of phone on the left): turning the phone clockwise = steer right
+        //   gives acc = (-cos t, -sin t)  ->  t = atan2(-y, -x)
+        // Landscape-right: acc = (cos t, sin t)  ->  t = atan2(y, x)
         var a = Input.acceleration;
-        float deg = Mathf.Atan2(a.y, -a.x) * Mathf.Rad2Deg; // landscape-left: 0 when level
-        if (Screen.orientation == ScreenOrientation.LandscapeRight) deg = Mathf.Atan2(-a.y, a.x) * Mathf.Rad2Deg;
+        var o = Screen.orientation;
+        if (o != ScreenOrientation.LandscapeLeft && o != ScreenOrientation.LandscapeRight)
+            o = Input.deviceOrientation == DeviceOrientation.LandscapeRight ? ScreenOrientation.LandscapeRight : ScreenOrientation.LandscapeLeft;
+        float deg = o == ScreenOrientation.LandscapeRight ? Mathf.Atan2(a.y, a.x) * Mathf.Rad2Deg : Mathf.Atan2(-a.y, -a.x) * Mathf.Rad2Deg;
         return invertTilt ? -deg : deg;
     }
     float TiltSteer()
     {
         tiltSmooth += (TiltRaw() - tiltCenter - tiltSmooth) * Mathf.Min(1, Time.deltaTime * 20);
-        float dz = 1.5f, a = Mathf.Abs(tiltSmooth);
+        return TiltToSteer();
+    }
+    float TiltToSteer()
+    {
+        float dz = 1.5f, a = Mathf.Abs(tiltSmooth); // 1.5 deg dead zone, full lock at ~26 deg
         return a < dz ? 0 : Mathf.Clamp(Mathf.Sign(tiltSmooth) * (a - dz) / 25f, -1, 1);
     }
 
@@ -146,6 +158,9 @@ public class GameManager : MonoBehaviour
         }
         if (!playground) LapsAndRecover(dt);
         model.Apply(car.x, car.y, car.heading, car.delta, frontSpin, car.wheelSpin, car.axLong, car.ay);
+        audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
+        audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+        audioEngine.slide = car.surfaceMu < 0.9 ? 0 : Mathf.Clamp01(((float)System.Math.Max(car.useF, car.useR) - 1f) * 12f + (car.lockF || car.lockR || car.spinR ? 0.6f : 0f));
         if (flashT > 0) flashT -= dt;
     }
 
@@ -249,22 +264,24 @@ public class GameManager : MonoBehaviour
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
 
         // top-right buttons
-        float bw = S(78), bh = S(30), x0 = Screen.width - S(8);
-        string[] labels = { "Cam", "Reset", "TC " + tc, tilt ? "Tilt" : "Drag", playground ? "Playgr." : "Track" };
+        float bw = S(66), bh = S(30), x0 = Screen.width - S(8);
+        string[] labels = { sound ? "Sound" : "Muted", "Cam", "Reset", "TC " + tc, tilt ? "Tilt" : "Drag", playground ? "Playgr." : "Track" };
         for (int i = 0; i < labels.Length; i++)
         {
             var r = new Rect(x0 - (labels.Length - i) * (bw + S(4)), S(8), bw, bh);
             if (GUI.Button(r, labels[i], btn))
             {
-                if (i == 0) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); }
-                if (i == 1) ResetCar();
-                if (i == 2) { tc = (TcMode)(((int)tc + 1) % 3); car.cfg.tc = tc; Flash("Traction control " + tc); }
-                if (i == 3) { tilt = !tilt; tiltCenter = 0; Flash(tilt ? "Tilt steering (level = straight)" : "Drag steering"); }
-                if (i == 4) { playground = !playground; ResetCar(); }
+                if (i == 0) { sound = !sound; audioEngine.muted = !sound; Flash(sound ? "Sound on" : "Sound off"); }
+                if (i == 1) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); }
+                if (i == 2) ResetCar();
+                if (i == 3) { tc = (TcMode)(((int)tc + 1) % 3); car.cfg.tc = tc; Flash("Traction control " + tc); }
+                if (i == 4) { tilt = !tilt; tiltCenter = 0; Flash(tilt ? "Tilt steering (level = straight)" : "Drag steering"); }
+                if (i == 5) { playground = !playground; ResetCar(); }
                 Save();
             }
         }
-        if (tilt && GUI.Button(new Rect(x0 - 5 * (bw + S(4)), S(8) + bh + S(4), bw, bh), "Invert", btn)) { invertTilt = !invertTilt; Save(); }
+        if (tilt && GUI.Button(new Rect(x0 - 6 * (bw + S(4)), S(8) + bh + S(4), bw, bh), "Invert", btn)) { invertTilt = !invertTilt; Save(); }
+        if (tilt && GUI.Button(new Rect(x0 - 5 * (bw + S(4)), S(8) + bh + S(4), bw, bh), "Center", btn)) { tiltCenter = TiltRaw(); Flash("Straight = how you hold it now"); }
 
         // top-centre: lap time or test data
         string top, sub;
@@ -291,9 +308,10 @@ public class GameManager : MonoBehaviour
 
         // telemetry
         double beta = System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)) * 57.3;
-        Panel(new Rect(S(8), S(8), S(150), S(76)));
-        GUI.Label(new Rect(S(14), S(10), S(150), S(76)),
-            $"Front grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}", small);
+        Panel(new Rect(S(8), S(8), S(150), tilt ? S(92) : S(76)));
+        GUI.Label(new Rect(S(14), S(10), S(150), S(92)),
+            $"Front grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
+            (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
 
         // pedals
         Pedal(GasRect, pedalGas, new Color(0.24f, 0.86f, 0.52f), "GAS");

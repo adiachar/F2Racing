@@ -7,6 +7,11 @@ on:
     paths: ['Assets/**', 'Packages/**', 'ProjectSettings/**', '.github/workflows/**']
   workflow_dispatch: {}
 
+# a newer push cancels an older run that is still building (saves build minutes)
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build ${{ matrix.targetPlatform }}
