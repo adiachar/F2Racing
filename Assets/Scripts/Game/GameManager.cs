@@ -88,20 +88,30 @@ public class GameManager : MonoBehaviour
     Rect BrakeRect => tilt ? new Rect(S(14), Screen.height - S(196), S(100), S(180)) : new Rect(Screen.width - S(204), Screen.height - S(126), S(96), S(110));
     float S(float v) => v * Screen.height / 390f; // layout units match the web version (390 px tall landscape phone)
 
+    int gasFinger = -1, brakeFinger = -1;
     CarInput ReadInput(float dt)
     {
-        float gasT = 0, brkT = 0; bool steerHeld = false;
+        float gasT = 0, brkT = 0; bool steerHeld = false; bool gasSeen = false, brakeSeen = false;
         foreach (var t in Input.touches)
         {
             var p = new Vector2(t.position.x, Screen.height - t.position.y); // GUI space (y down)
-            if (GasRect.Contains(p)) gasT = Mathf.Max(gasT, PedalAmount(GasRect, p));
-            else if (BrakeRect.Contains(p)) brkT = Mathf.Max(brkT, PedalAmount(BrakeRect, p));
-            else if (!tilt && p.x < Screen.width * 0.42f && p.y > S(60))
+            bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
+            // a finger "owns" the pedal it first touched and keeps controlling it even if it slides off the box
+            if (t.phase == TouchPhase.Began)
+            {
+                if (GasRect.Contains(p)) gasFinger = t.fingerId;
+                else if (BrakeRect.Contains(p)) brakeFinger = t.fingerId;
+            }
+            if (t.fingerId == gasFinger) { if (!ended) { gasT = PedalAmount(GasRect, p); gasSeen = true; } continue; }
+            if (t.fingerId == brakeFinger) { if (!ended) { brkT = PedalAmount(BrakeRect, p); brakeSeen = true; } continue; }
+            if (!tilt && p.x < Screen.width * 0.42f && p.y > S(60))
             {
                 if (t.phase == TouchPhase.Began || steerFinger < 0) { steerFinger = t.fingerId; steerAnchorX = p.x; }
-                if (t.fingerId == steerFinger) { dragSteer = Mathf.Clamp((p.x - steerAnchorX) / (Screen.width * 0.15f), -1, 1); steerHeld = true; }
+                if (t.fingerId == steerFinger && !ended) { dragSteer = Mathf.Clamp((p.x - steerAnchorX) / (Screen.width * 0.15f), -1, 1); steerHeld = true; }
             }
         }
+        if (!gasSeen) gasFinger = -1;
+        if (!brakeSeen) brakeFinger = -1;
         if (!steerHeld) { steerFinger = -1; dragSteer = 0; }
         // keyboard / editor
         float kSteer = (Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A) ? 1 : 0);
