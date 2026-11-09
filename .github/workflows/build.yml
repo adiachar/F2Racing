@@ -54,6 +54,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd build/${{ matrix.targetPlatform }}
-          if [ "${{ matrix.targetPlatform }}" = "Android" ]; then f=F2Racing.apk; else zip -qr ../F2Racing-WebGL.zip . && f=../F2Racing-WebGL.zip; fi
+          if [ "${{ matrix.targetPlatform }}" = "Android" ]; then f=F2Racing.apk; else zip -qr "$RUNNER_TEMP/F2Racing-WebGL.zip" . && f="$RUNNER_TEMP/F2Racing-WebGL.zip"; fi
           gh release view latest -R ${{ github.repository }} >/dev/null 2>&1 || gh release create latest -R ${{ github.repository }} --title "Latest build" --notes "Newest successful build (updated automatically)." --prerelease
           gh release upload latest "$f" -R ${{ github.repository }} --clobber

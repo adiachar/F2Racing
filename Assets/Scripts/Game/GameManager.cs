@@ -70,10 +70,48 @@ public class GameManager : MonoBehaviour
                   : Track.Build();
             world = WorldBuilder.Build(track);
             BuildLine();
+            BuildMiniMap();
             builtFor = circuit;
             bestLap = lastLap = null; lapNo = 1;
         }
         if (lineGo != null) lineGo.SetActive(showLine && !playground);
+    }
+
+    // mini-map: the circuit outline drawn once into a small texture; the car is a dot on top
+    Texture2D miniTex; float mmMinX, mmMinY, mmScale; const int MM = 128;
+    void BuildMiniMap()
+    {
+        if (miniTex == null) { miniTex = new Texture2D(MM, MM, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp }; }
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        foreach (var q in track.pts) { minX = System.Math.Min(minX, q.x); maxX = System.Math.Max(maxX, q.x); minY = System.Math.Min(minY, q.y); maxY = System.Math.Max(maxY, q.y); }
+        float span = (float)System.Math.Max(maxX - minX, maxY - minY);
+        mmScale = (MM - 12) / span;
+        mmMinX = (float)(minX + maxX) / 2 - span / 2; mmMinY = (float)(minY + maxY) / 2 - span / 2;
+        var mmPx = new Color32[MM * MM];
+        foreach (var q in track.pts)
+        {
+            int cx = 6 + (int)(((float)q.x - mmMinX) * mmScale), cy = 6 + (int)(((float)q.y - mmMinY) * mmScale);
+            for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+            {
+                int ix = cx + dx, iy = cy + dy;
+                if (ix >= 0 && iy >= 0 && ix < MM && iy < MM) mmPx[iy * MM + ix] = new Color32(255, 255, 255, 220);
+            }
+        }
+        miniTex.SetPixels32(mmPx); miniTex.Apply(false);
+    }
+    void DrawMiniMap()
+    {
+        if (miniTex == null || playground) return;
+        float size = S(110), x = Screen.width - size - S(8), y = S(46);
+        Fill(new Rect(x - S(4), y - S(4), size + S(8), size + S(8)), new Color(0, 0, 0, 0.3f));
+        // texture rows go bottom-up, GUI goes top-down: flip vertically (physics +y = north = up on screen)
+        GUI.DrawTextureWithTexCoords(new Rect(x, y, size, size), miniTex, new Rect(0, 0, 1, 1));
+        float k = size / MM;
+        float cx = x + (6 + ((float)car.x - mmMinX) * mmScale) * k, cy = y + size - (6 + ((float)car.y - mmMinY) * mmScale) * k;
+        var p0 = track.pts[0];
+        float sx = x + (6 + ((float)p0.x - mmMinX) * mmScale) * k, sy = y + size - (6 + ((float)p0.y - mmMinY) * mmScale) * k;
+        Fill(new Rect(sx - S(3), sy - S(3), S(6), S(6)), new Color(1f, 0.82f, 0.25f));
+        Fill(new Rect(cx - S(4), cy - S(4), S(8), S(8)), new Color(1f, 0.25f, 0.2f));
     }
 
     // racing line overlay (off by default; "Line" button)
@@ -392,6 +430,8 @@ public class GameManager : MonoBehaviour
         GUI.Label(new Rect(S(14), S(10), S(150), S(92)),
             $"Front grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
+
+        DrawMiniMap();
 
         // pedals
         Pedal(GasRect, pedalGas, new Color(0.24f, 0.86f, 0.52f), "GAS");
