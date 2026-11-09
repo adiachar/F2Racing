@@ -71,6 +71,7 @@ public class GameManager : MonoBehaviour
             world = WorldBuilder.Build(track);
             BuildLine();
             BuildMiniMap();
+            if (skids != null) skids.Clear();
             builtFor = circuit;
             bestLap = lastLap = null; lapNo = 1;
         }
@@ -112,6 +113,24 @@ public class GameManager : MonoBehaviour
         float sx = x + (6 + ((float)p0.x - mmMinX) * mmScale) * k, sy = y + size - (6 + ((float)p0.y - mmMinY) * mmScale) * k;
         Fill(new Rect(sx - S(3), sy - S(3), S(6), S(6)), new Color(1f, 0.82f, 0.25f));
         Fill(new Rect(cx - S(4), cy - S(4), S(8), S(8)), new Color(1f, 0.25f, 0.2f));
+    }
+
+    SkidMarks skids;
+    void UpdateSkids()
+    {
+        if (skids == null) skids = new SkidMarks();
+        float v = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+        bool asphalt = surface == 0 && v > 2f;
+        double beta = System.Math.Abs(System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)));
+        bool rear = asphalt && (car.spinR || car.lockR || (car.useR > 0.98 && beta > 0.07));
+        bool front = asphalt && (car.lockF || (car.useF > 0.99 && beta > 0.05));
+        var right = model.transform.right;
+        for (int i = 0; i < 2; i++)
+        {
+            if (model.frontPivots[i] != null) skids.Track(i, model.frontPivots[i].position, right, front);
+            if (model.rearSpin[i] != null) skids.Track(2 + i, model.rearSpin[i].parent.position, right, rear);
+        }
+        skids.Upload();
     }
 
     // racing line overlay (off by default; "Line" button)
@@ -265,6 +284,7 @@ public class GameManager : MonoBehaviour
         double al = acc / H, dh = System.Math.Atan2(System.Math.Sin(car.heading - ph), System.Math.Cos(car.heading - ph));
         double rx = px + (car.x - px) * al, ry = py + (car.y - py) * al, rh = ph + dh * al, rd = pd + (car.delta - pd) * al;
         model.Apply(rx, ry, rh, rd, visF, visR, gLon, gLat);
+        UpdateSkids();
         audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
         audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
         audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR, car.lockF || car.lockR || car.spinR ? 1.1f : 0f); audioEngine.onAsphalt = surface == 0;
