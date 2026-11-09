@@ -254,6 +254,78 @@ public class CarModel : MonoBehaviour
         return cm;
     }
 
+    // ------------------------------------------------------------------ imported car (Resources/Car/car.bytes)
+    // Made by Tools/convert_car_model.py from "2026 Ferrari SF-26" by Tyler_Dave (Sketchfab, CC BY 4.0):
+    // logos, decals, numbers and cockpit interior removed, reduced to ~53k triangles, own red/white paint.
+    public const string Credit = "Car model based on \"2026 Ferrari SF-26\" by Tyler_Dave (Sketchfab), CC BY 4.0. Modified: logos removed, simplified, repainted.";
+    public static CarModel CreateFromAsset()
+    {
+        var ta = Resources.Load<TextAsset>("Car/car");
+        if (ta == null) return null;
+        var d = ta.bytes; int o = 0;
+        int I() { int v = System.BitConverter.ToInt32(d, o); o += 4; return v; }
+        float F() { float v = System.BitConverter.ToSingle(d, o); o += 4; return v; }
+        if (d.Length < 8 || d[0] != 'F' || d[1] != '2' || d[2] != 'M' || d[3] != '1') return null;
+        o = 4; int n = I();
+        var mats = new[] {
+            WorldBuilder.Mat(new Color(0.78f, 0.05f, 0.07f), null, 0.88f, 0.35f),   // 0 red paint
+            WorldBuilder.Mat(new Color(0.93f, 0.93f, 0.94f), null, 0.86f, 0.15f),   // 1 white paint
+            WorldBuilder.Mat(new Color(0.07f, 0.075f, 0.085f), null, 0.6f, 0.25f),  // 2 carbon
+            WorldBuilder.Mat(new Color(0.55f, 0.57f, 0.6f), null, 0.8f, 0.9f),      // 3 metal
+            WorldBuilder.Mat(new Color(0.045f, 0.045f, 0.05f), null, 0.22f),        // 4 tyre rubber
+            WorldBuilder.Mat(new Color(0.2f, 0.21f, 0.23f), null, 0.75f, 0.85f),    // 5 rims / discs
+            WorldBuilder.Mat(new Color(1f, 0.15f, 0.12f), null, 0.9f),              // 6 rain light
+        };
+        var root = new GameObject("Car");
+        var cm = root.AddComponent<CarModel>();
+        cm.body = new GameObject("Body").transform; cm.body.SetParent(root.transform, false);
+        var wheels = new System.Collections.Generic.Dictionary<string, Transform>();
+        for (int p = 0; p < n; p++)
+        {
+            int len = I(); string name = System.Text.Encoding.UTF8.GetString(d, o, len); o += len;
+            int mid = I(); var piv = new Vector3(F(), F(), F());
+            int nv = I(), ni = I();
+            var pos = new Vector3[nv]; var nrm = new Vector3[nv]; var idx = new int[ni];
+            for (int i = 0; i < nv; i++) pos[i] = new Vector3(F(), F(), F());
+            for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
+            for (int i = 0; i < ni; i++) idx[i] = I();
+            var mesh = new Mesh { indexFormat = nv > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
+            mesh.vertices = pos; mesh.normals = nrm; mesh.triangles = idx; mesh.RecalculateBounds();
+            var go = new GameObject(name);
+            Transform parent = cm.body;
+            if (name.StartsWith("wheel_"))
+            {
+                string key = name.Substring(6, 2); // FL, FR, RL, RR
+                if (!wheels.TryGetValue(key, out var spin))
+                {
+                    var pivot = new GameObject("WheelPivot_" + key).transform; pivot.SetParent(root.transform, false); pivot.localPosition = piv;
+                    spin = new GameObject("Spin").transform; spin.SetParent(pivot, false);
+                    wheels[key] = spin;
+                    if (key[0] == 'F') { int k = key[1] == 'L' ? 0 : 1; cm.frontPivots[k] = pivot; cm.frontSpin[k] = spin; }
+                    else cm.rearSpin[key[1] == 'L' ? 0 : 1] = spin;
+                }
+                parent = spin;
+            }
+            go.transform.SetParent(parent, false);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
+        }
+        // the model has no driver: add a helmet in the cockpit (hidden in cockpit view)
+        {
+            var h = GameObject.CreatePrimitive(PrimitiveType.Sphere); Destroy(h.GetComponent<Collider>());
+            h.name = "Helmet"; h.transform.SetParent(cm.body, false);
+            h.transform.localPosition = new Vector3(0, 0.72f, 0.05f); h.transform.localScale = new Vector3(0.26f, 0.28f, 0.3f);
+            h.GetComponent<MeshRenderer>().sharedMaterial = WorldBuilder.Mat(new Color(1f, 0.82f, 0.18f), null, 0.9f, 0.2f);
+            cm.helmet = h.transform;
+        }
+        var sh = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(sh.GetComponent<Collider>());
+        sh.name = "ContactShadow"; sh.transform.SetParent(root.transform, false);
+        sh.transform.localPosition = new Vector3(0, 0.035f, 0.3f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
+        sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
+        var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = WorldBuilder.ShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        return cm;
+    }
+
     // physics -> visuals. heading: rad CCW from +x (physics); delta: + = left; spin: wheel angle (rad)
     public void Apply(double x, double y, double heading, double delta, double frontSpinRad, double rearSpinRad, double axLong, double ay)
     {

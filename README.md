@@ -9,3 +9,9 @@ Mobile formula-car racing game in Unity, with physics calibrated to the FIA Form
 - `Assets/Scripts/Game` — the game builds itself at runtime (track, playground, car, cameras, touch/tilt controls, HUD).
 - `Assets/Editor/BuildScript.cs` — used by the cloud build; no need to open the project in the editor.
 - `.github/workflows/build.yml` — every push builds an Android APK and a WebGL build (GameCI).
+
+## Credits
+- Car model based on "2026 Ferrari SF-26" by Tyler_Dave (https://sketchfab.com/3d-models/2026-ferrari-sf-26-e5ca6cecdc42449283f4bed27360f2a7),
+  licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changes: all logos, decals, numbers and the cockpit
+  interior removed, geometry simplified to ~53k triangles, repainted. Converted with `Tools/convert_car_model.py`.
+  Note: this is a replica of a real team car; replace it with an original design before any public release.
