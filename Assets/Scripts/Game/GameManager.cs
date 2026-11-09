@@ -19,6 +19,8 @@ public class GameManager : MonoBehaviour
 
     // settings (saved)
     TcMode tc; bool tilt, playground, invertTilt, sound = true; int camMode;
+    // aero balance (share of downforce on the front axle): the main real-world setup knob for under/oversteer
+    static readonly float[] Balances = { 0.45f, 0.48f, 0.50f, 0.53f }; int balIdx;
     EngineAudio audioEngine;
     static readonly string[] CamNames = { "Chase", "Far chase", "Cockpit" };
 
@@ -40,11 +42,11 @@ public class GameManager : MonoBehaviour
 
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
-        playground = PlayerPrefs.GetInt("pg", 0) == 1; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1;
+        playground = PlayerPrefs.GetInt("pg", 0) == 1; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1);
 
         track = Track.Build();
         WorldBuilder.Build(track);
-        car = new FormulaCar(new CarConfig { tc = tc });
+        car = new FormulaCar(new CarConfig { tc = tc, aeroFront = Balances[balIdx] });
         model = CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
         var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera";
         cam.nearClipPlane = 0.2f; cam.farClipPlane = 2500; cam.fieldOfView = 62;
@@ -57,12 +59,12 @@ public class GameManager : MonoBehaviour
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("pg", playground ? 1 : 0); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.Save();
+        PlayerPrefs.SetInt("pg", playground ? 1 : 0); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.Save();
     }
 
     void ResetCar()
     {
-        car = new FormulaCar(new CarConfig { tc = tc });
+        car = new FormulaCar(new CarConfig { tc = tc, aeroFront = Balances[balIdx] });
         if (playground) { car.x = WorldBuilder.PadStart.x - 15; car.y = WorldBuilder.PadStart.y; car.heading = 0; }
         else { var p = track.pts[track.N - 30]; car.x = p.x; car.y = p.y; car.heading = System.Math.Atan2(p.ty, p.tx); }
         idx = prevIdx = -1; lapStart = null; cut = false; offTime = wrongTime = 0; t100 = null; launchT = -1; topSpeed = 0;
@@ -274,8 +276,8 @@ public class GameManager : MonoBehaviour
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
 
         // top-right buttons
-        float bw = S(66), bh = S(30), x0 = Screen.width - S(8);
-        string[] labels = { sound ? "Sound" : "Muted", "Cam", "Reset", "TC " + tc, tilt ? "Tilt" : "Drag", playground ? "Playgr." : "Track" };
+        float bw = S(60), bh = S(30), x0 = Screen.width - S(8);
+        string[] labels = { sound ? "Sound" : "Muted", "Cam", "Reset", "TC " + tc, $"Aero {Balances[balIdx] * 100:0}%", tilt ? "Tilt" : "Drag", playground ? "Playgr." : "Track" };
         for (int i = 0; i < labels.Length; i++)
         {
             var r = new Rect(x0 - (labels.Length - i) * (bw + S(4)), S(8), bw, bh);
@@ -285,21 +287,27 @@ public class GameManager : MonoBehaviour
                 if (i == 1) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); }
                 if (i == 2) ResetCar();
                 if (i == 3) { tc = (TcMode)(((int)tc + 1) % 3); car.cfg.tc = tc; Flash("Traction control " + tc); }
-                if (i == 4) { tilt = !tilt; tiltCenter = 0; Flash(tilt ? "Tilt steering (level = straight)" : "Drag steering"); }
-                if (i == 5) { playground = !playground; ResetCar(); }
+                if (i == 4)
+                {
+                    balIdx = (balIdx + 1) % Balances.Length; car.cfg.aeroFront = Balances[balIdx];
+                    Flash(balIdx == 0 ? "Aero 45% front: stable (understeer)" : balIdx == 3 ? "Aero 53% front: very loose (oversteer)" : $"Aero {Balances[balIdx] * 100:0}% front: more rotation");
+                }
+                if (i == 5) { tilt = !tilt; tiltCenter = 0; Flash(tilt ? "Tilt steering (level = straight)" : "Drag steering"); }
+                if (i == 6) { playground = !playground; ResetCar(); }
                 Save();
             }
         }
-        if (tilt && GUI.Button(new Rect(x0 - 6 * (bw + S(4)), S(8) + bh + S(4), bw, bh), "Invert", btn)) { invertTilt = !invertTilt; Save(); }
-        if (tilt && GUI.Button(new Rect(x0 - 5 * (bw + S(4)), S(8) + bh + S(4), bw, bh), "Center", btn)) { tiltCenter = TiltRaw(); Flash("Straight = how you hold it now"); }
+        if (tilt && GUI.Button(new Rect(S(8), S(106), S(72), bh), "Invert", btn)) { invertTilt = !invertTilt; Save(); }
+        if (tilt && GUI.Button(new Rect(S(86), S(106), S(72), bh), "Center", btn)) { tiltCenter = TiltRaw(); Flash("Straight = how you hold it now"); }
 
         // top-centre: lap time or test data
         string top, sub;
         if (playground) { top = "TEST DATA (ours vs real F2)"; sub = $"0-100 {(t100.HasValue ? t100.Value.ToString("0.00") + "s" : "—")} (2.9)  ·  top {topSpeed:0} km/h"; }
         else { top = lapStart.HasValue ? Fmt(simTime - lapStart.Value) : "--:--.---"; sub = $"Lap {lapNo}  ·  Last {Fmt(lastLap)}  ·  Best {Fmt(bestLap)}"; }
-        Panel(new Rect(Screen.width / 2 - S(150), S(8), S(300), S(44)));
-        center.fontSize = (int)S(18); GUI.Label(new Rect(Screen.width / 2 - S(150), S(8), S(300), S(26)), top, center);
-        center.fontSize = (int)S(11); GUI.Label(new Rect(Screen.width / 2 - S(150), S(30), S(300), S(20)), sub, center);
+        float py = S(44);
+        Panel(new Rect(Screen.width / 2 - S(150), py, S(300), S(44)));
+        center.fontSize = (int)S(18); GUI.Label(new Rect(Screen.width / 2 - S(150), py, S(300), S(26)), top, center);
+        center.fontSize = (int)S(11); GUI.Label(new Rect(Screen.width / 2 - S(150), py + S(22), S(300), S(20)), sub, center);
 
         // dash
         var dash = new Rect(Screen.width / 2 - S(95), Screen.height - S(80), S(190), S(70));
