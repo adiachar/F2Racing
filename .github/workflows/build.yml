@@ -1,5 +1,5 @@
 # Cloud build: every push to main builds the game for Android (APK) and the web (WebGL), using GameCI.
-# Needs repository secrets UNITY_LICENSE (contents of the .ulf file), UNITY_EMAIL, UNITY_PASSWORD.
+# Needs repository secrets UNITY_LICENSE (contents of the .ulf file), UNITY_EMAIL, UNITY_PASSWORD (all set).
 name: Build game
 on:
   push:
