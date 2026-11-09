@@ -1,0 +1,21 @@
+# One-off helper: exports Unity's managed assemblies (UnityEngine/UnityEditor) as a private artifact,
+# so scripts can be compile-checked in seconds outside the full build.
+name: Unity reference assemblies
+on: workflow_dispatch
+jobs:
+  refs:
+    runs-on: ubuntu-latest
+    container: unityci/editor:ubuntu-6000.0.85f2-base-3
+    steps:
+      - run: |
+          M=/opt/unity/Editor/Data/Managed
+          mkdir -p refs
+          cp $M/UnityEngine.dll $M/UnityEditor.dll refs/ 2>/dev/null || true
+          cp $M/UnityEngine/*.dll refs/ 2>/dev/null || true
+          N=$(ls -d /opt/unity/Editor/Data/NetStandard/ref/2.1.0 2>/dev/null || true); [ -n "$N" ] && cp $N/netstandard.dll refs/ || true
+          ls refs | head -100; du -sh refs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unity-refs
+          path: refs
+          retention-days: 30

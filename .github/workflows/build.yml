@@ -1,6 +1,8 @@
 # Cloud build: every push to main (game files) builds the game for Android (APK) and the web (WebGL), using GameCI.
 # Needs repository secrets UNITY_LICENSE (contents of the .ulf file), UNITY_EMAIL, UNITY_PASSWORD (all set).
 name: Build game
+permissions:
+  contents: write
 on:
   push:
     branches: [main]
@@ -45,3 +47,13 @@ jobs:
           name: F2Racing-${{ matrix.targetPlatform }}
           path: build/${{ matrix.targetPlatform }}
           retention-days: 14
+      # stable download link: every successful build replaces the files on the "latest" release
+      - name: Publish to the "latest" release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd build/${{ matrix.targetPlatform }}
+          if [ "${{ matrix.targetPlatform }}" = "Android" ]; then f=F2Racing.apk; else zip -qr ../F2Racing-WebGL.zip . && f=../F2Racing-WebGL.zip; fi
+          gh release view latest -R ${{ github.repository }} >/dev/null 2>&1 || gh release create latest -R ${{ github.repository }} --title "Latest build" --notes "Newest successful build (updated automatically)." --prerelease
+          gh release upload latest "$f" -R ${{ github.repository }} --clobber
