@@ -81,6 +81,30 @@ namespace FormulaSim
             return new Track { pts = pts, N = N, length = total, ds = ds, width = width };
         }
 
+        // Real circuit from (longitude, latitude) points: local metres (equirectangular around the centre,
+        // accurate to a few cm over a few km), x = east, y = north. The start/finish line is the first point.
+        public static Track FromLonLat(double[,] lonlat, double width)
+        {
+            int n = lonlat.GetLength(0);
+            double lon0 = 0, lat0 = 0;
+            for (int i = 0; i < n; i++) { lon0 += lonlat[i, 0]; lat0 += lonlat[i, 1]; }
+            lon0 /= n; lat0 /= n;
+            const double R = 6371000;
+            double kx = Math.PI / 180 * R * Math.Cos(lat0 * Math.PI / 180), ky = Math.PI / 180 * R;
+            // put the start/finish line at the origin
+            double ox = (lonlat[0, 0] - lon0) * kx, oy = (lonlat[0, 1] - lat0) * ky;
+            var pts = new double[n, 2];
+            for (int i = 0; i < n; i++) { pts[i, 0] = (lonlat[i, 0] - lon0) * kx - ox; pts[i, 1] = (lonlat[i, 1] - lat0) * ky - oy; }
+            return Build(pts, width);
+        }
+
+        public (double minX, double minY, double maxX, double maxY) Bounds()
+        {
+            double a = double.MaxValue, b = double.MaxValue, c = double.MinValue, d = double.MinValue;
+            foreach (var p in pts) { a = Math.Min(a, p.x); b = Math.Min(b, p.y); c = Math.Max(c, p.x); d = Math.Max(d, p.y); }
+            return (a, b, c, d);
+        }
+
         // nearest centreline sample; hint = previous index for a fast local search
         public (int idx, double lateral, double dist) Nearest(double x, double y, int hint = -1)
         {

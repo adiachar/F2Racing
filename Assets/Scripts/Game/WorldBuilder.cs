@@ -8,7 +8,7 @@ public static class WorldBuilder
 {
     public const float Kerb = 1.4f;
     // playground: 800 x 480 m pad south of the circuit (same place as the web version)
-    public static readonly Rect Pad = new Rect(250 - 400, -560 - 240, 800, 480);
+    public static Rect Pad = new Rect(250 - 400, -560 - 240, 800, 480); // placed next to each circuit in Build
     public static Vector2 PadStart => new Vector2(Pad.xMin + 40, Pad.center.y);
 
     static Material baseMat;
@@ -134,10 +134,15 @@ public static class WorldBuilder
         return go;
     }
 
-    public static void Build(Track t)
+    public static GameObject Build(Track t)
     {
         var root = new GameObject("World").transform;
         float Wd = (float)t.width;
+        var bb = t.Bounds();
+        float cx = (float)(bb.minX + bb.maxX) / 2, cy = (float)(bb.minY + bb.maxY) / 2;
+        float ext = (float)System.Math.Max(bb.maxX - bb.minX, bb.maxY - bb.minY);
+        // test-drive pad sits just south of whichever circuit is loaded
+        Pad = new Rect(cx - 400, (float)bb.minY - 300 - 480, 800, 480);
 
         // sky, light, fog: procedural skybox (sun, atmosphere), fog matched to its horizon
         var skyMat = Resources.Load<Material>("Sky");
@@ -164,10 +169,11 @@ public static class WorldBuilder
         // ground
         var grassTex = GrassTex();
         var grass = Mat(Color.white, grassTex);
-        grass.mainTextureScale = new Vector2(440, 440);
+        float gsize = Mathf.Max(4400, ext + 3000);
+        grass.mainTextureScale = new Vector2(gsize / 10, gsize / 10);
         var g = GameObject.CreatePrimitive(PrimitiveType.Quad); Object.Destroy(g.GetComponent<Collider>());
         g.name = "Ground"; g.transform.SetParent(root);
-        g.transform.position = new Vector3(240, -0.05f, 60); g.transform.rotation = Quaternion.Euler(90, 0, 0); g.transform.localScale = new Vector3(4400, 4400, 1);
+        g.transform.position = new Vector3(cx, -0.05f, cy - 400); g.transform.rotation = Quaternion.Euler(90, 0, 0); g.transform.localScale = new Vector3(gsize, gsize, 1);
         g.GetComponent<MeshRenderer>().sharedMaterial = grass;
 
         // road
@@ -232,9 +238,11 @@ public static class WorldBuilder
         {
             var leaf = Mat(new Color(0.19f, 0.42f, 0.21f)); var trunk = Mat(new Color(0.36f, 0.25f, 0.19f));
             var rnd = new System.Random(7); int placed = 0, tries = 0;
-            while (placed < 260 && tries++ < 6000)
+            int want = Mathf.Clamp((int)(ext / 6), 200, 450);
+            while (placed < want && tries++ < want * 25)
             {
-                double x = -450 + rnd.NextDouble() * 1350, y = -250 + rnd.NextDouble() * 1250;
+                double x = bb.minX - 350 + rnd.NextDouble() * (bb.maxX - bb.minX + 700), y = bb.minY - 250 + rnd.NextDouble() * (bb.maxY - bb.minY + 600);
+                if (Pad.Contains(new Vector2((float)x, (float)y))) continue;
                 if (t.Nearest(x, y).dist < 26) continue;
                 float s = 0.7f + (float)rnd.NextDouble() * 0.8f;
                 var tr = GameObject.CreatePrimitive(PrimitiveType.Cylinder); Object.Destroy(tr.GetComponent<Collider>());
@@ -250,13 +258,14 @@ public static class WorldBuilder
 
         // one reflection capture of sky + ground, rendered once: cheap, and makes the paint look real
         QualitySettings.realtimeReflectionProbes = true;
-        var probeGo = new GameObject("SkyReflection"); probeGo.transform.SetParent(root); probeGo.transform.position = new Vector3(240, 2, 300);
+        var probeGo = new GameObject("SkyReflection"); probeGo.transform.SetParent(root); probeGo.transform.position = new Vector3(cx, 2, cy);
         var probe = probeGo.AddComponent<ReflectionProbe>();
         probe.mode = UnityEngine.Rendering.ReflectionProbeMode.Realtime;
         probe.refreshMode = UnityEngine.Rendering.ReflectionProbeRefreshMode.ViaScripting;
         probe.size = new Vector3(5000, 2000, 5000); probe.resolution = 128; probe.hdr = false;
         probe.cullingMask = ~0; probe.farClipPlane = 3000;
         probe.RenderProbe();
+        return root.gameObject;
     }
 
     static void Box(Transform root, Vector3 pos, Vector3 size, Material m)

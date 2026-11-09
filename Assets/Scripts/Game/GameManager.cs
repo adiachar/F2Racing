@@ -19,6 +19,8 @@ public class GameManager : MonoBehaviour
 
     // settings (saved)
     TcMode tc; bool tilt, playground, invertTilt, sound = true; int camMode;
+    static readonly string[] MapNames = { "Test track", "Monaco", "Spa", "Playground" };
+    int mapIdx; GameObject world;
     // aero balance (share of downforce on the front axle): the main real-world setup knob for under/oversteer
     static readonly float[] Balances = { 0.45f, 0.48f, 0.50f, 0.53f }; int balIdx;
     EngineAudio audioEngine;
@@ -42,10 +44,9 @@ public class GameManager : MonoBehaviour
 
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
-        playground = PlayerPrefs.GetInt("pg", 0) == 1; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1);
+        mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == 3; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1);
 
-        track = Track.Build();
-        WorldBuilder.Build(track);
+        LoadMap();
         car = new FormulaCar(new CarConfig { tc = tc, aeroFront = Balances[balIdx], steerSpeed = 12, steerReturn = 16 });
         model = CarModel.CreateFromAsset() ?? CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
         var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera";
@@ -56,10 +57,27 @@ public class GameManager : MonoBehaviour
         ResetCar();
     }
 
+    int builtFor = -1;
+    void LoadMap()
+    {
+        playground = mapIdx == 3;
+        int circuit = playground ? (builtFor >= 0 ? builtFor : 0) : mapIdx;
+        if (circuit != builtFor || world == null)
+        {
+            if (world != null) Destroy(world);
+            track = circuit == 1 ? Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth)
+                  : circuit == 2 ? Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)
+                  : Track.Build();
+            world = WorldBuilder.Build(track);
+            builtFor = circuit;
+            bestLap = lastLap = null; lapNo = 1;
+        }
+    }
+
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("pg", playground ? 1 : 0); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.Save();
+        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.Save();
     }
 
     void ResetCar()
@@ -68,7 +86,7 @@ public class GameManager : MonoBehaviour
         if (playground) { car.x = WorldBuilder.PadStart.x - 15; car.y = WorldBuilder.PadStart.y; car.heading = 0; }
         else { var p = track.pts[track.N - 30]; car.x = p.x; car.y = p.y; car.heading = System.Math.Atan2(p.ty, p.tx); }
         idx = prevIdx = -1; lapStart = null; cut = false; offTime = wrongTime = 0; t100 = null; launchT = -1; topSpeed = 0;
-        Flash(playground ? "Playground" : "Track");
+        Flash(MapNames[mapIdx]);
     }
 
     void Recover()
@@ -275,8 +293,8 @@ public class GameManager : MonoBehaviour
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
 
         // top-right buttons
-        float bw = S(60), bh = S(30), x0 = Screen.width - S(8);
-        string[] labels = { sound ? "Sound" : "Muted", "Cam", "Reset", "TC " + tc, $"Aero {Balances[balIdx] * 100:0}%", tilt ? "Tilt" : "Drag", playground ? "Playgr." : "Track" };
+        float bw = S(62), bh = S(30), x0 = Screen.width - S(8);
+        string[] labels = { sound ? "Sound" : "Muted", "Cam", "Reset", "TC " + tc, $"Aero {Balances[balIdx] * 100:0}%", tilt ? "Tilt" : "Drag", MapNames[mapIdx] };
         for (int i = 0; i < labels.Length; i++)
         {
             var r = new Rect(x0 - (labels.Length - i) * (bw + S(4)), S(8), bw, bh);
@@ -292,7 +310,7 @@ public class GameManager : MonoBehaviour
                     Flash(balIdx == 0 ? "Aero 45% front: stable (understeer)" : balIdx == 3 ? "Aero 53% front: very loose (oversteer)" : $"Aero {Balances[balIdx] * 100:0}% front: more rotation");
                 }
                 if (i == 5) { tilt = !tilt; tiltCenter = 0; Flash(tilt ? "Tilt steering (level = straight)" : "Drag steering"); }
-                if (i == 6) { playground = !playground; ResetCar(); }
+                if (i == 6) { mapIdx = (mapIdx + 1) % MapNames.Length; LoadMap(); ResetCar(); Flash(MapNames[mapIdx]); }
                 Save();
             }
         }
