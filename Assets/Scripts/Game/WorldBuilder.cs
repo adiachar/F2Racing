@@ -210,6 +210,7 @@ public static class WorldBuilder
             }
             MeshObj("Kerbs", v, uv, tri, Mat(Color.white, KerbTex())).transform.SetParent(root);
         }
+        Trackside.Build(t, root, t.width < 10.0); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
 
         // playground pad + skidpad rings + distance boards + slalom cones
         {
