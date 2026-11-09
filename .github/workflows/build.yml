@@ -22,8 +22,7 @@ jobs:
           path: Library
           key: Library-${{ matrix.targetPlatform }}-${{ hashFiles('Packages/**', 'ProjectSettings/ProjectVersion.txt') }}
           restore-keys: Library-${{ matrix.targetPlatform }}-
-      - name: Free disk space (Android build is large)
-        if: matrix.targetPlatform == 'Android'
+      - name: Free disk space (the Unity build image is large)
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: false
