@@ -119,7 +119,16 @@ for key, nm in (((front_sign, 1), 'FL'), ((front_sign, -1), 'FR'), ((-front_sign
         for kname, mesh, t2 in pieces:
             r = export_mesh(mesh, t2, smooth_angle=50)
             pos = r[0] - piv.astype(np.float32)
-            out.append((f'wheel_{nm}_{kname}', MAT['hub' if kname != 'tyre' else 'tyre'], tuple(piv)) + (pos, r[1], r[2]))
+            if kname == 'tyre':
+                # the model's wheels have camber and toe; spun about the car's cross axis they would wobble.
+                # Find the wheel's own axis (direction of least spread) and stand the wheel up straight.
+                cc = pos - pos.mean(0); ev, evec = np.linalg.eigh(cc.T @ cc); ax = evec[:, 0] * np.sign(evec[0, 0])
+                vv = np.cross(ax, [1, 0, 0]); sn = np.linalg.norm(vv); cs = ax[0]
+                K = np.array([[0, -vv[2], vv[1]], [vv[2], 0, -vv[0]], [-vv[1], vv[0], 0]])
+                Rw = np.eye(3) if sn < 1e-9 else np.eye(3) + K + K @ K * ((1 - cs) / sn ** 2)
+                print(f'wheel {nm}: straightened by {np.degrees(np.arcsin(sn)):.2f} deg')
+            pos = (pos @ Rw.T).astype(np.float32); nr = (r[1] @ Rw.T).astype(np.float32)
+            out.append((f'wheel_{nm}_{kname}', MAT['hub' if kname != 'tyre' else 'tyre'], tuple(piv)) + (pos, nr, r[2]))
 # helmet position: just ahead of the airbox, above the cockpit
 total = 0
 with open(OUT, 'wb') as f:

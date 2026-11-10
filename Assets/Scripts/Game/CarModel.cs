@@ -307,8 +307,17 @@ public class CarModel : MonoBehaviour
             if (cached != null) mesh = cached[p];
             else
             {
-                mesh = new Mesh { indexFormat = nv > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
-                mesh.vertices = pos; mesh.normals = nrm; mesh.triangles = idx; mesh.RecalculateBounds();
+                // The source model has many thin panels built as a single skin, and some facing inwards; with
+                // normal one-sided drawing those show as holes. Every triangle gets a twin facing the other way.
+                var pos2 = new Vector3[nv * 2]; var nrm2 = new Vector3[nv * 2]; var idx2 = new int[ni * 2];
+                for (int i = 0; i < nv; i++) { pos2[i] = pos[i]; nrm2[i] = nrm[i]; pos2[nv + i] = pos[i]; nrm2[nv + i] = -nrm[i]; }
+                for (int i = 0; i < ni; i += 3)
+                {
+                    idx2[i] = idx[i]; idx2[i + 1] = idx[i + 1]; idx2[i + 2] = idx[i + 2];
+                    idx2[ni + i] = nv + idx[i]; idx2[ni + i + 1] = nv + idx[i + 2]; idx2[ni + i + 2] = nv + idx[i + 1];
+                }
+                mesh = new Mesh { indexFormat = nv * 2 > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
+                mesh.vertices = pos2; mesh.normals = nrm2; mesh.triangles = idx2; mesh.RecalculateBounds();
                 made[p] = mesh;
             }
             var go = new GameObject(name);

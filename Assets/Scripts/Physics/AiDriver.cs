@@ -214,6 +214,37 @@ namespace FormulaSim
     // exchange speed along the line of contact, like a firm nudge.
     public static class Traffic
     {
+        // Barriers: distance from the centreline to the inner face of the wall (street circuit) or guardrail.
+        // Matches where Trackside.cs draws them.
+        public static double WallOffset(Track t) => t.width / 2 + 1.4 + (t.width < 10 ? 1.25 : 7.9);
+
+        // Hitting the barrier: the speed into the wall is lost (a little bounces back), scraping along it
+        // costs speed through friction, and a hit with the nose swings the car round.
+        public static bool Wall(FormulaCar c, TrackPoint p, double lateral, double wall)
+        {
+            const double Half = 0.95, Bounce = 0.2, Scrape = 0.45;
+            double over = Math.Abs(lateral) - (wall - Half);
+            if (over <= 0) return false;
+            double sgn = lateral > 0 ? 1 : -1, nx = p.nx * sgn, ny = p.ny * sgn; // points out of the track
+            c.x -= nx * over; c.y -= ny * over;
+            double ch = Math.Cos(c.heading), sh = Math.Sin(c.heading);
+            double wx = c.vx * ch - c.vy * sh, wy = c.vx * sh + c.vy * ch;
+            double vn = wx * nx + wy * ny;
+            if (vn <= 0) return true;
+            double tx = -ny, ty = nx, vt = wx * tx + wy * ty;
+            double J = (1 + Bounce) * vn;                         // impulse per unit mass
+            double vt2 = vt - Math.Sign(vt) * Math.Min(Math.Abs(vt), Scrape * J);
+            double vn2 = -Bounce * vn;
+            wx = nx * vn2 + tx * vt2; wy = ny * vn2 + ty * vt2;
+            c.vx = wx * ch + wy * sh; c.vy = -wx * sh + wy * ch;
+            // the nose (or tail, in reverse) is what touches: the push acts ahead of the centre of gravity
+            double arm = c.cfg.wheelbase * (1 - c.cfg.frontWeight) * (c.vx >= 0 ? 1 : -1);
+            double cross = ch * -ny - sh * -nx;
+            double dr = 0.35 * arm * J * c.cfg.mass / c.cfg.inertiaZ * cross;
+            c.r = c.r * 0.6 + (dr < -3 ? -3 : dr > 3 ? 3 : dr);
+            return true;
+        }
+
         const double R = 0.95, FrontC = 1.55, RearC = -1.25;
         public static bool Collide(FormulaCar a, FormulaCar b)
         {
