@@ -96,6 +96,7 @@ if (args.Length > 0 && args[0] == "race")
         var hf = t.h != null ? new HeightField(t) : null;
         for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
         double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n];
+        double tMin = 999, tMaxF = 0, tMaxR = 0, tSumF = 0, tSumR = 0; int tN = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         while (time < 6 * 130 && ds.Min(d => d.lap) < 5)
         {
@@ -104,9 +105,11 @@ if (args.Length > 0 && args[0] == "race")
                 for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; } }
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
             }
+            if (steps % 240 == 0) { var c0 = ds[0].car; tMin = Math.Min(tMin, Math.Min(c0.tyreTF, c0.tyreTR)); tMaxF = Math.Max(tMaxF, c0.tyreTF); tMaxR = Math.Max(tMaxR, c0.tyreTR); if (time > 60) { tSumF += c0.tyreTF; tSumR += c0.tyreTR; tN++; } }
             foreach (var d in ds) { double hw = t.width / 2, al = Math.Abs(d.lateral); d.car.surfaceMu = al <= hw ? 1 : al <= hw + 1.4 ? Surfaces.Kerb.mu : Surfaces.Grass.mu; d.car.surfaceDrag = al <= hw ? 0 : al <= hw + 1.4 ? Surfaces.Kerb.drag : Surfaces.Grass.drag; if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
             time += H;
         }
+        Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}");
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
         int pos = 1;
         foreach (var d in ds.OrderByDescending(d => d.progress))

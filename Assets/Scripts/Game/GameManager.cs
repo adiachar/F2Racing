@@ -239,6 +239,7 @@ public class GameManager : MonoBehaviour
     {
         if (raceTime >= Countdown && aiTick++ % 4 == 0)
         {
+            UpdateTow();
             for (int i = 0; i < rivals.Count; i++)
             {
                 rivals[i].Think(4 * H, simTime, rivals, car, idx, playerLat);
@@ -256,7 +257,7 @@ public class GameManager : MonoBehaviour
         {
             var d = rivals[i]; double al = System.Math.Abs(d.lateral);
             var sf = al <= hw ? Surfaces.Asphalt : al <= hw + WorldBuilder.Kerb ? Surfaces.Kerb : Surfaces.Grass;
-            d.car.surfaceMu = sf.mu; d.car.surfaceDrag = sf.drag;
+            d.car.surfaceMu = sf.mu * (al <= hw ? LineGrip(d.idx, d.lateral) : 1); d.car.surfaceDrag = sf.drag;
             d.car.Step(raceTime >= Countdown ? d.LastInput : new CarInput(0, 0, 1), H);
         }
     }
@@ -484,7 +485,40 @@ public class GameManager : MonoBehaviour
             if (surface == 2 && lat > hw + WorldBuilder.Kerb + 0.9) cut = true;
         }
         var s = surface == 0 ? Surfaces.Asphalt : surface == 1 ? Surfaces.Kerb : Surfaces.Grass;
-        car.surfaceMu = s.mu; car.surfaceDrag = s.drag;
+        car.surfaceMu = s.mu * (surface == 0 && !playground ? LineGrip(idx, playerLat) : 1); car.surfaceDrag = s.drag;
+    }
+
+    // The racing line is rubbered-in and clean; away from it the asphalt is dusty and gives up to 4% less grip.
+    double LineGrip(int i, double lateral)
+    {
+        if (line == null || i < 0) return 1;
+        double off = System.Math.Abs(lateral - line.off[i]), u = System.Math.Min(1, System.Math.Max(0, (off - 1.5) / 2.5));
+        return 1 - 0.04 * u * u * (3 - 2 * u);
+    }
+
+    // Slipstream: how deep each car sits in the air of the car ahead (0..1). Full effect right behind, fading out
+    // by 60 m back or 2.5 m to the side.
+    void UpdateTow()
+    {
+        int n = rivals.Count; if (n == 0) { car.tow = 0; return; }
+        int N = track.N;
+        double Tow(int myIdx, double myLat, int skip)
+        {
+            double best = 0;
+            for (int j = -1; j < n; j++)
+            {
+                if (j == skip) continue;
+                int oi = j < 0 ? idx : rivals[j].idx; double ol = j < 0 ? playerLat : rivals[j].lateral;
+                if (oi < 0) continue;
+                int d = oi - myIdx; if (d > N / 2) d -= N; else if (d < -N / 2) d += N;
+                double gap = d * track.ds; if (gap < 2 || gap > 60) continue;
+                double side = System.Math.Abs(ol - myLat); if (side > 2.5) continue;
+                best = System.Math.Max(best, (1 - gap / 60) * (1 - side / 2.5));
+            }
+            return best;
+        }
+        car.tow = idx < 0 || playground ? 0 : Tow(idx, playerLat, -1);
+        for (int i = 0; i < n; i++) rivals[i].car.tow = rivals[i].idx < 0 ? 0 : Tow(rivals[i].idx, rivals[i].lateral, i);
     }
 
     void LapsAndRecover(float dt)
@@ -646,9 +680,10 @@ public class GameManager : MonoBehaviour
 
         // telemetry
         double beta = System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)) * 57.3;
-        Panel(new Rect(S(8), S(8), S(150), tilt ? S(106) : S(90)));
-        GUI.Label(new Rect(S(14), S(10), S(150), S(106)),
+        Panel(new Rect(S(8), S(8), S(160), tilt ? S(162) : S(146)));
+        GUI.Label(new Rect(S(14), S(10), S(160), S(162)),
             $"{fpsAvg:0} fps\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
+            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\nTyres {car.tyreTF:0}° / {car.tyreTR:0}°\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
 
         DrawMiniMap();

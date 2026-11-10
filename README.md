@@ -24,3 +24,11 @@ The car model (`Assets/Scripts/Physics/FormulaCar.cs`) uses published 2026 F1 fi
 1.9 m width, 705/710 mm tyres, about 400 kW combustion engine plus a 350 kW MGU-K with the regulation speed ramp-down,
 a 4 MJ battery, 8.5 MJ harvest per lap, and active aero (wings open on straights). Tyre grip, drag and downforce are not
 published; they are estimates checked against real performance figures. Run `dotnet run` in `Tools/PhysicsCheck` to see the comparison.
+
+### Chassis detail
+
+On top of the basic car, the model includes: suspension (ride height, pitch and roll from the loads), ground-effect
+aero that depends on ride height and rake, downforce loss when sliding and in another car's dirty air, slipstream,
+camber and toe, tyre temperature with a grip window, a locking differential, and a rubbered-in racing line.
+All of it is a few dozen arithmetic operations per step. Teams do not publish these numbers; they are typical
+values, tuned so that whole-car performance still matches measured figures (`Tools/PhysicsCheck`).
