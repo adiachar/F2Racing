@@ -255,6 +255,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localPosition = new Vector3(0, 0.035f, -0.15f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
         sh.transform.localScale = new Vector3(2.5f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = WorldBuilder.ShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
         return cm;
     }
 
@@ -373,6 +374,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localPosition = new Vector3(0, 0.035f, 0.3f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
         sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = WorldBuilder.ShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
         return cm;
     }
 

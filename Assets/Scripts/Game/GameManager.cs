@@ -133,7 +133,7 @@ public class GameManager : MonoBehaviour
     {
         gfxLevel = level;
         QualitySettings.antiAliasing = level >= 3 ? 4 : level == 2 ? 2 : 0;
-        QualitySettings.shadows = level <= 1 ? ShadowQuality.Disable : ShadowQuality.All;
+        QualitySettings.shadows = level <= 1 || LightBake.Active ? ShadowQuality.Disable : ShadowQuality.All; // baked lighting needs no shadow maps
         QualitySettings.shadowCascades = level >= 3 ? 2 : 1;
         QualitySettings.shadowResolution = level >= 3 ? ShadowResolution.High : ShadowResolution.Medium;
         QualitySettings.shadowDistance = level >= 3 ? 90 : 55;
@@ -178,7 +178,7 @@ public class GameManager : MonoBehaviour
         var rubber = Scenery.Rubber(track, line, world.transform);
         var boards = Scenery.Boards(track, line, world.transform, (float)Traffic.WallOffset(track));
         // these are built after the world, so lay them on the hills here
-        WorldBuilder.Drape(lineGo); WorldBuilder.Drape(rubber); if (boards != null) WorldBuilder.Drape(boards);
+        WorldBuilder.Drape(lineGo); WorldBuilder.Drape(rubber); if (boards != null) { WorldBuilder.Drape(boards); LightBake.Apply(boards); }
         lineGo.SetActive(showLine && !playground);
     }
 
@@ -434,6 +434,13 @@ public class GameManager : MonoBehaviour
         double al = acc / H, dh = System.Math.Atan2(System.Math.Sin(car.heading - ph), System.Math.Cos(car.heading - ph));
         double rx = px + (car.x - px) * al, ry = py + (car.y - py) * al, rh = ph + dh * al, rd = pd + (car.delta - pd) * al;
         model.Apply(rx, ry, rh, rd, visF, visR, gLon, gLat);
+        if (LightBake.Active && LightBake.CarSun != null)
+        {
+            // the cars' sun dims when the player's car is inside a baked shadow
+            float lit = playground ? 1 : LightBake.Sun((float)car.x, (float)car.y, model.transform.position.y + 0.6f);
+            carLit += (lit - carLit) * Mathf.Min(1, dt * 8);
+            LightBake.CarSun.intensity = 1.25f * (0.12f + 0.88f * carLit);
+        }
         model.SetBrake(car.brake > 0.05); model.SetSteer((float)car.steerIn);
         for (int i = 0; i < rivals.Count; i++)
         {
@@ -514,7 +521,7 @@ public class GameManager : MonoBehaviour
     static string Fmt(double? t) { if (!t.HasValue) return "--:--.---"; int m = (int)(t.Value / 60); return $"{m}:{t.Value - m * 60:00.000}"; }
 
     // ---------------------------------------------------------------- camera
-    Vector3 camVel; float gLon, gLat, visF, visR;
+    Vector3 camVel; float gLon, gLat, visF, visR, carLit = 1;
     void LateUpdate()
     {
         var tr = model.transform;

@@ -245,8 +245,18 @@ public static class WorldBuilder
         var asphalt = Mat(Color.white, AsphaltTex(), 0.15f);
         {
             var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
-            Strip(t, 0, t.N, Wd / 2, -Wd / 2, 0.03f, 8, v, uv, tri);
-            for (int i = 0; i < uv.Count; i++) uv[i] = new Vector2(uv[i].x * Wd / 4, uv[i].y);
+            // several columns across the width, so baked shadows can fall part-way across the road
+            const int K = 6;
+            for (int i = 0; i <= t.N; i++)
+            {
+                var p = t.pts[i % t.N];
+                for (int c = 0; c <= K; c++)
+                {
+                    float lat = Wd / 2 - Wd * c / K;
+                    v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2((float)c / K * Wd / 4, (float)(i * t.ds) / 8));
+                    if (i < t.N && c < K) { int k = i * (K + 1) + c; tri.Add(k); tri.Add(k + K + 1); tri.Add(k + 1); tri.Add(k + K + 1); tri.Add(k + K + 2); tri.Add(k + 1); }
+                }
+            }
             MeshObj("Road", v, uv, tri, asphalt).transform.SetParent(root);
         }
         // white edge lines
@@ -353,6 +363,18 @@ public static class WorldBuilder
             }
         }
         Drape(root.gameObject);
+        // lighting baked into the vertices (LightBake.cs); if the phone can't run that shader, the sun and
+        // real-time shadows are used as before
+        if (LightBake.Begin(t, -sunGo.transform.forward))
+        {
+            LightBake.AddOccluders(root.gameObject);
+            LightBake.Apply(root.gameObject);
+            sun.shadows = LightShadows.None; sun.cullingMask = ~(1 << LightBake.CarLayer);
+            var carSunGo = new GameObject("CarSun"); carSunGo.transform.SetParent(root); carSunGo.transform.rotation = sunGo.transform.rotation;
+            var cs2 = carSunGo.AddComponent<Light>(); cs2.type = LightType.Directional; cs2.color = sun.color; cs2.intensity = sun.intensity;
+            cs2.shadows = LightShadows.None; cs2.cullingMask = 1 << LightBake.CarLayer;
+            LightBake.CarSun = cs2;
+        }
         StaticBatchingUtility.Combine(root.gameObject);
 
         // one reflection capture of sky + ground, rendered once: cheap, and makes the paint look real
