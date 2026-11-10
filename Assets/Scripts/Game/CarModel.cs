@@ -259,9 +259,19 @@ public class CarModel : MonoBehaviour
     // Made by Tools/convert_car_model.py from "2026 Ferrari SF-26" by Tyler_Dave (Sketchfab, CC BY 4.0):
     // logos, decals, numbers and cockpit interior removed, reduced to ~53k triangles, own red/white paint.
     public const string Credit = "Car model based on \"2026 Ferrari SF-26\" by Tyler_Dave (Sketchfab), CC BY 4.0. Modified: logos removed, simplified, repainted.";
-    public static CarModel CreateFromAsset()
+    static readonly System.Collections.Generic.Dictionary<string, Mesh[]> meshCache = new System.Collections.Generic.Dictionary<string, Mesh[]>();
+    Material lightMat; bool braking;
+    // rear light glows when the driver brakes
+    public void SetBrake(bool on)
     {
-        var ta = Resources.Load<TextAsset>("Car/car");
+        if (on == braking || lightMat == null) return;
+        braking = on; lightMat.SetColor("_EmissionColor", on ? new Color(3f, 0.25f, 0.2f) : new Color(0.25f, 0.02f, 0.02f));
+    }
+
+    // res: "Car/car" (full detail, the player's car) or "Car/car_lod" (light copy for rivals); paint: body colour
+    public static CarModel CreateFromAsset(string res = "Car/car", Color? paint = null, bool rival = false)
+    {
+        var ta = Resources.Load<TextAsset>(res);
         if (ta == null) return null;
         var d = ta.bytes; int o = 0;
         int I() { int v = System.BitConverter.ToInt32(d, o); o += 4; return v; }
@@ -269,14 +279,15 @@ public class CarModel : MonoBehaviour
         if (d.Length < 8 || d[0] != 'F' || d[1] != '2' || d[2] != 'M' || d[3] != '1') return null;
         o = 4; int n = I();
         var mats = new[] {
-            WorldBuilder.Mat(new Color(0.78f, 0.05f, 0.07f), null, 0.88f, 0.35f),   // 0 red paint
+            WorldBuilder.Mat(paint ?? new Color(0.78f, 0.05f, 0.07f), null, 0.88f, 0.35f),   // 0 body paint
             WorldBuilder.Mat(new Color(0.93f, 0.93f, 0.94f), null, 0.86f, 0.15f),   // 1 white paint
             WorldBuilder.Mat(new Color(0.07f, 0.075f, 0.085f), null, 0.6f, 0.25f),  // 2 carbon
             WorldBuilder.Mat(new Color(0.55f, 0.57f, 0.6f), null, 0.8f, 0.9f),      // 3 metal
             WorldBuilder.Mat(new Color(0.045f, 0.045f, 0.05f), null, 0.22f),        // 4 tyre rubber
             WorldBuilder.Mat(new Color(0.2f, 0.21f, 0.23f), null, 0.75f, 0.85f),    // 5 rims / discs
-            WorldBuilder.Mat(new Color(1f, 0.15f, 0.12f), null, 0.9f),              // 6 rain light
+            WorldBuilder.Glow(new Color(1f, 0.15f, 0.12f), new Color(0.25f, 0.02f, 0.02f)),  // 6 rear light
         };
+        meshCache.TryGetValue(res, out var cached); var made = cached == null ? new Mesh[n] : null;
         var root = new GameObject("Car");
         // the mesh was converted at Formula 2 size (3.135 m wheelbase); a 2026 F1 car is 3.40 m long between the axles and 1.9 m wide
         root.transform.localScale = Vector3.one * (3.40f / 3.135f);
@@ -292,8 +303,14 @@ public class CarModel : MonoBehaviour
             for (int i = 0; i < nv; i++) pos[i] = new Vector3(F(), F(), F());
             for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
             for (int i = 0; i < ni; i++) idx[i] = I();
-            var mesh = new Mesh { indexFormat = nv > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
-            mesh.vertices = pos; mesh.normals = nrm; mesh.triangles = idx; mesh.RecalculateBounds();
+            Mesh mesh;
+            if (cached != null) mesh = cached[p];
+            else
+            {
+                mesh = new Mesh { indexFormat = nv > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
+                mesh.vertices = pos; mesh.normals = nrm; mesh.triangles = idx; mesh.RecalculateBounds();
+                made[p] = mesh;
+            }
             var go = new GameObject(name);
             Transform parent = cm.body;
             if (name.StartsWith("wheel_"))
@@ -313,7 +330,10 @@ public class CarModel : MonoBehaviour
             go.transform.SetParent(parent, false);
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
+            if (rival) r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; // rivals keep only the soft blob shadow
         }
+        if (made != null) meshCache[res] = made;
+        cm.lightMat = mats[6];
         // the model has no driver: add a helmet in the cockpit (hidden in cockpit view)
         {
             var h = GameObject.CreatePrimitive(PrimitiveType.Sphere); Destroy(h.GetComponent<Collider>());

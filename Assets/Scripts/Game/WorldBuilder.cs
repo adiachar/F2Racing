@@ -22,6 +22,17 @@ public static class WorldBuilder
         return m;
     }
 
+    // self-lit material (brake lights, start lights); falls back to a plain one if the build has no Glow material
+    static Material glowMat;
+    public static Material Glow(Color c, Color emission)
+    {
+        if (glowMat == null) glowMat = Resources.Load<Material>("Glow");
+        if (glowMat == null) return Mat(c, null, 0.9f);
+        var m = new Material(glowMat) { color = c };
+        m.EnableKeyword("_EMISSION"); m.SetColor("_EmissionColor", emission);
+        return m;
+    }
+
     // ---------------------------------------------------------------- procedural textures
     static float Hash(int x, int y, int s)
     {
@@ -46,7 +57,7 @@ public static class WorldBuilder
         }
         return sum / norm;
     }
-    static Texture2D Tex(int w, int h, System.Func<float, float, int, int, Color32> f)
+    public static Texture2D Tex(int w, int h, System.Func<float, float, int, int, Color32> f)
     {
         var t = new Texture2D(w, h, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
         var px = new Color32[w * h];
@@ -122,7 +133,7 @@ public static class WorldBuilder
             }
         }
     }
-    static GameObject MeshObj(string name, List<Vector3> v, List<Vector2> uv, List<int> tri, Material m, bool shadows = true)
+    public static GameObject MeshObj(string name, List<Vector3> v, List<Vector2> uv, List<int> tri, Material m, bool shadows = true)
     {
         var mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
         mesh.SetVertices(v); mesh.SetUVs(0, uv); mesh.SetTriangles(tri, 0);
@@ -163,7 +174,7 @@ public static class WorldBuilder
         RenderSettings.ambientGroundColor = new Color(0.3f, 0.35f, 0.25f);
         var sunGo = new GameObject("Sun"); sunGo.transform.SetParent(root);
         var sun = sunGo.AddComponent<Light>(); sun.type = LightType.Directional; sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.25f;
-        sun.shadows = LightShadows.Soft; sun.shadowStrength = 0.75f;
+        sun.shadows = LightShadows.Soft; sun.shadowStrength = 0.8f; sun.shadowBias = 0.03f; sun.shadowNormalBias = 0.3f;
         sunGo.transform.rotation = Quaternion.Euler(48, -35, 0);
 
         // ground
@@ -210,7 +221,8 @@ public static class WorldBuilder
             }
             MeshObj("Kerbs", v, uv, tri, Mat(Color.white, KerbTex())).transform.SetParent(root);
         }
-        Trackside.Build(t, root, t.width < 10.0); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
+        Trackside.Build(t, root, t.width < 10.0);
+        Scenery.Build(t, root, t.width < 10.0); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
 
         // playground pad + skidpad rings + distance boards + slalom cones
         {

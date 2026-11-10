@@ -5,6 +5,113 @@ using System.Text.Json;
 using FormulaSim;
 
 const double H = 1.0 / 240;
+Track[] Circuits() => new[] { Track.Build(), Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth), Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth) };
+string[] CircuitNames = { "Test track", "Monaco", "Spa" };
+
+// ---- AI trainer: dotnet run -- train ----
+// Evolution search (cross-entropy method) over the controller gains. Every candidate drives full laps in the
+// real physics; the score is the flying-lap time, and leaving the track disqualifies it.
+if (args.Length > 0 && args[0] == "train")
+{
+    var ace = new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 };
+    double Eval(Track t, RacingLine line, double[] p, out double worstLat)
+    {
+        worstLat = 0;
+        var d = new AiDriver(t, line, new CarConfig(), ace, AiTuning.From(p));
+        d.Place(t.N - 30, line.off[t.N - 30]);
+        double time = 0, limit = t.width / 2 + 0.3; int steps = 0;
+        while (time < 400)
+        {
+            if (steps++ % 4 == 0)
+            {
+                d.Think(4 * H, time, null, null, -1, 0);
+                if (d.recovered) return 5000 - d.progress * 1000;
+                if (time > 3) worstLat = Math.Max(worstLat, Math.Abs(d.lateral));
+                if (Math.Abs(d.lateral) > limit) return 5000 - d.progress * 1000;
+                if (d.lap >= 3) return d.lastLap;
+            }
+            var near = d.lateral; double hw = t.width / 2;
+            d.car.surfaceMu = Math.Abs(near) <= hw ? 1.0 : Surfaces.Kerb.mu; d.car.surfaceDrag = Math.Abs(near) <= hw ? 0 : Surfaces.Kerb.drag;
+            d.car.Step(d.LastInput, H); time += H;
+        }
+        return 6000;
+    }
+    double[] lo = { 2, 0.05, 0.0, 0.1, 0.1, 0.70, 0.60 }, hi = { 12, 0.5, 0.4, 1.5, 1.5, 1.05, 1.0 };
+    var result = new List<double[]>(); var tracks = Circuits(); var swAll = System.Diagnostics.Stopwatch.StartNew(); long laps = 0;
+    for (int ti = 0; ti < tracks.Length; ti++)
+    {
+        var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
+        var rnd = new Random(42 + ti);
+        double[] mean = new AiTuning().ToArray(), sig = { 1.5, 0.06, 0.05, 0.15, 0.15, 0.05, 0.06 };
+        double[] best = mean; double bestCost = double.MaxValue;
+        const int Pop = 40, Elite = 8, Gens = 16;
+        for (int gen = 0; gen < Gens; gen++)
+        {
+            var pop = new double[Pop][]; var cost = new double[Pop];
+            for (int k = 0; k < Pop; k++)
+            {
+                pop[k] = new double[mean.Length];
+                for (int j = 0; j < mean.Length; j++)
+                {
+                    double u1 = 1 - rnd.NextDouble(), u2 = rnd.NextDouble(), n = Math.Sqrt(-2 * Math.Log(u1)) * Math.Cos(2 * Math.PI * u2);
+                    pop[k][j] = Math.Clamp(k == 0 ? mean[j] : mean[j] + sig[j] * n, lo[j], hi[j]);
+                }
+            }
+            Parallel.For(0, Pop, k => { cost[k] = Eval(t, line, pop[k], out _); });
+            laps += Pop * 3;
+            var order = Enumerable.Range(0, Pop).OrderBy(k => cost[k]).ToArray();
+            if (cost[order[0]] < bestCost) { bestCost = cost[order[0]]; best = pop[order[0]]; }
+            for (int j = 0; j < mean.Length; j++)
+            {
+                double m = 0; for (int e = 0; e < Elite; e++) m += pop[order[e]][j]; m /= Elite;
+                double var = 0; for (int e = 0; e < Elite; e++) var += (pop[order[e]][j] - m) * (pop[order[e]][j] - m);
+                mean[j] = m; sig[j] = Math.Max(Math.Sqrt(var / Elite), sig[j] * 0.35);
+            }
+            Console.WriteLine($"{CircuitNames[ti]} gen {gen + 1}: best lap {(bestCost < 1000 ? bestCost.ToString("F2") + " s" : "off track")}");
+        }
+        // back off a little from the knife edge so the gains also hold up in traffic
+        best = (double[])best.Clone(); best[5] *= 0.985; best[6] *= 0.97;
+        double lapT = Eval(t, line, best, out double wl);
+        Console.WriteLine($"{CircuitNames[ti]}: trained lap {lapT:F2} s (max {wl:F2} m from the centre, track half-width {t.width / 2:F1}) gains {string.Join(", ", best.Select(b => b.ToString("F3", CultureInfo.InvariantCulture)))}");
+        result.Add(best);
+    }
+    Console.WriteLine($"Training: {laps} laps driven in {swAll.Elapsed.TotalSeconds:F0} s");
+    var path = Path.Combine(AppContext.BaseDirectory.Split("/bin/")[0], "../../Assets/Scripts/Physics/AiDriver.cs");
+    var src = File.ReadAllText(path); int a = src.IndexOf("/*TRAINED*/"), b = src.IndexOf("/*END*/");
+    var rows = string.Join("", result.Select(r => "\n            new[] { " + string.Join(", ", r.Select(x => x.ToString("F3", CultureInfo.InvariantCulture))) + " },"));
+    File.WriteAllText(path, src[..(a + 11)] + rows + "\n            " + src[b..]);
+    return;
+}
+
+// ---- race test: dotnet run -- race ----
+if (args.Length > 0 && args[0] == "race")
+{
+    var tracks = Circuits();
+    for (int ti = 0; ti < tracks.Length; ti++)
+    {
+        var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
+        var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
+        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
+        double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (time < 6 * 130 && ds.Min(d => d.lap) < 5)
+        {
+            if (steps++ % 4 == 0)
+            {
+                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; } }
+                for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
+            }
+            foreach (var d in ds) { double hw = t.width / 2, al = Math.Abs(d.lateral); d.car.surfaceMu = al <= hw ? 1 : al <= hw + 1.4 ? Surfaces.Kerb.mu : Surfaces.Grass.mu; d.car.surfaceDrag = al <= hw ? 0 : al <= hw + 1.4 ? Surfaces.Kerb.drag : Surfaces.Grass.drag; d.car.Step(d.LastInput, H); }
+            time += H;
+        }
+        Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
+        int pos = 1;
+        foreach (var d in ds.OrderByDescending(d => d.progress))
+            Console.WriteLine($"  P{pos++,-2} {d.who.name,-13} pace {d.who.pace:F2} best {d.bestLap:F2} resets {rec[ds.IndexOf(d)]}");
+    }
+    return;
+}
+
 var dir = AppContext.BaseDirectory.Split("/bin/")[0];
 var sc = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "scenarios.json"))).RootElement;
 var golden = File.ReadAllLines(Path.Combine(dir, "golden.csv")).Select(l => l.Split(',')).ToList();

@@ -34,6 +34,14 @@ public static class BuildScript
         // materials that keep the shaders we create at runtime inside the build
         if (!File.Exists("Assets/Resources/Sky.mat"))
             AssetDatabase.CreateAsset(new Material(Shader.Find("Skybox/Procedural")), "Assets/Resources/Sky.mat");
+        if (!File.Exists("Assets/Resources/Glow.mat"))
+        {
+            // Standard shader with emission switched on, so that shader variant is part of the build (brake lights)
+            var g = new Material(Shader.Find("Standard"));
+            g.EnableKeyword("_EMISSION"); g.SetColor("_EmissionColor", Color.red);
+            g.globalIlluminationFlags = MaterialGlobalIlluminationFlags.None;
+            AssetDatabase.CreateAsset(g, "Assets/Resources/Glow.mat");
+        }
         if (!File.Exists("Assets/Resources/Shadow.mat"))
             AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Transparent")), "Assets/Resources/Shadow.mat");
         if (!File.Exists(ScenePath))

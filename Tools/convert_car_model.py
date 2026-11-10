@@ -1,6 +1,9 @@
 # Convert the SF-26 glb into a compact, logo-free, mobile-ready mesh file for the game.
 # Output: car.bytes (custom binary, read by CarModel.cs) — Unity frame: x right, y up, z forward, origin = CG on the ground.
 import trimesh, numpy as np, struct, fast_simplification, sys
+# usage: convert.py [lod]   (lod = low-detail copy for rival cars, written to car_lod.bytes)
+LOD = 0.13 if len(sys.argv) > 1 and sys.argv[1] == 'lod' else 1.0
+OUT = 'car_lod.bytes' if LOD < 1 else 'car.bytes'
 WHEELBASE, FRONTW = 3.135, 0.45            # physics car: front axle at +a, rear at -b from CG
 B = WHEELBASE * FRONTW; A = WHEELBASE - B
 sc = trimesh.load('sf26/source/f1_2026_sf26.glb', force='scene')
@@ -62,6 +65,7 @@ det_flip = (L_AX == 0)  # swapping x/z is a mirror; also the sign flips below
 def export_mesh(mesh, target_tris, smooth_angle=35):
     if mesh is None: return None
     v, f = mesh.vertices, mesh.faces
+    target_tris = max(60, int(target_tris * LOD))
     if len(f) > target_tris:
         v, f = fast_simplification.simplify(v, f, target_reduction=1 - target_tris / len(f))
     m = trimesh.Trimesh(v, f, process=True)
@@ -118,7 +122,7 @@ for key, nm in (((front_sign, 1), 'FL'), ((front_sign, -1), 'FR'), ((-front_sign
             out.append((f'wheel_{nm}_{kname}', MAT['hub' if kname != 'tyre' else 'tyre'], tuple(piv)) + (pos, r[1], r[2]))
 # helmet position: just ahead of the airbox, above the cockpit
 total = 0
-with open('car.bytes', 'wb') as f:
+with open(OUT, 'wb') as f:
     f.write(b'F2M1'); f.write(struct.pack('<i', len(out)))
     for nm, mid, piv, pos, nrm, faces in out:
         b = nm.encode(); f.write(struct.pack('<i', len(b))); f.write(b)
@@ -128,4 +132,4 @@ with open('car.bytes', 'wb') as f:
         total += len(faces); print(f'{nm:18s} mat {mid} verts {len(pos):6d} tris {len(faces):6d} pivot {np.round(piv,3)}')
 allp = np.concatenate([o[3] + np.array(o[2], np.float32) for o in out])
 print('TOTAL tris', total, 'bounds', np.round(allp.min(0), 3), np.round(allp.max(0), 3))
-import os; print('file MB', os.path.getsize('car.bytes') / 1e6)
+import os; print('file MB', os.path.getsize(OUT) / 1e6)
