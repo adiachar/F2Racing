@@ -48,10 +48,13 @@ public class GameManager : MonoBehaviour
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
         mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == 3; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1); showLine = PlayerPrefs.GetInt("line", 0) == 1; absOn = PlayerPrefs.GetInt("abs", 1) == 1;
+        dzIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltDz", 1), 0, DeadZones.Length - 1); rangeIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltRange", 2), 0, TiltRanges.Length - 1);
+        smoothIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltSmooth", 1), 0, SmoothCut.Length - 1); speedSteerIdx = Mathf.Clamp(PlayerPrefs.GetInt("speedSteer", 2), 0, SpeedSteer.Length - 1);
+        ApplyScreenLock();
         rivalIdx = Mathf.Clamp(PlayerPrefs.GetInt("rivals", 1), 0, RivalCounts.Length - 1); diffIdx = Mathf.Clamp(PlayerPrefs.GetInt("diff", 0), 0, DiffNames.Length - 1);
 
         LoadMap();
-        car = new FormulaCar(new CarConfig { tc = tc, abs = absOn, aeroFront = Balances[balIdx], steerSpeed = 12, steerReturn = 16 });
+        car = new FormulaCar(PlayerConfig());
         model = CarModel.CreateFromAsset() ?? CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
         var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera";
         cam.nearClipPlane = 0.2f; cam.farClipPlane = 2500; cam.fieldOfView = 62;
@@ -175,12 +178,12 @@ public class GameManager : MonoBehaviour
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.Save();
+        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("tiltDz", dzIdx); PlayerPrefs.SetInt("tiltRange", rangeIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.Save();
     }
 
     void ResetCar()
     {
-        car = new FormulaCar(new CarConfig { tc = tc, abs = absOn, aeroFront = Balances[balIdx], steerSpeed = 12, steerReturn = 16 });
+        car = new FormulaCar(PlayerConfig());
         SetupRivals();
         if (playground) { car.x = WorldBuilder.PadStart.x - 15; car.y = WorldBuilder.PadStart.y; car.heading = 0; }
         else
@@ -200,12 +203,14 @@ public class GameManager : MonoBehaviour
     static readonly string[] DiffNames = { "Easy", "Medium", "Hard", "Real" };
     static readonly double[] DiffScale = { 0.82, 0.89, 0.95, 1.0 }; int diffIdx;
     readonly List<AiDriver> rivals = new List<AiDriver>(); readonly List<CarModel> rivalModels = new List<CarModel>(); readonly List<float> rivalSpin = new List<float>();
+    readonly List<CarModel> rivalFar = new List<CarModel>(); readonly List<bool> rivalNear = new List<bool>();
     const double Countdown = 3; double raceTime; int pLap, aiTick; double playerLat;
 
     void SetupRivals()
     {
         foreach (var m in rivalModels) if (m != null) Destroy(m.gameObject);
-        rivals.Clear(); rivalModels.Clear(); rivalSpin.Clear();
+        foreach (var m in rivalFar) if (m != null) Destroy(m.gameObject);
+        rivals.Clear(); rivalModels.Clear(); rivalSpin.Clear(); rivalFar.Clear(); rivalNear.Clear();
         int count = playground || line == null ? 0 : RivalCounts[rivalIdx];
         var grid = DriverProfile.Grid;
         for (int k = 0; k < count; k++)
@@ -217,6 +222,8 @@ public class GameManager : MonoBehaviour
             rivals.Add(d); rivalSpin.Add(0);
             var col = new Color(who.r, who.g, who.b);
             rivalModels.Add(CarModel.CreateFromAsset("Car/car_lod", col, true) ?? CarModel.Create(d.car.cfg.wheelbase, d.car.cfg.frontWeight, d.car.cfg.wheelRadius));
+            var far = CarModel.CreateFromAsset("Car/car_far", col, true); if (far != null) far.gameObject.SetActive(false);
+            rivalFar.Add(far); rivalNear.Add(true);
         }
     }
 
@@ -310,43 +317,76 @@ public class GameManager : MonoBehaviour
     }
     static float PedalAmount(Rect r, Vector2 p) => Mathf.Clamp01(0.2f + 0.8f * (r.yMax - p.y) / r.height); // low on the pedal = light, high = full
 
-    float tiltCenter, tiltSmooth, tiltAxis = float.NaN, tiltAxisT, tiltConf;
-    // Steering-wheel angle of the phone held sideways, from gravity only.
-    // Gravity's direction in the screen plane is measured against a LOCKED "down" axis (one of +x,-x,+y,-y,
-    // whichever the OS reports for landscape). The lock only moves after gravity has sat clearly on another
-    // axis for 0.6 s, so holding a big tilt never flips the steering the other way.
-    // When the phone lies flat, gravity is almost perpendicular to the screen and the angle is pure noise:
-    // tiltConf fades steering to zero there instead of letting it jitter.
+    // ---------------------------------------------------------------- tilt steering
+    // The phone is the steering wheel: its turn angle is the direction of gravity within the screen plane.
+    //  * The angle is measured from a LOCKED "down" axis, so a big tilt can never flip the steering, and the screen
+    //    is kept from auto-rotating while tilt steering is on (a rotating screen made the steering jump).
+    //  * All sensor samples since the last frame are averaged, then smoothed with a "one euro" filter: it smooths
+    //    hard when the phone is held still (no jitter) and hardly at all when it moves quickly (no lag).
+    //  * Only when the phone lies almost flat is there too little gravity in the screen plane to measure; steering
+    //    then fades out. It works normally from about 15 degrees of screen tilt upwards.
+    // Dead zone, angle for full lock and smoothing are settings.
+    float tiltCenter, tiltSmooth, tiltAxis = float.NaN, tiltAxisT, tiltConf, tiltRawDeg, tiltVel; bool tiltInit;
+    static readonly float[] DeadZones = { 0f, 0.5f, 1f, 2f, 3f }; int dzIdx = 1;
+    static readonly float[] TiltRanges = { 12f, 16f, 20f, 25f, 30f }; int rangeIdx = 2;
+    static readonly string[] SmoothNames = { "Off", "Low", "Medium", "High" };
+    static readonly float[] SmoothCut = { 60f, 6f, 3f, 1.5f }; int smoothIdx = 1;
+    static readonly string[] SpeedSteerNames = { "Full lock always", "Quick", "Normal", "Calm" };
+    static readonly double[] SpeedSteer = { 0.0, 0.25, 0.5, 1.25 }; int speedSteerIdx = 2;
+
+    Vector3 Gravity()
+    {
+        // every accelerometer sample since the last frame (phones report 2-4 per frame), averaged
+        Vector3 sum = Vector3.zero; float w = 0;
+        int n = Input.accelerationEventCount;
+        for (int i = 0; i < n; i++) { var e = Input.GetAccelerationEvent(i); float dtE = Mathf.Max(e.deltaTime, 1e-4f); sum += e.acceleration * dtE; w += dtE; }
+        return w > 0 ? sum / w : Input.acceleration;
+    }
     float TiltRaw()
     {
-        var a = Input.acceleration;
+        var a = Gravity();
         float inPlane = Mathf.Sqrt(a.x * a.x + a.y * a.y);
-        tiltConf = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.3f, 0.6f, inPlane));
-        if (inPlane < 0.2f) return 0;
+        tiltConf = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.12f, 0.26f, inPlane));
+        if (inPlane < 0.1f) return tiltRawDeg; // lying flat: nothing to measure, keep the last value
         float th = Mathf.Atan2(a.y, a.x) * Mathf.Rad2Deg;
         float nearest = Mathf.Round(th / 90f) * 90f;
-        if (float.IsNaN(tiltAxis)) tiltAxis = nearest;
-        bool clearlyOther = Mathf.Abs(Mathf.DeltaAngle(th, nearest)) < 25f && Mathf.Abs(Mathf.DeltaAngle(nearest, tiltAxis)) > 1f && inPlane > 0.6f;
-        if (clearlyOther) { tiltAxisT += Time.unscaledDeltaTime; if (tiltAxisT > 0.6f) { tiltAxis = nearest; tiltAxisT = 0; } }
+        if (float.IsNaN(tiltAxis)) { if (inPlane < 0.3f) return 0; tiltAxis = nearest; }
+        bool clearlyOther = Mathf.Abs(Mathf.DeltaAngle(th, nearest)) < 20f && Mathf.Abs(Mathf.DeltaAngle(nearest, tiltAxis)) > 1f && inPlane > 0.35f;
+        if (clearlyOther) { tiltAxisT += Time.unscaledDeltaTime; if (tiltAxisT > 0.5f) { tiltAxis = nearest; tiltAxisT = 0; } }
         else tiltAxisT = 0;
-        float deg = Mathf.Clamp(Mathf.DeltaAngle(tiltAxis, th), -80, 80);
-        return invertTilt ? -deg : deg;
+        float deg = Mathf.Clamp(Mathf.DeltaAngle(tiltAxis, th), -85, 85);
+        tiltRawDeg = invertTilt ? -deg : deg;
+        return tiltRawDeg;
     }
+    static float Alpha(float cutoffHz, float dt) => 1f / (1f + 1f / (2f * Mathf.PI * cutoffHz * dt));
     float TiltSteer()
     {
-        float target = (TiltRaw() - tiltCenter) * tiltConf;
-        // smoothing: ~0.08 s, plus a tiny hysteresis band that swallows sensor noise
-        float k = Mathf.Min(1, Time.deltaTime * 12);
-        float d = target - tiltSmooth;
-        if (Mathf.Abs(d) < 0.25f) d = 0;
-        tiltSmooth += d * k;
+        float dt = Mathf.Clamp(Time.unscaledDeltaTime, 0.002f, 0.1f);
+        float x = (TiltRaw() - tiltCenter) * tiltConf;
+        if (!tiltInit) { tiltSmooth = x; tiltVel = 0; tiltInit = true; }
+        // one euro filter: the faster the phone turns, the less it is smoothed
+        float v = (x - tiltSmooth) / dt;
+        tiltVel += (v - tiltVel) * Alpha(4f, dt);
+        float cut = SmoothCut[smoothIdx] + 0.18f * Mathf.Abs(tiltVel);
+        tiltSmooth += (x - tiltSmooth) * Alpha(cut, dt);
         return TiltToSteer();
     }
     float TiltToSteer()
     {
-        float dz = 2f, a = Mathf.Abs(tiltSmooth); // 2 deg dead zone, full lock at ~27 deg
-        return a < dz ? 0 : Mathf.Clamp(Mathf.Sign(tiltSmooth) * (a - dz) / 25f, -1, 1);
+        float dz = DeadZones[dzIdx], range = TiltRanges[rangeIdx], a = Mathf.Abs(tiltSmooth);
+        return a <= dz ? 0 : Mathf.Clamp(Mathf.Sign(tiltSmooth) * (a - dz) / (range - dz), -1, 1);
     }
+    // while tilt steering is on the screen must not auto-rotate; with drag steering it may
+    void ApplyScreenLock()
+    {
+        if (!tilt) { Screen.orientation = ScreenOrientation.AutoRotation; return; }
+        // freeze the screen the way it is right now (never force a side: that could turn the picture upside down)
+        var cur = Screen.orientation;
+        if (cur == ScreenOrientation.LandscapeLeft || cur == ScreenOrientation.LandscapeRight) Screen.orientation = cur;
+        tiltAxis = float.NaN; tiltInit = false;
+    }
+    CarConfig PlayerConfig() => new CarConfig { tc = tc, abs = absOn, aeroFront = Balances[balIdx], steerSpeed = 14, steerReturn = 18, speedSens = SpeedSteer[speedSteerIdx] };
+
     // ---------------------------------------------------------------- loop
     void Update()
     {
@@ -385,13 +425,18 @@ public class GameManager : MonoBehaviour
         double al = acc / H, dh = System.Math.Atan2(System.Math.Sin(car.heading - ph), System.Math.Cos(car.heading - ph));
         double rx = px + (car.x - px) * al, ry = py + (car.y - py) * al, rh = ph + dh * al, rd = pd + (car.delta - pd) * al;
         model.Apply(rx, ry, rh, rd, visF, visR, gLon, gLat);
-        model.SetBrake(car.brake > 0.05);
+        model.SetBrake(car.brake > 0.05); model.SetSteer((float)car.steerIn);
         for (int i = 0; i < rivals.Count; i++)
         {
             var c = rivals[i].car;
             rivalSpin[i] = Mathf.Repeat(rivalSpin[i] + Mathf.Clamp((float)(c.vx / c.cfg.wheelRadius) * dt, -0.5f, 0.5f), Mathf.PI * 2);
-            rivalModels[i].Apply(c.x, c.y, c.heading, c.delta, rivalSpin[i], rivalSpin[i], 0, 0);
-            rivalModels[i].SetBrake(c.brake > 0.05);
+            // close rivals use the detailed model, distant ones the light one
+            float ddx = (float)c.x - cam.transform.position.x, ddz = (float)c.y - cam.transform.position.z;
+            bool near = ddx * ddx + ddz * ddz < (rivalNear[i] ? 34f * 34f : 28f * 28f) || rivalFar[i] == null;
+            if (near != rivalNear[i]) { rivalNear[i] = near; rivalModels[i].gameObject.SetActive(near); if (rivalFar[i] != null) rivalFar[i].gameObject.SetActive(!near); }
+            var rm = near ? rivalModels[i] : rivalFar[i];
+            rm.Apply(c.x, c.y, c.heading, c.delta, rivalSpin[i], rivalSpin[i], 0, 0);
+            rm.SetBrake(c.brake > 0.05);
         }
         UpdateSkids();
         AutoQuality();
@@ -510,17 +555,18 @@ public class GameManager : MonoBehaviour
 
         // top-right: Settings, Camera, Restart. Everything else lives in the settings menu.
         float bh = S(30), bw = S(74), x0 = Screen.width - S(8);
-        if (GUI.Button(new Rect(x0 - 3 * (bw + S(4)), S(8), bw, bh), menuOpen ? "Close" : "Settings", btn)) menuOpen = !menuOpen;
+        if (GUI.Button(new Rect(x0 - 3 * (bw + S(4)), S(8), bw, bh), menuOpen ? "Close" : "Settings", btn)) { menuOpen = !menuOpen; if (!menuOpen) ApplyScreenLock(); }
         if (GUI.Button(new Rect(x0 - 2 * (bw + S(4)), S(8), bw, bh), "Cam", btn)) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); Save(); }
         if (GUI.Button(new Rect(x0 - 1 * (bw + S(4)), S(8), bw, bh), "Restart", btn)) { ResetCar(); menuOpen = false; }
         if (!menuOpen && !playground && (surface == 2 || hitT > 0) && GUI.Button(new Rect(Screen.width / 2 - S(60), Screen.height * 0.5f, S(120), bh), "Back on track", btn)) Recover();
         if (menuOpen)
         {
-            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera" };
+            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera", "Tilt dead zone", "Tilt for full lock", "Tilt smoothing", "Steering at speed" };
             string[] vals = { sound ? "On" : "Off", tc.ToString(), absOn ? "On" : "Off (real F1)", $"{Balances[balIdx] * 100:0}% front", tilt ? "Tilt the phone" : "Drag on screen",
-                              invertTilt ? "Inverted" : "Normal", "Set straight now", MapNames[mapIdx], showLine ? "Shown" : "Hidden", RivalCounts[rivalIdx].ToString(), DiffNames[diffIdx], CamNames[camMode] };
+                              invertTilt ? "Inverted" : "Normal", "Set straight now", MapNames[mapIdx], showLine ? "Shown" : "Hidden", RivalCounts[rivalIdx].ToString(), DiffNames[diffIdx], CamNames[camMode],
+                              $"{DeadZones[dzIdx]:0.#}°", $"{TiltRanges[rangeIdx]:0}°", SmoothNames[smoothIdx], SpeedSteerNames[speedSteerIdx] };
             int rows = (names.Length + 1) / 2;
-            float panW = Mathf.Min(Screen.width - S(40), S(560)), rh = S(34), panH = rows * rh + S(52);
+            float panW = Mathf.Min(Screen.width - S(40), S(600)), rh = S(33), panH = rows * rh + S(52);
             var panel = new Rect((Screen.width - panW) / 2, (Screen.height - panH) / 2 + S(10), panW, panH);
             Fill(panel, new Color(0.05f, 0.06f, 0.08f, 0.93f));
             center.fontSize = (int)S(15); GUI.Label(new Rect(panel.x, panel.y + S(6), panW, S(24)), "<b>SETTINGS</b>   (game paused)", center);
@@ -534,7 +580,7 @@ public class GameManager : MonoBehaviour
                 if (i == 1) { tc = (TcMode)(((int)tc + 1) % 3); car.cfg.tc = tc; }
                 if (i == 2) { absOn = !absOn; car.cfg.abs = absOn; }
                 if (i == 3) { balIdx = (balIdx + 1) % Balances.Length; car.cfg.aeroFront = Balances[balIdx]; }
-                if (i == 4) { tilt = !tilt; tiltCenter = 0; }
+                if (i == 4) { tilt = !tilt; tiltCenter = 0; ApplyScreenLock(); }
                 if (i == 5) invertTilt = !invertTilt;
                 if (i == 6) { tiltCenter = TiltRaw(); Flash("Straight = how you hold it now"); }
                 if (i == 7) { mapIdx = (mapIdx + 1) % MapNames.Length; LoadMap(); ResetCar(); }
@@ -542,6 +588,10 @@ public class GameManager : MonoBehaviour
                 if (i == 9) { rivalIdx = (rivalIdx + 1) % RivalCounts.Length; ResetCar(); }
                 if (i == 10) { diffIdx = (diffIdx + 1) % DiffNames.Length; ResetCar(); }
                 if (i == 11) camMode = (camMode + 1) % CamNames.Length;
+                if (i == 12) dzIdx = (dzIdx + 1) % DeadZones.Length;
+                if (i == 13) rangeIdx = (rangeIdx + 1) % TiltRanges.Length;
+                if (i == 14) smoothIdx = (smoothIdx + 1) % SmoothCut.Length;
+                if (i == 15) { speedSteerIdx = (speedSteerIdx + 1) % SpeedSteer.Length; car.cfg.speedSens = SpeedSteer[speedSteerIdx]; }
                 Save();
             }
         }

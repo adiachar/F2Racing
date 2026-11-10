@@ -58,7 +58,8 @@ namespace FormulaSim
         public double brakeForce = 46000;    // N total at full pedal (enough for ~5 g with downforce)
         public double brakeBias = 0.57;      // front share
         public double maxLockDeg = 22;       // Monaco-spec steering lock
-        public double speedSens = 1.25;          // steering ratio aid: less lock at speed (same feel as before with the larger lock)
+        public double speedSens = 0.5;      // steering aid: lock = full / (1 + speedSens (v/30)^2). 0 = full lock at any speed
+        public double csFull = 0.07;        // slide angle (rad) at which countersteer gets full lock again
         public double steerSpeed = 3.0;
         public double steerReturn = 8.0;
         public bool csOpen = true;           // open up to full lock when countersteering
@@ -78,7 +79,7 @@ namespace FormulaSim
         public static CarConfig LegacyF2() => new CarConfig
         {
             mass = 795, inertiaZ = 950, wheelbase = 3.135, frontWeight = 0.45, cgHeight = 0.28, wheelRadius = 0.33,
-            mu = 2.2, wheelInertia = 1.6, speedSens = 1.0, track = 1.50, cdA = 1.05, clA = 4.0, activeAero = false, cdAX = 1.05, clAX = 4.0,
+            mu = 2.2, wheelInertia = 1.6, speedSens = 1.0, csFull = 0.14, track = 1.50, cdA = 1.05, clA = 4.0, activeAero = false, cdAX = 1.05, clAX = 4.0,
             peakTorque = 600, torqueRpm = new double[] { 2000, 4000, 5500, 6500, 7500, 8750 }, torqueFrac = new[] { 0.40, 0.62, 0.88, 1.0, 0.97, 0.84 },
             redline = 8750, idleRpm = 3000, gearTopSpeeds = new double[] { 128, 168, 207, 245, 283, 320 }, driveEff = 0.80,
             ersPower = 0, shiftTime = 0.05, brakeForce = 22500, brakeBias = 0.60, maxLockDeg = 18,
@@ -233,7 +234,7 @@ namespace FormulaSim
             if (double.IsNaN(lockV) || speed < lockV) lockV = speed;
             else if (!countering && (Math.Abs(target) > Math.Abs(steerIn) + 0.02 || Math.Abs(steerIn) < 0.1)) lockV = Math.Min(speed, lockV + 10 * dt);
             double speedLock = fullLock / (1 + c.speedSens * (lockV / 30) * (lockV / 30));
-            double cs = countering && c.csOpen ? Clamp(Math.Abs(beta) / 0.14, 0, 1) : 0;
+            double cs = countering && c.csOpen ? Clamp(Math.Abs(beta) / c.csFull, 0, 1) : 0;
             csBlend = csBlend + (cs - csBlend) * Math.Min(1, dt * 12);
             double lockA = speedLock + (fullLock - speedLock) * csBlend;
             lockAngle = lockA;

@@ -1,9 +1,13 @@
 # Convert the SF-26 glb into a compact, logo-free, mobile-ready mesh file for the game.
 # Output: car.bytes (custom binary, read by CarModel.cs) — Unity frame: x right, y up, z forward, origin = CG on the ground.
 import trimesh, numpy as np, struct, fast_simplification, sys
-# usage: convert.py [lod]   (lod = low-detail copy for rival cars, written to car_lod.bytes)
-LOD = 0.13 if len(sys.argv) > 1 and sys.argv[1] == 'lod' else 1.0
-OUT = 'car_lod.bytes' if LOD < 1 else 'car.bytes'
+# usage: convert.py [lod|far|full]
+MODE = sys.argv[1] if len(sys.argv) > 1 else ''
+# lod = rival cars close by, far = rival cars in the distance (the game swaps between them by distance)
+LOD = {'lod': 0.28, 'far': 0.06}.get(MODE, 1.0)
+OUT = {'lod': 'car_lod.bytes', 'far': 'car_far.bytes'}.get(MODE, 'car.bytes')
+FULL = len(sys.argv) > 1 and sys.argv[1] == 'full'   # diagnostic: nothing simplified, dropped groups included
+if FULL: OUT = 'car_full.bytes'
 WHEELBASE, FRONTW = 3.135, 0.45            # physics car: front axle at +a, rear at -b from CG
 B = WHEELBASE * FRONTW; A = WHEELBASE - B
 sc = trimesh.load('sf26/source/f1_2026_sf26.glb', force='scene')
@@ -62,11 +66,11 @@ def to_unity(v):
     # keep handedness consistent: if we swapped axes (det<0) the caller flips winding
     return out
 det_flip = (L_AX == 0)  # swapping x/z is a mirror; also the sign flips below
-def export_mesh(mesh, target_tris, smooth_angle=35):
+def export_mesh(mesh, target_tris, smooth_angle=35, lod_tris=None):
     if mesh is None: return None
     v, f = mesh.vertices, mesh.faces
-    target_tris = max(60, int(target_tris * LOD))
-    if len(f) > target_tris:
+    target_tris = max(60, int(target_tris * LOD)) if lod_tris is None or LOD >= 1 else (lod_tris if MODE == 'lod' else max(60, lod_tris // 5))
+    if len(f) > target_tris and not FULL:
         v, f = fast_simplification.simplify(v, f, target_reduction=1 - target_tris / len(f))
     m = trimesh.Trimesh(v, f, process=True)
     m = m.smooth_shaded if smooth_angle is None else trimesh.graph.smooth_shade(m, angle=np.radians(smooth_angle))
@@ -89,46 +93,63 @@ print('axis map det', np.linalg.det(Mlin), 'flip winding', MIRROR)
 
 out = []  # (name, matId, pivot(xyz), pos, nrm, faces)
 MAT = {'paint_red': 0, 'paint_white': 1, 'carbon': 2, 'metal': 3, 'tyre': 4, 'hub': 5, 'light': 6, 'white': 1}
-# body: paint split into red (front/lower) and white (engine cover top / rear upper) by triangle position
-paint = get(GROUPS['paint'])
-pc = to_unity(paint.triangles_center)
-white_sel = (pc[:, 2] < 0.25) & (pc[:, 1] > 0.62 * scale / scale)  # behind the cockpit and above sidepod height
-for nm, sel, tgt in (('paint_red', ~white_sel, 9000), ('paint_white', white_sel, 5000)):
-    sub = paint.submesh([np.where(sel)[0]], append=True)
-    r = export_mesh(sub, tgt); out.append((nm, MAT[nm], (0, 0, 0)) + r)
-for g, tgt in (('carbon', 26000), ('white', 800), ('metal', 1500), ('light', 400)):
+# body paint: one colour, kept at full detail (it is the smooth surface the eye rests on, and what the driver sees
+# from the cockpit; simplifying it left jagged shards)
+r = export_mesh(get(GROUPS['paint']), 31000); out.append(('paint_red', MAT['paint_red'], (0, 0, 0)) + r)
+for g, tgt in (('carbon', 56000), ('white', 1000), ('metal', 1500), ('light', 400)):
     r = export_mesh(get(GROUPS[g]), tgt)
     if r: out.append((g, MAT[g], (0, 0, 0)) + r)
+if FULL:
+    for nm, names, mid in (('decals', ['sf25_decals', 'sf25_decals2', 'numbers'], 7), ('sw', ['sf25_sw', 'sf25_sw_carbon', 'sf25_sw_decals', 'sf25_lcd'], 8), ('misc', ['gp21_cinture.005', 'driver_color', 'glass', 'plastic_interior.002'], 9)):
+        r = export_mesh(get(names), 10**9)
+        if r: out.append((nm, mid, (0, 0, 0)) + r)
 # wheels: split tyre + hub per wheel, pivot at the wheel centre (so it can spin and steer)
 hub = get(GROUPS['hub'])
 for key, nm in (((front_sign, 1), 'FL'), ((front_sign, -1), 'FR'), ((-front_sign, 1), 'RL'), ((-front_sign, -1), 'RR')):
     piv = None
-    for src, kind, tgt in ((tyre, 'tyre', 1600), (hub, 'hub', 1100)):
+    for src, kind in ((tyre, 'tyre'), (hub, 'hub')):
         c2 = src.triangles_center
         sel = (np.sign(c2[:, L_AX] - mid_l) == key[0]) & (np.sign(c2[:, W_AX]) == key[1])
         sub = src.submesh([np.where(sel)[0]], append=True)
         if kind == 'tyre':
             piv = to_unity(((sub.bounds[0] + sub.bounds[1]) / 2)[None])[0]
-            pieces = [('tyre', sub, tgt)]
+            # The model's wheels have camber and toe; spun about the car's cross axis they would wobble.
+            # Find the wheel's own axis from the FULL-detail tyre (direction of least spread), stand the wheel up
+            # straight, and put the axis exactly through the pivot.
+            full = to_unity(np.asarray(sub.vertices)) - piv
+            cc = full - full.mean(0); ev, evec = np.linalg.eigh(cc.T @ cc); ax = evec[:, 0] * np.sign(evec[0, 0])
+            vv = np.cross(ax, [1, 0, 0]); sn = np.linalg.norm(vv); cs = ax[0]
+            K = np.array([[0, -vv[2], vv[1]], [vv[2], 0, -vv[0]], [-vv[1], vv[0], 0]])
+            Rw = np.eye(3) if sn < 1e-9 else np.eye(3) + K + K @ K * ((1 - cs) / sn ** 2)
+            fr = full @ Rw.T; shift = np.array([0, (fr[:, 1].min() + fr[:, 1].max()) / 2, (fr[:, 2].min() + fr[:, 2].max()) / 2])
+            print(f'wheel {nm}: straightened by {np.degrees(np.arcsin(sn)):.2f} deg, centre moved {np.round(shift * 1000, 1)} mm')
+            pieces = [('tyre', sub, 3200, 1500)]
         else:
             # rim/wheel cover sits on the outboard half and spins; brake caliper, upright and duct sit
             # inboard and must only steer (spinning them made the wheels look disconnected)
             cu = to_unity(sub.triangles_center); outward = np.sign(piv[0]) * (cu[:, 0] - piv[0]) > 0.0
-            pieces = [('hub', sub.submesh([np.where(outward)[0]], append=True), 800),
-                      ('hubstatic', sub.submesh([np.where(~outward)[0]], append=True), 500)]
-        for kname, mesh, t2 in pieces:
-            r = export_mesh(mesh, t2, smooth_angle=50)
-            pos = r[0] - piv.astype(np.float32)
-            if kname == 'tyre':
-                # the model's wheels have camber and toe; spun about the car's cross axis they would wobble.
-                # Find the wheel's own axis (direction of least spread) and stand the wheel up straight.
-                cc = pos - pos.mean(0); ev, evec = np.linalg.eigh(cc.T @ cc); ax = evec[:, 0] * np.sign(evec[0, 0])
-                vv = np.cross(ax, [1, 0, 0]); sn = np.linalg.norm(vv); cs = ax[0]
-                K = np.array([[0, -vv[2], vv[1]], [vv[2], 0, -vv[0]], [-vv[1], vv[0], 0]])
-                Rw = np.eye(3) if sn < 1e-9 else np.eye(3) + K + K @ K * ((1 - cs) / sn ** 2)
-                print(f'wheel {nm}: straightened by {np.degrees(np.arcsin(sn)):.2f} deg')
-            pos = (pos @ Rw.T).astype(np.float32); nr = (r[1] @ Rw.T).astype(np.float32)
+            pieces = [('hub', sub.submesh([np.where(outward)[0]], append=True), 10**9, 1500),   # simplifying the rim bends it: keep it
+                      ('hubstatic', sub.submesh([np.where(~outward)[0]], append=True), 900, 150)]
+        for kname, mesh, t2, t3 in pieces:
+            r = export_mesh(mesh, t2, smooth_angle=50, lod_tris=t3)
+            pos = (r[0] - piv.astype(np.float32)) @ Rw.T - shift; nr = (r[1] @ Rw.T).astype(np.float32)
+            # the simplifier sometimes throws a vertex far out of place; keep every vertex inside the original part
+            fv = (to_unity(np.asarray(mesh.vertices)) - piv) @ Rw.T - shift; rmax = np.hypot(fv[:, 1], fv[:, 2]).max()
+            pos[:, 0] = np.clip(pos[:, 0], fv[:, 0].min(), fv[:, 0].max())
+            rr = np.hypot(pos[:, 1], pos[:, 2]); k = np.minimum(1, rmax / np.maximum(rr, 1e-9)); pos[:, 1] *= k; pos[:, 2] *= k
+            pos = pos.astype(np.float32)
             out.append((f'wheel_{nm}_{kname}', MAT['hub' if kname != 'tyre' else 'tyre'], tuple(piv)) + (pos, nr, r[2]))
+# steering wheel: its own part, stored facing straight down the car (axis = z) so the game can turn it; the part
+# name carries how far the column is tilted back
+sw = get(['sf25_sw', 'sf25_sw_carbon'])
+if sw is not None and MODE != 'far':
+    r = export_mesh(sw, 3000, smooth_angle=40)
+    full = to_unity(np.asarray(sw.vertices)); c = (full.min(0) + full.max(0)) / 2; c[0] = 0
+    cc = full - full.mean(0); ev, evec = np.linalg.eigh(cc.T @ cc); ax = evec[:, 0]; ax[0] = 0; ax /= np.linalg.norm(ax); ax *= np.sign(ax[2])
+    pitch = np.degrees(np.arctan2(-ax[1], ax[2]))        # Unity: +pitch about x tips +z down
+    a = np.radians(-pitch); Rx = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+    out.append((f'steer_{pitch:.2f}', MAT['carbon'], tuple(c)) + (((r[0] - c.astype(np.float32)) @ Rx.T).astype(np.float32), (r[1] @ Rx.T).astype(np.float32), r[2]))
+    print('steering wheel centre', np.round(c, 3), 'column pitch', round(pitch, 2))
 # helmet position: just ahead of the airbox, above the cockpit
 total = 0
 with open(OUT, 'wb') as f:

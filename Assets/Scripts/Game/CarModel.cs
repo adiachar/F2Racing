@@ -9,6 +9,9 @@ public class CarModel : MonoBehaviour
 {
     public Transform body;
     public GameObject cockpitFloor;
+    Transform steerWheel; float steerPitch;
+    // turn the steering wheel in the cockpit: steer -1..1 (+ = right), about a third of a turn each way
+    public void SetSteer(float steer) { if (steerWheel != null) steerWheel.localRotation = Quaternion.Euler(steerPitch, 0, -steer * 120f); }
     public Transform[] frontPivots = new Transform[2], frontSpin = new Transform[2], rearSpin = new Transform[2];
     public Transform helmet;
 
@@ -307,17 +310,23 @@ public class CarModel : MonoBehaviour
             if (cached != null) mesh = cached[p];
             else
             {
-                // The source model has many thin panels built as a single skin, and some facing inwards; with
-                // normal one-sided drawing those show as holes. Every triangle gets a twin facing the other way.
-                var pos2 = new Vector3[nv * 2]; var nrm2 = new Vector3[nv * 2]; var idx2 = new int[ni * 2];
-                for (int i = 0; i < nv; i++) { pos2[i] = pos[i]; nrm2[i] = nrm[i]; pos2[nv + i] = pos[i]; nrm2[nv + i] = -nrm[i]; }
-                for (int i = 0; i < ni; i += 3)
+                // Thin parts (wings, floor, suspension, cockpit tub, mirrors) are single skins in the source model, and
+                // some face inwards: drawn one-sided they show as holes. Those get a twin of every triangle facing the
+                // other way. The painted body, tyres and rims are closed shapes and stay one-sided (half the work).
+                bool twoSided = mid == 1 || mid == 2 || mid == 3 || mid == 6 || name.StartsWith("steer_");
+                if (twoSided)
                 {
-                    idx2[i] = idx[i]; idx2[i + 1] = idx[i + 1]; idx2[i + 2] = idx[i + 2];
-                    idx2[ni + i] = nv + idx[i]; idx2[ni + i + 1] = nv + idx[i + 2]; idx2[ni + i + 2] = nv + idx[i + 1];
+                    var pos2 = new Vector3[nv * 2]; var nrm2 = new Vector3[nv * 2]; var idx2 = new int[ni * 2];
+                    for (int i = 0; i < nv; i++) { pos2[i] = pos[i]; nrm2[i] = nrm[i]; pos2[nv + i] = pos[i]; nrm2[nv + i] = -nrm[i]; }
+                    for (int i = 0; i < ni; i += 3)
+                    {
+                        idx2[i] = idx[i]; idx2[i + 1] = idx[i + 1]; idx2[i + 2] = idx[i + 2];
+                        idx2[ni + i] = nv + idx[i]; idx2[ni + i + 1] = nv + idx[i + 2]; idx2[ni + i + 2] = nv + idx[i + 1];
+                    }
+                    pos = pos2; nrm = nrm2; idx = idx2;
                 }
-                mesh = new Mesh { indexFormat = nv * 2 > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
-                mesh.vertices = pos2; mesh.normals = nrm2; mesh.triangles = idx2; mesh.RecalculateBounds();
+                mesh = new Mesh { indexFormat = pos.Length > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
+                mesh.vertices = pos; mesh.normals = nrm; mesh.triangles = idx; mesh.RecalculateBounds();
                 made[p] = mesh;
             }
             var go = new GameObject(name);
@@ -337,6 +346,13 @@ public class CarModel : MonoBehaviour
                 parent = name.EndsWith("_hubstatic") ? spin.parent : spin;
             }
             go.transform.SetParent(parent, false);
+            if (name.StartsWith("steer_"))
+            {
+                // steering wheel: sits at its pivot, tilted back with the column; SetSteer turns it
+                float.TryParse(name.Substring(6), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out cm.steerPitch);
+                go.transform.localPosition = piv; go.transform.localRotation = Quaternion.Euler(cm.steerPitch, 0, 0);
+                cm.steerWheel = go.transform; mid = 5;
+            }
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
             if (rival) r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; // rivals keep only the soft blob shadow
@@ -351,7 +367,7 @@ public class CarModel : MonoBehaviour
             h.GetComponent<MeshRenderer>().sharedMaterial = WorldBuilder.Mat(new Color(1f, 0.82f, 0.18f), null, 0.9f, 0.2f);
             cm.helmet = h.transform;
         }
-        cm.cockpitFloor = CockpitTub(cm.body);
+        // (the model's own cockpit tub is drawn now, so the stand-in floor is no longer needed)
         var sh = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(sh.GetComponent<Collider>());
         sh.name = "ContactShadow"; sh.transform.SetParent(root.transform, false);
         sh.transform.localPosition = new Vector3(0, 0.035f, 0.3f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
