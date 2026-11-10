@@ -5,58 +5,84 @@
 //
 // Physics frame: world x/y plane, heading 0 = +x, positive yaw = counter-clockwise (left).
 // Car frame: vx forward, vy left, r yaw rate.
-// Calibrated to the FIA Formula 2 car (see CarConfig for sources and tuning notes).
+// Calibrated to the 2026 Formula 1 car (see CarConfig for sources and tuning notes).
 using System;
 
 namespace FormulaSim
 {
     public enum TcMode { Off, Low, High }
 
+    // Defaults = 2026 Formula 1 car. Sources: FIA 2026 technical regulations as published by the FIA, Honda and
+    // the teams (mass, wheelbase, width, power unit, energy store, MGU-K ramp-down), Pirelli (tyre sizes).
+    // Values marked "est." are not published; they were fitted so the model reproduces measured F1 performance:
+    // the 2026 pole laps at Monaco (1:12.051) and Spa (1:44.361), speed-trap figures and typical g-forces.
     [Serializable]
     public class CarConfig
     {
-        public double mass = 795;            // kg: 755 FIA minimum (with driver) + ~40 kg fuel
-        public double inertiaZ = 950;        // kg m^2 yaw inertia (estimate)
-        public double wheelbase = 3.135;     // m (FIA)
-        public double frontWeight = 0.45;    // static weight on front axle
-        public double cgHeight = 0.28;       // m
-        public double wheelRadius = 0.33;    // m (13" rim + slick)
-        public double mu = 2.2;              // effective peak friction (tuned with clA 4.0: FIA 3.9 g in fast corners)
-        public double rearGrip = 1.08;       // wider rear tyres
-        public double loadExp = 0.8;         // max tyre force ~ load^0.8
+        public double mass = 783;            // kg: 768 FIA minimum (with driver) + ~15 kg fuel (qualifying trim)
+        public double inertiaZ = 1100;       // kg m^2 yaw inertia (est.)
+        public double wheelbase = 3.40;      // m (FIA maximum, all teams use it)
+        public double frontWeight = 0.45;    // static weight on front axle (est., regulation window ~44-46 %)
+        public double cgHeight = 0.27;       // m (est.)
+        public double wheelRadius = 0.355;   // m (Pirelli 2026 rear: 710 mm diameter)
+        public double mu = 2.2;              // tyre friction at static load (est., see calibration in Tools/PhysicsCheck)
+        public double rearGrip = 1.08;       // wider rear tyres (375 mm vs 280 mm)
+        public double loadExp = 0.8;         // max tyre force ~ load^0.8 (tyre load sensitivity)
         public double tireB = 14.5, tireC = 1.6, tireE = 0.3; // magic formula, peak ~6.7 deg
         public double slipGrowth = 0.3;      // peak slip angle grows with load
         public double peakRatio = 0.11;      // longitudinal slip ratio at peak traction
-        public double wheelInertia = 1.6;    // kg m^2, both rear wheels + tyres + discs
+        public double wheelInertia = 1.8;    // kg m^2, both rear wheels + tyres + discs (est.)
         public double engineInertia = 0.045; // kg m^2, felt at the wheel x ratio^2
-        public double track = 1.50;          // m, track width (lateral weight transfer)
+        public double track = 1.58;          // m, track width (1.9 m car, 280/375 mm tyres)
         public double latTransferFront = 0.5;
-        public double cdA = 1.05;            // drag area m^2
-        public double clA = 4.0;             // downforce area m^2
+        public double cdA = 1.10;            // drag area m^2, wings closed (corner mode) (est.)
+        public double clA = 4.0;             // downforce area m^2, corner mode (est.)
+        public bool activeAero = true;       // 2026 active aero: wings open on straights (straight mode)
+        public double cdAX = 0.70, clAX = 2.5; // drag / downforce area with wings open (est.)
         public double aeroFront = 0.45;
         public double rollRes = 0.015;
-        public double peakTorque = 600;      // Nm (FIA)
-        public double redline = 8750, idleRpm = 3000;
-        public double[] gearTopSpeeds = { 128, 168, 207, 245, 283, 320 }; // km/h at the limiter
-        public double driveEff = 0.80;
-        public double shiftTime = 0.05;
+        // combustion engine: 1.6 V6 turbo, ~400 kW from 10,500 rpm (fuel-flow limited), 15,000 rpm allowed
+        public double peakTorque = 365;      // Nm at the crank
+        public double[] torqueRpm = { 4000, 6000, 8000, 10500, 12000, 13000 };
+        public double[] torqueFrac = { 0.55, 0.80, 0.96, 1.0, 0.875, 0.80 };
+        public double redline = 12000, idleRpm = 4000;
+        public double[] gearTopSpeeds = { 130, 165, 200, 232, 262, 292, 322, 350 }; // km/h at the limiter, 8 gears (est.)
+        public double driveEff = 0.94;
+        // hybrid: MGU-K 350 kW, 4 MJ battery, 8.5 MJ harvest per lap (FIA)
+        public double ersPower = 350e3;      // W
+        public double ersCapacity = 4e6;     // J usable
+        public double ersHarvestLap = 8.5e6; // J per lap
+        public double ersLiftPower = 100e3;  // W harvested when coasting off-throttle (est.)
+        public double shiftTime = 0.03;
         public double clutchEngage = 13;     // m/s (47 km/h) by which the launch clutch is fully engaged
-        public double brakeForce = 22500;    // N total at full pedal
-        public double brakeBias = 0.60;      // front share
-        public double maxLockDeg = 18;
-        public double speedSens = 1.0;
+        public double brakeForce = 46000;    // N total at full pedal (enough for ~5 g with downforce)
+        public double brakeBias = 0.57;      // front share
+        public double maxLockDeg = 22;       // Monaco-spec steering lock
+        public double speedSens = 1.25;          // steering ratio aid: less lock at speed (same feel as before with the larger lock)
         public double steerSpeed = 3.0;
         public double steerReturn = 8.0;
         public bool csOpen = true;           // open up to full lock when countersteering
-        public TcMode tc = TcMode.Low;
+        public TcMode tc = TcMode.Low;       // driver aids (not allowed in real F1; kept for touch controls)
         public bool abs = true, autoShift = true;
 
         public CarConfig Clone()
         {
             var c = (CarConfig)MemberwiseClone();
             c.gearTopSpeeds = (double[])gearTopSpeeds.Clone();
+            c.torqueRpm = (double[])torqueRpm.Clone(); c.torqueFrac = (double[])torqueFrac.Clone();
             return c;
         }
+
+        // The Formula 2 set-up the web prototype was built on. Only used by the regression tests,
+        // which replay the JavaScript version's results.
+        public static CarConfig LegacyF2() => new CarConfig
+        {
+            mass = 795, inertiaZ = 950, wheelbase = 3.135, frontWeight = 0.45, cgHeight = 0.28, wheelRadius = 0.33,
+            mu = 2.2, wheelInertia = 1.6, speedSens = 1.0, track = 1.50, cdA = 1.05, clA = 4.0, activeAero = false, cdAX = 1.05, clAX = 4.0,
+            peakTorque = 600, torqueRpm = new double[] { 2000, 4000, 5500, 6500, 7500, 8750 }, torqueFrac = new[] { 0.40, 0.62, 0.88, 1.0, 0.97, 0.84 },
+            redline = 8750, idleRpm = 3000, gearTopSpeeds = new double[] { 128, 168, 207, 245, 283, 320 }, driveEff = 0.80,
+            ersPower = 0, shiftTime = 0.05, brakeForce = 22500, brakeBias = 0.60, maxLockDeg = 18,
+        };
     }
 
     public struct CarInput
@@ -70,7 +96,7 @@ namespace FormulaSim
     public static class Surfaces
     {
         // peak friction relative to dry asphalt; kerbs use anti-slip paint
-        public static readonly (double mu, double drag) Asphalt = (1.0, 0.0), Kerb = (0.95, 0.01), Grass = (0.42, 0.15);
+        public static readonly (double mu, double drag) Asphalt = (1.0, 0.0), Kerb = (0.95, 0.01), Grass = (0.2, 0.15); // slicks on grass: ~0.4 against ~2.2 on asphalt
     }
 
     public class FormulaCar
@@ -92,6 +118,9 @@ namespace FormulaSim
         public double lockV = double.NaN, csBlend, lockAngle;
         public double wR = double.NaN;      // rear wheel spin speed (rad/s)
         public double slipRatioR, Fdrive, FxR, DR, torque;
+        public double aeroX;                // 0 = wings closed (corner mode), 1 = open (straight mode)
+        public double ersEnergy = double.NaN, ersHarvested, ersKw; // battery (J), harvested this lap (J), MGU-K power now (kW, - = charging)
+        public void NewLap() { ersHarvested = 0; }
 
         public FormulaCar(CarConfig cfg = null) { this.cfg = cfg ?? new CarConfig(); }
 
@@ -102,18 +131,25 @@ namespace FormulaSim
         public static double GearRatio(CarConfig c, int gear) =>
             (c.redline * 2 * Math.PI / 60 * c.wheelRadius) / (c.gearTopSpeeds[gear - 1] / 3.6);
 
-        static readonly double[,] TorquePts = { { 2000, 0.40 }, { 4000, 0.62 }, { 5500, 0.88 }, { 6500, 1.0 }, { 7500, 0.97 }, { 8750, 0.84 } };
         public static double TorqueAt(CarConfig c, double rpm)
         {
-            int n = TorquePts.GetLength(0);
-            if (rpm <= TorquePts[0, 0]) return c.peakTorque * TorquePts[0, 1];
+            double[] R = c.torqueRpm, F = c.torqueFrac; int n = R.Length;
+            if (rpm <= R[0]) return c.peakTorque * F[0];
             for (int i = 1; i < n; i++)
-                if (rpm <= TorquePts[i, 0])
+                if (rpm <= R[i])
                 {
-                    double r0 = TorquePts[i - 1, 0], f0 = TorquePts[i - 1, 1], r1 = TorquePts[i, 0], f1 = TorquePts[i, 1];
+                    double r0 = R[i - 1], f0 = F[i - 1], r1 = R[i], f1 = F[i];
                     return c.peakTorque * (f0 + (f1 - f0) * (rpm - r0) / (r1 - r0));
                 }
-            return c.peakTorque * TorquePts[n - 1, 1];
+            return c.peakTorque * F[n - 1];
+        }
+
+        // MGU-K power allowed at this road speed (FIA 2026 ramp-down): full to 290 km/h,
+        // 1800 - 5 v [kW] to 340 km/h (100 kW), then down to zero at 345 km/h
+        public static double ErsPowerAt(CarConfig c, double v)
+        {
+            double kmh = Math.Abs(v) * 3.6, f = kmh <= 290 ? 1 : kmh <= 340 ? (1800 - 5 * kmh) / 350 : kmh < 345 ? (345 - kmh) / 5 * (100.0 / 350) : 0;
+            return c.ersPower * f;
         }
 
         // slip (in B*alpha units) where the magic formula peaks, for this C/E shape (cached)
@@ -217,7 +253,13 @@ namespace FormulaSim
 
             // ---------- aero + loads ----------
             double q = 0.5 * RHO * vx * vx;
-            double down = q * c.clA, drag = q * c.cdA;
+            if (c.activeAero)
+            {
+                // wings open on the straights: full throttle, no brake, little cornering; they close at once otherwise
+                bool open = thr > 0.9 && brk <= 0 && vx > 30 && Math.Abs(ayF) < (aeroX > 0.5 ? 9 : 6);
+                aeroX = Approach(aeroX, open ? 1 : 0, (open ? 4 : 8) * dt);
+            }
+            double down = q * (c.clA + (c.clAX - c.clA) * aeroX), drag = q * (c.cdA + (c.cdAX - c.cdA) * aeroX);
             double transfer = m * axLong * c.cgHeight / L;
             double fz0F = m * G * b / L, fz0R = m * G * a / L;
             fzF = Math.Max(300, fz0F - transfer + down * c.aeroFront);
@@ -266,6 +308,25 @@ namespace FormulaSim
             {
                 if (rpm < c.redline) fdrive = TorqueAt(c, rpm) * thr * ratio * c.driveEff / c.wheelRadius;
                 if (thr < 0.05 && vx > 1) fdrive -= (rpm / c.redline) * 1200; // engine braking
+            }
+            // ---------- hybrid (MGU-K + battery) ----------
+            double fK = 0, harvestW = 0;
+            if (c.ersPower > 0)
+            {
+                if (double.IsNaN(ersEnergy)) ersEnergy = c.ersCapacity;
+                double room = Math.Min(c.ersCapacity - ersEnergy, c.ersHarvestLap - ersHarvested);
+                if (!reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && ersEnergy > 0)
+                {
+                    fK = thr * c.driveEff * ErsPowerAt(c, vx) / Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
+                    fdrive += fK;
+                }
+                else if (!reverse && vx > 5 && room > 0)
+                {
+                    // charging: on the brakes the motor takes over part of the rear braking (no extra force);
+                    // when coasting it adds some drag
+                    if (brk > 0) harvestW = Math.Min(c.ersPower, brk * c.brakeForce * (1 - c.brakeBias) * vx);
+                    else if (thr < 0.05) { harvestW = c.ersLiftPower; fdrive -= Math.Min(harvestW / vx, 1500); harvestW = Math.Min(harvestW, 1500 * vx); }
+                }
             }
 
             // ---------- tyres ----------
@@ -331,6 +392,14 @@ namespace FormulaSim
             spinR = fdrive > 0 && tR.kap > 1.5 * kPk;
             lockR = brk > 0 && tR.kap < -0.5;
             absActive = (rF.limited || rearAbs) && fdrive <= 0;
+            if (c.ersPower > 0)
+            {
+                // the battery only pays for electric drive that reaches the road (traction control cuts the rest)
+                double used = fK > 0 && fdrive > 0 ? Math.Min(fK, Math.Max(FxRl, 0) * fK / fdrive) * Math.Abs(vx) / c.driveEff : 0;
+                double got = Math.Min(harvestW * dt, Math.Max(0, Math.Min(c.ersCapacity - ersEnergy, c.ersHarvestLap - ersHarvested)));
+                ersEnergy = Clamp(ersEnergy - used * dt + got, 0, c.ersCapacity); ersHarvested += got;
+                ersKw = (used - got / dt) / 1000;
+            }
 
             // ---------- resistances ----------
             double roll = (c.rollRes + surfaceDrag) * m * G;

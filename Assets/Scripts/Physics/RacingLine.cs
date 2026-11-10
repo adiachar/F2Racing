@@ -22,10 +22,10 @@ namespace FormulaSim
         public sbyte[] phase;    // +1 accelerate (green), 0 at the cornering limit / coast (yellow), -1 brake (red)
         public double lapTime;   // s, integrated over the speed profile
 
-        public static RacingLine Compute(Track t, CarConfig cfg, double margin = 1.3, double safety = 0.82)
+        public static RacingLine Compute(Track t, CarConfig cfg, double margin = 1.3, double safety = 0.82, double brakeUse = 0.8)
         {
             var rl = Build(t, margin);
-            rl.SpeedProfile(cfg, safety);
+            rl.SpeedProfile(cfg, safety, brakeUse);
             return rl;
         }
 
@@ -85,12 +85,12 @@ namespace FormulaSim
         // ---------------------------------------------------------------- speeds (speedProfile)
         // Target speed (m/s) at every point of the line for this car setup.
         // Uses the same tyre law as the physics (max force ~ load^0.8 per axle, more load from downforce).
-        public double[] SpeedProfile(CarConfig c, double safety = 0.82)
+        public double[] SpeedProfile(CarConfig c, double safety = 0.82, double brakeUse = 0.8)
         {
             double m = c.mass, e = c.loadExp;
             double kq = 0.5 * RHO;
             double fz0F = m * G * c.frontWeight, fz0R = m * G * (1 - c.frontWeight);
-            // total tyre grip (N) at speed v
+            // total tyre grip (N) at speed v (wings closed: corners and braking)
             double grip(double v)
             {
                 double down = kq * v * v * c.clA;
@@ -102,33 +102,69 @@ namespace FormulaSim
             pMax *= c.driveEff;
             double vTop = c.gearTopSpeeds[c.gearTopSpeeds.Length - 1] / 3.6;
             // 1) cornering limit: largest v with m v^2 k <= grip(v)
-            var v = new double[N];
+            var vc = new double[N];
             for (int i = 0; i < N; i++)
             {
                 double kap = Math.Abs(curv[i]);
-                if (m * vTop * vTop * kap <= grip(vTop)) { v[i] = vTop; continue; }
+                if (m * vTop * vTop * kap <= grip(vTop)) { vc[i] = vTop; continue; }
                 double lo = 0, hi = vTop;
                 for (int it = 0; it < 40; it++) { double mid = (lo + hi) / 2; if (m * mid * mid * kap <= grip(mid)) lo = mid; else hi = mid; }
-                v[i] = lo;
+                vc[i] = lo;
             }
-            vCorner = (double[])v.Clone();
-            // 2) acceleration limit (forward, two passes so it wraps) and 3) braking limit (backward)
-            for (int pass = 0; pass < 2; pass++) for (int i = 0; i < N; i++)
+            vCorner = vc;
+            // hybrid: where on the lap the battery still has charge (found by iterating profile <-> energy)
+            bool ers = c.ersPower > 0;
+            var charge = new bool[N]; for (int i = 0; i < N; i++) charge[i] = true;
+            double[] v = null;
+            for (int iter = 0; iter < (ers ? 6 : 1); iter++)
             {
-                int j = (i + 1) % N; double vi = v[i], q = kq * vi * vi;
-                // friction circle: grip used for cornering isn't available for accelerating; only the rear drives
-                double total = grip(vi), lat = m * vi * vi * Math.Abs(curv[i]);
-                double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat)) * (1 - c.frontWeight);
-                double a = (Math.Min(spare, pMax / Math.Max(vi, 5)) - q * c.cdA) / m;
-                v[j] = Math.Min(v[j], Math.Sqrt(Math.Max(0, vi * vi + 2 * Math.Max(a, 0) * ds[i])));
-            }
-            for (int pass = 0; pass < 2; pass++) for (int i = N - 1; i >= 0; i--)
-            {
-                int j = (i + 1) % N; double vj = v[j], q = kq * vj * vj;
-                double total = grip(vj), lat = m * vj * vj * Math.Abs(curv[j]);
-                double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat));
-                double a = (Math.Min(spare, c.brakeForce) + q * c.cdA) / m * 0.8; // keep some braking in reserve
-                v[i] = Math.Min(v[i], Math.Sqrt(vj * vj + 2 * a * ds[i]));
+                v = (double[])vc.Clone();
+                // 2) acceleration limit (forward, two passes so it wraps) and 3) braking limit (backward)
+                for (int pass = 0; pass < 2; pass++) for (int i = 0; i < N; i++)
+                {
+                    int j = (i + 1) % N; double vi = v[i], q = kq * vi * vi;
+                    // friction circle: grip used for cornering isn't available for accelerating; only the rear drives
+                    double total = grip(vi), lat = m * vi * vi * Math.Abs(curv[i]);
+                    double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat)) * (1 - c.frontWeight);
+                    double push = pMax / Math.Max(vi, 5);
+                    if (ers && charge[i]) push += c.driveEff * FormulaCar.ErsPowerAt(c, vi) / Math.Max(vi, 15);
+                    double cdA = c.activeAero && vi > 30 && lat / m < 6 ? c.cdAX : c.cdA; // wings open on straights
+                    double a = (Math.Min(spare, push) - q * cdA) / m;
+                    v[j] = Math.Min(v[j], Math.Sqrt(Math.Max(0, vi * vi + 2 * Math.Max(a, 0) * ds[i])));
+                }
+                for (int pass = 0; pass < 2; pass++) for (int i = N - 1; i >= 0; i--)
+                {
+                    int j = (i + 1) % N; double vj = v[j], q = kq * vj * vj;
+                    double total = grip(vj), lat = m * vj * vj * Math.Abs(curv[j]);
+                    double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat));
+                    double a = (Math.Min(spare, c.brakeForce) + q * c.cdA) / m * brakeUse; // keep some braking in reserve
+                    v[i] = Math.Min(v[i], Math.Sqrt(vj * vj + 2 * a * ds[i]));
+                }
+                if (!ers) break;
+                // battery over two laps (the second one is the settled state)
+                double E = c.ersCapacity, harvested = 0; var next = new bool[N];
+                for (int lap = 0; lap < 2; lap++)
+                {
+                    harvested = 0;
+                    for (int i = 0; i < N; i++)
+                    {
+                        int j = (i + 1) % N; double vm = Math.Max(1, (v[i] + v[j]) / 2), dt = ds[i] / vm;
+                        next[i] = E > 0;
+                        if (v[j] < v[i] - 0.05)
+                        {
+                            double got = Math.Min(Math.Min(c.ersPower, c.brakeForce * (1 - c.brakeBias) * vm) * dt, Math.Min(c.ersCapacity - E, c.ersHarvestLap - harvested));
+                            got = Math.Max(0, got); E += got; harvested += got;
+                        }
+                        else if (E > 0)
+                        {
+                            bool flatOut = v[j] > v[i] + 1e-9 || v[i] >= vTop - 0.5 || v[i] < vc[i] * 0.97;
+                            E = Math.Max(0, E - FormulaCar.ErsPowerAt(c, vm) * (flatOut ? 1 : 0.3) * dt);
+                        }
+                    }
+                }
+                // blend so the iteration settles instead of flipping
+                bool same = true; for (int i = 0; i < N; i++) if (next[i] != charge[i]) { same = false; break; }
+                charge = next; if (same) break;
             }
             speed = v;
 

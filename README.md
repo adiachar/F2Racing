@@ -17,3 +17,10 @@ Mobile formula-car racing game in Unity, with physics calibrated to the FIA Form
   Note: this is a replica of a real team car; replace it with an original design before any public release.
 
 - Circuit data: [f1-circuits](https://github.com/bacinger/f1-circuits) by Tomislav Bacinger, MIT licence.
+
+## Physics reference (2026 Formula 1)
+
+The car model (`Assets/Scripts/Physics/FormulaCar.cs`) uses published 2026 F1 figures: 768 kg minimum mass, 3.40 m wheelbase,
+1.9 m width, 705/710 mm tyres, about 400 kW combustion engine plus a 350 kW MGU-K with the regulation speed ramp-down,
+a 4 MJ battery, 8.5 MJ harvest per lap, and active aero (wings open on straights). Tyre grip, drag and downforce are not
+published; they are estimates checked against real performance figures. Run `dotnet run` in `Tools/PhysicsCheck` to see the comparison.

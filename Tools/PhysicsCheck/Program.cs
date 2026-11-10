@@ -12,7 +12,7 @@ int row = 0; double worstPos = 0, worstVel = 0; string worstAt = "";
 var perScenario = new Dictionary<string, (double pos, double vel)>();
 foreach (var s in sc.EnumerateArray())
 {
-    var cfg = new CarConfig();
+    var cfg = CarConfig.LegacyF2();
     if (s.GetProperty("cfg").TryGetProperty("tc", out var tc)) cfg.tc = tc.GetString() switch { "off" => TcMode.Off, "high" => TcMode.High, _ => TcMode.Low };
     if (s.GetProperty("cfg").TryGetProperty("abs", out var ab)) cfg.abs = ab.GetBoolean();
     var car = new FormulaCar(cfg) { vx = s.GetProperty("vx0").GetDouble(), gear = s.GetProperty("gear0").GetInt32() };
@@ -44,21 +44,23 @@ Console.WriteLine($"JS vs C# over {row} samples:");
 foreach (var (k, v) in perScenario) Console.WriteLine($"  {k,-18} max position diff {v.pos:E2} m, max speed diff {v.vel:E2} m/s");
 Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "MATCH" : "DIFFERENT")}");
 
-// calibration vs FIA F2 (same method as the web version's test/calibrate.mjs)
+// ---- 2026 F1 car against real-world figures ----
 {
     const double g = 9.81;
-    var car = new FormulaCar(new CarConfig { tc = TcMode.High }); double t = 0, t100 = 0, t200 = 0;
-    while (t < 60) { car.Step(new CarInput(0, 1, 0), H); t += H; double k = car.vx * 3.6; if (t100 == 0 && k >= 100) t100 = t; if (t200 == 0 && k >= 200) t200 = t; }
-    double top = car.vx * 3.6;
-    var bc = new FormulaCar { vx = 300 / 3.6, gear = 6 }; double peakB = 0;
-    for (int i = 0; i < 240 * 1.5; i++) { bc.Step(new CarInput(0, 0, 1), H); peakB = Math.Min(peakB, bc.ax / g); }
+    CarConfig F1() => new CarConfig { tc = TcMode.High };
+    var car = new FormulaCar(F1()); double t = 0, t100 = 0, t200 = 0, t300 = 0, top = 0;
+    while (t < 60) { car.Step(new CarInput(0, 1, 0), H); t += H; double k = car.vx * 3.6; top = Math.Max(top, k); if (t100 == 0 && k >= 100) t100 = t; if (t200 == 0 && k >= 200) t200 = t; if (t300 == 0 && k >= 300) t300 = t; }
+    var c0 = new CarConfig { tc = TcMode.High, ersPower = 0 }; var noK = new FormulaCar(c0); for (int i = 0; i < 240 * 60; i++) noK.Step(new CarInput(0, 1, 0), H);
+    var bc = new FormulaCar(F1()) { vx = 320 / 3.6, gear = 8 }; double peakB = 0;
+    for (int i = 0; i < 240 * 2; i++) { bc.Step(new CarInput(0, 0, 1), H); if (i > 60) peakB = Math.Min(peakB, bc.ax / g); }
+    double Stop(double kmh) { var b2 = new FormulaCar(F1()) { vx = kmh / 3.6, gear = 3 }; double x0 = b2.x; int n = 0; while (b2.vx > 0.3 && n++ < 240 * 20) b2.Step(new CarInput(0, 0, 1), H); return b2.x - x0; }
     var lat = new List<string>();
-    foreach (var kmh in new[] { 100, 180, 250, 290 })
+    foreach (var kmh in new[] { 80, 150, 220, 280 })
     {
         double best = 0;
         for (double st = 0.05; st <= 1.0; st += 0.05)
         {
-            var c2 = new FormulaCar(new CarConfig { tc = TcMode.High }) { vx = kmh / 3.6, gear = 4 };
+            var c2 = new FormulaCar(F1()) { vx = kmh / 3.6, gear = 5 };
             bool ok = true; double sum = 0; int n = 0;
             for (int i = 0; i < 240 * 3; i++)
             {
@@ -71,7 +73,21 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
         }
         lat.Add($"{kmh}:{best:F2}");
     }
-    Console.WriteLine($"Calibration: 0-100 {t100:F2}s (FIA 2.90) | 0-200 {t200:F2}s (FIA 6.60) | top {top:F0} km/h | braking {peakB:F2}g (FIA -3.5) | lateral {string.Join(" ", lat)}g (FIA max 3.9)");
+    foreach (var mode in new[] { TcMode.Low, TcMode.Off })
+    {
+        var l = new FormulaCar(new CarConfig { tc = mode }); double tt = 0, a100 = 0, a200 = 0;
+        while (tt < 12 && a200 == 0) { l.Step(new CarInput(0, 1, 0), H); tt += H; if (a100 == 0 && l.vx * 3.6 >= 100) a100 = tt; if (l.vx * 3.6 >= 200) a200 = tt; }
+        Console.WriteLine($"  launch TC {mode}: 0-100 {a100:F2}s, 0-200 {a200:F2}s");
+    }
+    Console.WriteLine("F1 2026 car vs real figures:");
+    Console.WriteLine($"  0-100 {t100:F2}s (perfect traction; real 2.2-2.6 with wheelspin) | 0-200 {t200:F2}s (2025 cars ~4.4-4.6) | 0-300 {t300:F2}s | top {top:F0} km/h, engine only {noK.vx * 3.6:F0} (real speed traps 325-345)");
+    Console.WriteLine($"  braking from 320: peak {peakB:F2} g (real 5-6) | 200-0 in {Stop(200):F0} m | 100-0 in {Stop(100):F0} m (real 15-17)");
+    Console.WriteLine($"  cornering g at km/h {string.Join(" ", lat)} (real: ~2 slow, 4-5 fast)");
+    foreach (var (nm, t2, real) in new[] { ("Monaco", Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth), 72.051), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth), 104.361) })
+    {
+        var r = RacingLine.Compute(t2, new CarConfig(), 1.3, 0.97, 0.95);
+        Console.WriteLine($"  {nm}: ideal lap {r.lapTime:F2}s, real 2026 pole {real:F2}s ({(r.lapTime / real - 1) * 100:+0.0;-0.0}%), speed {r.speed.Min() * 3.6:F0}-{r.speed.Max() * 3.6:F0} km/h");
+    }
 }
 
 // track port check against the web track.js (point count, length, a few samples)
@@ -90,7 +106,7 @@ foreach (var (nm, data, w) in new[] { ("Monaco", TrackData.Monaco, TrackData.Mon
 
 // racing line + speed profile (port of racingline.js): parity with the JS on the default track, then the real circuits
 {
-    var cfg = new CarConfig();
+    var cfg = CarConfig.LegacyF2();
     var gpath = Path.Combine(dir, "racingline_golden.csv");
     var rl = RacingLine.Compute(Track.Build(), cfg);
     if (File.Exists(gpath))
@@ -109,7 +125,7 @@ foreach (var (nm, data, w) in new[] { ("Monaco", TrackData.Monaco, TrackData.Mon
     foreach (var (nm, t) in new[] { ("Test track", Track.Build()), ("Monaco", Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth)), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)) })
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var r = RacingLine.Compute(t, cfg);
+        var r = RacingLine.Compute(t, new CarConfig());
         double ms = sw.Elapsed.TotalMilliseconds;
         double vmin = r.speed.Min() * 3.6, vmax = r.speed.Max() * 3.6, offMax = r.off.Max(o => Math.Abs(o));
         int nb = r.phase.Count(p => p < 0), nc = r.phase.Count(p => p == 0), na = r.phase.Count(p => p > 0);

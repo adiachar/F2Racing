@@ -278,6 +278,8 @@ public class CarModel : MonoBehaviour
             WorldBuilder.Mat(new Color(1f, 0.15f, 0.12f), null, 0.9f),              // 6 rain light
         };
         var root = new GameObject("Car");
+        // the mesh was converted at Formula 2 size (3.135 m wheelbase); a 2026 F1 car is 3.40 m long between the axles and 1.9 m wide
+        root.transform.localScale = Vector3.one * (3.40f / 3.135f);
         var cm = root.AddComponent<CarModel>();
         cm.body = new GameObject("Body").transform; cm.body.SetParent(root.transform, false);
         var wheels = new System.Collections.Generic.Dictionary<string, Transform>();

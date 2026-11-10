@@ -344,7 +344,7 @@ public class GameManager : MonoBehaviour
                 if (!cut && (!bestLap.HasValue || lastLap < bestLap)) { bestLap = lastLap; Flash("Best lap! " + Fmt(bestLap)); }
                 else Flash((cut ? "Lap invalid  " : "Lap ") + Fmt(lastLap));
             }
-            lapStart = simTime; lapNo++; cut = false;
+            lapStart = simTime; lapNo++; cut = false; car.NewLap();
         }
         else if (prevIdx < track.N * 0.2 && idx > track.N * 0.8) lapStart = null;
     }
@@ -439,7 +439,7 @@ public class GameManager : MonoBehaviour
 
         // top-centre: lap time or test data
         string top, sub;
-        if (playground) { top = "TEST DATA (ours vs real F2)"; sub = $"0-100 {(t100.HasValue ? t100.Value.ToString("0.00") + "s" : "—")} (2.9)  ·  top {topSpeed:0} km/h"; }
+        if (playground) { top = "TEST DATA (ours vs real F1)"; sub = $"0-100 {(t100.HasValue ? t100.Value.ToString("0.00") + "s" : "—")} (real 2.2-2.6)  ·  top {topSpeed:0} km/h"; }
         else { top = lapStart.HasValue ? Fmt(simTime - lapStart.Value) : "--:--.---"; sub = $"Lap {lapNo}  ·  Last {Fmt(lastLap)}  ·  Best {Fmt(bestLap)}"; }
         float py = S(44);
         Panel(new Rect(Screen.width / 2 - S(150), py, S(300), S(44)));
@@ -458,7 +458,12 @@ public class GameManager : MonoBehaviour
         Fill(new Rect(dash.x + S(10), dash.y + S(44), (dash.width - S(20)) * rpmFrac, S(6)), Color.Lerp(new Color(0.24f, 0.86f, 0.52f), new Color(1f, 0.3f, 0.23f), rpmFrac));
         center.fontSize = (int)S(10);
         string lights = (car.tcActive ? "<color=#ffb020>TC</color>" : "TC") + "   " + (car.absActive ? "<color=#ffb020>ABS</color>" : "ABS") + "   " +
-                        (car.lockF || car.lockR ? "<color=#ff4b3a>LOCK</color>" : "LOCK") + "   " + (car.spinR ? "<color=#ff4b3a>SPIN</color>" : "SPIN");
+                        (car.lockF || car.lockR ? "<color=#ff4b3a>LOCK</color>" : "LOCK") + "   " + (car.spinR ? "<color=#ff4b3a>SPIN</color>" : "SPIN")
+        // hybrid battery and active-aero state
+        float batt = double.IsNaN(car.ersEnergy) ? 1f : (float)(car.ersEnergy / car.cfg.ersCapacity);
+        Fill(new Rect(dash.x, dash.yMax + S(2), dash.width, S(5)), new Color(1, 1, 1, 0.2f));
+        Fill(new Rect(dash.x, dash.yMax + S(2), dash.width * batt, S(5)), car.ersKw > 1 ? new Color(0.3f, 0.75f, 1f) : car.ersKw < -1 ? new Color(0.24f, 0.86f, 0.52f) : new Color(0.75f, 0.8f, 0.85f));
+        lights += "   " + (car.aeroX > 0.5 ? "<color=#4cc3ff>WING</color>" : "WING");
         GUI.Label(new Rect(dash.x, dash.y + S(50), dash.width, S(18)), lights, center);
 
         // telemetry
