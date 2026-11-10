@@ -21,10 +21,16 @@ namespace FormulaSim
         public bool[] braking;   // the target speed falls towards the next point (brake here)
         public sbyte[] phase;    // +1 accelerate (green), 0 at the cornering limit / coast (yellow), -1 brake (red)
         public double lapTime;   // s, integrated over the speed profile
+        public double[] grade;   // road slope at each point (rise per metre, + = uphill); null on a flat circuit
 
         public static RacingLine Compute(Track t, CarConfig cfg, double margin = 1.3, double safety = 0.82, double brakeUse = 0.8)
         {
             var rl = Build(t, margin);
+            if (t.h != null)
+            {
+                rl.grade = new double[t.N];
+                for (int i = 0; i < t.N; i++) rl.grade[i] = (t.h[(i + 1) % t.N] - t.h[(i - 1 + t.N) % t.N]) / (2 * t.ds);
+            }
             rl.SpeedProfile(cfg, safety, brakeUse);
             return rl;
         }
@@ -129,7 +135,7 @@ namespace FormulaSim
                     double push = pMax / Math.Max(vi, 5);
                     if (ers && charge[i]) push += c.driveEff * FormulaCar.ErsPowerAt(c, vi) / Math.Max(vi, 15);
                     double cdA = c.activeAero && vi > 30 && lat / m < 6 ? c.cdAX : c.cdA; // wings open on straights
-                    double a = (Math.Min(spare, push) - q * cdA) / m;
+                    double a = (Math.Min(spare, push) - q * cdA) / m - (grade != null ? G * grade[i] : 0);
                     v[j] = Math.Min(v[j], Math.Sqrt(Math.Max(0, vi * vi + 2 * Math.Max(a, 0) * ds[i])));
                 }
                 for (int pass = 0; pass < 2; pass++) for (int i = N - 1; i >= 0; i--)
@@ -137,7 +143,7 @@ namespace FormulaSim
                     int j = (i + 1) % N; double vj = v[j], q = kq * vj * vj;
                     double total = grip(vj), lat = m * vj * vj * Math.Abs(curv[j]);
                     double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat));
-                    double a = (Math.Min(spare, c.brakeForce) + q * c.cdA) / m * brakeUse; // keep some braking in reserve
+                    double a = Math.Max(0.5, (Math.Min(spare, c.brakeForce) + q * c.cdA) / m * brakeUse + (grade != null ? G * grade[i] : 0)); // some braking in reserve; downhill it takes longer
                     v[i] = Math.Min(v[i], Math.Sqrt(vj * vj + 2 * a * ds[i]));
                 }
                 if (!ers) break;

@@ -40,14 +40,11 @@ public class GameManager : MonoBehaviour
         Screen.orientation = ScreenOrientation.AutoRotation;
         Screen.autorotateToPortrait = Screen.autorotateToPortraitUpsideDown = false;
         Screen.autorotateToLandscapeLeft = Screen.autorotateToLandscapeRight = true;
-        QualitySettings.shadows = ShadowQuality.All; QualitySettings.shadowDistance = 90; QualitySettings.shadowCascades = 2;
-        QualitySettings.shadowResolution = ShadowResolution.High; QualitySettings.shadowProjection = ShadowProjection.StableFit;
-        QualitySettings.anisotropicFiltering = AnisotropicFiltering.ForceEnable;
-        QualitySettings.antiAliasing = 4;
+        QualitySettings.vSyncCount = 0; QualitySettings.shadowProjection = ShadowProjection.StableFit;
 
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
-        mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == 3; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1); showLine = PlayerPrefs.GetInt("line", 0) == 1; absOn = PlayerPrefs.GetInt("abs", 1) == 1;
+        mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == 3; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1); showLine = PlayerPrefs.GetInt("line", 0) == 1; absOn = PlayerPrefs.GetInt("abs", 1) == 1; gfxIdx = Mathf.Clamp(PlayerPrefs.GetInt("gfx", 0), 0, GfxNames.Length - 1);
         dzIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltDz", 1), 0, DeadZones.Length - 1); rangeIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltRange", 2), 0, TiltRanges.Length - 1);
         smoothIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltSmooth", 1), 0, SmoothCut.Length - 1); speedSteerIdx = Mathf.Clamp(PlayerPrefs.GetInt("speedSteer", 2), 0, SpeedSteer.Length - 1);
         ApplyScreenLock();
@@ -61,6 +58,7 @@ public class GameManager : MonoBehaviour
         cam.clearFlags = RenderSettings.skybox != null ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor; cam.backgroundColor = RenderSettings.fogColor;
         camGo.AddComponent<AudioListener>();
         audioEngine = camGo.AddComponent<EngineAudio>(); audioEngine.muted = !sound;
+        ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx);
         ResetCar();
     }
 
@@ -72,7 +70,7 @@ public class GameManager : MonoBehaviour
         if (circuit != builtFor || world == null)
         {
             if (world != null) Destroy(world);
-            track = circuit == 1 ? Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth)
+            track = circuit == 1 ? TrackData.MonacoTrack()
                   : circuit == 2 ? Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)
                   : Track.Build();
             world = WorldBuilder.Build(track);
@@ -128,22 +126,28 @@ public class GameManager : MonoBehaviour
         Fill(new Rect(cx - S(4), cy - S(4), S(8), S(8)), new Color(1f, 0.25f, 0.2f));
     }
 
-    // low-end phones: if the game can't hold ~50 fps for 4 s, step quality down (AA off, then shorter
-    // shadows, then no shadows). It only ever steps down, so it can't flicker between levels.
-    float fpsAvg = 60, slowT; int qLevel;
+    // Graphics level (a setting). Auto starts at Medium and steps down if the phone cannot hold about 50 fps.
+    static readonly string[] GfxNames = { "Auto", "Low", "Medium", "High" }; int gfxIdx; int gfxLevel = 2;
+    float fpsAvg = 60, slowT;
+    void ApplyGraphics(int level)
+    {
+        gfxLevel = level;
+        QualitySettings.antiAliasing = level >= 3 ? 4 : level == 2 ? 2 : 0;
+        QualitySettings.shadows = level <= 1 ? ShadowQuality.Disable : ShadowQuality.All;
+        QualitySettings.shadowCascades = level >= 3 ? 2 : 1;
+        QualitySettings.shadowResolution = level >= 3 ? ShadowResolution.High : ShadowResolution.Medium;
+        QualitySettings.shadowDistance = level >= 3 ? 90 : 55;
+        QualitySettings.anisotropicFiltering = level <= 1 ? AnisotropicFiltering.Disable : AnisotropicFiltering.ForceEnable;
+        if (cam != null) cam.farClipPlane = level <= 1 ? 1500 : 2500;
+    }
     void AutoQuality()
     {
-        if (Time.realtimeSinceStartup < 6f || qLevel >= 5) return;
         float fps = 1f / Mathf.Max(Time.unscaledDeltaTime, 0.001f);
         fpsAvg += (fps - fpsAvg) * 0.05f;
+        if (gfxIdx != 0 || menuOpen || Time.realtimeSinceStartup < 6f || gfxLevel <= 1) return;
         slowT = fpsAvg < 50f ? slowT + Time.unscaledDeltaTime : 0;
         if (slowT < 4f) return;
-        slowT = 0; fpsAvg = 60; qLevel++;
-        if (qLevel == 1) QualitySettings.antiAliasing = 2;
-        else if (qLevel == 2) { QualitySettings.antiAliasing = 0; QualitySettings.shadowCascades = 1; QualitySettings.shadowResolution = ShadowResolution.Medium; }
-        else if (qLevel == 3) QualitySettings.shadowDistance = 40;
-        else if (qLevel == 4) QualitySettings.shadows = ShadowQuality.Disable;
-        else QualitySettings.anisotropicFiltering = AnisotropicFiltering.Disable;
+        slowT = 0; ApplyGraphics(gfxLevel - 1); Flash("Graphics lowered to keep it smooth");
     }
 
     SkidMarks skids;
@@ -171,14 +175,17 @@ public class GameManager : MonoBehaviour
         if (lineGo != null) Destroy(lineGo);
         line = RacingLine.Compute(track, new CarConfig { aeroFront = Balances[balIdx] });
         lineGo = RacingLineView.Build(track, line, world.transform);
-        Scenery.Rubber(track, line, world.transform);
+        var rubber = Scenery.Rubber(track, line, world.transform);
+        var boards = Scenery.Boards(track, line, world.transform, (float)Traffic.WallOffset(track));
+        // these are built after the world, so lay them on the hills here
+        WorldBuilder.Drape(lineGo); WorldBuilder.Drape(rubber); if (boards != null) WorldBuilder.Drape(boards);
         lineGo.SetActive(showLine && !playground);
     }
 
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("tiltDz", dzIdx); PlayerPrefs.SetInt("tiltRange", rangeIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.Save();
+        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltDz", dzIdx); PlayerPrefs.SetInt("tiltRange", rangeIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.Save();
     }
 
     void ResetCar()
@@ -235,6 +242,7 @@ public class GameManager : MonoBehaviour
             for (int i = 0; i < rivals.Count; i++)
             {
                 rivals[i].Think(4 * H, simTime, rivals, car, idx, playerLat);
+                var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.Grade(rc.x, rc.y, rc.heading) : 0;
                 if (rivals[i].idx >= 0) Traffic.Wall(rivals[i].car, track.pts[rivals[i].idx], rivals[i].lateral, wallAt);
             }
             for (int i = 0; i < rivals.Count; i++)
@@ -399,6 +407,7 @@ public class GameManager : MonoBehaviour
         {
             SetSurface();
             px = car.x; py = car.y; ph = car.heading; pd = car.delta;
+            if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
             if (rivals.Count > 0 && raceTime < Countdown) input = new CarInput(input.steer, 0, 1); // wait for the lights
             car.Step(input, H);
             if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt)) { if (hitT <= 0) Flash("Barrier!"); hitT = 1.5f; }
@@ -435,7 +444,9 @@ public class GameManager : MonoBehaviour
             bool near = ddx * ddx + ddz * ddz < (rivalNear[i] ? 34f * 34f : 28f * 28f) || rivalFar[i] == null;
             if (near != rivalNear[i]) { rivalNear[i] = near; rivalModels[i].gameObject.SetActive(near); if (rivalFar[i] != null) rivalFar[i].gameObject.SetActive(!near); }
             var rm = near ? rivalModels[i] : rivalFar[i];
-            rm.Apply(c.x, c.y, c.heading, c.delta, rivalSpin[i], rivalSpin[i], 0, 0);
+            // drawn at the same in-between moment as the player's car, or they would shake against it
+            double back = (1 - acc / H) * H, cch = System.Math.Cos(c.heading), csh = System.Math.Sin(c.heading);
+            rm.Apply(c.x - (c.vx * cch - c.vy * csh) * back, c.y - (c.vx * csh + c.vy * cch) * back, c.heading - c.r * back, c.delta, rivalSpin[i], rivalSpin[i], 0, 0);
             rm.SetBrake(c.brake > 0.05);
         }
         UpdateSkids();
@@ -537,7 +548,7 @@ public class GameManager : MonoBehaviour
     }
 
     // ---------------------------------------------------------------- HUD
-    GUIStyle big, small, btn, center;
+    GUIStyle big, small, btn, center, gearStyle;
     Texture2D white;
     void OnGUI()
     {
@@ -561,12 +572,12 @@ public class GameManager : MonoBehaviour
         if (!menuOpen && !playground && (surface == 2 || hitT > 0) && GUI.Button(new Rect(Screen.width / 2 - S(60), Screen.height * 0.5f, S(120), bh), "Back on track", btn)) Recover();
         if (menuOpen)
         {
-            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera", "Tilt dead zone", "Tilt for full lock", "Tilt smoothing", "Steering at speed" };
+            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera", "Tilt dead zone", "Tilt for full lock", "Tilt smoothing", "Steering at speed", "Graphics" };
             string[] vals = { sound ? "On" : "Off", tc.ToString(), absOn ? "On" : "Off (real F1)", $"{Balances[balIdx] * 100:0}% front", tilt ? "Tilt the phone" : "Drag on screen",
                               invertTilt ? "Inverted" : "Normal", "Set straight now", MapNames[mapIdx], showLine ? "Shown" : "Hidden", RivalCounts[rivalIdx].ToString(), DiffNames[diffIdx], CamNames[camMode],
-                              $"{DeadZones[dzIdx]:0.#}°", $"{TiltRanges[rangeIdx]:0}°", SmoothNames[smoothIdx], SpeedSteerNames[speedSteerIdx] };
+                              $"{DeadZones[dzIdx]:0.#}°", $"{TiltRanges[rangeIdx]:0}°", SmoothNames[smoothIdx], SpeedSteerNames[speedSteerIdx], gfxIdx == 0 ? "Auto (" + GfxNames[gfxLevel] + ")" : GfxNames[gfxIdx] };
             int rows = (names.Length + 1) / 2;
-            float panW = Mathf.Min(Screen.width - S(40), S(600)), rh = S(33), panH = rows * rh + S(52);
+            float panW = Mathf.Min(Screen.width - S(40), S(600)), rh = S(31), panH = rows * rh + S(52);
             var panel = new Rect((Screen.width - panW) / 2, (Screen.height - panH) / 2 + S(10), panW, panH);
             Fill(panel, new Color(0.05f, 0.06f, 0.08f, 0.93f));
             center.fontSize = (int)S(15); GUI.Label(new Rect(panel.x, panel.y + S(6), panW, S(24)), "<b>SETTINGS</b>   (game paused)", center);
@@ -591,6 +602,7 @@ public class GameManager : MonoBehaviour
                 if (i == 12) dzIdx = (dzIdx + 1) % DeadZones.Length;
                 if (i == 13) rangeIdx = (rangeIdx + 1) % TiltRanges.Length;
                 if (i == 14) smoothIdx = (smoothIdx + 1) % SmoothCut.Length;
+                if (i == 16) { gfxIdx = (gfxIdx + 1) % GfxNames.Length; ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); }
                 if (i == 15) { speedSteerIdx = (speedSteerIdx + 1) % SpeedSteer.Length; car.cfg.speedSens = SpeedSteer[speedSteerIdx]; }
                 Save();
             }
@@ -609,7 +621,7 @@ public class GameManager : MonoBehaviour
         var dash = new Rect(Screen.width / 2 - S(95), Screen.height - S(80), S(190), S(70));
         Panel(dash);
         GUI.Label(new Rect(dash.x, dash.y + S(2), dash.width * 0.72f, S(40)), $"{speed * 3.6f:0}<size={(int)S(12)}> km/h</size>", big);
-        var gearStyle = new GUIStyle(big); gearStyle.normal.textColor = new Color(1f, 0.82f, 0.25f);
+        if (gearStyle == null) { gearStyle = new GUIStyle(big); gearStyle.normal.textColor = new Color(1f, 0.82f, 0.25f); }
         gearStyle.fontSize = (int)S(24);
         GUI.Label(new Rect(dash.x + dash.width * 0.7f, dash.y + S(2), dash.width * 0.3f, S(40)), car.reverse ? "R" : car.gear.ToString(), gearStyle);
         float rpmFrac = Mathf.Clamp01((float)((car.rpm - car.cfg.idleRpm) / (car.cfg.redline - car.cfg.idleRpm)));
@@ -627,9 +639,9 @@ public class GameManager : MonoBehaviour
 
         // telemetry
         double beta = System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)) * 57.3;
-        Panel(new Rect(S(8), S(8), S(150), tilt ? S(92) : S(76)));
-        GUI.Label(new Rect(S(14), S(10), S(150), S(92)),
-            $"Front grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
+        Panel(new Rect(S(8), S(8), S(150), tilt ? S(106) : S(90)));
+        GUI.Label(new Rect(S(14), S(10), S(150), S(106)),
+            $"{fpsAvg:0} fps\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
 
         DrawMiniMap();

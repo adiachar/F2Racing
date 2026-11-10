@@ -115,6 +115,7 @@ namespace FormulaSim
         public double fzF, fzR, useF, useR, alphaF, alphaR;
         public bool lockF, lockR, spinR, tcActive, absActive;
         public double surfaceMu = 1, surfaceDrag;
+        public double grade;                // slope of the road in the direction the car points (rise per metre, + = uphill)
         public double wheelSpin;
         public double lockV = double.NaN, csBlend, lockAngle;
         public double wR = double.NaN;      // rear wheel spin speed (rad/s)
@@ -408,7 +409,7 @@ namespace FormulaSim
 
             // ---------- integrate ----------
             double cd = Math.Cos(delta), sd = Math.Sin(delta);
-            double Fx = FxF * cd - FyF * sd + FxRl - resist;
+            double Fx = FxF * cd - FyF * sd + FxRl - resist - m * G * grade; // gravity pulls the car back on a climb
             double Fy = FxF * sd + FyF * cd + FyR;
             double Mz = a * (FxF * sd + FyF * cd) - b * FyR;
             ax = Fx / m; ay = Fy / m;

@@ -5,7 +5,24 @@ namespace FormulaSim
     public static class TrackData
     {
         // Circuit de Monaco: 159 points, track width ~9 m
+        public static Track MonacoTrack() => Track.FromLonLat(Monaco, MonacoWidth, MonacoStart, MonacoElev);
         public const double MonacoWidth = 9.0;
+        // the circuit data begins near Casino Square; the real start/finish line is about 2450 m further on
+        public const double MonacoStart = 2450;
+        // Height profile: {distance from the start line (m), height above sea level (m)}. ESTIMATE from the known
+        // shape of the lap (about 42 m from the harbour up to Casino Square); not surveyed data.
+        public static readonly double[,] MonacoElev =
+        {
+            { 0, 7 }, { 196, 9 },            // start line, Sainte Devote
+            { 480, 26 }, { 758, 43 },        // Beau Rivage climb, Massenet
+            { 840, 47 }, { 900, 46 },        // crest, Casino Square
+            { 1110, 38 }, { 1244, 27 },      // Mirabeau, Grand Hotel hairpin
+            { 1338, 20 }, { 1424, 11 },      // lower Mirabeau, Portier
+            { 1530, 9 }, { 1930, 8 },        // tunnel
+            { 2084, 5 }, { 2364, 4 },        // harbour chicane, Tabac
+            { 2716, 4 }, { 2914, 5 },        // swimming pool, Rascasse
+            { 3100, 6 },                     // Anthony Noghes
+        };
         public static readonly double[,] Monaco = {
             { 7.4271910, 43.7394040 }, { 7.4271710, 43.7394940 }, { 7.4271990, 43.7395750 }, { 7.4272710, 43.7396860 },
             { 7.4273390, 43.7397640 }, { 7.4275510, 43.7399580 }, { 7.4286280, 43.7410150 }, { 7.4287030, 43.7410910 },

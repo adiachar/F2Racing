@@ -12,9 +12,44 @@ public static class WorldBuilder
     public static Vector2 PadStart => new Vector2(Pad.xMin + 40, Pad.center.y);
 
     static Material baseMat;
+    // ---------------------------------------------------------------- hills
+    // Height of the ground at a point (0 everywhere on a flat circuit). The road, scenery and cars all use it.
+    public static HeightField Height;
+    public static float H(double x, double y) => Height == null ? 0f : (float)Height.Sample(x, y);
+
+    // Lay everything under "root" onto the hills: meshes built in world coordinates get every vertex lifted,
+    // placed objects (trees, cones) are lifted as a whole.
+    public static void Drape(GameObject root)
+    {
+        if (Height == null) return;
+        foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
+        {
+            var tr = mf.transform;
+            if (mf.name == "Terrain") continue; // built at its final height already
+            if (tr.localToWorldMatrix.isIdentity)
+            {
+                var mesh = mf.sharedMesh; if (mesh == null) continue;
+                var v = mesh.vertices;
+                for (int i = 0; i < v.Length; i++) v[i].y += H(v[i].x, v[i].z);
+                mesh.vertices = v; mesh.RecalculateNormals(); mesh.RecalculateBounds();
+            }
+            else { var p = tr.position; p.y += H(p.x, p.z); tr.position = p; }
+        }
+    }
+
+    static Material diffuseMat; static bool diffuseTried;
     public static Material Mat(Color c, Texture2D tex = null, float smooth = 0.1f, float metal = 0f)
     {
         if (baseMat == null) baseMat = Resources.Load<Material>("Base");
+        // matt surfaces (road, grass, walls, buildings) use the simple diffuse shader: it looks the same there and
+        // costs a fraction of the full shader on a phone. Shiny things (car paint, metal) keep the full one.
+        if (!diffuseTried) { diffuseTried = true; diffuseMat = Resources.Load<Material>("Diffuse"); }
+        if (diffuseMat != null && smooth <= 0.3f && metal <= 0f)
+        {
+            var d = new Material(diffuseMat) { color = c };
+            if (tex != null) d.mainTexture = tex;
+            return d;
+        }
         var m = new Material(baseMat) { color = c };
         if (tex != null) m.mainTexture = tex;
         m.SetFloat("_Glossiness", smooth);
@@ -182,10 +217,29 @@ public static class WorldBuilder
         var grass = Mat(Color.white, grassTex);
         float gsize = Mathf.Max(4400, ext + 3000);
         grass.mainTextureScale = new Vector2(gsize / 10, gsize / 10);
-        var g = GameObject.CreatePrimitive(PrimitiveType.Quad); Object.Destroy(g.GetComponent<Collider>());
-        g.name = "Ground"; g.transform.SetParent(root);
-        g.transform.position = new Vector3(cx, -0.05f, cy - 400); g.transform.rotation = Quaternion.Euler(90, 0, 0); g.transform.localScale = new Vector3(gsize, gsize, 1);
-        g.GetComponent<MeshRenderer>().sharedMaterial = grass;
+        Height = t.h != null ? new HeightField(t) : null;
+        {
+            // ground: one big flat sheet, plus (on a hilly circuit) a fine grid around the track that follows the hills
+            void Sheet(string name, float x0, float y0, float w, float hgt, int nx, int ny, float yy)
+            {
+                var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
+                for (int j = 0; j <= ny; j++) for (int i = 0; i <= nx; i++)
+                {
+                    float px = x0 + w * i / nx, py = y0 + hgt * j / ny;
+                    // the open land is kept below any road within reach of this grid cell, so it can never bury one
+                    float hy = name == "Terrain" ? (float)Height.Lowest(px, py, w / nx * 1.1f + 2f) + yy : yy;
+                    v.Add(new Vector3(px, hy, py)); uv.Add(new Vector2(px / gsize, py / gsize));
+                    if (i < nx && j < ny) { int k = j * (nx + 1) + i; tri.Add(k); tri.Add(k + nx + 1); tri.Add(k + 1); tri.Add(k + 1); tri.Add(k + nx + 1); tri.Add(k + nx + 2); }
+                }
+                MeshObj(name, v, uv, tri, grass).transform.SetParent(root);
+            }
+            Sheet("Ground", cx - gsize / 2, cy - 400 - gsize / 2, gsize, gsize, 1, 1, Height == null ? -0.05f : -0.35f);
+            if (Height != null)
+            {
+                float m = 400, w = (float)(bb.maxX - bb.minX) + 2 * m, hg = (float)(bb.maxY - bb.minY) + 2 * m, cell = Mathf.Max(8f, ext / 180f);
+                Sheet("Terrain", (float)bb.minX - m, (float)bb.minY - m, w, hg, Mathf.CeilToInt(w / cell), Mathf.CeilToInt(hg / cell), -0.12f);
+            }
+        }
 
         // road
         var asphalt = Mat(Color.white, AsphaltTex(), 0.15f);
@@ -220,6 +274,37 @@ public static class WorldBuilder
                 k = j;
             }
             MeshObj("Kerbs", v, uv, tri, Mat(Color.white, KerbTex())).transform.SetParent(root);
+        }
+        if (t.width < 10.0)
+        {
+            // street circuit: paved shoulders out to the walls, and (on hills) the retaining wall below the street
+            var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
+            float edge = Wd / 2 + 3.3f;
+            Strip(t, 0, t.N, Wd / 2, edge, 0.028f, 6, v, uv, tri);
+            Strip(t, 0, t.N, -Wd / 2, -edge, 0.028f, 6, v, uv, tri);
+            MeshObj("Pavement", v, uv, tri, Mat(new Color(0.62f, 0.62f, 0.64f), AsphaltTex(), 0.1f)).transform.SetParent(root);
+            if (t.h != null)
+            {
+                v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>();
+                for (int side = -1; side <= 1; side += 2)
+                {
+                    int start = v.Count;
+                    for (int i = 0; i <= t.N; i++)
+                    {
+                        var p = t.pts[i % t.N];
+                        var top = W(p.x + p.nx * edge * side, p.y + p.ny * edge * side, 0.03f);
+                        v.Add(top); v.Add(top + Vector3.down * 18f);
+                        float u = (float)(i * t.ds) / 4f; uv.Add(new Vector2(u, 0)); uv.Add(new Vector2(u, 4.5f));
+                        if (i < t.N)
+                        {
+                            int k = start + i * 2;
+                            tri.Add(k); tri.Add(k + 1); tri.Add(k + 2); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k + 3);
+                            tri.Add(k); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k + 2); tri.Add(k + 3); tri.Add(k + 1);
+                        }
+                    }
+                }
+                MeshObj("RetainingWalls", v, uv, tri, Mat(new Color(0.72f, 0.69f, 0.63f), AsphaltTex(), 0.1f)).transform.SetParent(root);
+            }
         }
         Trackside.Build(t, root, t.width < 10.0);
         Scenery.Build(t, root, t.width < 10.0); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
@@ -267,6 +352,7 @@ public static class WorldBuilder
                 placed++;
             }
         }
+        Drape(root.gameObject);
         StaticBatchingUtility.Combine(root.gameObject);
 
         // one reflection capture of sky + ground, rendered once: cheap, and makes the paint look real

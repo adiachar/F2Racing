@@ -405,8 +405,22 @@ public class CarModel : MonoBehaviour
     // physics -> visuals. heading: rad CCW from +x (physics); delta: + = left; spin: wheel angle (rad)
     public void Apply(double x, double y, double heading, double delta, double frontSpinRad, double rearSpinRad, double axLong, double ay)
     {
-        transform.position = new Vector3((float)x, 0, (float)y);
-        transform.rotation = Quaternion.Euler(0, 90f - (float)(heading * Mathf.Rad2Deg), 0);
+        if (WorldBuilder.Height == null)
+        {
+            transform.position = new Vector3((float)x, 0, (float)y);
+            transform.rotation = Quaternion.Euler(0, 90f - (float)(heading * Mathf.Rad2Deg), 0);
+        }
+        else
+        {
+            // on hills: sit on the ground and lean with it
+            float ch = (float)System.Math.Cos(heading), sh = (float)System.Math.Sin(heading);
+            float h0 = WorldBuilder.H(x, y);
+            float sf = (WorldBuilder.H(x + ch * 1.7, y + sh * 1.7) - WorldBuilder.H(x - ch * 1.7, y - sh * 1.7)) / 3.4f;   // slope ahead
+            float ss = (WorldBuilder.H(x + sh * 0.8, y - ch * 0.8) - WorldBuilder.H(x - sh * 0.8, y + ch * 0.8)) / 1.6f;   // slope to the right
+            var fwd = new Vector3(ch, sf, sh); var right = new Vector3(sh, ss, -ch);
+            transform.position = new Vector3((float)x, h0, (float)y);
+            transform.rotation = Quaternion.LookRotation(fwd, Vector3.Cross(fwd, right));
+        }
         // body pitch/roll from g-forces: nose dives under braking, rolls to the outside in corners
         body.localRotation = Quaternion.Euler(Mathf.Clamp((float)-axLong * 0.09f, -1.7f, 1.7f), 0, Mathf.Clamp((float)-ay * 0.07f, -1.7f, 1.7f));
         float steer = -(float)(delta * Mathf.Rad2Deg);

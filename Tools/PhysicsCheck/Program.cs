@@ -5,7 +5,7 @@ using System.Text.Json;
 using FormulaSim;
 
 const double H = 1.0 / 240;
-Track[] Circuits() => new[] { Track.Build(), Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth), Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth) };
+Track[] Circuits() => new[] { Track.Build(), TrackData.MonacoTrack(), Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth) };
 string[] CircuitNames = { "Test track", "Monaco", "Spa" };
 
 // ---- AI trainer: dotnet run -- train ----
@@ -18,6 +18,7 @@ if (args.Length > 0 && args[0] == "train")
     {
         worstLat = 0;
         var d = new AiDriver(t, line, new CarConfig(), ace, AiTuning.From(p));
+        var hf = t.h != null ? new HeightField(t) : null;
         d.Place(t.N - 30, line.off[t.N - 30]);
         double time = 0, limit = t.width / 2 + 0.3; int steps = 0;
         while (time < 400)
@@ -32,6 +33,7 @@ if (args.Length > 0 && args[0] == "train")
             }
             var near = d.lateral; double hw = t.width / 2;
             d.car.surfaceMu = Math.Abs(near) <= hw ? 1.0 : Surfaces.Kerb.mu; d.car.surfaceDrag = Math.Abs(near) <= hw ? 0 : Surfaces.Kerb.drag;
+            if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
             d.car.Step(d.LastInput, H); time += H;
         }
         return 6000;
@@ -91,6 +93,7 @@ if (args.Length > 0 && args[0] == "race")
     {
         var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
         var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
+        var hf = t.h != null ? new HeightField(t) : null;
         for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
         double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n];
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -101,7 +104,7 @@ if (args.Length > 0 && args[0] == "race")
                 for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; } }
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
             }
-            foreach (var d in ds) { double hw = t.width / 2, al = Math.Abs(d.lateral); d.car.surfaceMu = al <= hw ? 1 : al <= hw + 1.4 ? Surfaces.Kerb.mu : Surfaces.Grass.mu; d.car.surfaceDrag = al <= hw ? 0 : al <= hw + 1.4 ? Surfaces.Kerb.drag : Surfaces.Grass.drag; d.car.Step(d.LastInput, H); }
+            foreach (var d in ds) { double hw = t.width / 2, al = Math.Abs(d.lateral); d.car.surfaceMu = al <= hw ? 1 : al <= hw + 1.4 ? Surfaces.Kerb.mu : Surfaces.Grass.mu; d.car.surfaceDrag = al <= hw ? 0 : al <= hw + 1.4 ? Surfaces.Kerb.drag : Surfaces.Grass.drag; if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
             time += H;
         }
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
@@ -190,7 +193,7 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
     Console.WriteLine($"  0-100 {t100:F2}s (perfect traction; real 2.2-2.6 with wheelspin) | 0-200 {t200:F2}s (2025 cars ~4.4-4.6) | 0-300 {t300:F2}s | top {top:F0} km/h, engine only {noK.vx * 3.6:F0} (real speed traps 325-345)");
     Console.WriteLine($"  braking from 320: peak {peakB:F2} g (real 5-6) | 200-0 in {Stop(200):F0} m | 100-0 in {Stop(100):F0} m (real 15-17)");
     Console.WriteLine($"  cornering g at km/h {string.Join(" ", lat)} (real: ~2 slow, 4-5 fast)");
-    foreach (var (nm, t2, real) in new[] { ("Monaco", Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth), 72.051), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth), 104.361) })
+    foreach (var (nm, t2, real) in new[] { ("Monaco", TrackData.MonacoTrack(), 72.051), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth), 104.361) })
     {
         var r = RacingLine.Compute(t2, new CarConfig(), 1.3, 0.97, 0.95);
         Console.WriteLine($"  {nm}: ideal lap {r.lapTime:F2}s, real 2026 pole {real:F2}s ({(r.lapTime / real - 1) * 100:+0.0;-0.0}%), speed {r.speed.Min() * 3.6:F0}-{r.speed.Max() * 3.6:F0} km/h");
@@ -229,7 +232,7 @@ foreach (var (nm, data, w) in new[] { ("Monaco", TrackData.Monaco, TrackData.Mon
         }
         Console.WriteLine($"Racing line JS vs C# (default track, {rows.Length} pts): max offset diff {dOff:E2} m, position {dPos:E2} m, speed {dV:E2} m/s; {(dOff < 1e-6 && dPos < 1e-6 && dV < 1e-4 ? "MATCH" : "DIFFERENT")}");
     }
-    foreach (var (nm, t) in new[] { ("Test track", Track.Build()), ("Monaco", Track.FromLonLat(TrackData.Monaco, TrackData.MonacoWidth)), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)) })
+    foreach (var (nm, t) in new[] { ("Test track", Track.Build()), ("Monaco", TrackData.MonacoTrack()), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)) })
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var r = RacingLine.Compute(t, new CarConfig());

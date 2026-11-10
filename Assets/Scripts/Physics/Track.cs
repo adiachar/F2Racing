@@ -83,7 +83,9 @@ namespace FormulaSim
 
         // Real circuit from (longitude, latitude) points: local metres (equirectangular around the centre,
         // accurate to a few cm over a few km), x = east, y = north. The start/finish line is the first point.
-        public static Track FromLonLat(double[,] lonlat, double width)
+        // startAt: distance (m) along the raw data at which the real start/finish line lies (the data may begin anywhere).
+        // elev: optional {distance from the start line (m), height (m)} keys; gives every point a height (h).
+        public static Track FromLonLat(double[,] lonlat, double width, double startAt = 0, double[,] elev = null)
         {
             int n = lonlat.GetLength(0);
             double lon0 = 0, lat0 = 0;
@@ -91,11 +93,48 @@ namespace FormulaSim
             lon0 /= n; lat0 /= n;
             const double R = 6371000;
             double kx = Math.PI / 180 * R * Math.Cos(lat0 * Math.PI / 180), ky = Math.PI / 180 * R;
+            var raw = new double[n, 2];
+            for (int i = 0; i < n; i++) { raw[i, 0] = (lonlat[i, 0] - lon0) * kx; raw[i, 1] = (lonlat[i, 1] - lat0) * ky; }
+            // begin at the raw point nearest to the start line
+            int first = 0;
+            if (startAt > 0)
+            {
+                double acc = 0, best = double.MaxValue;
+                for (int i = 0; i < n; i++)
+                {
+                    if (Math.Abs(acc - startAt) < best) { best = Math.Abs(acc - startAt); first = i; }
+                    int j = (i + 1) % n; acc += Math.Sqrt((raw[j, 0] - raw[i, 0]) * (raw[j, 0] - raw[i, 0]) + (raw[j, 1] - raw[i, 1]) * (raw[j, 1] - raw[i, 1]));
+                }
+            }
             // put the start/finish line at the origin
-            double ox = (lonlat[0, 0] - lon0) * kx, oy = (lonlat[0, 1] - lat0) * ky;
+            double ox = raw[first, 0], oy = raw[first, 1];
             var pts = new double[n, 2];
-            for (int i = 0; i < n; i++) { pts[i, 0] = (lonlat[i, 0] - lon0) * kx - ox; pts[i, 1] = (lonlat[i, 1] - lat0) * ky - oy; }
-            return Build(pts, width);
+            for (int i = 0; i < n; i++) { int k = (i + first) % n; pts[i, 0] = raw[k, 0] - ox; pts[i, 1] = raw[k, 1] - oy; }
+            var t = Build(pts, width);
+            if (elev != null) t.SetElevation(elev);
+            return t;
+        }
+
+        public double[] h; // height of every point (m); null = flat circuit
+        void SetElevation(double[,] keys)
+        {
+            int m = keys.GetLength(0); h = new double[N];
+            for (int i = 0; i < N; i++)
+            {
+                double s = pts[i].s; int k = 0;
+                while (k < m - 1 && keys[k + 1, 0] <= s) k++;
+                double s0 = keys[k, 0], h0 = keys[k, 1], s1 = k + 1 < m ? keys[k + 1, 0] : length + keys[0, 0], h1 = k + 1 < m ? keys[k + 1, 1] : keys[0, 1];
+                if (s < keys[0, 0]) { s0 = keys[m - 1, 0] - length; h0 = keys[m - 1, 1]; s1 = keys[0, 0]; h1 = keys[0, 1]; }
+                double u = Math.Min(1, Math.Max(0, (s - s0) / Math.Max(1e-6, s1 - s0))); u = u * u * (3 - 2 * u);
+                h[i] = h0 + (h1 - h0) * u;
+            }
+            // round off the joins (about 40 m)
+            for (int pass = 0; pass < 3; pass++)
+            {
+                var o = new double[N]; int w = (int)Math.Round(20 / ds);
+                for (int i = 0; i < N; i++) { double sum = 0; for (int j = -w; j <= w; j++) sum += h[((i + j) % N + N) % N]; o[i] = sum / (2 * w + 1); }
+                h = o;
+            }
         }
 
         public (double minX, double minY, double maxX, double maxY) Bounds()

@@ -42,6 +42,11 @@ public static class BuildScript
             g.globalIlluminationFlags = MaterialGlobalIlluminationFlags.None;
             AssetDatabase.CreateAsset(g, "Assets/Resources/Glow.mat");
         }
+        if (!File.Exists("Assets/Resources/Diffuse.mat"))
+        {
+            var sh = Shader.Find("Legacy Shaders/Diffuse");
+            if (sh != null) AssetDatabase.CreateAsset(new Material(sh), "Assets/Resources/Diffuse.mat");
+        }
         if (!File.Exists("Assets/Resources/Shadow.mat"))
             AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Transparent")), "Assets/Resources/Shadow.mat");
         if (!File.Exists(ScenePath))

@@ -66,7 +66,7 @@ public class SkidMarks
     public void Track(int wheel, Vector3 pos, Vector3 side, bool on)
     {
         if (!on) { active[wheel] = false; return; }
-        pos.y = Height;
+        pos.y = Height + WorldBuilder.H(pos.x, pos.z);
         side.y = 0; side = side.normalized * HalfWidth;
         Vector3 l = pos - side, r = pos + side;
         if (!active[wheel] || (pos - lastP[wheel]).sqrMagnitude > 25f)
