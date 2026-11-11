@@ -42,8 +42,10 @@ public static class Scenery
         var bb = t.Bounds();
         float cx = (float)(bb.minX + bb.maxX) / 2, cy = (float)(bb.minY + bb.maxY) / 2;
         float ext = (float)System.Math.Max(bb.maxX - bb.minX, bb.maxY - bb.minY);
-        Hills(parent, cx, cy, ext * 0.5f + 620, 60, 95, new Color(0.30f, 0.40f, 0.33f), 3);
-        Hills(parent, cx, cy, ext * 0.5f + 980, 130, 170, new Color(0.38f, 0.47f, 0.50f), 11);
+        bool forest = t.def != null && t.def.forest > 0.6;   // Ardennes: higher, darker, wooded hills
+        float hk = forest ? 1.4f : 1f;
+        Hills(parent, cx, cy, ext * 0.5f + 620, 60 * hk, 95 * hk, forest ? new Color(0.17f, 0.28f, 0.19f) : new Color(0.30f, 0.40f, 0.33f), 3);
+        Hills(parent, cx, cy, ext * 0.5f + 980, 130 * hk, 170 * hk, forest ? new Color(0.30f, 0.38f, 0.38f) : new Color(0.38f, 0.47f, 0.50f), 11);
         if (street) Town(t, parent);
     }
 

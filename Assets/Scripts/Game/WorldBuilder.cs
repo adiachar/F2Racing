@@ -220,6 +220,8 @@ public static class WorldBuilder
         var sky = new Color(0.72f, 0.80f, 0.88f);
         RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = sky;
         RenderSettings.fogStartDistance = 300; RenderSettings.fogEndDistance = 1800;
+        if (Street(t)) { RenderSettings.fogColor = new Color(0.80f, 0.82f, 0.85f); RenderSettings.fogStartDistance = 220; RenderSettings.fogEndDistance = 1500; } // sea haze
+        else if (t.def != null && t.def.forest > 0.6) { RenderSettings.fogColor = new Color(0.66f, 0.74f, 0.78f); RenderSettings.fogStartDistance = 180; RenderSettings.fogEndDistance = 1300; } // damp Ardennes air
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
         RenderSettings.ambientSkyColor = new Color(0.62f, 0.72f, 0.85f);
         RenderSettings.ambientEquatorColor = new Color(0.55f, 0.6f, 0.6f);
@@ -403,25 +405,56 @@ public static class WorldBuilder
             }
         }
 
-        // simple trees (instanced-friendly: shared materials so they batch)
+        // trees: built straight into two combined meshes (crowns, trunks) so thousands cost two draw calls.
+        // A forest circuit (Spa) gets dense belts of spruce; others get scattered broad-leaf trees.
         {
-            var leaf = Mat(new Color(0.19f, 0.42f, 0.21f)); var trunk = Mat(new Color(0.36f, 0.25f, 0.19f));
+            float dens = t.def != null ? (float)t.def.forest : 0.3f;
+            bool conifer = dens > 0.6f;
+            var crown = new List<Vector3>(); var cuv = new List<Vector2>(); var ctri = new List<int>();
+            var trunkV = new List<Vector3>(); var tuv = new List<Vector2>(); var ttri = new List<int>();
             var rnd = new System.Random(7); int placed = 0, tries = 0;
-            int want = Mathf.Clamp((int)(ext / 6), 200, 450);
-            while (placed < want && tries++ < want * 25)
+            int want = Mathf.Clamp((int)(t.length * 0.4f * dens + ext / 6), 200, 2500);
+            float near = 26f, far = conifer ? 260f : 600f;
+            // a ring of n points at height y with radius r around (x, z)
+            void Ring(List<Vector3> v, float x, float z, float y, float r, int n, float rot)
+            { for (int k = 0; k < n; k++) { float a2 = rot + k * Mathf.PI * 2 / n; v.Add(new Vector3(x + Mathf.Cos(a2) * r, y, z + Mathf.Sin(a2) * r)); cuv.Add(Vector2.zero); } }
+            void Cone(float x, float z, float y0, float y1, float r, int n, float rot)
             {
-                double x = bb.minX - 350 + rnd.NextDouble() * (bb.maxX - bb.minX + 700), y = bb.minY - 250 + rnd.NextDouble() * (bb.maxY - bb.minY + 600);
-                if (Pad.Contains(new Vector2((float)x, (float)y))) continue;
-                if (t.Nearest(x, y).dist < 26) continue;
-                float s = 0.7f + (float)rnd.NextDouble() * 0.8f;
-                var tr = GameObject.CreatePrimitive(PrimitiveType.Cylinder); Object.Destroy(tr.GetComponent<Collider>());
-                tr.transform.SetParent(root); tr.transform.position = new Vector3((float)x, 1.2f * s, (float)y); tr.transform.localScale = new Vector3(0.5f * s, 1.2f * s, 0.5f * s);
-                tr.GetComponent<MeshRenderer>().sharedMaterial = trunk;
-                var lf = GameObject.CreatePrimitive(PrimitiveType.Sphere); Object.Destroy(lf.GetComponent<Collider>());
-                lf.transform.SetParent(root); lf.transform.position = new Vector3((float)x, 4.2f * s, (float)y); lf.transform.localScale = new Vector3(4.2f * s, 5.5f * s, 4.2f * s);
-                lf.GetComponent<MeshRenderer>().sharedMaterial = leaf;
+                int b0 = crown.Count; Ring(crown, x, z, y0, r, n, rot); int tip = crown.Count; crown.Add(new Vector3(x, y1, z)); cuv.Add(Vector2.zero);
+                for (int k = 0; k < n; k++) { ctri.Add(b0 + k); ctri.Add(tip); ctri.Add(b0 + (k + 1) % n); }
+            }
+            while (placed < want && tries++ < want * 30)
+            {
+                double x = bb.minX - far * 0.6 + rnd.NextDouble() * (bb.maxX - bb.minX + far * 1.2), y = bb.minY - far * 0.6 + rnd.NextDouble() * (bb.maxY - bb.minY + far * 1.2);
+                if (Pad.Contains(new Vector2((float)x, (float)y)) || Waterfront.InWater((float)x, (float)y)) continue;
+                double dist = t.Nearest(x, y).dist;
+                if (dist < near + (t.def != null ? t.def.barrier : 0) || dist > far) continue;
+                float sz = 0.7f + (float)rnd.NextDouble() * 0.8f, rot = (float)rnd.NextDouble() * 6.28f, fx = (float)x, fz = (float)y;
+                if (conifer)
+                {
+                    // spruce: three stacked cones
+                    float hgt = 14f * sz, r0 = 3.2f * sz;
+                    Cone(fx, fz, 1.5f * sz, hgt * 0.55f, r0, 7, rot);
+                    Cone(fx, fz, hgt * 0.35f, hgt * 0.8f, r0 * 0.75f, 7, rot + 0.4f);
+                    Cone(fx, fz, hgt * 0.6f, hgt, r0 * 0.5f, 6, rot + 0.8f);
+                }
+                else
+                {
+                    // broad-leaf: a squashed double cone (eight faces) on a trunk
+                    float cy = 4.6f * sz, rr = 2.6f * sz; int b0 = crown.Count;
+                    Ring(crown, fx, fz, cy, rr, 6, rot);
+                    crown.Add(new Vector3(fx, cy + 3.2f * sz, fz)); crown.Add(new Vector3(fx, cy - 2.4f * sz, fz)); cuv.Add(Vector2.zero); cuv.Add(Vector2.zero);
+                    for (int k = 0; k < 6; k++) { int a1 = b0 + k, a2 = b0 + (k + 1) % 6; ctri.Add(a1); ctri.Add(b0 + 6); ctri.Add(a2); ctri.Add(a1); ctri.Add(a2); ctri.Add(b0 + 7); }
+                }
+                // trunk: a thin three-sided post
+                int tb = trunkV.Count; float tr2 = 0.25f * sz, th2 = conifer ? 2f * sz : 3f * sz;
+                for (int k = 0; k < 3; k++) { float a2 = rot + k * 2.094f; trunkV.Add(new Vector3(fx + Mathf.Cos(a2) * tr2, 0, fz + Mathf.Sin(a2) * tr2)); trunkV.Add(new Vector3(fx + Mathf.Cos(a2) * tr2, th2, fz + Mathf.Sin(a2) * tr2)); tuv.Add(Vector2.zero); tuv.Add(Vector2.zero); }
+                for (int k = 0; k < 3; k++) { int a1 = tb + k * 2, a2 = tb + ((k + 1) % 3) * 2; ttri.Add(a1); ttri.Add(a1 + 1); ttri.Add(a2); ttri.Add(a2); ttri.Add(a1 + 1); ttri.Add(a2 + 1); }
                 placed++;
             }
+            var leafCol = conifer ? new Color(0.12f, 0.27f, 0.15f) : new Color(0.19f, 0.42f, 0.21f);
+            MeshObj("Trees", crown, cuv, ctri, Mat(leafCol)).transform.SetParent(root);
+            MeshObj("Trunks", trunkV, tuv, ttri, Mat(new Color(0.36f, 0.25f, 0.19f))).transform.SetParent(root);
         }
         Drape(root.gameObject);
         // lighting baked into the vertices (LightBake.cs); if the phone can't run that shader, the sun and

@@ -367,6 +367,14 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
         while (tt < 12 && a200 == 0) { l.Step(new CarInput(0, 1, 0), H); tt += H; if (a100 == 0 && l.vx * 3.6 >= 100) a100 = tt; if (l.vx * 3.6 >= 200) a200 = tt; }
         Console.WriteLine($"  launch TC {mode}: 0-100 {a100:F2}s, 0-200 {a200:F2}s");
     }
+    { // brake temperature through a Monza turn 1 style stop (340 -> 80 km/h) and the straight after it
+        var bt = new FormulaCar(F1()) { vx = 340 / 3.6, gear = 8 }; double t0 = bt.brakeTF; bt.Step(new CarInput(0, 0, 0), H); t0 = bt.brakeTF;
+        while (bt.vx * 3.6 > 80) bt.Step(new CarInput(0, 0, 1), H);
+        double peakF = bt.brakeTF, peakR = bt.brakeTR; for (int i = 0; i < 240 * 12; i++) bt.Step(new CarInput(0, 1, 0), H);
+        var cold = new FormulaCar(F1() ) { vx = 200 / 3.6, gear = 6, brakeTF = 40, brakeTR = 40 }; double xc = cold.x; while (cold.vx > 0.3) cold.Step(new CarInput(0, 0, 1), H);
+        var warm = new FormulaCar(F1()) { vx = 200 / 3.6, gear = 6 }; double xw = warm.x; while (warm.vx > 0.3) warm.Step(new CarInput(0, 0, 1), H);
+        Console.WriteLine($"  brakes: {t0:F0} C -> front {peakF:F0} C, rear {peakR:F0} C after 340->80 km/h (Brembo: ~1000 C), {bt.brakeTF:F0} C after 12 s flat out; 200-0 cold brakes {cold.x - xc:F0} m vs warm {warm.x - xw:F0} m");
+    }
     Console.WriteLine("F1 2026 car vs real figures:");
     Console.WriteLine($"  0-100 {t100:F2}s (perfect traction; real 2.2-2.6 with wheelspin) | 0-200 {t200:F2}s (2025 cars ~4.4-4.6) | 0-300 {t300:F2}s | top {top:F0} km/h, engine only {noK.vx * 3.6:F0} (real speed traps 325-345)");
     Console.WriteLine($"  braking from 320: peak {peakB:F2} g (real 5-6) | 200-0 in {Stop(200):F0} m | 100-0 in {Stop(100):F0} m (real 15-17)");

@@ -91,6 +91,7 @@ namespace FormulaSim
         public double waterFrom, waterTo, waterX, waterY;
         // tunnel: covered from tunnelFrom to tunnelTo (m from the start line)
         public double tunnelFrom, tunnelTo;
+        public double forest = 0.3;      // 0 = open land, 1 = dense forest round the circuit (Spa)
 
         public Track Build()
         {
@@ -136,7 +137,7 @@ namespace FormulaSim
         public static readonly CircuitDef Monaco = new CircuitDef
         {
             id = "monaco", name = "Monaco", lonlat = TrackData.Monaco, width = TrackData.MonacoWidth, startAt = TrackData.MonacoStart,
-            elev = TrackData.MonacoElev, style = CircuitStyle.Street, barrier = 2.65, realPole = 72.051,
+            elev = TrackData.MonacoElev, style = CircuitStyle.Street, barrier = 2.65, realPole = 72.051, forest = 0.1,
             waterFrom = 1540, waterTo = 2890, waterX = 400, waterY = -100,   // Port Hercule and the sea
             tunnelFrom = 1560, tunnelTo = 1880,                               // the tunnel under the hotel
             // real minimum corner speeds (km/h) from published corner guides (F1 Chronicle, Honda, circuit guides);
@@ -149,7 +150,7 @@ namespace FormulaSim
         };
         public static readonly CircuitDef Spa = new CircuitDef
         {
-            id = "spa", name = "Spa", metric = TrackDataTum.Spa, style = CircuitStyle.Parkland, realPole = 104.361,
+            id = "spa", name = "Spa", metric = TrackDataTum.Spa, style = CircuitStyle.Parkland, realPole = 104.361, forest = 1,
         };
         // order matters: the AI tuning table (AiTuning.Trained) uses the same order
         public static readonly CircuitDef[] All = { Test, Monaco, Spa };

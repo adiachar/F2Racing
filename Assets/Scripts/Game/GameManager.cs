@@ -55,7 +55,7 @@ public class GameManager : MonoBehaviour
         LoadMap();
         car = new FormulaCar(PlayerConfig());
         model = CarModel.CreateFromAsset() ?? CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
-        var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera";
+        var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera"; cam.allowDynamicResolution = true;
         cam.nearClipPlane = 0.2f; cam.farClipPlane = 2500; cam.fieldOfView = 62;
         cam.clearFlags = RenderSettings.skybox != null ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor; cam.backgroundColor = RenderSettings.fogColor;
         camGo.AddComponent<AudioListener>();
@@ -142,10 +142,25 @@ public class GameManager : MonoBehaviour
         QualitySettings.anisotropicFiltering = level <= 1 ? AnisotropicFiltering.Disable : AnisotropicFiltering.ForceEnable;
         if (cam != null) cam.farClipPlane = level <= 1 ? 1500 : 2500;
     }
+    // Dynamic resolution: when the phone can't hold ~50 fps the 3D picture is drawn at a lower resolution
+    // (down to 60%) and scaled up; the HUD is drawn afterwards at full resolution, so text stays sharp.
+    // Works where the graphics API supports it (Vulkan, Metal); elsewhere it does nothing.
+    float renderScale = 1f, scaleT;
+    void DynamicResolution()
+    {
+        if (menuOpen || Time.realtimeSinceStartup < 6f) return;
+        if (fpsAvg < 50f) scaleT -= Time.unscaledDeltaTime; else if (fpsAvg > 58f) scaleT += Time.unscaledDeltaTime; else scaleT = 0;
+        float ns = renderScale;
+        if (scaleT < -1.5f) { ns = Mathf.Max(0.6f, renderScale - 0.1f); scaleT = 0; }
+        else if (scaleT > 6f) { ns = Mathf.Min(1f, renderScale + 0.05f); scaleT = 0; }
+        if (!Mathf.Approximately(ns, renderScale)) { renderScale = ns; ScalableBufferManager.ResizeBuffers(ns, ns); }
+    }
     void AutoQuality()
     {
         float fps = 1f / Mathf.Max(Time.unscaledDeltaTime, 0.001f);
         fpsAvg += (fps - fpsAvg) * 0.05f;
+        DynamicResolution();
+        if (renderScale > 0.65f) { slowT = 0; return; } // first lower the resolution, then the effects
         if (gfxIdx != 0 || menuOpen || Time.realtimeSinceStartup < 6f || gfxLevel <= 1) return;
         slowT = fpsAvg < 50f ? slowT + Time.unscaledDeltaTime : 0;
         if (slowT < 4f) return;
@@ -694,10 +709,10 @@ public class GameManager : MonoBehaviour
 
         // telemetry
         double beta = System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)) * 57.3;
-        Panel(new Rect(S(8), S(8), S(178), tilt ? S(176) : S(160)));
-        GUI.Label(new Rect(S(14), S(10), S(178), S(176)),
-            $"{fpsAvg:0} fps\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
-            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{CompoundTable.Get(car.cfg.compound).name} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
+        Panel(new Rect(S(8), S(8), S(178), tilt ? S(190) : S(174)));
+        GUI.Label(new Rect(S(14), S(10), S(178), S(190)),
+            $"{fpsAvg:0} fps" + (renderScale < 0.99f ? $" ({renderScale * 100:0}% res)" : "") + $"\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
+            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{CompoundTable.Get(car.cfg.compound).name} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nBrakes {car.brakeTF:0}° / {car.brakeTR:0}°\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
 
         DrawMiniMap();

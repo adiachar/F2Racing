@@ -57,6 +57,11 @@ namespace FormulaSim
         public double clutchEngage = 13;     // m/s (47 km/h) by which the launch clutch is fully engaged
         public double brakeForce = 46000;    // N total at full pedal (enough for ~5 g with downforce)
         public double brakeBias = 0.57;      // front share
+        // carbon-carbon brakes (Brembo: working window about 350-1000 C): weak when cold, fading when far too hot
+        public bool brakeTemps = true;
+        public double brakeStart = 300, brakeAmbient = 30;   // deg C
+        public double brakeHeatCap = 2400;                    // J/K per axle (discs + pads), ~500 K rise from a 340->80 km/h stop
+        public double brakeCool0 = 30, brakeCoolV = 1.2;      // W/K at rest, plus per m/s (about 20 s time constant at 300 km/h)
         public double maxLockDeg = 22;       // Monaco-spec steering lock
         public double speedSens = 0.5;      // steering aid: lock = full / (1 + speedSens (v/30)^2). 0 = full lock at any speed
         public double csFull = 0.07;        // slide angle (rad) at which countersteer gets full lock again
@@ -102,7 +107,7 @@ namespace FormulaSim
         public static CarConfig LegacyF2() => new CarConfig
         {
             mass = 795, inertiaZ = 950, wheelbase = 3.135, frontWeight = 0.45, cgHeight = 0.28, wheelRadius = 0.33,
-            chassis = false, mu = 2.2, wheelInertia = 1.6, speedSens = 1.0, csFull = 0.14, track = 1.50, cdA = 1.05, clA = 4.0, activeAero = false, cdAX = 1.05, clAX = 4.0,
+            chassis = false, brakeTemps = false, mu = 2.2, wheelInertia = 1.6, speedSens = 1.0, csFull = 0.14, track = 1.50, cdA = 1.05, clA = 4.0, activeAero = false, cdAX = 1.05, clAX = 4.0,
             peakTorque = 600, torqueRpm = new double[] { 2000, 4000, 5500, 6500, 7500, 8750 }, torqueFrac = new[] { 0.40, 0.62, 0.88, 1.0, 0.97, 0.84 },
             redline = 8750, idleRpm = 3000, gearTopSpeeds = new double[] { 128, 168, 207, 245, 283, 320 }, driveEff = 0.80,
             ersPower = 0, shiftTime = 0.05, brakeForce = 22500, brakeBias = 0.60, maxLockDeg = 18,
@@ -147,7 +152,15 @@ namespace FormulaSim
         public double surfaceDrag { get => (wRoll[0] + wRoll[1] + wRoll[2] + wRoll[3]) / 4; set { for (int i = 0; i < 4; i++) wRoll[i] = value; } }
         // tyre wear 0 (new) .. 1 (finished), front and rear
         public double wearF, wearR;
-        public double gripF = 1, gripR = 1;  // tyre grip now from temperature, compound and wear (1 = a fresh Soft at its best)
+        public double gripF = 1, gripR = 1;
+        public double brakeTF = double.NaN, brakeTR;           // deg C, front and rear brakes
+        // friction of carbon brakes vs temperature: ~55% at room temperature, full from ~400 C, fading above 1000 C
+        public static double BrakeMu(double t)
+        {
+            double cold = Math.Min(1, Math.Max(0, (t - 120) / 280)); cold = cold * cold * (3 - 2 * cold);
+            double hot = Math.Min(1, Math.Max(0, (t - 1000) / 250)); hot = hot * hot * (3 - 2 * hot);
+            return (0.55 + 0.45 * cold) * (1 - 0.3 * hot);
+        }  // tyre grip now from temperature, compound and wear (1 = a fresh Soft at its best)
         // chassis detail: state and read-outs
         public double tow;                  // 0..1 how deep in another car's slipstream (set by the game)
         public double rideF = double.NaN, rideR, bodyRoll, pitch;      // m, m, rad, rad
@@ -431,7 +444,13 @@ namespace FormulaSim
 
             int dir = vx > 0.05 ? 1 : vx < -0.05 ? -1 : 0;
             double Bd = brk * c.brakeForce;
-            double FxF = -dir * Bd * c.brakeBias;
+            double kBF = 1, kBR = 1;
+            if (c.brakeTemps)
+            {
+                if (double.IsNaN(brakeTF)) { brakeTF = c.brakeStart; brakeTR = c.brakeStart; }
+                kBF = BrakeMu(brakeTF); kBR = BrakeMu(brakeTR);
+            }
+            double FxF = -dir * Bd * c.brakeBias * kBF;
             var rF = Combine(FxF, FyF, DF, c.abs);
             FxF = rF.Fx; FyF = rF.Fy;
             lockF = rF.slide; useF = rF.use;
@@ -451,7 +470,7 @@ namespace FormulaSim
                 return new RearForce { Fx = F * sx / sv, Fy = -F * syR / sv, s = sv, kap = kap };
             }
             double Iw = c.wheelInertia + c.engineInertia * ratio * ratio;
-            double brakeT = Bd * (1 - c.brakeBias) * rw;
+            double brakeT = Bd * (1 - c.brakeBias) * rw * kBR;
             double wv = wR;
             {
                 var t0 = RearTyre(wv); double eps = 0.05;
@@ -526,6 +545,14 @@ namespace FormulaSim
                     wearF = Math.Min(1, wearF + pF * c.wearPerJ * hotF / life * dt);
                     wearR = Math.Min(1, wearR + pR * c.wearPerJ * hotR / life * dt);
                 }
+            }
+            if (c.brakeTemps && !double.IsNaN(brakeTF))
+            {
+                // the brakes take the braking work; the MGU-K takes part of the rear's while it is charging
+                double pFb = Math.Abs(FxF) * Math.Abs(vx), pRb = Math.Max(0, Math.Abs(brakeT / rw) * Math.Abs(vx) - harvestW);
+                double coolB = c.brakeCool0 + c.brakeCoolV * speed;
+                brakeTF += dt * (pFb - coolB * (brakeTF - c.brakeAmbient)) / c.brakeHeatCap;
+                brakeTR += dt * (pRb - coolB * (brakeTR - c.brakeAmbient)) / c.brakeHeatCap;
             }
             ax = Fx / m; ay = Fy / m;
 
