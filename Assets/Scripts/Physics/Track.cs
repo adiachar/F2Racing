@@ -108,7 +108,40 @@ namespace FormulaSim
         // accurate to a few cm over a few km), x = east, y = north. The start/finish line is the first point.
         // startAt: distance (m) along the raw data at which the real start/finish line lies (the data may begin anywhere).
         // elev: optional {distance from the start line (m), height (m)} keys; gives every point a height (h).
-        public static Track FromLonLat(double[,] lonlat, double width, double startAt = 0, double[,] elev = null)
+        // Spread each bend's curvature over a Gaussian window of sigma metres (same total turn, loop kept closed).
+        // A coarse outline (one point every 20 m) squeezes a bend into a single vertex, which makes corners far
+        // tighter than the real road; real roads change curvature gradually.
+        public double[,] SmoothedCurvature(double sigma) => SmoothedCurvature(_ => sigma);
+        // sigmaAt(s): the window can differ along the lap (each corner fitted on its own; see CircuitDef.curveFit)
+        public double[,] SmoothedCurvature(Func<double, double> sigmaAt)
+        {
+            var th = new double[N + 1]; th[0] = Math.Atan2(pts[0].ty, pts[0].tx);
+            var k = new double[N];
+            for (int i = 0; i < N; i++)
+            {
+                var a = pts[i]; var b = pts[(i + 1) % N];
+                double d = Math.Atan2(b.ty, b.tx) - Math.Atan2(a.ty, a.tx);
+                while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+                k[i] = d; // turn per step
+            }
+            // spread each point's turn over its neighbours (scatter form: the total turn is kept exactly)
+            var ksm = new double[N];
+            for (int i = 0; i < N; i++)
+            {
+                double sg = sigmaAt(pts[i].s);
+                if (sg < 0.5) { ksm[i] += k[i]; continue; }
+                int w = (int)Math.Ceiling(3 * sg / ds); double ks = 0;
+                for (int j = -w; j <= w; j++) ks += Math.Exp(-0.5 * (j * ds / sg) * (j * ds / sg));
+                for (int j = -w; j <= w; j++) ksm[((i + j) % N + N) % N] += k[i] * Math.Exp(-0.5 * (j * ds / sg) * (j * ds / sg)) / ks;
+            }
+            var P = new double[N, 2]; double x = pts[0].x, y = pts[0].y, h = th[0];
+            for (int i = 0; i < N; i++) { P[i, 0] = x; P[i, 1] = y; x += Math.Cos(h + ksm[i] / 2) * ds; y += Math.Sin(h + ksm[i] / 2) * ds; h += ksm[i]; }
+            double ex = x - pts[0].x, ey = y - pts[0].y; // closure error, spread along the lap
+            for (int i = 0; i < N; i++) { P[i, 0] -= ex * i / N; P[i, 1] -= ey * i / N; }
+            return P;
+        }
+
+        public static Track FromLonLat(double[,] lonlat, double width, double startAt = 0, double[,] elev = null, double curveSigma = 0, double[,] curveFit = null)
         {
             int n = lonlat.GetLength(0);
             double lon0 = 0, lat0 = 0;
@@ -134,8 +167,17 @@ namespace FormulaSim
             var pts = new double[n, 2];
             for (int i = 0; i < n; i++) { int k = (i + first) % n; pts[i, 0] = raw[k, 0] - ox; pts[i, 1] = raw[k, 1] - oy; }
             var t = Build(pts, width);
+            if (curveSigma > 0 || curveFit != null) t = Build(t.SmoothedCurvature(sAt => SigmaAt(sAt, curveSigma, curveFit)), width);
             if (elev != null) t.SetElevation(elev);
             return t;
+        }
+
+        // the curvature window at distance s: the fitted value of the corner within 60 m, otherwise the default
+        public static double SigmaAt(double s, double sigma0, double[,] fit)
+        {
+            if (fit == null) return sigma0;
+            for (int i = 0; i < fit.GetLength(0); i++) if (Math.Abs(fit[i, 0] - s) <= 60) return fit[i, 1];
+            return sigma0;
         }
 
         public double[] h; // height of every point (m); null = flat circuit

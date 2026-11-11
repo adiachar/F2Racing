@@ -11,6 +11,182 @@ string[] CircuitNames = { "Test track", "Monaco", "Spa" };
 // ---- AI trainer: dotnet run -- train ----
 // Evolution search (cross-entropy method) over the controller gains. Every candidate drives full laps in the
 // real physics; the score is the flying-lap time, and leaving the track disqualifies it.
+// ---- physics lab: dotnet run -- lab <outdir> ----
+// Standard vehicle-dynamics tests; writes CSV files that Tools/PhysicsCheck/plot_lab.py turns into charts.
+if (args.Length > 0 && args[0] == "lab")
+{
+    string labDir = args.Length > 1 ? args[1] : "lab"; Directory.CreateDirectory(labDir);
+    var inv = CultureInfo.InvariantCulture; const double g = 9.81, rho = 1.225;
+    string F(double v) => v.ToString("G6", inv);
+    var cfg = new CarConfig();
+    // 1) tyre: lateral force coefficient vs slip angle at several loads (the Pacejka "magic formula")
+    using (var w = new StreamWriter(Path.Combine(labDir, "tyre.csv")))
+    {
+        w.WriteLine("alpha_deg,load_ratio,mu_y");
+        foreach (var lr in new[] { 0.5, 1.0, 2.0, 3.0 })
+            for (double a = 0; a <= 15.001; a += 0.25)
+                w.WriteLine($"{F(a)},{F(lr)},{F(cfg.mu * Math.Pow(lr, cfg.loadExp - 1) * FormulaCar.Magic(cfg, a * Math.PI / 180, lr))}");
+    }
+    // grip model as a formula: total tyre force available at speed v (both axles, straight line)
+    double GripN(CarConfig c, double v)
+    {
+        double down = 0.5 * rho * v * v * c.clA, fz0F = c.mass * g * c.frontWeight, fz0R = c.mass * g * (1 - c.frontWeight);
+        double fF = fz0F + down * c.aeroFront, fR = fz0R + down * (1 - c.aeroFront);
+        return c.mu * (fz0F * Math.Pow(fF / fz0F, c.loadExp) + c.rearGrip * fz0R * Math.Pow(fR / fz0R, c.loadExp));
+    }
+    // 2) performance envelope vs speed: simulated and the formula
+    using (var w = new StreamWriter(Path.Combine(labDir, "envelope.csv")))
+    {
+        w.WriteLine("kmh,kind,sim_g,formula_g");
+        // braking from 345 km/h to rest, sampled every 5 km/h
+        var bc = new FormulaCar(new CarConfig { tc = TcMode.High }) { vx = 345 / 3.6, gear = 8 }; double next = 335;
+        for (int i = 0; i < 240 * 10 && bc.vx > 3; i++)
+        {
+            bc.Step(new CarInput(0, 0, 1), H);
+            double k = bc.vx * 3.6;
+            if (k <= next && i > 30) { double v = bc.vx; double fg = (Math.Min(GripN(bc.cfg, v), bc.cfg.brakeForce) + 0.5 * rho * v * v * bc.cfg.cdA + bc.cfg.rollRes * bc.cfg.mass * g) / bc.cfg.mass / g; w.WriteLine($"{F(k)},brake,{F(-bc.ax / g)},{F(fg)}"); next -= 5; }
+        }
+        // acceleration from rest, full throttle
+        var ac = new FormulaCar(new CarConfig { tc = TcMode.High }); next = 5;
+        for (int i = 0; i < 240 * 60; i++)
+        {
+            ac.Step(new CarInput(0, 1, 0), H);
+            double k = ac.vx * 3.6;
+            if (k >= next)
+            {
+                double v = ac.vx, p = 0;
+                for (double rpm = ac.cfg.idleRpm; rpm <= ac.cfg.redline; rpm += 50) p = Math.Max(p, FormulaCar.TorqueAt(ac.cfg, rpm) * rpm * Math.PI / 30);
+                double push = (p + (ac.ersEnergy > 0 ? FormulaCar.ErsPowerAt(ac.cfg, v) : 0)) * ac.cfg.driveEff / Math.Max(v, 1);
+                double traction = GripN(ac.cfg, v) * (1 - ac.cfg.frontWeight) * 1.08;
+                double cd = ac.aeroX > 0.5 ? ac.cfg.cdAX : ac.cfg.cdA;
+                double fg = (Math.Min(push, traction) - 0.5 * rho * v * v * cd - ac.cfg.rollRes * ac.cfg.mass * g) / ac.cfg.mass / g;
+                w.WriteLine($"{F(k)},accel,{F(ac.ax / g)},{F(fg)}"); next += 5;
+            }
+        }
+        // steady cornering: highest lateral g held for 2 s at each speed
+        for (int kmh = 60; kmh <= 320; kmh += 20)
+        {
+            double best = 0;
+            for (double st = 0.04; st <= 1.0; st += 0.03)
+            {
+                var c2 = new FormulaCar(new CarConfig { tc = TcMode.High }) { vx = kmh / 3.6, gear = 5 };
+                bool ok = true; double sum = 0; int n = 0;
+                for (int i = 0; i < 240 * 3; i++)
+                {
+                    double sp = Math.Sqrt(c2.vx * c2.vx + c2.vy * c2.vy);
+                    c2.Step(new CarInput(st, Math.Clamp(0.3 + (kmh / 3.6 - sp) * 0.5, 0, 1), 0), H);
+                    if (Math.Abs(Math.Atan2(c2.vy, c2.vx)) > 0.25) { ok = false; break; }
+                    if (i > 240 * 2) { sum += Math.Abs(c2.ay) / g; n++; }
+                }
+                if (ok && n > 0) best = Math.Max(best, sum / n);
+            }
+            double v = kmh / 3.6;
+            w.WriteLine($"{kmh},corner,{F(best)},{F(GripN(cfg, v) / cfg.mass / g)}");
+        }
+    }
+    // 3) handling: understeer gradient from a slow steering ramp at constant speed; step-steer yaw response
+    using (var w = new StreamWriter(Path.Combine(labDir, "handling.csv")))
+    {
+        w.WriteLine("test,kmh,x,y");
+        foreach (var kmh in new[] { 100, 200, 280 })
+        {
+            var c3 = new FormulaCar(new CarConfig { tc = TcMode.High }) { vx = kmh / 3.6, gear = 5 };
+            double L = c3.cfg.wheelbase;
+            for (int i = 0; i < 240 * 12; i++)
+            {
+                double st = Math.Min(1, i / (240.0 * 10)) * 0.9, sp = Math.Sqrt(c3.vx * c3.vx + c3.vy * c3.vy);
+                c3.Step(new CarInput(st, Math.Clamp(0.3 + (kmh / 3.6 - sp) * 0.5, 0, 1), 0), H);
+                if (Math.Abs(Math.Atan2(c3.vy, c3.vx)) > 0.2) break;
+                if (i % 24 == 0 && Math.Abs(c3.ay) > 0.2)
+                {
+                    double R = sp * sp / Math.Abs(c3.ay), dAck = L / R;     // Ackermann angle: what a neutral car would need
+                    w.WriteLine($"ramp,{kmh},{F(Math.Abs(c3.ay) / g)},{F((Math.Abs(c3.delta) - dAck) * 180 / Math.PI)}");
+                }
+            }
+        }
+        foreach (var kmh in new[] { 100, 200 })
+        {
+            var c4 = new FormulaCar(new CarConfig { tc = TcMode.High, steerSpeed = 1000 }) { vx = kmh / 3.6, gear = 5 };
+            for (int i = 0; i < 240 * 2; i++)
+            {
+                double sp = Math.Sqrt(c4.vx * c4.vx + c4.vy * c4.vy);
+                c4.Step(new CarInput(i >= 24 ? 0.12 : 0, Math.Clamp(0.3 + (kmh / 3.6 - sp) * 0.5, 0, 1), 0), H);
+                if (i % 2 == 0) w.WriteLine($"step,{kmh},{F(i * H - 0.1)},{F(Math.Abs(c4.r) * 180 / Math.PI)}");
+            }
+        }
+    }
+    // 4) a flying lap and a 25-lap stint at Spa by the trained AI, against the ideal speed profile
+    {
+        var t = FormulaSim.Circuits.Spa.Build(); var line = RacingLine.Compute(t, new CarConfig());
+        var ace = new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 };
+        var d = new AiDriver(t, line, new CarConfig(), ace, AiTuning.For(2));
+        d.Place(t.N - 30, line.off[t.N - 30]);
+        using var wl = new StreamWriter(Path.Combine(labDir, "lap.csv"));
+        using var ws = new StreamWriter(Path.Combine(labDir, "stint.csv"));
+        wl.WriteLine("s,kmh,ideal_kmh,throttle,brake,gear,lat_g,lon_g");
+        ws.WriteLine("lap,time,tyre_f,tyre_r,wear_f,wear_r");
+        double time = 0; int steps = 0, lastLap = 0; double sumTF = 0, sumTR = 0; int nT = 0;
+        while (d.lap < 27 && time < 4000)
+        {
+            if (steps++ % 4 == 0) { d.Think(4 * H, time, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); }
+            d.car.Step(d.LastInput, H); time += H;
+            if (steps % 24 == 0) { sumTF += d.car.tyreTF; sumTR += d.car.tyreTR; nT++; }
+            if (d.lap == 2 && steps % 12 == 0 && d.idx >= 0)
+                wl.WriteLine($"{F(t.pts[d.idx].s)},{F(Math.Sqrt(d.car.vx * d.car.vx + d.car.vy * d.car.vy) * 3.6)},{F(line.speed[d.idx] * 3.6)},{F(d.car.throttle)},{F(d.car.brake)},{d.car.gear},{F(d.car.ay / g)},{F(d.car.ax / g)}");
+            if (d.lap != lastLap)
+            {
+                if (lastLap >= 1 && !double.IsNaN(d.lastLap)) ws.WriteLine($"{lastLap},{F(d.lastLap)},{F(sumTF / Math.Max(1, nT))},{F(sumTR / Math.Max(1, nT))},{F(d.car.wearF)},{F(d.car.wearR)}");
+                lastLap = d.lap; sumTF = sumTR = 0; nT = 0;
+            }
+        }
+    }
+    // 5) Monaco corner speeds: real, coarse outline as published, outline with fitted corner shapes
+    using (var w = new StreamWriter(Path.Combine(labDir, "corners.csv")))
+    {
+        var def = FormulaSim.Circuits.Monaco; var real = def.realCorners;
+        string[] names = { "Ste Devote", "Massenet", "Casino", "Mirabeau", "Hairpin", "L. Mirabeau", "Portier", "Chicane", "Tabac", "Pool 1", "Pool 2", "Rascasse", "Noghes" };
+        var raw = Track.FromLonLat(def.lonlat, def.width, def.startAt, def.elev); var fit = def.Build();
+        var lr = RacingLine.Compute(raw, new CarConfig(), 1.3, 0.97, 0.95); var lf = RacingLine.Compute(fit, new CarConfig(), 1.3, 0.97, 0.95);
+        double Min(Track t, RacingLine l, double s0) { double mn = 1e9; for (int i = 0; i < t.N; i++) if (Math.Abs(t.pts[i].s - s0) < 45) mn = Math.Min(mn, l.speed[i]); return mn * 3.6; }
+        w.WriteLine("corner,real,raw,fitted");
+        for (int c = 0; c < real.GetLength(0); c++) w.WriteLine($"{names[c]},{F(real[c, 1])},{F(Min(raw, lr, real[c, 0]))},{F(Min(fit, lf, real[c, 0]))}");
+        w.WriteLine($"LAP,{F(def.realPole)},{F(lr.lapTime)},{F(lf.lapTime)}");
+    }
+    Console.WriteLine("lab data written to " + labDir);
+    return;
+}
+
+// ---- fit corner shapes to real corner speeds: dotnet run -- fitgeo ----
+if (args.Length > 0 && args[0] == "fitgeo")
+{
+    var def = FormulaSim.Circuits.Monaco; var real = def.realCorners; int nc = real.GetLength(0);
+    var sig = new double[nc]; for (int c = 0; c < nc; c++) sig[c] = def.curveSigma;
+    double[,] Table() { var f = new double[nc, 2]; for (int c = 0; c < nc; c++) { f[c, 0] = real[c, 0]; f[c, 1] = sig[c]; } return f; }
+    double[] Ratios()
+    {
+        var t = Track.FromLonLat(def.lonlat, def.width, def.startAt, def.elev, def.curveSigma, Table());
+        var line = RacingLine.Compute(t, new CarConfig(), 1.3, 0.97, 0.95);
+        var r = new double[nc];
+        for (int c = 0; c < nc; c++) { double mn = 1e9; for (int i = 0; i < t.N; i++) if (Math.Abs(t.pts[i].s - real[c, 0]) < 45) mn = Math.Min(mn, line.speed[i]); r[c] = mn * 3.6 / real[c, 1]; }
+        return r;
+    }
+    for (int pass = 0; pass < 3; pass++)
+        for (int c = 0; c < nc; c++)
+        {
+            double lo = 0, hi = 24;
+            for (int it = 0; it < 7; it++) { sig[c] = (lo + hi) / 2; if (Ratios()[c] < 1) lo = sig[c]; else hi = sig[c]; }
+            sig[c] = (lo + hi) / 2;
+        }
+    var rr = Ratios(); double se = 0; foreach (var x in rr) se += Math.Log(x) * Math.Log(x);
+    Console.WriteLine($"fitted: RMS corner speed error {Math.Sqrt(se / nc) * 100:F1}%; ratios {string.Join(" ", rr.Select(x => x.ToString("F2", CultureInfo.InvariantCulture)))}");
+    string rows = string.Join(", ", Enumerable.Range(0, nc).Select(c => "{ " + real[c, 0].ToString(CultureInfo.InvariantCulture) + ", " + sig[c].ToString("F1", CultureInfo.InvariantCulture) + " }"));
+    var path = Path.Combine(AppContext.BaseDirectory.Split("/bin/")[0], "../../Assets/Scripts/Physics/Circuit.cs");
+    var src = File.ReadAllText(path); int a = src.IndexOf("curveFit = "), b = src.IndexOf("/*CURVEFIT*/");
+    File.WriteAllText(path, src[..a] + "curveFit = new double[,] { " + rows + " }, " + src[b..]);
+    Console.WriteLine("curveFit = { " + rows + " }");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "train")
 {
     var ace = new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 };
@@ -195,7 +371,7 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
     Console.WriteLine($"  0-100 {t100:F2}s (perfect traction; real 2.2-2.6 with wheelspin) | 0-200 {t200:F2}s (2025 cars ~4.4-4.6) | 0-300 {t300:F2}s | top {top:F0} km/h, engine only {noK.vx * 3.6:F0} (real speed traps 325-345)");
     Console.WriteLine($"  braking from 320: peak {peakB:F2} g (real 5-6) | 200-0 in {Stop(200):F0} m | 100-0 in {Stop(100):F0} m (real 15-17)");
     Console.WriteLine($"  cornering g at km/h {string.Join(" ", lat)} (real: ~2 slow, 4-5 fast)");
-    foreach (var (nm, t2, real) in new[] { ("Monaco", TrackData.MonacoTrack(), 72.051), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth), 104.361) })
+    foreach (var (nm, t2, real) in new[] { ("Monaco", FormulaSim.Circuits.Monaco.Build(), 72.051), ("Spa", FormulaSim.Circuits.Spa.Build(), 104.361) })
     {
         var r = RacingLine.Compute(t2, new CarConfig(), 1.3, 0.97, 0.95);
         Console.WriteLine($"  {nm}: ideal lap {r.lapTime:F2}s, real 2026 pole {real:F2}s ({(r.lapTime / real - 1) * 100:+0.0;-0.0}%), speed {r.speed.Min() * 3.6:F0}-{r.speed.Max() * 3.6:F0} km/h");
@@ -234,7 +410,7 @@ foreach (var (nm, data, w) in new[] { ("Monaco", TrackData.Monaco, TrackData.Mon
         }
         Console.WriteLine($"Racing line JS vs C# (default track, {rows.Length} pts): max offset diff {dOff:E2} m, position {dPos:E2} m, speed {dV:E2} m/s; {(dOff < 1e-6 && dPos < 1e-6 && dV < 1e-4 ? "MATCH" : "DIFFERENT")}");
     }
-    foreach (var (nm, t) in new[] { ("Test track", Track.Build()), ("Monaco", TrackData.MonacoTrack()), ("Spa", Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)) })
+    foreach (var (nm, t) in new[] { ("Test track", FormulaSim.Circuits.Test.Build()), ("Monaco", FormulaSim.Circuits.Monaco.Build()), ("Spa", FormulaSim.Circuits.Spa.Build()) })
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var r = RacingLine.Compute(t, new CarConfig());

@@ -32,3 +32,17 @@ aero that depends on ride height and rake, downforce loss when sliding and in an
 camber and toe, tyre temperature with a grip window, a locking differential, and a rubbered-in racing line.
 All of it is a few dozen arithmetic operations per step. Teams do not publish these numbers; they are typical
 values, tuned so that whole-car performance still matches measured figures (`Tools/PhysicsCheck`).
+
+## Physics lab (maths, formulas and charts)
+
+`cd Tools/PhysicsCheck && dotnet run -c Release -- lab /tmp/lab && python3 plot_lab.py /tmp/lab ../../Docs/physics-lab.png`
+drives the car through standard vehicle-dynamics tests and compares them with formulas and real data:
+tyre force curves, the braking / acceleration / cornering envelope against the closed-form grip formula,
+understeer gradient, step-steer yaw response, a lap trace against the ideal speed profile, a 25-lap tyre stint,
+and Monaco corner speeds against real ones. Result: `Docs/physics-lab.png`.
+
+* Monaco: the public outline has a point only every ~20 m, which squeezes bends into single vertices. Each bend's
+  curvature spread is fitted (`dotnet run -- fitgeo`) to published real minimum corner speeds. The lap time was
+  not fitted, and still lands within 2% of the real 2026 pole (70.7 s ideal vs 72.05 s).
+* Spa: centre line and widths from the TUM racetrack database (OpenStreetMap, LGPL-3.0). Ideal lap 109.5 s vs
+  104.4 s real: elevation (Eau Rouge, Kemmel) is not modelled yet.

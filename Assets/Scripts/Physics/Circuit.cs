@@ -76,8 +76,12 @@ namespace FormulaSim
     {
         public string id, name;
         public double[,] lonlat;         // centreline (lon, lat); null = the built-in test track
+        public double[,] metric;         // or: centreline in metres with widths (TUM format: x, y, w_right, w_left)
         public double width = 12;        // m
         public double startAt;           // m along the raw data where the real start/finish line is
+        public double curveSigma;        // m, curvature spreading for a coarse outline (see Track.SmoothedCurvature)
+        public double[,] curveFit;       // per corner {distance from start (m), curvature window (m)}, fitted offline
+        public double[,] realCorners;    // per corner {distance from start (m), real minimum speed (km/h)}; the fit target
         public double[,] elev;           // {distance from the start line, height}; null = flat
         public CircuitStyle style = CircuitStyle.Parkland;
         public double barrier = 9.3;     // m from the track edge to the barriers
@@ -90,7 +94,8 @@ namespace FormulaSim
 
         public Track Build()
         {
-            var t = lonlat == null ? Track.Build(null, width) : Track.FromLonLat(lonlat, width, startAt, elev);
+            var t = metric != null ? Track.Build(TrackDataTum.Centre(metric), TrackDataTum.MeanWidth(metric))
+                  : lonlat == null ? Track.Build(null, width) : Track.FromLonLat(lonlat, width, startAt, elev, curveSigma, curveFit);
             t.def = this;
             Layout(t);
             return t;
@@ -134,10 +139,17 @@ namespace FormulaSim
             elev = TrackData.MonacoElev, style = CircuitStyle.Street, barrier = 2.65, realPole = 72.051,
             waterFrom = 1540, waterTo = 2890, waterX = 400, waterY = -100,   // Port Hercule and the sea
             tunnelFrom = 1560, tunnelTo = 1880,                               // the tunnel under the hotel
+            // real minimum corner speeds (km/h) from published corner guides (F1 Chronicle, Honda, circuit guides);
+            // the outline is too coarse (a point every 20 m) to give the true bend shapes, so each bend's curvature
+            // spread is fitted offline (dotnet run -- fitgeo) until the ideal lap matches these speeds
+            realCorners = new double[,] { { 168, 115 }, { 770, 150 }, { 862, 130 }, { 1084, 80 }, { 1216, 47 }, { 1310, 80 }, { 1398, 85 },
+                                          { 2056, 75 }, { 2338, 160 }, { 2492, 205 }, { 2688, 105 }, { 2886, 70 }, { 2974, 80 } },
+            curveSigma = 4,
+            curveFit = new double[,] { { 168, 14.5 }, { 770, 10.6 }, { 862, 18.7 }, { 1084, 14.5 }, { 1216, 0.1 }, { 1310, 10.4 }, { 1398, 12.7 }, { 2056, 4.6 }, { 2338, 13.2 }, { 2492, 12.5 }, { 2688, 8.2 }, { 2886, 11.9 }, { 2974, 2.7 } }, /*CURVEFIT*/
         };
         public static readonly CircuitDef Spa = new CircuitDef
         {
-            id = "spa", name = "Spa", lonlat = TrackData.Spa, width = TrackData.SpaWidth, style = CircuitStyle.Parkland, realPole = 104.361,
+            id = "spa", name = "Spa", metric = TrackDataTum.Spa, style = CircuitStyle.Parkland, realPole = 104.361,
         };
         // order matters: the AI tuning table (AiTuning.Trained) uses the same order
         public static readonly CircuitDef[] All = { Test, Monaco, Spa };

@@ -31,9 +31,9 @@ namespace FormulaSim
         public static readonly double[][] Trained =
         {
             /*TRAINED*/
-            new[] { 4.564, 0.052, 0.140, 0.499, 0.450, 0.943, 0.760 },
-            new[] { 8.528, 0.197, 0.115, 0.576, 0.543, 0.875, 0.826 },
-            new[] { 4.697, 0.096, 0.101, 0.812, 0.155, 0.891, 0.796 },
+            new[] { 4.382, 0.051, 0.160, 0.533, 0.102, 0.938, 0.823 },
+            new[] { 6.322, 0.055, 0.150, 0.841, 0.543, 0.935, 0.942 },
+            new[] { 3.931, 0.166, 0.133, 0.860, 0.107, 0.911, 0.794 },
             /*END*/
         };
     }
@@ -184,6 +184,8 @@ namespace FormulaSim
             if (mistakeT > 0) mistakeT -= dt;
             double vt = Math.Min(speed[ip], speed[idx] + 3) * lapPace * (mistakeT > 0 ? 1.07 : 1);
             if (Math.Abs(offset) > 0.8) vt *= 0.985;      // off the ideal line: a little slower
+            // drive to the grip the tyres have now (cold, overheated or worn tyres): corner speed goes with sqrt(grip)
+            vt *= Math.Sqrt(Clamp(Math.Min(car.gripF, car.gripR), 0.8, 1.0));
             vt = Math.Min(vt, speedCap);
             double err = vt - v;
             double thr = Clamp(err * tune.kThr, 0, 1), brk = Clamp(-err * tune.kBrk, 0, 1);

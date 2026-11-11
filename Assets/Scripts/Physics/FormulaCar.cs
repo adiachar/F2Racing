@@ -147,6 +147,7 @@ namespace FormulaSim
         public double surfaceDrag { get => (wRoll[0] + wRoll[1] + wRoll[2] + wRoll[3]) / 4; set { for (int i = 0; i < 4; i++) wRoll[i] = value; } }
         // tyre wear 0 (new) .. 1 (finished), front and rear
         public double wearF, wearR;
+        public double gripF = 1, gripR = 1;  // tyre grip now from temperature, compound and wear (1 = a fresh Soft at its best)
         // chassis detail: state and read-outs
         public double tow;                  // 0..1 how deep in another car's slipstream (set by the game)
         public double rideF = double.NaN, rideR, bodyRoll, pitch;      // m, m, rad, rad
@@ -209,7 +210,7 @@ namespace FormulaSim
             return peakCached;
         }
 
-        static double Magic(CarConfig c, double alpha, double loadRatio = 1)
+        public static double Magic(CarConfig c, double alpha, double loadRatio = 1)
         {
             double Ba = c.tireB * Math.Pow(loadRatio, -c.slipGrowth) * alpha;
             return Math.Sin(c.tireC * Math.Atan(Ba - c.tireE * (Ba - Math.Atan(Ba))));
@@ -324,7 +325,7 @@ namespace FormulaSim
                 double tf = c.toeF * Math.PI / 180, tr2 = c.toeR * Math.PI / 180;
                 drag += (tf * tf + tr2 * tr2) * 2 * 250e3 * (vx > 1 ? 1 : 0);
             }
-            aeroBalance = aeroF; downforce = down; dragForce = drag;
+            aeroBalance = aeroF; downforce = down; dragForce = drag; gripF = tempKF; gripR = tempKR;
             double transfer = m * axLong * c.cgHeight / L;
             double fz0F = m * G * b / L, fz0R = m * G * a / L;
             fzF = Math.Max(300, fz0F - transfer + down * aeroF);
