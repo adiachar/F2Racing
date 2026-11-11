@@ -46,3 +46,9 @@ and Monaco corner speeds against real ones. Result: `Docs/physics-lab.png`.
   not fitted, and still lands within 2% of the real 2026 pole (70.7 s ideal vs 72.05 s).
 * Spa: centre line and widths from the TUM racetrack database (OpenStreetMap, LGPL-3.0). Ideal lap 109.5 s vs
   104.4 s real: elevation (Eau Rouge, Kemmel) is not modelled yet.
+
+### Car classes
+F1 2026, Formula 2 and Formula 3 (Settings → Car). F2/F3 grip and downforce are fitted so their gap to the F1 car at
+Monaco and Spa matches the real gap between 2025 F2/F3 poles (Monaco 1:21.142 / 1:24.882, Spa 1:57.151 / 2:04.253)
+and 2026 F1 poles. Circuits: test track, Monaco, Spa, Monza, Silverstone, Suzuka, Austin, Hungaroring, Barcelona,
+Red Bull Ring, Zandvoort (all but Monaco and the test track from the TUM racetrack database).

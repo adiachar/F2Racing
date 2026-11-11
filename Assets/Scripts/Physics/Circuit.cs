@@ -97,6 +97,7 @@ namespace FormulaSim
         {
             var t = metric != null ? Track.Build(TrackDataTum.Centre(metric), TrackDataTum.MeanWidth(metric))
                   : lonlat == null ? Track.Build(null, width) : Track.FromLonLat(lonlat, width, startAt, elev, curveSigma, curveFit);
+            if (metric != null && elev != null) t.SetElevation(elev);
             t.def = this;
             Layout(t);
             return t;
@@ -151,9 +152,24 @@ namespace FormulaSim
         public static readonly CircuitDef Spa = new CircuitDef
         {
             id = "spa", name = "Spa", metric = TrackDataTum.Spa, style = CircuitStyle.Parkland, realPole = 104.361, forest = 1,
+            // Height profile (m, relative): ESTIMATE from published facts, not surveyed: 102 m between the highest
+            // point (Les Combes) and the lowest (Stavelot), Eau Rouge to Raidillon climbs ~35 m at up to 17-18 %.
+            elev = new double[,] { { 0, 52 }, { 400, 50 }, { 700, 30 }, { 950, 12 }, { 1150, 40 }, { 1300, 50 }, { 2000, 88 },
+                                   { 2350, 100 }, { 2700, 82 }, { 3150, 64 }, { 3800, 48 }, { 4500, 30 }, { 4950, 2 }, { 5500, 12 },
+                                   { 6100, 30 }, { 6700, 46 } },
         };
+        // more circuits from the TUM racetrack database (OpenStreetMap centre lines, measured widths); flat for now
+        static CircuitDef Tum(string id, string name, double[,] d, double forest) => new CircuitDef { id = id, name = name, metric = d, style = CircuitStyle.Parkland, forest = forest };
+        public static readonly CircuitDef Monza = Tum("monza", "Monza", TrackDataTum.Monza, 0.8);           // royal park
+        public static readonly CircuitDef Silverstone = Tum("silverstone", "Silverstone", TrackDataTum.Silverstone, 0.15);
+        public static readonly CircuitDef Suzuka = Tum("suzuka", "Suzuka", TrackDataTum.Suzuka, 0.5);
+        public static readonly CircuitDef Austin = Tum("austin", "Austin", TrackDataTum.Austin, 0.1);
+        public static readonly CircuitDef Budapest = Tum("budapest", "Hungaroring", TrackDataTum.Budapest, 0.3);
+        public static readonly CircuitDef Catalunya = Tum("catalunya", "Barcelona", TrackDataTum.Catalunya, 0.2);
+        public static readonly CircuitDef Spielberg = Tum("spielberg", "Red Bull Ring", TrackDataTum.Spielberg, 0.5);
+        public static readonly CircuitDef Zandvoort = Tum("zandvoort", "Zandvoort", TrackDataTum.Zandvoort, 0.2);
         // order matters: the AI tuning table (AiTuning.Trained) uses the same order
-        public static readonly CircuitDef[] All = { Test, Monaco, Spa };
+        public static readonly CircuitDef[] All = { Test, Monaco, Spa, Monza, Silverstone, Suzuka, Austin, Budapest, Catalunya, Spielberg, Zandvoort };
     }
 
     // ------------------------------------------------------------------ tyre contact

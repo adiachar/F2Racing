@@ -6,7 +6,7 @@ using FormulaSim;
 
 const double H = 1.0 / 240;
 Track[] Circuits() => FormulaSim.Circuits.All.Select(d => d.Build()).ToArray();
-string[] CircuitNames = { "Test track", "Monaco", "Spa" };
+string[] CircuitNames = FormulaSim.Circuits.All.Select(c => c.name).ToArray();
 
 // ---- AI trainer: dotnet run -- train ----
 // Evolution search (cross-entropy method) over the controller gains. Every candidate drives full laps in the

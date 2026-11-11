@@ -181,7 +181,7 @@ namespace FormulaSim
         }
 
         public double[] h; // height of every point (m); null = flat circuit
-        void SetElevation(double[,] keys)
+        public void SetElevation(double[,] keys)
         {
             int m = keys.GetLength(0); h = new double[N];
             for (int i = 0; i < N; i++)

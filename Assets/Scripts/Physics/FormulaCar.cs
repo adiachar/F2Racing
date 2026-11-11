@@ -102,6 +102,27 @@ namespace FormulaSim
             return c;
         }
 
+        // Car classes the player can choose. F1 = the 2026 car above. F2 = the FIA Formula 2 car the physics was
+        // first calibrated on (620 hp, 795 kg with driver). F3 = FIA Formula 3 (3.4 L V6, ~380 hp, ~673 kg with driver);
+        // F3 gearing and chassis figures are estimates.
+        public static string[] ClassNames = { "F1 2026", "Formula 2", "Formula 3" };
+        public static CarConfig ForClass(int k)
+        {
+            // grip (mu) and downforce (clA) of F2 and F3 are fitted so that their gap to the F1 car at Monaco and Spa
+            // matches the real gap between 2025 F2 / F3 poles and 2026 F1 poles (fit error 0.1 %)
+            if (k == 1) { var c = LegacyF2(); c.chassis = true; c.brakeTemps = true; c.speedSens = 0.5; c.mu = 1.70; c.clA = 4.0; c.clAX = 4.0; return c; }
+            if (k == 2) return new CarConfig
+            {
+                mass = 673, inertiaZ = 720, wheelbase = 2.95, frontWeight = 0.44, cgHeight = 0.29, wheelRadius = 0.30,
+                mu = 1.65, wheelInertia = 1.2, track = 1.45, cdA = 0.95, clA = 2.8, activeAero = false, cdAX = 0.95, clAX = 2.8,
+                rideF0 = 0.035, rideR0 = 0.055, springF = 180e3, springR = 160e3,
+                peakTorque = 360, torqueRpm = new double[] { 3000, 5000, 6500, 7500, 8000, 8500 }, torqueFrac = new[] { 0.55, 0.82, 0.97, 1.0, 0.97, 0.88 },
+                redline = 8500, idleRpm = 2500, gearTopSpeeds = new double[] { 115, 150, 182, 212, 242, 275 }, driveEff = 0.88,
+                ersPower = 0, shiftTime = 0.05, brakeForce = 17000, brakeBias = 0.58, maxLockDeg = 18, speedSens = 0.5,
+            };
+            return new CarConfig();
+        }
+
         // The Formula 2 set-up the web prototype was built on. Only used by the regression tests,
         // which replay the JavaScript version's results.
         public static CarConfig LegacyF2() => new CarConfig
