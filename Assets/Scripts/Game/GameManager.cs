@@ -445,6 +445,7 @@ public class GameManager : MonoBehaviour
             float lit = playground ? 1 : LightBake.Sun((float)car.x, (float)car.y, model.transform.position.y + 0.6f);
             carLit += (lit - carLit) * Mathf.Min(1, dt * 8);
             LightBake.CarSun.intensity = 1.25f * (0.12f + 0.88f * carLit);
+            Shader.SetGlobalFloat("_CarLit", carLit);
         }
         model.SetBrake(car.brake > 0.05); model.SetSteer((float)car.steerIn);
         for (int i = 0; i < rivals.Count; i++)

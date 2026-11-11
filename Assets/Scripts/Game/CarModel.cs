@@ -272,6 +272,17 @@ public class CarModel : MonoBehaviour
         braking = on; lightMat.SetColor("_EmissionColor", on ? new Color(3f, 0.25f, 0.2f) : new Color(0.25f, 0.02f, 0.02f));
     }
 
+    // the car paint shader (CarPaint.shader); if a phone can't run it, the standard shader is used instead
+    static Shader paintShader; static bool paintTried;
+    static Material Paint(Color c, float coat, float gloss, float metal, float stdSmooth, float stdMetal)
+    {
+        if (!paintTried) { paintTried = true; paintShader = Resources.Load<Shader>("CarPaint"); if (paintShader != null && !paintShader.isSupported) paintShader = null; }
+        if (paintShader == null) return WorldBuilder.Mat(c, null, stdSmooth, stdMetal);
+        var m = new Material(paintShader) { color = c };
+        m.SetFloat("_Coat", coat); m.SetFloat("_Gloss", gloss); m.SetFloat("_Metal", metal);
+        return m;
+    }
+
     // res: "Car/car" (full detail, the player's car) or "Car/car_lod" (light copy for rivals); paint: body colour
     public static CarModel CreateFromAsset(string res = "Car/car", Color? paint = null, bool rival = false)
     {
@@ -283,12 +294,12 @@ public class CarModel : MonoBehaviour
         if (d.Length < 8 || d[0] != 'F' || d[1] != '2' || d[2] != 'M' || d[3] != '1') return null;
         o = 4; int n = I();
         var mats = new[] {
-            WorldBuilder.Mat(paint ?? new Color(0.78f, 0.05f, 0.07f), null, 0.88f, 0.35f),   // 0 body paint
-            WorldBuilder.Mat(new Color(0.93f, 0.93f, 0.94f), null, 0.86f, 0.15f),   // 1 white paint
-            WorldBuilder.Mat(new Color(0.07f, 0.075f, 0.085f), null, 0.6f, 0.25f),  // 2 carbon
-            WorldBuilder.Mat(new Color(0.55f, 0.57f, 0.6f), null, 0.8f, 0.9f),      // 3 metal
-            WorldBuilder.Mat(new Color(0.045f, 0.045f, 0.05f), null, 0.22f),        // 4 tyre rubber
-            WorldBuilder.Mat(new Color(0.2f, 0.21f, 0.23f), null, 0.75f, 0.85f),    // 5 rims / discs
+            Paint(paint ?? new Color(0.78f, 0.05f, 0.07f), 1f, 0.92f, 0.15f, 0.88f, 0.35f),   // 0 body paint
+            Paint(new Color(0.93f, 0.93f, 0.94f), 1f, 0.9f, 0.05f, 0.86f, 0.15f),           // 1 white paint
+            Paint(new Color(0.06f, 0.065f, 0.075f), 0.55f, 0.7f, 0.1f, 0.6f, 0.25f),        // 2 carbon (satin)
+            Paint(new Color(0.55f, 0.57f, 0.6f), 0.3f, 0.8f, 0.9f, 0.8f, 0.9f),             // 3 metal
+            WorldBuilder.Mat(new Color(0.045f, 0.045f, 0.05f), null, 0.22f),                 // 4 tyre rubber
+            Paint(new Color(0.2f, 0.21f, 0.23f), 0.3f, 0.75f, 0.85f, 0.75f, 0.85f),         // 5 rims / discs
             WorldBuilder.Glow(new Color(1f, 0.15f, 0.12f), new Color(0.25f, 0.02f, 0.02f)),  // 6 rear light
         };
         meshCache.TryGetValue(res, out var cached); var made = cached == null ? new Mesh[n] : null;

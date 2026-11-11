@@ -281,6 +281,23 @@ public static class WorldBuilder
             Strip(t, 0, t.N, Wd / 2 - 0.15f, Wd / 2 - 0.4f, 0.045f, 4, v, uv, tri);
             Strip(t, 0, t.N, -Wd / 2 + 0.4f, -Wd / 2 + 0.15f, 0.045f, 4, v, uv, tri);
             Strip(t, 0, 1, Wd / 2, -Wd / 2, 0.05f, 4, v, uv, tri); // start/finish line
+            // grid boxes: one per starting slot (8 m apart, staggered left and right), as the cars are placed
+            for (int k = 0; k < 22; k++)
+            {
+                int i = ((t.N - 15 - k * 4 + 1) % t.N + t.N) % t.N; float side = (k % 2 == 0 ? 1 : -1) * 1.8f;
+                var p = t.pts[i]; int b0 = v.Count;
+                // a 2 m bar across the slot, 0.3 m deep, with short side marks reaching back towards the car
+                foreach (var (a0, a1, l0, l1) in new[] { (-0.15f, 0.15f, side - 1f, side + 1f), (-1.2f, 0.15f, side + 0.85f, side + 1f), (-1.2f, 0.15f, side - 1f, side - 0.85f) })
+                {
+                    int q = v.Count;
+                    v.Add(W(p.x + p.tx * a0 + p.nx * l1, p.y + p.ty * a0 + p.ny * l1, 0.05f));
+                    v.Add(W(p.x + p.tx * a0 + p.nx * l0, p.y + p.ty * a0 + p.ny * l0, 0.05f));
+                    v.Add(W(p.x + p.tx * a1 + p.nx * l1, p.y + p.ty * a1 + p.ny * l1, 0.05f));
+                    v.Add(W(p.x + p.tx * a1 + p.nx * l0, p.y + p.ty * a1 + p.ny * l0, 0.05f));
+                    for (int u = 0; u < 4; u++) uv.Add(Vector2.zero);
+                    tri.Add(q); tri.Add(q + 2); tri.Add(q + 1); tri.Add(q + 2); tri.Add(q + 3); tri.Add(q + 1);
+                }
+            }
             MeshObj("Lines", v, uv, tri, Mat(new Color(0.95f, 0.95f, 0.93f))).transform.SetParent(root);
         }
         // kerbs, astroturf and gravel traps, from the circuit's layout (the same data the tyres read)
@@ -424,6 +441,9 @@ public static class WorldBuilder
         probe.size = new Vector3(5000, 2000, 5000); probe.resolution = 128; probe.hdr = false;
         probe.cullingMask = 0; probe.farClipPlane = 3000; // sky only: grass reflected in the glossy paint showed as green patches
         probe.RenderProbe();
+        // what the car paint reflects below the horizon (the road), and full reflections unless in shade
+        Shader.SetGlobalColor("_GroundRefl", Street(t) ? new Color(0.15f, 0.15f, 0.16f) : new Color(0.13f, 0.16f, 0.12f));
+        Shader.SetGlobalFloat("_CarLit", 1f);
         return root.gameObject;
     }
 
