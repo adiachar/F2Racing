@@ -31,9 +31,9 @@ namespace FormulaSim
         public static readonly double[][] Trained =
         {
             /*TRAINED*/
-            new[] { 4.640, 0.051, 0.154, 0.560, 0.166, 0.929, 0.874 },
-            new[] { 5.757, 0.148, 0.119, 0.585, 0.425, 0.869, 0.866 },
-            new[] { 6.943, 0.151, 0.098, 0.654, 0.182, 0.918, 0.750 },
+            new[] { 4.564, 0.052, 0.140, 0.499, 0.450, 0.943, 0.760 },
+            new[] { 8.528, 0.197, 0.115, 0.576, 0.543, 0.875, 0.826 },
+            new[] { 4.697, 0.096, 0.101, 0.812, 0.155, 0.891, 0.796 },
             /*END*/
         };
     }
@@ -216,7 +216,7 @@ namespace FormulaSim
     {
         // Barriers: distance from the centreline to the inner face of the wall (street circuit) or guardrail.
         // Matches where Trackside.cs draws them.
-        public static double WallOffset(Track t) => t.width / 2 + 1.4 + (t.width < 10 ? 1.25 : 7.9);
+        public static double WallOffset(Track t) => t.width / 2 + (t.def != null ? t.def.barrier : 1.4 + (t.width < 10 ? 1.25 : 7.9));
 
         // Hitting the barrier: the speed into the wall is lost (a little bounces back), scraping along it
         // costs speed through friction, and a hit with the nose swings the car round.

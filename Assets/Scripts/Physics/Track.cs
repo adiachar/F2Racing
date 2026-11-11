@@ -20,6 +20,29 @@ namespace FormulaSim
         public int N;
         public double length, ds, width;
 
+        // layout, filled in by CircuitDef (null for a bare track): kerb width and what lies beyond it, per side
+        public const double KerbWidth = 1.4;
+        public CircuitDef def;
+        public float[] kerbL, kerbR;
+        public SurfaceType[] runL, runR;
+
+        // the surface at track point i, lateral offset lat (+ = left)
+        public SurfaceType SurfaceAt(int i, double lat)
+        {
+            double hw = width / 2, a = Math.Abs(lat);
+            if (a <= hw - 0.4) return SurfaceType.Asphalt;
+            if (a <= hw - 0.15) return SurfaceType.Paint;          // white edge line
+            if (a <= hw) return SurfaceType.Asphalt;
+            if (kerbL == null) return a <= hw + KerbWidth ? SurfaceType.Kerb : SurfaceType.Grass;
+            bool left = lat > 0;
+            double kw = left ? kerbL[i] : kerbR[i];
+            if (a <= hw + kw) return SurfaceType.Kerb;
+            var run = left ? runL[i] : runR[i];
+            if (def != null && def.style == CircuitStyle.Parkland && a <= hw + kw + 2.0) return SurfaceType.Astroturf; // strip behind the kerb
+            if (run == SurfaceType.Gravel && a < hw + KerbWidth + 2.0) return SurfaceType.Grass; // gravel traps start behind the kerb line
+            return run;
+        }
+
         static (double, double) Catmull((double x, double y) p0, (double x, double y) p1, (double x, double y) p2, (double x, double y) p3, double t)
         {
             double D((double x, double y) a, (double x, double y) b) { double d = Math.Sqrt(Math.Sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))); return d == 0 ? 1e-4 : d; }

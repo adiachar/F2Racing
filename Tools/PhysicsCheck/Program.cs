@@ -5,7 +5,7 @@ using System.Text.Json;
 using FormulaSim;
 
 const double H = 1.0 / 240;
-Track[] Circuits() => new[] { Track.Build(), TrackData.MonacoTrack(), Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth) };
+Track[] Circuits() => FormulaSim.Circuits.All.Select(d => d.Build()).ToArray();
 string[] CircuitNames = { "Test track", "Monaco", "Spa" };
 
 // ---- AI trainer: dotnet run -- train ----
@@ -31,8 +31,7 @@ if (args.Length > 0 && args[0] == "train")
                 if (Math.Abs(d.lateral) > limit) return 5000 - d.progress * 1000;
                 if (d.lap >= 3) return d.lastLap;
             }
-            var near = d.lateral; double hw = t.width / 2;
-            d.car.surfaceMu = Math.Abs(near) <= hw ? 1.0 : Surfaces.Kerb.mu; d.car.surfaceDrag = Math.Abs(near) <= hw ? 0 : Surfaces.Kerb.drag;
+            if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1);
             if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
             d.car.Step(d.LastInput, H); time += H;
         }
@@ -106,10 +105,10 @@ if (args.Length > 0 && args[0] == "race")
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
             }
             if (steps % 240 == 0) { var c0 = ds[0].car; tMin = Math.Min(tMin, Math.Min(c0.tyreTF, c0.tyreTR)); tMaxF = Math.Max(tMaxF, c0.tyreTF); tMaxR = Math.Max(tMaxR, c0.tyreTR); if (time > 60) { tSumF += c0.tyreTF; tSumR += c0.tyreTR; tN++; } }
-            foreach (var d in ds) { double hw = t.width / 2, al = Math.Abs(d.lateral); d.car.surfaceMu = al <= hw ? 1 : al <= hw + 1.4 ? Surfaces.Kerb.mu : Surfaces.Grass.mu; d.car.surfaceDrag = al <= hw ? 0 : al <= hw + 1.4 ? Surfaces.Kerb.drag : Surfaces.Grass.drag; if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
+            foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
             time += H;
         }
-        Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}");
+        Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}; wear after {ds[0].lap} laps F {ds[0].car.wearF * 100:F1}% R {ds[0].car.wearR * 100:F1}%");
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
         int pos = 1;
         foreach (var d in ds.OrderByDescending(d => d.progress))

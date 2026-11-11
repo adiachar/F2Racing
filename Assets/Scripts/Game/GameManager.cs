@@ -20,7 +20,9 @@ public class GameManager : MonoBehaviour
 
     // settings (saved)
     TcMode tc; bool tilt, playground, invertTilt, sound = true; int camMode;
-    static readonly string[] MapNames = { "Test track", "Monaco", "Spa", "Playground" };
+    // every circuit in Circuits.All, then the free-driving playground
+    static readonly string[] MapNames = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Concat(System.Linq.Enumerable.Select(Circuits.All, c => c.name), new[] { "Playground" }));
+    static int PlaygroundIdx => Circuits.All.Length;
     int mapIdx; GameObject world;
     // aero balance (share of downforce on the front axle): the main real-world setup knob for under/oversteer
     static readonly float[] Balances = { 0.45f, 0.48f, 0.50f, 0.53f }; int balIdx;
@@ -44,7 +46,7 @@ public class GameManager : MonoBehaviour
 
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
-        mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == 3; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1); showLine = PlayerPrefs.GetInt("line", 0) == 1; absOn = PlayerPrefs.GetInt("abs", 1) == 1; gfxIdx = Mathf.Clamp(PlayerPrefs.GetInt("gfx", 0), 0, GfxNames.Length - 1);
+        mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == PlaygroundIdx; camMode = PlayerPrefs.GetInt("cam", 0); sound = PlayerPrefs.GetInt("snd", 1) == 1; balIdx = Mathf.Clamp(PlayerPrefs.GetInt("bal", 0), 0, Balances.Length - 1); showLine = PlayerPrefs.GetInt("line", 0) == 1; absOn = PlayerPrefs.GetInt("abs", 1) == 1; compIdx = Mathf.Clamp(PlayerPrefs.GetInt("tyres", 0), 0, CompoundTable.Defs.Length - 1); gfxIdx = Mathf.Clamp(PlayerPrefs.GetInt("gfx", 0), 0, GfxNames.Length - 1);
         dzIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltDz", 1), 0, DeadZones.Length - 1); rangeIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltRange", 2), 0, TiltRanges.Length - 1);
         smoothIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltSmooth", 1), 0, SmoothCut.Length - 1); speedSteerIdx = Mathf.Clamp(PlayerPrefs.GetInt("speedSteer", 2), 0, SpeedSteer.Length - 1);
         ApplyScreenLock();
@@ -62,17 +64,17 @@ public class GameManager : MonoBehaviour
         ResetCar();
     }
 
+    int compIdx; // tyre compound
     int builtFor = -1; double wallAt = 1e9; float hitT; bool menuOpen, absOn = true;
     void LoadMap()
     {
-        playground = mapIdx == 3;
+        playground = mapIdx == PlaygroundIdx;
         int circuit = playground ? (builtFor >= 0 ? builtFor : 0) : mapIdx;
         if (circuit != builtFor || world == null)
         {
             if (world != null) Destroy(world);
-            track = circuit == 1 ? TrackData.MonacoTrack()
-                  : circuit == 2 ? Track.FromLonLat(TrackData.Spa, TrackData.SpaWidth)
-                  : Track.Build();
+            track = Circuits.All[circuit].Build();
+            rubber = 0; // a fresh, "green" track
             world = WorldBuilder.Build(track);
             wallAt = Traffic.WallOffset(track);
             BuildLine();
@@ -185,7 +187,7 @@ public class GameManager : MonoBehaviour
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltDz", dzIdx); PlayerPrefs.SetInt("tiltRange", rangeIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.Save();
+        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("tyres", compIdx); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltDz", dzIdx); PlayerPrefs.SetInt("tiltRange", rangeIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.Save();
     }
 
     void ResetCar()
@@ -240,6 +242,9 @@ public class GameManager : MonoBehaviour
         if (raceTime >= Countdown && aiTick++ % 4 == 0)
         {
             UpdateTow();
+            // rubber build-up from every car's distance
+            double dist = System.Math.Abs(car.vx) * 4 * H; foreach (var r in rivals) dist += System.Math.Abs(r.car.vx) * 4 * H;
+            rubber = System.Math.Min(1, rubber + dist / (track.length * 25));
             for (int i = 0; i < rivals.Count; i++)
             {
                 rivals[i].Think(4 * H, simTime, rivals, car, idx, playerLat);
@@ -255,9 +260,8 @@ public class GameManager : MonoBehaviour
         double hw = track.width / 2;
         for (int i = 0; i < rivals.Count; i++)
         {
-            var d = rivals[i]; double al = System.Math.Abs(d.lateral);
-            var sf = al <= hw ? Surfaces.Asphalt : al <= hw + WorldBuilder.Kerb ? Surfaces.Kerb : Surfaces.Grass;
-            d.car.surfaceMu = sf.mu * (al <= hw ? LineGrip(d.idx, d.lateral) : 1); d.car.surfaceDrag = sf.drag;
+            var d = rivals[i];
+            if (aiTick % 4 == 1) WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber);
             d.car.Step(raceTime >= Countdown ? d.LastInput : new CarInput(0, 0, 1), H);
         }
     }
@@ -394,7 +398,7 @@ public class GameManager : MonoBehaviour
         if (cur == ScreenOrientation.LandscapeLeft || cur == ScreenOrientation.LandscapeRight) Screen.orientation = cur;
         tiltAxis = float.NaN; tiltInit = false;
     }
-    CarConfig PlayerConfig() => new CarConfig { tc = tc, abs = absOn, aeroFront = Balances[balIdx], steerSpeed = 14, steerReturn = 18, speedSens = SpeedSteer[speedSteerIdx] };
+    CarConfig PlayerConfig() => new CarConfig { tc = tc, abs = absOn, aeroFront = Balances[balIdx], steerSpeed = 14, steerReturn = 18, speedSens = SpeedSteer[speedSteerIdx], compound = (Compound)compIdx };
 
     // ---------------------------------------------------------------- loop
     void Update()
@@ -461,7 +465,7 @@ public class GameManager : MonoBehaviour
         AutoQuality();
         audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
         audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
-        audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR); audioEngine.onAsphalt = surface != 2; audioEngine.onKerb = surface == 1;
+        audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR); audioEngine.onAsphalt = surface != 2; audioEngine.onKerb = car.vib > 0.3;
         audioEngine.redline = (float)car.cfg.redline; audioEngine.shifting = car.shiftTimer > 0;
         audioEngine.wheelspin = car.throttle > 0.05 ? Mathf.Clamp01(((float)car.slipRatioR - 0.14f) / 0.4f) : 0;
         audioEngine.lockup = car.lockF || car.lockR ? 1 : car.brake > 0.05 ? Mathf.Clamp01((-(float)car.slipRatioR - 0.2f) / 0.4f) : 0;
@@ -481,20 +485,25 @@ public class GameManager : MonoBehaviour
             var n = track.Nearest(car.x, car.y, idx);
             prevIdx = idx < 0 ? n.idx : idx; idx = n.idx; playerLat = n.lateral;
             double lat = System.Math.Abs(n.lateral), hw = track.width / 2;
-            surface = lat <= hw ? 0 : lat <= hw + WorldBuilder.Kerb ? 1 : 2;
-            if (surface == 2 && lat > hw + WorldBuilder.Kerb + 0.9) cut = true;
+            WheelContact.Update(track, line, car, idx, n.lateral, rubber);
+            // 0 = all on the track, 1 = a tyre on a kerb, 2 = a tyre off the circuit
+            int onTrack = 0, onKerb = 0;
+            for (int w = 0; w < 4; w++)
+            {
+                var ty = car.wType[w];
+                if (SurfaceTable.OnTrack(ty)) onTrack++; else if (ty == SurfaceType.Kerb || ty == SurfaceType.SausageKerb) onKerb++;
+            }
+            surface = onTrack == 4 ? 0 : onTrack + onKerb == 4 ? 1 : 2;
+            if (onTrack + onKerb == 0) cut = true; // track limits: all four tyres beyond the kerbs
+            return;
         }
         var s = surface == 0 ? Surfaces.Asphalt : surface == 1 ? Surfaces.Kerb : Surfaces.Grass;
-        car.surfaceMu = s.mu * (surface == 0 && !playground ? LineGrip(idx, playerLat) : 1); car.surfaceDrag = s.drag;
+        car.surfaceMu = s.mu; car.surfaceDrag = s.drag;
     }
 
-    // The racing line is rubbered-in and clean; away from it the asphalt is dusty and gives up to 4% less grip.
-    double LineGrip(int i, double lateral)
-    {
-        if (line == null || i < 0) return 1;
-        double off = System.Math.Abs(lateral - line.off[i]), u = System.Math.Min(1, System.Math.Max(0, (off - 1.5) / 2.5));
-        return 1 - 0.04 * u * u * (3 - 2 * u);
-    }
+    // rubber laid down on the circuit this session (0 = green track, 1 = fully rubbered-in): grows with the
+    // distance all cars have driven; about 25 car-laps to rubber in fully
+    double rubber;
 
     // Slipstream: how deep each car sits in the air of the car ahead (0..1). Full effect right behind, fading out
     // by 60 m back or 2.5 m to the side.
@@ -569,6 +578,9 @@ public class GameManager : MonoBehaviour
             pos = tr.TransformPoint(halo ? new Vector3(0, 1.02f, 0.12f - lonG * 0.03f) : new Vector3(0, 0.775f, 0.22f - lonG * 0.03f));
             look = tr.TransformPoint(new Vector3(0, (halo ? 0.55f : 0.68f) + lonG * 0.2f, 30));
             fov = (halo ? 66 : 70) + Mathf.Min(speed, 90) * 0.06f;
+            // the surface shakes the driver's head: kerb ridges, gravel, grass
+            float sh = (float)car.vib * Mathf.Min(1, speed / 20f) * (halo ? 0.006f : 0.009f);
+            if (sh > 0) pos += tr.up * (Mathf.PerlinNoise(Time.time * 37f, 0.3f) - 0.5f) * 2 * sh + tr.right * (Mathf.PerlinNoise(0.7f, Time.time * 29f) - 0.5f) * sh;
             cam.transform.position = pos;
         }
         else
@@ -613,12 +625,12 @@ public class GameManager : MonoBehaviour
         if (!menuOpen && !playground && (surface == 2 || hitT > 0) && GUI.Button(new Rect(Screen.width / 2 - S(60), Screen.height * 0.5f, S(120), bh), "Back on track", btn)) Recover();
         if (menuOpen)
         {
-            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera", "Tilt dead zone", "Tilt for full lock", "Tilt smoothing", "Steering at speed", "Graphics" };
+            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera", "Tilt dead zone", "Tilt for full lock", "Tilt smoothing", "Steering at speed", "Graphics", "Tyres" };
             string[] vals = { sound ? "On" : "Off", tc.ToString(), absOn ? "On" : "Off (real F1)", $"{Balances[balIdx] * 100:0}% front", tilt ? "Tilt the phone" : "Drag on screen",
                               invertTilt ? "Inverted" : "Normal", "Set straight now", MapNames[mapIdx], showLine ? "Shown" : "Hidden", RivalCounts[rivalIdx].ToString(), DiffNames[diffIdx], CamNames[camMode],
-                              $"{DeadZones[dzIdx]:0.#}°", $"{TiltRanges[rangeIdx]:0}°", SmoothNames[smoothIdx], SpeedSteerNames[speedSteerIdx], gfxIdx == 0 ? "Auto (" + GfxNames[gfxLevel] + ")" : GfxNames[gfxIdx] };
+                              $"{DeadZones[dzIdx]:0.#}°", $"{TiltRanges[rangeIdx]:0}°", SmoothNames[smoothIdx], SpeedSteerNames[speedSteerIdx], gfxIdx == 0 ? "Auto (" + GfxNames[gfxLevel] + ")" : GfxNames[gfxIdx], CompoundTable.Defs[compIdx].name + " (fit on restart)" };
             int rows = (names.Length + 1) / 2;
-            float panW = Mathf.Min(Screen.width - S(40), S(600)), rh = S(31), panH = rows * rh + S(52);
+            float panW = Mathf.Min(Screen.width - S(40), S(600)), rh = S(28), panH = rows * rh + S(52);
             var panel = new Rect((Screen.width - panW) / 2, (Screen.height - panH) / 2 + S(10), panW, panH);
             Fill(panel, new Color(0.05f, 0.06f, 0.08f, 0.93f));
             center.fontSize = (int)S(15); GUI.Label(new Rect(panel.x, panel.y + S(6), panW, S(24)), "<b>SETTINGS</b>   (game paused)", center);
@@ -643,6 +655,7 @@ public class GameManager : MonoBehaviour
                 if (i == 12) dzIdx = (dzIdx + 1) % DeadZones.Length;
                 if (i == 13) rangeIdx = (rangeIdx + 1) % TiltRanges.Length;
                 if (i == 14) smoothIdx = (smoothIdx + 1) % SmoothCut.Length;
+                if (i == 17) compIdx = (compIdx + 1) % CompoundTable.Defs.Length;
                 if (i == 16) { gfxIdx = (gfxIdx + 1) % GfxNames.Length; ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); }
                 if (i == 15) { speedSteerIdx = (speedSteerIdx + 1) % SpeedSteer.Length; car.cfg.speedSens = SpeedSteer[speedSteerIdx]; }
                 Save();
@@ -680,10 +693,10 @@ public class GameManager : MonoBehaviour
 
         // telemetry
         double beta = System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)) * 57.3;
-        Panel(new Rect(S(8), S(8), S(160), tilt ? S(162) : S(146)));
-        GUI.Label(new Rect(S(14), S(10), S(160), S(162)),
+        Panel(new Rect(S(8), S(8), S(178), tilt ? S(176) : S(160)));
+        GUI.Label(new Rect(S(14), S(10), S(178), S(176)),
             $"{fpsAvg:0} fps\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
-            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\nTyres {car.tyreTF:0}° / {car.tyreTR:0}°\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
+            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{CompoundTable.Get(car.cfg.compound).name} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
 
         DrawMiniMap();

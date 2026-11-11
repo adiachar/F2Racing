@@ -76,6 +76,9 @@ namespace FormulaSim
         public double yawSens = 0.4;                      // downforce lost per radian of slide angle
         public double camberF = -3.25, camberR = -1.75;   // deg, static camber (Pirelli limits are about -3.5 / -2.0)
         public double toeF = -0.08, toeR = 0.10;          // deg per wheel (front toe-out, rear toe-in)
+        public Compound compound = Compound.Soft;
+        public double tyreLife = 1.0;                     // multiplies every compound's life (1 = a Soft lasts about 25 laps of Spa)
+        public double wearPerJ = 1.7e-8;                  // tread worn per joule of sliding energy (soft); calibrated in Tools/PhysicsCheck
         public double tyreStart = 70, tyreOpt = 100, tyreWindow = 30, tyreLoss = 0.06; // deg C: blanket temp, best temp, and grip lost one window away
         public double trackTemp = 40;                     // deg C
         public double tyreHeatCap = 22e3;                 // J/K per axle (tread and carcass that follow the surface)
@@ -134,7 +137,16 @@ namespace FormulaSim
         public double axLong, ax, ay, ayF;
         public double fzF, fzR, useF, useR, alphaF, alphaR;
         public bool lockF, lockR, spinR, tcActive, absActive;
-        public double surfaceMu = 1, surfaceDrag;
+        // what each tyre is touching (0 FL, 1 FR, 2 RL, 3 RR): grip factor, rolling drag, bump height
+        public readonly double[] wMu = { 1, 1, 1, 1 }, wRoll = new double[4], wBump = new double[4];
+        public readonly SurfaceType[] wType = new SurfaceType[4];
+        public double vib;                  // 0..1 how hard the surface is shaking the car right now (camera, sound)
+        public void SetWheelSurface(int w, SurfaceType type, double mu, double roll, double bump) { wType[w] = type; wMu[w] = mu; wRoll[w] = roll; wBump[w] = bump; }
+        // one surface for all four tyres (older code and tests)
+        public double surfaceMu { get => (wMu[0] + wMu[1] + wMu[2] + wMu[3]) / 4; set { for (int i = 0; i < 4; i++) wMu[i] = value; } }
+        public double surfaceDrag { get => (wRoll[0] + wRoll[1] + wRoll[2] + wRoll[3]) / 4; set { for (int i = 0; i < 4; i++) wRoll[i] = value; } }
+        // tyre wear 0 (new) .. 1 (finished), front and rear
+        public double wearF, wearR;
         // chassis detail: state and read-outs
         public double tow;                  // 0..1 how deep in another car's slipstream (set by the game)
         public double rideF = double.NaN, rideR, bodyRoll, pitch;      // m, m, rad, rad
@@ -302,8 +314,12 @@ namespace FormulaSim
                 // nose down (braking) moves the aero balance forward; squatting (acceleration) moves it back
                 aeroF = c.aeroFront + Clamp(c.rakeGain * ((rideR - rideF) - (c.rideR0 - c.rideF0)), -0.06, 0.06);
                 // tyres give their best grip in a temperature window
-                double eF = (tyreTF - c.tyreOpt) / c.tyreWindow, eR = (tyreTR - c.tyreOpt) / c.tyreWindow;
+                var cmp = CompoundTable.Get(c.compound);
+                double eF = (tyreTF - cmp.opt) / cmp.window, eR = (tyreTR - cmp.opt) / cmp.window;
                 tempKF = Math.Max(0.75, 1 - c.tyreLoss * eF * eF); tempKR = Math.Max(0.75, 1 - c.tyreLoss * eR * eR);
+                // compound grip, and worn tyres grip less (slowly at first, then they fall off a cliff)
+                tempKF *= cmp.grip * (1 - 0.05 * wearF - 0.12 * Math.Pow(wearF, 4));
+                tempKR *= cmp.grip * (1 - 0.05 * wearR - 0.12 * Math.Pow(wearR, 4));
                 // toe: the wheels are set a fraction of a degree off straight, which scrubs a little
                 double tf = c.toeF * Math.PI / 180, tr2 = c.toeR * Math.PI / 180;
                 drag += (tf * tf + tr2 * tr2) * 2 * 250e3 * (vx > 1 ? 1 : 0);
@@ -325,23 +341,31 @@ namespace FormulaSim
                 bodyRoll = m * ayF * c.cgHeight / c.rollStiff; pitch = ((rideR - rideF) - (c.rideR0 - c.rideF0)) / L;
             }
             double wLat = Clamp(Math.Abs(ayF) / 10, 0, 1), rollDeg = Math.Abs(bodyRoll) * 180 / Math.PI * 0.7;
-            double AxleGrip(double fz, double fz0, double share, double camber)
+            // bumps (kerb ridges, ruts) make the tyre load jump about; a loaded tyre then grips less on average
+            double vk = Math.Min(1, speed / 15);
+            vib = 0;
+            for (int w = 0; w < 4; w++) vib = Math.Max(vib, wBump[w] / 0.012 * vk);
+            vib = Math.Min(1, vib);
+            double Wm(int w) => wMu[w] * (1 - Math.Min(0.3, wBump[w] * 4.5 * vk));
+            // in a left turn (ayF > 0) the right-hand tyres are the outer, loaded ones
+            bool rightOuter = ayF >= 0;
+            double AxleGrip(double fz, double fz0, double share, double camber, double muL, double muR)
             {
                 double half = fz / 2, n = fz0 / 2, d = Math.Min(half * 0.95, dLat * share);
-                double mo = 1, mi = 1;
+                double mo = rightOuter ? muR : muL, mi = rightOuter ? muL : muR;
                 if (c.chassis)
                 {
                     // camber: the wheels lean in at the top. In a corner that suits the loaded outer tyre and hurts
                     // the inner one; in a straight line it costs a little braking and traction.
                     double lean = Math.Abs(camber), straight = 1 - 0.004 * lean;
                     double po = lean - rollDeg, pi = -lean - rollDeg;
-                    mo = straight + (1 + 0.012 * po - 0.0016 * po * po - straight) * wLat;
-                    mi = straight + (1 + 0.012 * pi - 0.0016 * pi * pi - straight) * wLat;
+                    mo *= straight + (1 + 0.012 * po - 0.0016 * po * po - straight) * wLat;
+                    mi *= straight + (1 + 0.012 * pi - 0.0016 * pi * pi - straight) * wLat;
                 }
                 return n * (Math.Pow((half + d) / n, c.loadExp) * mo + Math.Pow((half - d) / n, c.loadExp) * mi);
             }
-            double DF = c.mu * surfaceMu * tempKF * AxleGrip(fzF, fz0F, c.latTransferFront, c.camberF);
-            double DRl = c.mu * c.rearGrip * surfaceMu * tempKR * AxleGrip(fzR, fz0R, 1 - c.latTransferFront, c.camberR);
+            double DF = c.mu * tempKF * AxleGrip(fzF, fz0F, c.latTransferFront, c.camberF, Wm(0), Wm(1));
+            double DRl = c.mu * c.rearGrip * tempKR * AxleGrip(fzR, fz0R, 1 - c.latTransferFront, c.camberR, Wm(2), Wm(3));
 
             // ---------- engine / drive ----------
             double ratio = GearRatio(c, gear);
@@ -472,13 +496,15 @@ namespace FormulaSim
 
             // ---------- resistances ----------
             double roll = (c.rollRes + surfaceDrag) * m * G;
+            // drag on one side only (two wheels in the gravel) pulls the car round towards that side
+            double dragL = (wRoll[0] + wRoll[2]) * m * G / 4, dragR = (wRoll[1] + wRoll[3]) * m * G / 4;
             double resist = (drag + roll) * dir;
 
             // ---------- integrate ----------
             double cd = Math.Cos(delta), sd = Math.Sin(delta);
             double Fx = FxF * cd - FyF * sd + FxRl - resist - m * G * grade; // gravity pulls the car back on a climb
             double Fy = FxF * sd + FyF * cd + FyR;
-            double Mz = a * (FxF * sd + FyF * cd) - b * FyR;
+            double Mz = a * (FxF * sd + FyF * cd) - b * FyR + (c.track / 2) * (dragL - dragR) * dir;
             if (c.chassis)
             {
                 // differential: resists the rear wheels turning at different speeds, more so under power or on overrun
@@ -493,6 +519,11 @@ namespace FormulaSim
                     tyreTF += dt * (c.tyreHeatShare * pF - cool * (tyreTF - c.trackTemp)) / c.tyreHeatCap;
                     tyreTR += dt * (c.tyreHeatShare * pR - cool * (tyreTR - c.trackTemp)) / c.tyreHeatCap;
                     tyreTF = Clamp(tyreTF, 20, 200); tyreTR = Clamp(tyreTR, 20, 200);
+                    // wear follows the sliding energy; overheated tyres wear faster
+                    double life = CompoundTable.Get(c.compound).life * c.tyreLife;
+                    double hotF = 1 + Math.Max(0, tyreTF - 115) / 25, hotR = 1 + Math.Max(0, tyreTR - 115) / 25;
+                    wearF = Math.Min(1, wearF + pF * c.wearPerJ * hotF / life * dt);
+                    wearR = Math.Min(1, wearR + pR * c.wearPerJ * hotR / life * dt);
                 }
             }
             ax = Fx / m; ay = Fy / m;

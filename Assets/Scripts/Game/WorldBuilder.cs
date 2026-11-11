@@ -138,6 +138,20 @@ public static class WorldBuilder
         float k = 0.75f + Fbm(u, v, 6, 4, 9) * 0.35f + Fbm(u, v, 64, 2, 13) * 0.2f + (r > 0.9f ? 0.12f : r < 0.08f ? -0.12f : 0);
         return new Color32(B(62 * k), B(112 * k), B(44 * k), 255);
     });
+    // astroturf: green with the darker painted stripes run-off areas have
+    static Texture2D TurfTex() => Tex(64, 64, (u, v, x, y) =>
+    {
+        bool stripe = ((int)(v * 4)) % 2 == 0;
+        float k = (stripe ? 0.82f : 1f) * (0.9f + Fbm(u, v, 16, 2, 41) * 0.15f) * (0.95f + Hash(x, y, 43) * 0.08f);
+        return new Color32(B(58 * k), B(128 * k), B(70 * k), 255);
+    });
+    // gravel trap: pale stones of mixed size
+    static Texture2D GravelTex() => Tex(128, 128, (u, v, x, y) =>
+    {
+        float r = Hash(x, y, 59), stones = Fbm(u, v, 32, 3, 61);
+        float c = 150 + stones * 60 + (r > 0.85f ? 28 : r < 0.12f ? -34 : 0);
+        return new Color32(B(c * 1.02f), B(c * 0.95f), B(c * 0.84f), 255);
+    });
     static Texture2D KerbTex() => Tex(32, 64, (u, v, x, y) =>
     {
         bool red = v < 0.5f; float edge = Mathf.Min(u, 1 - u), lip = Mathf.Clamp(edge * 9, 0.55f, 1);
@@ -179,6 +193,8 @@ public static class WorldBuilder
         r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = shadows;
         return go;
     }
+
+    static bool Street(Track t) => t.def != null ? t.def.style == CircuitStyle.Street : t.width < 10.0;
 
     public static GameObject Build(Track t)
     {
@@ -267,25 +283,47 @@ public static class WorldBuilder
             Strip(t, 0, 1, Wd / 2, -Wd / 2, 0.05f, 4, v, uv, tri); // start/finish line
             MeshObj("Lines", v, uv, tri, Mat(new Color(0.95f, 0.95f, 0.93f))).transform.SetParent(root);
         }
-        // kerbs on corners (outer lip slightly raised)
+        // kerbs, astroturf and gravel traps, from the circuit's layout (the same data the tyres read)
         {
-            var curvy = new bool[t.N];
-            for (int i = 0; i < t.N; i++) curvy[i] = System.Math.Abs(t.pts[i].curv) > 1.0 / 280;
-            var on = new bool[t.N];
-            for (int i = 0; i < t.N; i++) for (int j = -8; j <= 8; j++) if (curvy[(i + j + t.N) % t.N]) { on[i] = true; break; }
-            var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
-            int k = 0;
-            while (k < t.N)
+            // every run of points where cond(i) holds, as (first, last) with last exclusive
+            void Runs(System.Func<int, bool> cond, System.Action<int, int> emit)
             {
-                if (!on[k]) { k++; continue; }
-                int j = k; while (j < t.N && on[j]) j++;
-                Strip(t, k, j, Wd / 2, Wd / 2 + Kerb, 0.05f, 3, v, uv, tri, 0.09f);
-                Strip(t, k, j, -Wd / 2, -(Wd / 2 + Kerb), 0.05f, 3, v, uv, tri, 0.09f);
-                k = j;
+                int k = 0;
+                while (k < t.N)
+                {
+                    if (!cond(k)) { k++; continue; }
+                    int j = k; while (j < t.N && cond(j)) j++;
+                    emit(k, j); k = j;
+                }
             }
+            var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
+            Runs(i => t.kerbL[i] > 0, (k, j) => Strip(t, k, j, Wd / 2, Wd / 2 + Kerb, 0.05f, 3, v, uv, tri, 0.09f));
+            Runs(i => t.kerbR[i] > 0, (k, j) => Strip(t, k, j, -Wd / 2, -(Wd / 2 + Kerb), 0.05f, 3, v, uv, tri, 0.09f));
             MeshObj("Kerbs", v, uv, tri, Mat(Color.white, KerbTex())).transform.SetParent(root);
+            if (t.def != null && t.def.style == CircuitStyle.Parkland)
+            {
+                // a 2 m astroturf strip behind the kerb (or the track edge) all the way round
+                v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>();
+                Runs(i => true, (k, j) =>
+                {
+                    for (int i = k; i < j; i++)
+                    {
+                        float kl = t.kerbL[i], kr = t.kerbR[i];
+                        Strip(t, i, i + 1, Wd / 2 + kl, Wd / 2 + kl + 2f, 0.035f, 4, v, uv, tri);
+                        Strip(t, i, i + 1, -(Wd / 2 + kr), -(Wd / 2 + kr + 2f), 0.035f, 4, v, uv, tri);
+                    }
+                });
+                MeshObj("Astroturf", v, uv, tri, Mat(Color.white, TurfTex())).transform.SetParent(root);
+                // gravel traps out to the barrier
+                v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>();
+                float gOut = Wd / 2 + (float)t.def.barrier - 0.4f;
+                Runs(i => t.runL[i] == SurfaceType.Gravel, (k, j) => Strip(t, k, System.Math.Min(j, t.N), Wd / 2 + Kerb + 2f, gOut, 0.025f, 6, v, uv, tri));
+                Runs(i => t.runR[i] == SurfaceType.Gravel, (k, j) => Strip(t, k, System.Math.Min(j, t.N), -(Wd / 2 + Kerb + 2f), -gOut, 0.025f, 6, v, uv, tri));
+                for (int i = 0; i < uv.Count; i++) uv[i] = new Vector2(uv[i].x * (gOut - Wd / 2 - Kerb - 2f) / 6f, uv[i].y);
+                MeshObj("Gravel", v, uv, tri, Mat(Color.white, GravelTex())).transform.SetParent(root);
+            }
         }
-        if (t.width < 10.0)
+        if (Street(t))
         {
             // street circuit: paved shoulders out to the walls, and (on hills) the retaining wall below the street
             var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
@@ -316,8 +354,8 @@ public static class WorldBuilder
                 MeshObj("RetainingWalls", v, uv, tri, Mat(new Color(0.72f, 0.69f, 0.63f), AsphaltTex(), 0.1f)).transform.SetParent(root);
             }
         }
-        Trackside.Build(t, root, t.width < 10.0);
-        Scenery.Build(t, root, t.width < 10.0); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
+        Trackside.Build(t, root, Street(t));
+        Scenery.Build(t, root, Street(t)); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
 
         // playground pad + skidpad rings + distance boards + slalom cones
         {
