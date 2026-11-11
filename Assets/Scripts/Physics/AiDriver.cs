@@ -34,13 +34,13 @@ namespace FormulaSim
             new[] { 5.552, 0.122, 0.170, 0.589, 0.105, 0.927, 0.794 },
             new[] { 6.361, 0.096, 0.148, 0.880, 0.385, 0.939, 0.889 },
             new[] { 5.561, 0.141, 0.133, 0.635, 0.104, 0.911, 0.781 },
-            new[] { 4.696, 0.207, 0.112, 0.503, 0.483, 0.922, 0.781 },
-            new[] { 5.695, 0.201, 0.128, 0.678, 0.342, 0.927, 0.842 },
-            new[] { 3.068, 0.060, 0.107, 0.685, 0.444, 0.882, 0.870 },
-            new[] { 7.344, 0.155, 0.132, 0.904, 0.290, 0.940, 0.806 },
-            new[] { 4.220, 0.199, 0.191, 0.723, 0.100, 0.895, 0.907 },
-            new[] { 2.779, 0.164, 0.118, 0.613, 0.515, 0.907, 0.814 },
-            new[] { 5.740, 0.075, 0.148, 0.757, 0.165, 0.947, 0.834 },
+            new[] { 4.430, 0.138, 0.105, 0.618, 0.460, 0.922, 0.894 },
+            new[] { 4.149, 0.172, 0.153, 0.581, 0.419, 0.925, 0.874 },
+            new[] { 3.199, 0.052, 0.107, 0.633, 0.451, 0.884, 0.832 },
+            new[] { 6.115, 0.124, 0.132, 0.814, 0.246, 0.934, 0.878 },
+            new[] { 4.195, 0.173, 0.183, 0.779, 0.100, 0.898, 0.864 },
+            new[] { 3.623, 0.198, 0.168, 0.599, 0.266, 0.899, 0.837 },
+            new[] { 5.837, 0.078, 0.149, 0.757, 0.162, 0.949, 0.823 },
             new[] { 3.275, 0.151, 0.103, 0.804, 0.107, 0.885, 0.783 },
             /*END*/
         };
@@ -97,6 +97,7 @@ namespace FormulaSim
 
         readonly Track track; readonly RacingLine line; readonly AiTuning tune;
         readonly double[] speed;          // this driver's own target speeds
+        readonly double[] speedFull;      // the same on a full tank (null when the car starts in qualifying trim)
         readonly Random rng;
         double offsetTarget, lapPace = 1, mistakeT, stuckT, offT, speedCap = double.MaxValue;
         bool wasBraking; int prevIdx = -1;
@@ -112,7 +113,14 @@ namespace FormulaSim
             double grip = tune.grip * difficulty * (0.86 + 0.14 * who.pace), brake = tune.brakeUse * difficulty * (0.84 + 0.16 * who.pace);
             // SpeedProfile stores its result in the line object; keep a private copy and leave the line as it was
             var keepS = line.speed; var keepB = line.braking; var keepP = line.phase; var keepC = line.vCorner; double keepT = line.lapTime;
-            speed = (double[])line.SpeedProfile(c, grip, brake).Clone();
+            if (c.fuel && c.fuelStart != c.fuelRef)
+            {
+                // a race start with more fuel than the reference trim: one profile for the full tank, one for empty,
+                // and Think blends them by the fuel left (the heavy car brakes earlier and corners a little slower)
+                speedFull = (double[])line.SpeedProfile(c.WithFuel(c.fuelStart), grip, brake).Clone();
+                speed = (double[])line.SpeedProfile(c.WithFuel(0), grip, brake).Clone();
+            }
+            else speed = (double[])line.SpeedProfile(c, grip, brake).Clone();
             line.speed = keepS; line.braking = keepB; line.phase = keepP; line.vCorner = keepC; line.lapTime = keepT;
         }
 
@@ -186,11 +194,12 @@ namespace FormulaSim
 
             // ---- speed: follow this driver's own speed profile ----
             int ip = (idx + (int)Math.Round(tune.preview * v / track.ds)) % N;
-            bool brakingZone = speed[(ip + 1) % N] < speed[ip] - 0.05;
+            double V(int i) => speedFull == null ? speed[i] : speed[i] + (speedFull[i] - speed[i]) * (double.IsNaN(car.fuel) ? 1 : Clamp(car.fuel / car.cfg.fuelStart, 0, 1));
+            bool brakingZone = V((ip + 1) % N) < V(ip) - 0.05;
             if (brakingZone && !wasBraking && rng.NextDouble() < 0.10 * (1 - who.consistency)) mistakeT = 0.9; // brakes too late now and then
             wasBraking = brakingZone;
             if (mistakeT > 0) mistakeT -= dt;
-            double vt = Math.Min(speed[ip], speed[idx] + 3) * lapPace * (mistakeT > 0 ? 1.07 : 1);
+            double vt = Math.Min(V(ip), V(idx) + 3) * lapPace * (mistakeT > 0 ? 1.07 : 1);
             if (Math.Abs(offset) > 0.8) vt *= 0.985;      // off the ideal line: a little slower
             // drive to the grip the tyres have now (cold, overheated or worn tyres): corner speed goes with sqrt(grip)
             vt *= Math.Sqrt(Clamp(Math.Min(car.gripF, car.gripR), 0.8, 1.0));
@@ -207,7 +216,7 @@ namespace FormulaSim
             recovered = false;
             if (stuckT > 2.0 || offT > 1.2)
             {
-                double keep = Math.Min(speed[idx] * 0.6, 30);
+                double keep = Math.Min(V(idx) * 0.6, 30);
                 Place(idx, line.off[idx], keep);
                 int g = 1; while (g < car.cfg.gearTopSpeeds.Length && keep * 3.6 > car.cfg.gearTopSpeeds[g - 1] * 0.8) g++;
                 car.gear = g; stuckT = offT = 0; offset = offsetTarget = 0; recovered = true;

@@ -260,16 +260,16 @@ if (args.Length > 0 && args[0] == "train")
     return;
 }
 
-// ---- race test: dotnet run -- race ----
+// ---- race test: dotnet run -- race [fuel] ("fuel": start on a 70 kg race fuel load instead of qualifying trim) ----
 if (args.Length > 0 && args[0] == "race")
 {
-    var tracks = Circuits();
+    var tracks = Circuits(); double raceFuel = args.Length > 1 && args[1] == "fuel" ? 70 : new CarConfig().fuelStart;
     for (int ti = 0; ti < tracks.Length; ti++)
     {
         var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
         var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
         var hf = t.h != null ? new HeightField(t) : null;
-        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
+        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = raceFuel }, DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
         double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n];
         double tMin = 999, tMaxF = 0, tMaxR = 0, tSumF = 0, tSumR = 0; int tN = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -284,7 +284,7 @@ if (args.Length > 0 && args[0] == "race")
             foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
             time += H;
         }
-        Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}; wear after {ds[0].lap} laps F {ds[0].car.wearF * 100:F1}% R {ds[0].car.wearR * 100:F1}%");
+        Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}; wear after {ds[0].lap} laps F {ds[0].car.wearF * 100:F1}% R {ds[0].car.wearR * 100:F1}%; fuel {ds[0].car.fuel:F1} kg left, {ds[0].car.fuelLastLap:F2} kg last lap");
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
         int pos = 1;
         foreach (var d in ds.OrderByDescending(d => d.progress))
@@ -389,6 +389,73 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
         Console.WriteLine($"  {def.name,-14} {r.lapTime,8:F2} {def.realPole,8:F2} {e,6:+0.0;-0.0}%  {r.speed.Min() * 3.6,4:F0}-{r.speed.Max() * 3.6,3:F0}  {t2.length,6:F0}  {elevTxt}");
     }
     Console.WriteLine($"  mean error {errs.Average():+0.0;-0.0}%, spread (sd) {Math.Sqrt(errs.Select(x => (x - errs.Average()) * (x - errs.Average())).Average()):F1}%");
+
+    // ---- race detail checks: fuel, tyre surface, brake bias, wind ----
+    Console.WriteLine("Race detail vs real figures:");
+    { // fuel: burn per lap by the AI on a full tank, and the lap-time cost of weight on the ideal lap
+        var ace = new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 };
+        var rows = new List<string>();
+        foreach (var (ti, raceLaps) in new[] { (1, 78), (2, 44), (3, 53) })
+        {
+            var def = FormulaSim.Circuits.All[ti]; var t2 = def.Build(); var line = RacingLine.Compute(t2, new CarConfig());
+            var d = new AiDriver(t2, line, new CarConfig { fuelStart = 70 }, ace, AiTuning.For(ti));
+            var hf = t2.h != null ? new HeightField(t2) : null;
+            double Drive(AiDriver dd, int laps)
+            {
+                double tt = 0; int st = 0;
+                dd.Place(t2.N - 30, line.off[t2.N - 30]);
+                while (dd.lap < laps && tt < 600)
+                {
+                    if (st++ % 4 == 0) { dd.Think(4 * H, tt, null, null, -1, 0); WheelContact.Update(t2, line, dd.car, dd.idx, dd.lateral, 1); if (hf != null) dd.car.grade = hf.Grade(dd.car.x, dd.car.y, dd.car.heading); }
+                    dd.car.Step(dd.LastInput, H); tt += H;
+                }
+                return dd.lastLap;
+            }
+            Drive(d, 4);
+            double light = Drive(new AiDriver(t2, line, new CarConfig { fuelStart = 15, fuelFlow = 0 }, ace, AiTuning.For(ti)), 3);
+            double full = Drive(new AiDriver(t2, line, new CarConfig { fuelStart = 65, fuelFlow = 0 }, ace, AiTuning.For(ti)), 3);
+            var c15 = new CarConfig(); double solver = (RacingLine.Compute(t2, c15.WithFuel(65), 1.3, 0.97, 0.95).lapTime - RacingLine.Compute(t2, c15, 1.3, 0.97, 0.95).lapTime) / 50;
+            rows.Add($"{def.name} {d.car.fuelLastLap:F2} kg/lap (real 70 kg / {raceLaps} laps = {70.0 / raceLaps:F2}); 15 vs 65 kg: AI {light:F2} vs {full:F2} s = {(full - light) / 50:F3} s/kg, ideal lap {solver:F3} s/kg");
+        }
+        Console.WriteLine($"  fuel (real weight cost 0.03-0.04 s/kg):");
+        foreach (var r in rows) Console.WriteLine("    " + r);
+    }
+    { // tyre surface: a locked front wheel (no ABS) spikes the surface temperature; grip comes back once it soaks in
+        var lk = new FormulaCar(new CarConfig { tc = TcMode.High, abs = false }) { vx = 200 / 3.6, gear = 6, tyreTF = 95, tyreTR = 95 };
+        for (int i = 0; i < 240; i++) lk.Step(new CarInput(0, 0.4, 0), H);
+        double g0 = lk.gripF, s0 = lk.tyreSF;
+        for (int i = 0; i < 120; i++) lk.Step(new CarInput(0, 0, 1), H);         // 0.5 s locked
+        double gLock = lk.gripF, sLock = lk.tyreSF, cLock = lk.tyreTF;
+        for (int i = 0; i < 240 * 2; i++) lk.Step(new CarInput(0, 0.3, 0), H);
+        Console.WriteLine($"  lock-up 0.5 s at 200 km/h: front surface {s0:F0} -> {sLock:F0} C (carcass {cLock:F0} C), grip {g0:F3} -> {gLock:F3}, 2 s later surface {lk.tyreSF:F0} C grip {lk.gripF:F3}; pressure {lk.tyrePF:F1}/{lk.tyrePR:F1} psi at {lk.tyreTF:F0}/{lk.tyreTR:F0} C");
+    }
+    { // brake bias, no ABS, 200 km/h: raise a steady pedal until a wheel locks; which axle goes first, and is the car stable
+        var parts = new List<string>();
+        foreach (var (bb, eb) in new[] { (0.50, 1.0), (0.57, 1.0), (0.57, 3.0), (0.64, 1.0) })
+        {
+            string first = "none"; double okPedal = 0; double yaw = 0, eff = 0;
+            for (double pedal = 0.20; pedal <= 1.001 && first == "none"; pedal += 0.02)
+            {
+                var bc2 = new FormulaCar(new CarConfig { tc = TcMode.High, abs = false, brakeBias = bb, engineBrake = eb }) { vx = 200 / 3.6, gear = 6 }; int n = 0; double y = 0;
+                while (bc2.vx > 15 && n++ < 240 * 6)
+                {
+                    bc2.Step(new CarInput(0, 0, pedal), H); y = Math.Max(y, Math.Abs(bc2.heading));
+                    if (bc2.lockR) { first = "rears"; yaw = y; break; }
+                    if (bc2.lockF) { first = "fronts"; yaw = y; break; }
+                    if (n == 120) eff = bc2.biasNow;
+                }
+                if (first == "none") okPedal = pedal;
+            }
+            parts.Add($"{bb * 100:F0}%{(eb != 1 ? " EB x3" : "")}: {(first == "rears" ? "REARS" : first)} lock above {okPedal * 100:F0}% pedal, road bias {eff * 100:F0}%");
+        }
+        Console.WriteLine($"  brake bias, no ABS from 200 km/h: {string.Join(" | ", parts)}");
+    }
+    { // wind: top speed with a 20 km/h head / tail wind; drift on a 250 km/h straight in a 30 km/h crosswind
+        double Top(double wx) { var w = new FormulaCar(F1()) { windX = wx }; for (int i = 0; i < 240 * 60; i++) w.Step(new CarInput(0, 1, 0), H); return w.vx * 3.6; }
+        var cw = new FormulaCar(F1()) { vx = 250 / 3.6, gear = 7, windY = -30 / 3.6 }; var cw0 = new FormulaCar(F1()) { vx = 250 / 3.6, gear = 7 };
+        for (int i = 0; i < 240; i++) { cw.Step(new CarInput(0, 0.75, 0), H); cw0.Step(new CarInput(0, 0.75, 0), H); }
+        Console.WriteLine($"  wind: top speed still air {Top(0):F0}, 20 km/h headwind {Top(-20 / 3.6):F0}, tailwind {Top(20 / 3.6):F0} km/h; 30 km/h crosswind at 250 km/h: drift {cw.y - cw0.y:F2} m and heading {cw.heading * 180 / Math.PI:F2} deg after 1 s, downforce {cw.downforce / cw0.downforce * 100 - 100:F1}%");
+    }
 }
 
 // track port check against the web track.js (point count, length, a few samples)

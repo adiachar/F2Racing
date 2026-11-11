@@ -225,7 +225,9 @@ namespace FormulaSim
     {
         // Set the surface under each tyre (0 FL, 1 FR, 2 RL, 3 RR) from the car's nearest track point and
         // lateral offset. rubber: 0..1 how rubbered-in the circuit is (grip on the asphalt rises with it).
-        public static void Update(Track t, RacingLine line, FormulaCar car, int idx, double lat, double rubber)
+        // marbles: 0..1 how much worn-off rubber lies off the line (builds up through a race as the tyres wear);
+        // off the line it adds to the "dirty side" grip loss, up to 4 % + 10 % = 14 % with marbles at 1 (est.).
+        public static void Update(Track t, RacingLine line, FormulaCar car, int idx, double lat, double rubber, double marbles = 0)
         {
             if (idx < 0 || t.kerbL == null) return;
             var c = car.cfg; var p = t.pts[idx];
@@ -244,7 +246,7 @@ namespace FormulaSim
                 {
                     // the rubbered-in racing line grips best; the session's rubber build-up lifts the whole track
                     mu *= 0.975 + 0.025 * rubber;
-                    if (line != null) { double off = Math.Abs(wl - line.off[wi]), u = Math.Min(1, Math.Max(0, (off - 1.5) / 2.5)); mu *= 1 - 0.04 * u * u * (3 - 2 * u); }
+                    if (line != null) { double off = Math.Abs(wl - line.off[wi]), u = Math.Min(1, Math.Max(0, (off - 1.5) / 2.5)); mu *= 1 - (0.04 + 0.10 * marbles) * u * u * (3 - 2 * u); }
                 }
                 car.SetWheelSurface(w, type, mu, def.roll, def.bump);
             }

@@ -75,7 +75,10 @@ public class GameManager : MonoBehaviour
         {
             if (world != null) Destroy(world);
             track = Circuits.All[circuit].Build();
-            rubber = 0; // a fresh, "green" track
+            rubber = 0; marbles = 0; // a fresh, "green" track
+            var wr = new System.Random(circuit * 7919 + System.DateTime.Now.DayOfYear);
+            double ws = wr.NextDouble() * 6, wd = wr.NextDouble() * 2 * System.Math.PI; // steady breeze 0-6 m/s for this session
+            windX = ws * System.Math.Cos(wd); windY = ws * System.Math.Sin(wd);
             world = WorldBuilder.Build(track);
             wallAt = Traffic.WallOffset(track);
             BuildLine();
@@ -210,6 +213,7 @@ public class GameManager : MonoBehaviour
     void ResetCar()
     {
         car = new FormulaCar(PlayerConfig());
+        car.windX = windX; car.windY = windY;
         if (model != null) model.SetStripe(CarModel.StripeFor((Compound)compIdx));
         SetupRivals();
         if (playground) { car.x = WorldBuilder.PadStart.x - 15; car.y = WorldBuilder.PadStart.y; car.heading = 0; }
@@ -245,8 +249,10 @@ public class GameManager : MonoBehaviour
         {
             // spread the picks over the whole field: stars, midfield and backmarkers
             var who = grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
-            var d = new AiDriver(track, line, CarConfig.ForClass(classIdx), who, AiTuning.For(builtFor), DiffScale[diffIdx], k + 1);
+            var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel();
+            var d = new AiDriver(track, line, rc, who, AiTuning.For(builtFor), DiffScale[diffIdx], k + 1);
             d.Place(track.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8);
+            d.car.windX = windX; d.car.windY = windY;
             rivals.Add(d); rivalSpin.Add(0);
             var col = new Color(who.r, who.g, who.b);
             rivalModels.Add(CarModel.CreateFromAsset("Car/car_lod", col, true) ?? CarModel.Create(d.car.cfg.wheelbase, d.car.cfg.frontWeight, d.car.cfg.wheelRadius));
@@ -264,6 +270,7 @@ public class GameManager : MonoBehaviour
             // rubber build-up from every car's distance
             double dist = System.Math.Abs(car.vx) * 4 * H; foreach (var r in rivals) dist += System.Math.Abs(r.car.vx) * 4 * H;
             rubber = System.Math.Min(1, rubber + dist / (track.length * 25));
+            marbles = System.Math.Min(1, marbles + dist / (track.length * 400));
             for (int i = 0; i < rivals.Count; i++)
             {
                 rivals[i].Think(4 * H, simTime, rivals, car, idx, playerLat);
@@ -280,7 +287,7 @@ public class GameManager : MonoBehaviour
         for (int i = 0; i < rivals.Count; i++)
         {
             var d = rivals[i];
-            if (aiTick % 4 == 1) WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber);
+            if (aiTick % 4 == 1) WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles);
             d.car.Step(raceTime >= Countdown ? d.LastInput : new CarInput(0, 0, 1), H);
         }
     }
@@ -422,7 +429,7 @@ public class GameManager : MonoBehaviour
     {
         var c = CarConfig.ForClass(classIdx);
         c.tc = tc; c.abs = absOn; c.aeroFront = classIdx == 0 ? Balances[balIdx] : c.aeroFront; c.steerSpeed = 14; c.steerReturn = 18;
-        c.speedSens = SpeedSteer[speedSteerIdx]; c.compound = (Compound)compIdx;
+        c.speedSens = SpeedSteer[speedSteerIdx]; c.compound = (Compound)compIdx; c.fuelStart = RaceFuel();
         return c;
     }
 
@@ -518,7 +525,7 @@ public class GameManager : MonoBehaviour
             var n = track.Nearest(car.x, car.y, idx);
             prevIdx = idx < 0 ? n.idx : idx; idx = n.idx; playerLat = n.lateral;
             double lat = System.Math.Abs(n.lateral), hw = track.width / 2;
-            WheelContact.Update(track, line, car, idx, n.lateral, rubber);
+            WheelContact.Update(track, line, car, idx, n.lateral, rubber, marbles);
             // 0 = all on the track, 1 = a tyre on a kerb, 2 = a tyre off the circuit
             int onTrack = 0, onKerb = 0;
             for (int w = 0; w < 4; w++)
@@ -536,7 +543,9 @@ public class GameManager : MonoBehaviour
 
     // rubber laid down on the circuit this session (0 = green track, 1 = fully rubbered-in): grows with the
     // distance all cars have driven; about 25 car-laps to rubber in fully
-    double rubber;
+    double rubber, marbles, windX, windY;
+    // race fuel: about 0.23 kg per km (fits 2026 burn at Monaco, Spa, Monza) for the laps plus a small reserve; 15 kg = qualifying trim
+    double RaceFuel() => raceLaps > 0 && track != null ? System.Math.Min(70, 0.23 * track.length / 1000 * (raceLaps + 0.5) + 2) : 15;
 
     // Slipstream: how deep each car sits in the air of the car ahead (0..1). Full effect right behind, fading out
     // by 60 m back or 2.5 m to the side.
@@ -766,7 +775,7 @@ public class GameManager : MonoBehaviour
         Panel(new Rect(S(8), S(8), S(178), tilt ? S(190) : S(174)));
         GUI.Label(new Rect(S(14), S(10), S(178), S(190)),
             $"{fpsAvg:0} fps" + (renderScale < 0.99f ? $" ({renderScale * 100:0}% res)" : "") + $"\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
-            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{CompoundTable.Get(car.cfg.compound).name} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nBrakes {car.brakeTF:0}° / {car.brakeTR:0}°\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
+            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{CompoundTable.Get(car.cfg.compound).name} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nBrakes {car.brakeTF:0}° / {car.brakeTR:0}°" + (double.IsNaN(car.fuel) ? "" : $"\nFuel {car.fuel:0.0} kg ({car.fuelLastLap:0.00}/lap)  Tyres {car.tyrePF:0.0}/{car.tyrePR:0.0} psi") + $"\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
 
         DrawMiniMap();

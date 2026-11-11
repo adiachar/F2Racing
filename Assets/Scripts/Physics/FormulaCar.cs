@@ -93,12 +93,53 @@ namespace FormulaSim
         public double towDrag = 0.30, towDown = 0.10;     // slipstream right behind another car: drag and downforce lost
         public TcMode tc = TcMode.Low;       // driver aids (not allowed in real F1; kept for touch controls)
         public bool abs = true, autoShift = true;
+        // ---- race detail: fuel, tyre surface heat, brake setting, wind, kerbs ----
+        // fuel load: `mass` already holds fuelRef kg; the car carries fuelStart kg at the start and burns it as the
+        // engine works. FIA 2026: fuel energy flow max 3000 MJ/h (about 70 kg/h of the sustainable fuel) and at most
+        // 70 kg for the race. Weight costs about 0.03-0.04 s a lap per kg (The Race: 10 kg = 0.3-0.4 s).
+        public bool fuel = true;
+        public double fuelRef = 15;          // kg of fuel included in `mass` (qualifying trim)
+        public double fuelStart = 15;        // kg at the start (a race: set up to 70)
+        public double fuelFlow = 70;         // kg/h at full combustion power (FIA 2026 energy-flow limit)
+        public double fuelFront = 0.50;      // where the tank sits, as a front-axle share (est.: behind the driver, a bit ahead of the CG)
+        public double fuelHeight = 0.20;     // m, height of the fuel's centre of mass (est.: tank on the floor)
+        public double fuelGyr = 0.35;        // m, radius of gyration of the fuel about its own centre (est.)
+        // tyre surface: a thin tread layer that heats in a fraction of a second when sliding or locking and passes
+        // the heat on to the carcass (tyreTF/TR). Grip sees part of the surface temperature, so a lock-up or a
+        // slide costs grip for a moment and then recovers as the heat soaks into the carcass.
+        public bool tyreSurface = true;
+        public double tyreSurfCap = 1500;    // J/K per axle (est.: ~1 mm of tread on two tyres)
+        public double tyreSurfLink = 2000;   // W/K surface-to-carcass conduction per axle (est.: ~0.75 s time constant)
+        public double tyreSurfGrip = 0.3;    // share of the surface-carcass difference that the grip feels (0.5 made the trained AI slide off more)
+        public double tyrePressF = 25, tyrePressR = 23; // psi set at blanket temperature (typical Pirelli starting pressures, est.)
+        // brakes: bias migration moves the balance rearwards as the pedal is eased (front % = brakeBias - migration x
+        // (1 - pedal)); engineBrake scales the overrun engine braking on the rear axle (steering-wheel "EB" map)
+        public double brakeMigration = 0;    // 0 = off; real cars use about 0.02-0.05
+        public double engineBrake = 1;       // 1 = as calibrated; more = more rear braking on entry (less stable)
+        // wind (the game sets car.windX / windY): side force and its yaw moment act at the centre of pressure
+        public double sideCyA = 4.5;         // m^2 per radian of aero yaw (est.: side force slope x frontal area)
+        public double sideCp = -0.3;         // m, centre of pressure ahead (+) of the CG (est.: behind, so the car weathervanes)
+        // kerbs: a kerb under one side tilts the car, so the roll springs move load onto the kerb side
+        public bool kerbTransfer = true;
+        public double kerbLift = 0.5;        // share of a surface's bump height that lifts the tyre on average (est.)
+        // tyres that ran through grass, gravel or astroturf pick up dirt and grip less until it wears off
+        public double dirtLoss = 0.08, dirtClear = 400; // grip lost when fully dirty; metres driven to clear about 63 %
 
         public CarConfig Clone()
         {
             var c = (CarConfig)MemberwiseClone();
             c.gearTopSpeeds = (double[])gearTopSpeeds.Clone();
             c.torqueRpm = (double[])torqueRpm.Clone(); c.torqueFrac = (double[])torqueFrac.Clone();
+            return c;
+        }
+
+        // The same car as a fixed mass carrying `kg` of fuel, for the speed-profile solver (RacingLine): the fuel is
+        // added to the mass, and mu is scaled so the tyres keep their load sensitivity about the reference car's
+        // loads (the solver measures load against the car's own weight).
+        public CarConfig WithFuel(double kg)
+        {
+            var c = Clone(); c.fuel = false; c.mass = mass + kg - fuelRef;
+            c.mu = mu * Math.Pow(mass / c.mass, 1 - loadExp);
             return c;
         }
 
@@ -110,7 +151,8 @@ namespace FormulaSim
         {
             // grip (mu) and downforce (clA) of F2 and F3 are fitted so that their gap to the F1 car at Monaco and Spa
             // matches the real gap between 2025 F2 / F3 poles and 2026 F1 poles (fit error 0.1 %)
-            if (k == 1) { var c = LegacyF2(); c.chassis = true; c.brakeTemps = true; c.speedSens = 0.5; c.mu = 1.70; c.clA = 4.0; c.clAX = 4.0; return c; }
+            // F2 / F3 fuel flow: no flow limit; estimated from power at ~30 % efficiency (est.)
+            if (k == 1) { var c = LegacyF2(); c.chassis = true; c.brakeTemps = true; c.speedSens = 0.5; c.mu = 1.70; c.clA = 4.0; c.clAX = 4.0; c.fuel = true; c.fuelFlow = 120; c.tyreSurface = true; c.kerbTransfer = true; return c; }
             if (k == 2) return new CarConfig
             {
                 mass = 673, inertiaZ = 720, wheelbase = 2.95, frontWeight = 0.44, cgHeight = 0.29, wheelRadius = 0.30,
@@ -119,6 +161,7 @@ namespace FormulaSim
                 peakTorque = 360, torqueRpm = new double[] { 3000, 5000, 6500, 7500, 8000, 8500 }, torqueFrac = new[] { 0.55, 0.82, 0.97, 1.0, 0.97, 0.88 },
                 redline = 8500, idleRpm = 2500, gearTopSpeeds = new double[] { 115, 150, 182, 212, 242, 275 }, driveEff = 0.88,
                 ersPower = 0, shiftTime = 0.05, brakeForce = 17000, brakeBias = 0.58, maxLockDeg = 18, speedSens = 0.5,
+                fuelFlow = 75, sideCyA = 3.5,
             };
             return new CarConfig();
         }
@@ -132,6 +175,7 @@ namespace FormulaSim
             peakTorque = 600, torqueRpm = new double[] { 2000, 4000, 5500, 6500, 7500, 8750 }, torqueFrac = new[] { 0.40, 0.62, 0.88, 1.0, 0.97, 0.84 },
             redline = 8750, idleRpm = 3000, gearTopSpeeds = new double[] { 128, 168, 207, 245, 283, 320 }, driveEff = 0.80,
             ersPower = 0, shiftTime = 0.05, brakeForce = 22500, brakeBias = 0.60, maxLockDeg = 18,
+            fuel = false, tyreSurface = false, kerbTransfer = false, // the JS prototype had none of these (golden test)
         };
     }
 
@@ -195,10 +239,31 @@ namespace FormulaSim
         public double slipRatioR, Fdrive, FxR, DR, torque;
         public double aeroX;                // 0 = wings closed (corner mode), 1 = open (straight mode)
         public double ersEnergy = double.NaN, ersHarvested, ersKw; // battery (J), harvested this lap (J), MGU-K power now (kW, - = charging)
-        public void NewLap() { ersHarvested = 0; }
+        // fuel (kg) left, used this lap / last lap, and the car's mass now (kg)
+        public double fuel = double.NaN, fuelThisLap, fuelLastLap = double.NaN, massNow;
+        // tyre surface temperature (deg C) and pressure (psi), front and rear; dirt picked up (0..1) front and rear
+        public double tyreSF = double.NaN, tyreSR, tyrePF, tyrePR, dirtF, dirtR;
+        public double biasNow;              // front share of all braking force right now (brakes + engine + MGU-K)
+        public double windX, windY;         // m/s, world frame: the way the air is moving (set by the game per session)
+        public void NewLap() { ersHarvested = 0; fuelLastLap = fuelThisLap; fuelThisLap = 0; }
+
+        // combustion engine's peak power from the torque curve (cached), for the fuel flow
+        double icePeakKey1 = double.NaN, icePeakKey2 = double.NaN, icePeak;
+        double IcePeak(CarConfig c)
+        {
+            if (c.peakTorque != icePeakKey1 || c.redline != icePeakKey2)
+            {
+                double p = 1;
+                for (double rr = c.idleRpm; rr <= c.redline; rr += 50) p = Math.Max(p, TorqueAt(c, rr) * rr * Math.PI / 30);
+                icePeakKey1 = c.peakTorque; icePeakKey2 = c.redline; icePeak = p;
+            }
+            return icePeak;
+        }
 
         public FormulaCar(CarConfig cfg = null) { this.cfg = cfg ?? new CarConfig(); }
 
+        // how much a surface dirties the tyres (fully dirty after about 30 m on it)
+        static double Dirty(SurfaceType t) => t == SurfaceType.Grass || t == SurfaceType.Gravel ? 1 : t == SurfaceType.Astroturf ? 0.5 : 0;
         static double Clamp(double v, double a, double b) => v < a ? a : v > b ? b : v;
         static double Approach(double v, double t, double d) => v < t ? Math.Min(v + d, t) : Math.Max(v - d, t);
         static double Hypot(double a, double b) => Math.Sqrt(a * a + b * b);
@@ -292,8 +357,25 @@ namespace FormulaSim
         public void Step(CarInput input, double dt)
         {
             var c = cfg;
-            double L = c.wheelbase, b = L * c.frontWeight, a = L - b; // a: CG->front, b: CG->rear
-            double m = c.mass;
+            double m = c.mass, Iz = c.inertiaZ, fw = c.frontWeight, hcg = c.cgHeight;
+            if (c.fuel)
+            {
+                // the fuel is a point mass at the tank: the car's mass, weight split, CG height and yaw inertia follow it
+                if (double.IsNaN(fuel)) fuel = c.fuelStart;
+                double dm = fuel - c.fuelRef;
+                if (dm != 0)
+                {
+                    double m1 = m + dm, dx = c.wheelbase * (c.fuelFront - fw); // tank position relative to the reference CG
+                    fw = (m * fw + dm * c.fuelFront) / m1;
+                    hcg = (m * hcg + dm * c.fuelHeight) / m1;
+                    // parallel axes: both bodies about the new CG
+                    double s = dx * dm / m1;
+                    Iz = Iz + m * s * s + dm * (c.fuelGyr * c.fuelGyr + (dx - s) * (dx - s));
+                    m = m1;
+                }
+            }
+            massNow = m;
+            double L = c.wheelbase, b = L * fw, a = L - b; // a: CG->front, b: CG->rear
             double speed = Hypot(vx, vy);
 
             // ---------- steering filter ----------
@@ -317,6 +399,8 @@ namespace FormulaSim
             throttle = Clamp(input.throttle, 0, 1);
             brake = Clamp(input.brake, 0, 1);
             double thr = throttle, brk = brake;
+            // brake balance (front share); migration moves it rearwards as the pedal is eased
+            double bias = c.brakeMigration != 0 ? Clamp(c.brakeBias - c.brakeMigration * (1 - brk), 0.3, 0.8) : c.brakeBias;
 
             // ---------- reverse: hold brake when stopped ----------
             if (!reverse)
@@ -327,7 +411,19 @@ namespace FormulaSim
             else if (thr > 0.1) { reverse = false; stopTimer = 0; }
 
             // ---------- aero + loads ----------
-            double q = 0.5 * RHO * vx * vx;
+            double q = 0.5 * RHO * vx * vx, betaAero = beta, windSide = 0;
+            bool windy = windX != 0 || windY != 0;
+            if (windy)
+            {
+                // the car meets the air at its speed relative to the air: a headwind adds drag and downforce,
+                // a tailwind takes them away; a crosswind turns the airflow (aero yaw) and pushes on the car's side
+                double chw = Math.Cos(heading), shw = Math.Sin(heading);
+                double ux = vx - (windX * chw + windY * shw), uy = vy - (-windX * shw + windY * chw);
+                q = 0.5 * RHO * ux * ux;
+                betaAero = Math.Atan2(uy, Math.Max(Math.Abs(ux), 1));
+                // side force from the wind only (the car's own sideslip is already in the tyre calibration)
+                windSide = -0.5 * RHO * c.sideCyA * (Hypot(ux, uy) * uy - Hypot(vx, vy) * vy);
+            }
             if (c.activeAero)
             {
                 // wings open on the straights: full throttle, no brake, little cornering; they close at once otherwise
@@ -343,15 +439,28 @@ namespace FormulaSim
                 // ground effect: the lower the floor runs, the more downforce, until it gets so low that it stalls
                 double hm = (rideF + rideR) / 2;
                 double downK = Clamp(1 + c.rideGain * (c.rideDesign - hm) / c.rideDesign, 0.8, 1.12) * Clamp(hm / c.rideStall, 0.6, 1);
-                downK *= 1 - Math.Min(0.15, c.yawSens * Math.Abs(beta));   // sliding sideways spoils the airflow
+                downK *= 1 - Math.Min(0.15, c.yawSens * Math.Abs(betaAero)); // sliding sideways (or a crosswind) spoils the airflow
                 downK *= 1 - c.towDown * tow;                               // dirty air behind another car
                 down *= downK; drag *= 1 - c.towDrag * tow;
                 // nose down (braking) moves the aero balance forward; squatting (acceleration) moves it back
                 aeroF = c.aeroFront + Clamp(c.rakeGain * ((rideR - rideF) - (c.rideR0 - c.rideF0)), -0.06, 0.06);
                 // tyres give their best grip in a temperature window
                 var cmp = CompoundTable.Get(c.compound);
-                double eF = (tyreTF - cmp.opt) / cmp.window, eR = (tyreTR - cmp.opt) / cmp.window;
+                double gTF = tyreTF, gTR = tyreTR;
+                if (c.tyreSurface)
+                {
+                    if (double.IsNaN(tyreSF)) { tyreSF = tyreTF; tyreSR = tyreTR; }
+                    gTF += c.tyreSurfGrip * (tyreSF - tyreTF); gTR += c.tyreSurfGrip * (tyreSR - tyreTR);
+                }
+                double eF = (gTF - cmp.opt) / cmp.window, eR = (gTR - cmp.opt) / cmp.window;
                 tempKF = Math.Max(0.75, 1 - c.tyreLoss * eF * eF); tempKR = Math.Max(0.75, 1 - c.tyreLoss * eR * eR);
+                // dirt picked up off the track
+                if (dirtF > 0) tempKF *= 1 - c.dirtLoss * dirtF;
+                if (dirtR > 0) tempKR *= 1 - c.dirtLoss * dirtR;
+                // carcass temperature sets the pressure (gas law, from the set pressure at blanket temperature)
+                // (absolute pressure scales with absolute temperature; 14.7 psi of atmosphere)
+                tyrePF = (c.tyrePressF + 14.7) * (tyreTF + 273.15) / (c.tyreStart + 273.15) - 14.7;
+                tyrePR = (c.tyrePressR + 14.7) * (tyreTR + 273.15) / (c.tyreStart + 273.15) - 14.7;
                 // compound grip, and worn tyres grip less (slowly at first, then they fall off a cliff)
                 tempKF *= cmp.grip * (1 - 0.05 * wearF - 0.12 * Math.Pow(wearF, 4));
                 tempKR *= cmp.grip * (1 - 0.05 * wearR - 0.12 * Math.Pow(wearR, 4));
@@ -360,20 +469,24 @@ namespace FormulaSim
                 drag += (tf * tf + tr2 * tr2) * 2 * 250e3 * (vx > 1 ? 1 : 0);
             }
             aeroBalance = aeroF; downforce = down; dragForce = drag; gripF = tempKF; gripR = tempKR;
-            double transfer = m * axLong * c.cgHeight / L;
+            double transfer = m * axLong * hcg / L;
             double fz0F = m * G * b / L, fz0R = m * G * a / L;
+            // tyre nominal loads and static ride heights belong to the reference car (with fuelRef kg on board), so
+            // extra fuel sinks the car and meets the tyres' load sensitivity instead of getting grip for free
+            double nF0 = fz0F, nR0 = fz0R;
+            if (m != c.mass) { double rb = L * c.frontWeight; nF0 = c.mass * G * rb / L; nR0 = c.mass * G * (L - rb) / L; }
             fzF = Math.Max(300, fz0F - transfer + down * aeroF);
             fzR = Math.Max(300, fz0R + transfer + down * (1 - aeroF));
             ayF = ayF + (ay - ayF) * Math.Min(1, dt * 10);
-            double dLat = m * Math.Abs(ayF) * c.cgHeight / c.track;
+            double dLat = m * Math.Abs(ayF) * hcg / c.track;
             if (c.chassis)
             {
                 // suspension: each axle sinks under load (downforce, braking, acceleration) and settles with a short lag
                 double k = Math.Min(1, dt * c.heaveRate);
-                double tgF = c.rideF0 - (fzF - fz0F) / c.springF, tgR = c.rideR0 - (fzR - fz0R) / c.springR;
+                double tgF = c.rideF0 - (fzF - nF0) / c.springF, tgR = c.rideR0 - (fzR - nR0) / c.springR;
                 bottoming = tgF < 0.003 || tgR < 0.003;
                 rideF += (Math.Max(0.003, tgF) - rideF) * k; rideR += (Math.Max(0.003, tgR) - rideR) * k;
-                bodyRoll = m * ayF * c.cgHeight / c.rollStiff; pitch = ((rideR - rideF) - (c.rideR0 - c.rideF0)) / L;
+                bodyRoll = m * ayF * hcg / c.rollStiff; pitch = ((rideR - rideF) - (c.rideR0 - c.rideF0)) / L;
             }
             double wLat = Clamp(Math.Abs(ayF) / 10, 0, 1), rollDeg = Math.Abs(bodyRoll) * 180 / Math.PI * 0.7;
             // bumps (kerb ridges, ruts) make the tyre load jump about; a loaded tyre then grips less on average
@@ -384,7 +497,16 @@ namespace FormulaSim
             double Wm(int w) => wMu[w] * (1 - Math.Min(0.3, wBump[w] * 4.5 * vk));
             // in a left turn (ayF > 0) the right-hand tyres are the outer, loaded ones
             bool rightOuter = ayF >= 0;
-            double AxleGrip(double fz, double fz0, double share, double camber, double muL, double muR)
+            // kerb on one side: the tyres there ride higher, the roll springs push load onto them (dk = load moved to the
+            // right-hand tyre, N). Axle roll stiffness K moves K * (height difference / track) / track.
+            double dkF = 0, dkR = 0;
+            if (c.kerbTransfer)
+            {
+                double kt = c.kerbLift * c.rollStiff / (c.track * c.track);
+                dkF = (wBump[1] - wBump[0]) * kt * c.latTransferFront;
+                dkR = (wBump[3] - wBump[2]) * kt * (1 - c.latTransferFront);
+            }
+            double AxleGrip(double fz, double fz0, double share, double camber, double muL, double muR, double dk)
             {
                 double half = fz / 2, n = fz0 / 2, d = Math.Min(half * 0.95, dLat * share);
                 double mo = rightOuter ? muR : muL, mi = rightOuter ? muL : muR;
@@ -397,10 +519,17 @@ namespace FormulaSim
                     mo *= straight + (1 + 0.012 * po - 0.0016 * po * po - straight) * wLat;
                     mi *= straight + (1 + 0.012 * pi - 0.0016 * pi * pi - straight) * wLat;
                 }
+                if (dk != 0)
+                {
+                    // signed transfer to the right-hand tyre: cornering plus kerb, at most 95 % of the axle's half load
+                    double sR = Clamp((rightOuter ? d : -d) + dk, -half * 0.95, half * 0.95);
+                    double mR = rightOuter ? mo : mi, mL = rightOuter ? mi : mo;
+                    return n * (Math.Pow((half + sR) / n, c.loadExp) * mR + Math.Pow((half - sR) / n, c.loadExp) * mL);
+                }
                 return n * (Math.Pow((half + d) / n, c.loadExp) * mo + Math.Pow((half - d) / n, c.loadExp) * mi);
             }
-            double DF = c.mu * tempKF * AxleGrip(fzF, fz0F, c.latTransferFront, c.camberF, Wm(0), Wm(1));
-            double DRl = c.mu * c.rearGrip * tempKR * AxleGrip(fzR, fz0R, 1 - c.latTransferFront, c.camberR, Wm(2), Wm(3));
+            double DF = c.mu * tempKF * AxleGrip(fzF, nF0, c.latTransferFront, c.camberF, Wm(0), Wm(1), dkF);
+            double DRl = c.mu * c.rearGrip * tempKR * AxleGrip(fzR, nR0, 1 - c.latTransferFront, c.camberR, Wm(2), Wm(3), dkR);
 
             // ---------- engine / drive ----------
             double ratio = GearRatio(c, gear);
@@ -426,7 +555,8 @@ namespace FormulaSim
             }
             shiftTimer = Math.Max(0, shiftTimer - dt);
 
-            double fdrive = 0;
+            double fdrive = 0, pIce = 0;
+            bool dry = c.fuel && fuel <= 0;   // out of fuel: the combustion engine stops pushing
             if (reverse)
             {
                 if (vx > -2.8) fdrive = -brk * 3500;
@@ -434,8 +564,8 @@ namespace FormulaSim
             }
             else if (shiftTimer <= 0)
             {
-                if (rpm < c.redline) fdrive = TorqueAt(c, rpm) * thr * ratio * c.driveEff / c.wheelRadius;
-                if (thr < 0.05 && vx > 1) fdrive -= (rpm / c.redline) * 1200; // engine braking
+                if (rpm < c.redline && !dry) { double te = TorqueAt(c, rpm) * thr; fdrive = te * ratio * c.driveEff / c.wheelRadius; pIce = te * rpm * Math.PI / 30; }
+                if (thr < 0.05 && vx > 1) fdrive -= (rpm / c.redline) * 1200 * c.engineBrake; // engine braking (EB map)
             }
             // ---------- hybrid (MGU-K + battery) ----------
             double fK = 0, harvestW = 0;
@@ -452,16 +582,22 @@ namespace FormulaSim
                 {
                     // charging: on the brakes the motor takes over part of the rear braking (no extra force);
                     // when coasting it adds some drag
-                    if (brk > 0) harvestW = Math.Min(c.ersPower, brk * c.brakeForce * (1 - c.brakeBias) * vx);
+                    if (brk > 0) harvestW = Math.Min(c.ersPower, brk * c.brakeForce * (1 - bias) * vx);
                     else if (thr < 0.05) { harvestW = c.ersLiftPower; fdrive -= Math.Min(harvestW / vx, 1500); harvestW = Math.Min(harvestW, 1500 * vx); }
                 }
+            }
+
+            if (c.fuel && pIce > 0)
+            {
+                double burnt = Math.Min(fuel, c.fuelFlow / 3600 * pIce / IcePeak(c) * dt);
+                fuel -= burnt; fuelThisLap += burnt;
             }
 
             // ---------- tyres ----------
             double vxs = Math.Max(Math.Abs(vx), 4);
             alphaF = Math.Atan2(vy + a * r, vxs) - delta * (vx >= 0 ? 1 : -1);
             alphaR = Math.Atan2(vy - b * r, vxs);
-            double FyF = -DF * Magic(c, alphaF, fzF / fz0F);
+            double FyF = -DF * Magic(c, alphaF, fzF / nF0);
 
             int dir = vx > 0.05 ? 1 : vx < -0.05 ? -1 : 0;
             double Bd = brk * c.brakeForce;
@@ -471,13 +607,13 @@ namespace FormulaSim
                 if (double.IsNaN(brakeTF)) { brakeTF = c.brakeStart; brakeTR = c.brakeStart; }
                 kBF = BrakeMu(brakeTF); kBR = BrakeMu(brakeTR);
             }
-            double FxF = -dir * Bd * c.brakeBias * kBF;
+            double FxF = -dir * Bd * bias * kBF;
             var rF = Combine(FxF, FyF, DF, c.abs);
             FxF = rF.Fx; FyF = rF.Fy;
             lockF = rF.slide; useF = rF.use;
 
             // ---------- rear axle: wheel speed + combined slip ----------
-            double rw = c.wheelRadius, lrR = fzR / fz0R;
+            double rw = c.wheelRadius, lrR = fzR / nR0;
             double aPk = PeakBa(c) / (c.tireB * Math.Pow(lrR, -c.slipGrowth));
             double kPk = c.peakRatio, vden = Math.Max(Math.Abs(vx), 3);
             double syR = Math.Tan(alphaR) / Math.Tan(aPk);
@@ -491,7 +627,7 @@ namespace FormulaSim
                 return new RearForce { Fx = F * sx / sv, Fy = -F * syR / sv, s = sv, kap = kap };
             }
             double Iw = c.wheelInertia + c.engineInertia * ratio * ratio;
-            double brakeT = Bd * (1 - c.brakeBias) * rw * kBR;
+            double brakeT = Bd * (1 - bias) * rw * kBR;
             double wv = wR;
             {
                 var t0 = RearTyre(wv); double eps = 0.05;
@@ -546,6 +682,10 @@ namespace FormulaSim
             double Fx = FxF * cd - FyF * sd + FxRl - resist - m * G * grade; // gravity pulls the car back on a climb
             double Fy = FxF * sd + FyF * cd + FyR;
             double Mz = a * (FxF * sd + FyF * cd) - b * FyR + (c.track / 2) * (dragL - dragR) * dir;
+            if (windy) { Fy += windSide; Mz += windSide * c.sideCp; }
+            // brake balance actually reaching the road: front share of all retarding force (brakes, engine, MGU-K)
+            double retF = Math.Max(0, -FxF * dir), retR = Math.Max(0, -FxRl * dir);
+            biasNow = retF + retR > 1 ? retF / (retF + retR) : bias;
             if (c.chassis)
             {
                 // differential: resists the rear wheels turning at different speeds, more so under power or on overrun
@@ -557,9 +697,27 @@ namespace FormulaSim
                     double pF = Math.Abs(FyF * vxs * Math.Tan(alphaF)) + Math.Abs(FxF) * Math.Abs(vx) * (lockF ? 0.6 : 0.04) + 0.6 * c.rollRes * fzF * speed;
                     double pR = Math.Abs(FyR * vxs * Math.Tan(alphaR)) + Math.Abs(FxRl * (wR * rw - vx)) + 0.6 * c.rollRes * fzR * speed;
                     double cool = c.tyreCool0 + c.tyreCoolV * speed;
-                    tyreTF += dt * (c.tyreHeatShare * pF - cool * (tyreTF - c.trackTemp)) / c.tyreHeatCap;
-                    tyreTR += dt * (c.tyreHeatShare * pR - cool * (tyreTR - c.trackTemp)) / c.tyreHeatCap;
+                    if (c.tyreSurface)
+                    {
+                        // two nodes: sliding heats the thin surface layer, which passes the heat to the carcass;
+                        // air and road cool the carcass as before
+                        double qF = c.tyreSurfLink * (tyreSF - tyreTF), qR = c.tyreSurfLink * (tyreSR - tyreTR);
+                        tyreSF += dt * (c.tyreHeatShare * pF - qF) / c.tyreSurfCap;
+                        tyreSR += dt * (c.tyreHeatShare * pR - qR) / c.tyreSurfCap;
+                        tyreTF += dt * (qF - cool * (tyreTF - c.trackTemp)) / c.tyreHeatCap;
+                        tyreTR += dt * (qR - cool * (tyreTR - c.trackTemp)) / c.tyreHeatCap;
+                        tyreSF = Clamp(tyreSF, 20, 250); tyreSR = Clamp(tyreSR, 20, 250);
+                    }
+                    else
+                    {
+                        tyreTF += dt * (c.tyreHeatShare * pF - cool * (tyreTF - c.trackTemp)) / c.tyreHeatCap;
+                        tyreTR += dt * (c.tyreHeatShare * pR - cool * (tyreTR - c.trackTemp)) / c.tyreHeatCap;
+                    }
                     tyreTF = Clamp(tyreTF, 20, 200); tyreTR = Clamp(tyreTR, 20, 200);
+                    // dirt: picked up on grass, gravel and astroturf, worn off by driving on the track
+                    double dClear = speed * dt / c.dirtClear;
+                    dirtF = Clamp(dirtF + (Dirty(wType[0]) + Dirty(wType[1])) * 0.5 * speed * dt / 30 - dirtF * dClear, 0, 1);
+                    dirtR = Clamp(dirtR + (Dirty(wType[2]) + Dirty(wType[3])) * 0.5 * speed * dt / 30 - dirtR * dClear, 0, 1);
                     // wear follows the sliding energy; overheated tyres wear faster
                     double life = CompoundTable.Get(c.compound).life * c.tyreLife;
                     double hotF = 1 + Math.Max(0, tyreTF - 115) / 25, hotR = 1 + Math.Max(0, tyreTR - 115) / 25;
@@ -579,7 +737,7 @@ namespace FormulaSim
 
             vx += (ax + r * vy) * dt;
             vy += (ay - r * vx) * dt;
-            r += Mz / c.inertiaZ * dt;
+            r += Mz / Iz * dt;
 
             if (dir != 0 && Math.Sign(vx) != dir && fdrive == 0) vx = 0;
             if (brk > 0 && Math.Abs(vx) < 0.3 && Math.Abs(fdrive) < 1) vx *= 0.5;
