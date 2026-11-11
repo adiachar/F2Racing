@@ -18,6 +18,7 @@ public static class LightBake
     static float[] roof; static int nx, nz; static float x0, z0, cell, maxH;
     static Vector3 toSun; static Vector2 sunDir; static float sunSlope;
     static Shader shader;
+    static readonly Color LampCol = new Color(0.55f, 0.45f, 0.3f);
     static readonly Color SunCol = new Color(1f, 0.95f, 0.86f) * 1.25f, Sky = new Color(0.62f, 0.72f, 0.85f), Side = new Color(0.55f, 0.6f, 0.6f), Below = new Color(0.3f, 0.35f, 0.25f);
 
     public static bool Begin(Track t, Vector3 towardsSun)
@@ -132,6 +133,7 @@ public static class LightBake
             var sh = r.sharedMaterial.shader; if (sh == null) continue;
             string sn = sh.name;
             if (sn != "Legacy Shaders/Diffuse" && sn != "Standard" && sn != "F2/Baked") continue; // not the see-through or glowing ones
+            if (r.sharedMaterial.IsKeywordEnabled("_EMISSION")) continue;                               // lamps keep their glow
             var v = mesh.vertices; var n = mesh.normals; var col = new Color[v.Length];
             bool hasN = n != null && n.Length == v.Length;
             for (int i = 0; i < v.Length; i++)
@@ -142,6 +144,8 @@ public static class LightBake
                 float ao = Open(p.x + nn.x * 0.3f, p.z + nn.z * 0.3f, p.y);
                 Color amb = nn.y >= 0 ? Color.Lerp(Side, Sky, nn.y) : Color.Lerp(Side, Below, -nn.y);
                 Color c = SunCol * (ndl * sun) + amb * ao;
+                // inside a tunnel: no sky, warm lamp light instead
+                if (sun < 0.5f && Roof(p.x, p.z) - p.y > 1f && Roof(p.x, p.z) - p.y < 9f && Waterfront.InTunnel(p.x, p.z)) c = amb * 0.15f + LampCol;
                 col[i] = new Color(c.r * 0.5f, c.g * 0.5f, c.b * 0.5f, 1); // the shader doubles it
             }
             mesh.colors = col;

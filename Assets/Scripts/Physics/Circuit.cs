@@ -82,6 +82,11 @@ namespace FormulaSim
         public CircuitStyle style = CircuitStyle.Parkland;
         public double barrier = 9.3;     // m from the track edge to the barriers
         public double realPole;          // s, real pole lap for comparison (0 = none)
+        // water: the track from waterFrom to waterTo (m from the start line) runs along a quay; the water lies on the
+        // side towards (waterX, waterY) (track coordinates) and stretches out to sea
+        public double waterFrom, waterTo, waterX, waterY;
+        // tunnel: covered from tunnelFrom to tunnelTo (m from the start line)
+        public double tunnelFrom, tunnelTo;
 
         public Track Build()
         {
@@ -127,6 +132,8 @@ namespace FormulaSim
         {
             id = "monaco", name = "Monaco", lonlat = TrackData.Monaco, width = TrackData.MonacoWidth, startAt = TrackData.MonacoStart,
             elev = TrackData.MonacoElev, style = CircuitStyle.Street, barrier = 2.65, realPole = 72.051,
+            waterFrom = 1540, waterTo = 2890, waterX = 400, waterY = -100,   // Port Hercule and the sea
+            tunnelFrom = 1560, tunnelTo = 1880,                               // the tunnel under the hotel
         };
         public static readonly CircuitDef Spa = new CircuitDef
         {

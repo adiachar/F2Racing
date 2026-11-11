@@ -25,7 +25,7 @@ public static class WorldBuilder
         foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
         {
             var tr = mf.transform;
-            if (mf.name == "Terrain") continue; // built at its final height already
+            if (mf.name == "Terrain" || mf.name == "Harbour") continue; // built at their final height already
             if (tr.localToWorldMatrix.isIdentity)
             {
                 var mesh = mf.sharedMesh; if (mesh == null) continue;
@@ -194,6 +194,7 @@ public static class WorldBuilder
         return go;
     }
 
+    const float SeaBed = -4f;
     static bool Street(Track t) => t.def != null ? t.def.style == CircuitStyle.Street : t.width < 10.0;
 
     public static GameObject Build(Track t)
@@ -234,6 +235,7 @@ public static class WorldBuilder
         float gsize = Mathf.Max(4400, ext + 3000);
         grass.mainTextureScale = new Vector2(gsize / 10, gsize / 10);
         Height = t.h != null ? new HeightField(t) : null;
+        Waterfront.Prepare(t);
         {
             // ground: one big flat sheet, plus (on a hilly circuit) a fine grid around the track that follows the hills
             void Sheet(string name, float x0, float y0, float w, float hgt, int nx, int ny, float yy)
@@ -244,12 +246,15 @@ public static class WorldBuilder
                     float px = x0 + w * i / nx, py = y0 + hgt * j / ny;
                     // the open land is kept below any road within reach of this grid cell, so it can never bury one
                     float hy = name == "Terrain" ? (float)Height.Lowest(px, py, w / nx * 1.1f + 2f) + yy : yy;
+                    // the harbour: the ground drops to the sea bed beyond the quay
+                    if (name == "Terrain" && Waterfront.InWater(px, py)) hy = SeaBed;
                     v.Add(new Vector3(px, hy, py)); uv.Add(new Vector2(px / gsize, py / gsize));
                     if (i < nx && j < ny) { int k = j * (nx + 1) + i; tri.Add(k); tri.Add(k + nx + 1); tri.Add(k + 1); tri.Add(k + 1); tri.Add(k + nx + 1); tri.Add(k + nx + 2); }
                 }
                 MeshObj(name, v, uv, tri, grass).transform.SetParent(root);
             }
-            Sheet("Ground", cx - gsize / 2, cy - 400 - gsize / 2, gsize, gsize, 1, 1, Height == null ? -0.05f : -0.35f);
+            Sheet("Ground", cx - gsize / 2, cy - 400 - gsize / 2, gsize, gsize, 1, 1, Waterfront.HasWater ? SeaBed : Height == null ? -0.05f : -0.35f);
+            if (Waterfront.HasWater) Waterfront.BuildWater(root, 1.0f); // about 3 m below the quay
             if (Height != null)
             {
                 float m = 400, w = (float)(bb.maxX - bb.minX) + 2 * m, hg = (float)(bb.maxY - bb.minY) + 2 * m, cell = Mathf.Max(8f, ext / 180f);
@@ -371,6 +376,7 @@ public static class WorldBuilder
                 MeshObj("RetainingWalls", v, uv, tri, Mat(new Color(0.72f, 0.69f, 0.63f), AsphaltTex(), 0.1f)).transform.SetParent(root);
             }
         }
+        Waterfront.BuildTunnel(t, root);
         Trackside.Build(t, root, Street(t));
         Scenery.Build(t, root, Street(t)); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
 

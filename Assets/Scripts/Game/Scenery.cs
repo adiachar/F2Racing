@@ -64,6 +64,7 @@ public static class Scenery
             // slope back from the viewer so the hill catches the light like a hillside, not a wall
             var t0 = new Vector3(cx + Mathf.Cos(a0) * (radius + 140), H(i), cy + Mathf.Sin(a0) * (radius + 140));
             var t1 = new Vector3(cx + Mathf.Cos(a1) * (radius + 140), H(i + 1), cy + Mathf.Sin(a1) * (radius + 140));
+            if (Waterfront.InWater(p0.x, p0.z) || Waterfront.InWater(p1.x, p1.z)) continue; // open sea, no hills
             var inward = new Vector3(cx, 60, cy) - (p0 + p1) * 0.5f;
             Quad(b, p0, p1, t1, t0, inward, new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1));
         }
@@ -100,7 +101,7 @@ public static class Scenery
                 // keep clear of every other part of the circuit
                 bool free = true; float need = hw + WorldBuilder.Kerb + 3.5f + depth / 2 + 3; need *= need;
                 for (int k = 0; k < N; k += 2) { var q = t.pts[k]; float dx = (float)q.x - bx, dy = (float)q.y - by; if (dx * dx + dy * dy < need) { free = false; break; } }
-                if (!free) continue;
+                if (!free || Waterfront.InWater(bx, by) || Waterfront.InTunnel(bx, by)) continue;
                 var c = new Vector3(bx, 0, by);
                 var tx = new Vector3((float)p.tx, 0, (float)p.ty) * (width / 2);
                 var nx = new Vector3((float)p.nx, 0, (float)p.ny) * (depth / 2);
