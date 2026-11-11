@@ -14,6 +14,11 @@ public static class WorldBuilder
     static Material baseMat;
     // true when Road.shader draws the road (asphalt, rubber, lines, kerbs, grid); Scenery.Rubber then adds no overlay
     public static bool RoadShaded;
+    // graphics level the world is built for: 1 Low, 2 Medium, 3 High (GameManager's "gfx" setting; Auto = Medium,
+    // or Low once Auto has stepped down to it, which GameManager shows by switching anisotropic filtering off)
+    public static int Gfx = 2;
+    // the baked vertex lighting will run (same test as LightBake.Begin): vertex-colour tints and the fence shader work
+    public static bool BakeReady;
     // ---------------------------------------------------------------- hills
     // Height of the ground at a point (0 everywhere on a flat circuit). The road, scenery and cars all use it.
     public static HeightField Height;
@@ -202,7 +207,8 @@ public static class WorldBuilder
     public static GameObject MeshObj(string name, List<Vector3> v, List<Vector2> uv, List<int> tri, Material m, bool shadows = true, List<Vector2> uv2 = null)
     {
         var mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-        mesh.SetVertices(v); mesh.SetUVs(0, uv); if (uv2 != null) mesh.SetUVs(2, uv2); // (channel 2: static batching may treat channel 1 as lightmap UVs) mesh.SetTriangles(tri, 0);
+        mesh.SetVertices(v); mesh.SetUVs(0, uv); if (uv2 != null) mesh.SetUVs(2, uv2); // (channel 2: static batching may treat channel 1 as lightmap UVs)
+        mesh.SetTriangles(tri, 0);
         mesh.RecalculateNormals(); mesh.RecalculateBounds();
         var go = new GameObject(name);
         go.AddComponent<MeshFilter>().sharedMesh = mesh;
@@ -217,6 +223,10 @@ public static class WorldBuilder
     public static GameObject Build(Track t)
     {
         var root = new GameObject("World").transform;
+        int gfxSetting = PlayerPrefs.GetInt("gfx", 0);
+        Gfx = gfxSetting == 0 ? (QualitySettings.anisotropicFiltering == AnisotropicFiltering.Disable ? 1 : 2) : Mathf.Clamp(gfxSetting, 1, 3);
+        { var bs = Resources.Load<Shader>("Baked"); BakeReady = bs != null && bs.isSupported; }
+        BakeTint.Clear();
         float Wd = (float)t.width;
         var bb = t.Bounds();
         float cx = (float)(bb.minX + bb.maxX) / 2, cy = (float)(bb.minY + bb.maxY) / 2;
@@ -492,6 +502,8 @@ public static class WorldBuilder
             var trunkV = new List<Vector3>(); var tuv = new List<Vector2>(); var ttri = new List<int>();
             var rnd = new System.Random(7); int placed = 0, tries = 0;
             int want = Mathf.Clamp((int)(t.length * 0.4f * dens + ext / 6), 200, 2500);
+            if (Gfx <= 1) want = want * 3 / 5; // Low: fewer trees
+            var ctint = new List<Color>(); // per-tree shade variety, multiplied into the baked light (BakeTint)
             float near = 26f, far = conifer ? 260f : 600f;
             // a ring of n points at height y with radius r around (x, z)
             void Ring(List<Vector3> v, float x, float z, float y, float r, int n, float rot)
@@ -504,7 +516,7 @@ public static class WorldBuilder
             while (placed < want && tries++ < want * 30)
             {
                 double x = bb.minX - far * 0.6 + rnd.NextDouble() * (bb.maxX - bb.minX + far * 1.2), y = bb.minY - far * 0.6 + rnd.NextDouble() * (bb.maxY - bb.minY + far * 1.2);
-                if (Pad.Contains(new Vector2((float)x, (float)y)) || Waterfront.InWater((float)x, (float)y)) continue;
+                if (Pad.Contains(new Vector2((float)x, (float)y)) || Waterfront.InWater((float)x, (float)y) || Trackside.Blocked((float)x, (float)y, 5f)) continue;
                 double dist = t.Nearest(x, y).dist;
                 if (dist < near + (t.def != null ? t.def.barrier : 0) || dist > far) continue;
                 float sz = 0.7f + (float)rnd.NextDouble() * 0.8f, rot = (float)rnd.NextDouble() * 6.28f, fx = (float)x, fz = (float)y;
@@ -524,6 +536,11 @@ public static class WorldBuilder
                     crown.Add(new Vector3(fx, crY + 3.2f * sz, fz)); crown.Add(new Vector3(fx, crY - 2.4f * sz, fz)); cuv.Add(Vector2.zero); cuv.Add(Vector2.zero);
                     for (int k = 0; k < 6; k++) { int a1 = b0 + k, a2 = b0 + (k + 1) % 6; ctri.Add(a1); ctri.Add(b0 + 6); ctri.Add(a2); ctri.Add(a1); ctri.Add(a2); ctri.Add(b0 + 7); }
                 }
+                {
+                    float sh = 0.82f + (float)rnd.NextDouble() * 0.3f, warm = (float)rnd.NextDouble() * 0.12f;
+                    var tc = new Color(sh * (1f + warm), sh, sh * (1f - warm * 0.5f), 1f);
+                    while (ctint.Count < crown.Count) ctint.Add(tc);
+                }
                 // trunk: a thin three-sided post
                 int tb = trunkV.Count; float tr2 = 0.25f * sz, th2 = conifer ? 2f * sz : 3f * sz;
                 for (int k = 0; k < 3; k++) { float a2 = rot + k * 2.094f; trunkV.Add(new Vector3(fx + Mathf.Cos(a2) * tr2, 0, fz + Mathf.Sin(a2) * tr2)); trunkV.Add(new Vector3(fx + Mathf.Cos(a2) * tr2, th2, fz + Mathf.Sin(a2) * tr2)); tuv.Add(Vector2.zero); tuv.Add(Vector2.zero); }
@@ -531,15 +548,19 @@ public static class WorldBuilder
                 placed++;
             }
             var leafCol = conifer ? new Color(0.12f, 0.27f, 0.15f) : new Color(0.19f, 0.42f, 0.21f);
-            MeshObj("Trees", crown, cuv, ctri, Mat(leafCol)).transform.SetParent(root);
+            var treesGo = MeshObj("Trees", crown, cuv, ctri, Mat(leafCol)); treesGo.transform.SetParent(root);
+            BakeTint.Add(treesGo.GetComponent<MeshFilter>().sharedMesh, ctint.ToArray());
             MeshObj("Trunks", trunkV, tuv, ttri, Mat(new Color(0.36f, 0.25f, 0.19f))).transform.SetParent(root);
         }
         Drape(root.gameObject);
+        var late = Trackside.Late; // fences and ground decals: lit by the bake, but kept out of its shadow map
+        if (late != null) Drape(late);
         // lighting baked into the vertices (LightBake.cs); if the phone can't run that shader, the sun and
         // real-time shadows are used as before
         if (LightBake.Begin(t, -sunGo.transform.forward))
         {
             LightBake.AddOccluders(root.gameObject);
+            if (late != null) late.transform.SetParent(root, false);
             LightBake.Apply(root.gameObject);
             sun.shadows = LightShadows.None; sun.cullingMask = ~(1 << LightBake.CarLayer);
             var carSunGo = new GameObject("CarSun"); carSunGo.transform.SetParent(root); carSunGo.transform.rotation = sunGo.transform.rotation;
@@ -547,6 +568,11 @@ public static class WorldBuilder
             cs2.shadows = LightShadows.None; cs2.cullingMask = 1 << LightBake.CarLayer;
             LightBake.CarSun = cs2;
         }
+        if (late != null && late.transform.parent != root) late.transform.SetParent(root, false);
+        Trackside.Late = null;
+        // ambient occlusion, dirt and variety tints on top of the baked light, then the fence shader (before batching)
+        BakeTint.Apply(LightBake.Active);
+        Trackside.AfterBake(root.gameObject);
         // the road is lit now (vertex colours): hand it to Road.shader
         if (roadR != null) { if (LightBake.Active) roadR.sharedMaterial = roadMat; else RoadShaded = false; }
         StaticBatchingUtility.Combine(root.gameObject);

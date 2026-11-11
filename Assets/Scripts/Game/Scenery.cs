@@ -7,7 +7,7 @@ using UnityEngine;
 
 public static class Scenery
 {
-    class Buf { public List<Vector3> v = new List<Vector3>(); public List<Vector2> uv = new List<Vector2>(); public List<int> tri = new List<int>(); }
+    class Buf { public List<Vector3> v = new List<Vector3>(); public List<Vector2> uv = new List<Vector2>(); public List<int> tri = new List<int>(); public List<Color> col; }
 
     // one flat quad, wound so that it is visible from the side "outward" points to
     static void Quad(Buf b, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 outward, Vector2 uv0, Vector2 uv1, Vector2 uv2, Vector2 uv3)
@@ -20,6 +20,17 @@ public static class Scenery
         b.v.Add(p0); b.v.Add(p1); b.v.Add(p2); b.v.Add(p3);
         b.uv.Add(uv0); b.uv.Add(uv1); b.uv.Add(uv2); b.uv.Add(uv3);
         b.tri.Add(i); b.tri.Add(i + 1); b.tri.Add(i + 2); b.tri.Add(i); b.tri.Add(i + 2); b.tri.Add(i + 3);
+        if (b.col != null) for (int k = 0; k < 4; k++) b.col.Add(Color.white);
+    }
+    // tint the last four vertices: colour times ambient occlusion (dark at street level, clear from AoH up)
+    static void TintLast(Buf b, Color c)
+    {
+        if (b.col == null) return;
+        for (int k = b.v.Count - 4; k < b.v.Count; k++)
+        {
+            float y = b.v[k].y, ao = Mathf.Lerp(0.55f, 1f, Mathf.Clamp01(y / 1.6f));
+            b.col[k] = new Color(c.r * ao, c.g * ao, c.b * ao, 1f);
+        }
     }
 
     static void Emit(string name, Buf b, Material m, Transform root, bool castShadows)
@@ -32,6 +43,7 @@ public static class Scenery
         go.AddComponent<MeshFilter>().sharedMesh = mesh;
         var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = m;
         r.shadowCastingMode = castShadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
+        if (b.col != null && b.col.Count == b.v.Count) BakeTint.Add(mesh, b.col.ToArray());
     }
 
     static float Rand(int i, int s) { float x = Mathf.Sin(i * 12.9898f + s * 78.233f) * 43758.5453f; return x - Mathf.Floor(x); }
@@ -91,8 +103,13 @@ public static class Scenery
             return new Color32(w, w, w, 255);
         });
         Color[] cols = { new Color(0.93f, 0.86f, 0.72f), new Color(0.90f, 0.74f, 0.62f), new Color(0.96f, 0.93f, 0.88f), new Color(0.86f, 0.80f, 0.66f) };
-        var walls = new Buf[cols.Length]; for (int i = 0; i < walls.Length; i++) walls[i] = new Buf();
+        // with the baked lighting the colour can ride in the vertex tint (BakeTint): all houses then share one material
+        // (one draw call instead of four) and get a darker band at street level; otherwise one material per colour
+        bool merged = WorldBuilder.BakeReady;
+        var walls = new Buf[merged ? 1 : cols.Length];
+        for (int i = 0; i < walls.Length; i++) walls[i] = new Buf { col = merged ? new List<Color>() : null };
         var roofs = new Buf();
+        float gapP = WorldBuilder.Gfx <= 1 ? 0.3f : 0.12f; // Low: more gaps between blocks
         float hw = (float)t.width / 2, clear = hw + WorldBuilder.Kerb + 5.5f;
         int N = t.N, step = Mathf.Max(1, Mathf.RoundToInt(13f / (float)t.ds)), count = 0;
         for (int i = 0; i < N; i += step)
@@ -101,34 +118,45 @@ public static class Scenery
             for (int side = -1; side <= 1; side += 2)
             {
                 int id = i * 2 + (side > 0 ? 1 : 0);
-                if (Rand(id, 5) < 0.12f) continue; // gaps between blocks
+                if (Rand(id, 5) < gapP) continue; // gaps between blocks
                 float depth = 10 + Rand(id, 1) * 8, width = 12.4f, height = 9 + Mathf.Floor(Rand(id, 2) * 7) * 3.2f;
                 float off = clear + depth / 2;
                 float bx = (float)(p.x + p.nx * off * side), by = (float)(p.y + p.ny * off * side);
                 // keep clear of every other part of the circuit
-                bool free = true; float need = hw + WorldBuilder.Kerb + 3.5f + depth / 2 + 3; need *= need;
+                // (the block itself stands clear + depth / 2 from its own track point, 2 m more than this, so only other legs fail)
+                bool free = true; float need = hw + WorldBuilder.Kerb + 3.5f + depth / 2; need *= need;
                 for (int k = 0; k < N; k += 2) { var q = t.pts[k]; float dx = (float)q.x - bx, dy = (float)q.y - by; if (dx * dx + dy * dy < need) { free = false; break; } }
-                if (!free || Waterfront.InWater(bx, by) || Waterfront.InTunnel(bx, by)) continue;
+                if (!free || Waterfront.InWater(bx, by) || Trackside.Blocked(bx, by, Mathf.Max(width, depth) * 0.5f) || Waterfront.InTunnel(bx, by)) continue;
                 var c = new Vector3(bx, 0, by);
                 var tx = new Vector3((float)p.tx, 0, (float)p.ty) * (width / 2);
                 var nx = new Vector3((float)p.nx, 0, (float)p.ny) * (depth / 2);
                 var up = Vector3.up * height;
                 Vector3[] corner = { c - tx - nx, c + tx - nx, c + tx + nx, c - tx + nx };
-                var b = walls[(int)(Rand(id, 3) * cols.Length) % cols.Length];
+                int ci = (int)(Rand(id, 3) * cols.Length) % cols.Length;
+                var b = walls[merged ? 0 : ci];
+                Color tc = merged ? cols[ci] * (0.94f + 0.08f * Rand(id, 4)) : Color.white;
                 for (int e = 0; e < 4; e++)
                 {
                     Vector3 a0 = corner[e], a1 = corner[(e + 1) % 4];
                     float wlen = (a1 - a0).magnitude, uu = Mathf.Round(wlen / 3.1f), vv = Mathf.Round(height / 3.2f);
                     // on hills the walls carry on down below street level, so no building floats above a slope
                     float below = WorldBuilder.Height != null ? 16f : 0f, vb = -Mathf.Round(below / 3.2f);
-                    var dn = Vector3.down * below;
-                    Quad(b, a0 + dn, a1 + dn, a1 + up, a0 + up, (a0 + a1) * 0.5f - c, new Vector2(0, vb), new Vector2(uu, vb), new Vector2(uu, vv), new Vector2(0, vv));
+                    var dn = Vector3.down * below; var outw = (a0 + a1) * 0.5f - c;
+                    if (b.col == null) Quad(b, a0 + dn, a1 + dn, a1 + up, a0 + up, outw, new Vector2(0, vb), new Vector2(uu, vb), new Vector2(uu, vv), new Vector2(0, vv));
+                    else
+                    {
+                        // split at street level and at 2 m, so the shade gathers at the foot of the wall
+                        float v2 = vv * 2f / height; var u2 = Vector3.up * 2f;
+                        if (below > 0) { Quad(b, a0 + dn, a1 + dn, a1, a0, outw, new Vector2(0, vb), new Vector2(uu, vb), new Vector2(uu, 0), new Vector2(0, 0)); TintLast(b, tc); }
+                        Quad(b, a0, a1, a1 + u2, a0 + u2, outw, new Vector2(0, 0), new Vector2(uu, 0), new Vector2(uu, v2), new Vector2(0, v2)); TintLast(b, tc);
+                        Quad(b, a0 + u2, a1 + u2, a1 + up, a0 + up, outw, new Vector2(0, v2), new Vector2(uu, v2), new Vector2(uu, vv), new Vector2(0, vv)); TintLast(b, tc);
+                    }
                 }
                 Quad(roofs, corner[0] + up, corner[1] + up, corner[2] + up, corner[3] + up, Vector3.up, Vector2.zero, Vector2.right, Vector2.one, Vector2.up);
                 count++;
             }
         }
-        for (int i = 0; i < walls.Length; i++) Emit("Town", walls[i], WorldBuilder.Mat(cols[i], win, 0.25f), parent, true);
+        for (int i = 0; i < walls.Length; i++) Emit("Town", walls[i], WorldBuilder.Mat(merged ? Color.white : cols[i], win, 0.25f), parent, true);
         Emit("TownRoofs", roofs, WorldBuilder.Mat(new Color(0.62f, 0.33f, 0.24f), null, 0.1f), parent, false);
     }
 
