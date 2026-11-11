@@ -491,6 +491,10 @@ public class GameManager : MonoBehaviour
         audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
         audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
         audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR); audioEngine.onAsphalt = surface != 2; audioEngine.onKerb = car.vib > 0.3;
+        audioEngine.carClass = classIdx;
+        audioEngine.ersKw = double.IsNaN(car.ersKw) ? 0f : (float)car.ersKw;
+        audioEngine.surface = surface != 2 ? surface
+            : (car.wType[0] == SurfaceType.Gravel || car.wType[1] == SurfaceType.Gravel || car.wType[2] == SurfaceType.Gravel || car.wType[3] == SurfaceType.Gravel) ? 3 : 2;
         audioEngine.redline = (float)car.cfg.redline; audioEngine.shifting = car.shiftTimer > 0;
         audioEngine.wheelspin = car.throttle > 0.05 ? Mathf.Clamp01(((float)car.slipRatioR - 0.14f) / 0.4f) : 0;
         audioEngine.lockup = car.lockF || car.lockR ? 1 : car.brake > 0.05 ? Mathf.Clamp01((-(float)car.slipRatioR - 0.2f) / 0.4f) : 0;
@@ -600,9 +604,9 @@ public class GameManager : MonoBehaviour
         {
             // 2 = cockpit (driver's eyes, low behind the halo); 3 = halo cam (just above the driver's head)
             bool halo = camMode == 3;
-            pos = tr.TransformPoint(halo ? new Vector3(0, 1.02f, 0.12f - lonG * 0.03f) : new Vector3(0, 0.822f, 0.395f - lonG * 0.03f));
-            look = tr.TransformPoint(new Vector3(0, (halo ? 0.55f : -0.63f) + lonG * 0.2f, 30)); // cockpit: 2.8 deg down, fitted to a real F1 onboard frame
-            fov = halo ? 66 : 51; // cockpit: fitted to a real F1 onboard frame (eye, angle and view solved from its halo, tyre and wheel positions); no widening with speed
+            pos = tr.TransformPoint(halo ? new Vector3(0, 1.02f, 0.12f - lonG * 0.03f) : new Vector3(0, 0.76f, 0.30f - lonG * 0.03f));
+            look = tr.TransformPoint(new Vector3(0, (halo ? 0.55f : 0.76f) + lonG * 0.2f, 30)); // cockpit: 2.8 deg down, fitted to a real F1 onboard frame
+            fov = halo ? 66 : 55; // cockpit: fitted to a real F1 onboard frame (eye, angle and view solved from its halo, tyre and wheel positions); no widening with speed
             // the surface shakes the driver's head: kerb ridges, gravel, grass
             float sh = (float)car.vib * Mathf.Min(1, speed / 20f) * (halo ? 0.006f : 0.009f);
             if (sh > 0) pos += tr.up * (Mathf.PerlinNoise(Time.time * 37f, 0.3f) - 0.5f) * 2 * sh + tr.right * (Mathf.PerlinNoise(0.7f, Time.time * 29f) - 0.5f) * sh;
@@ -621,6 +625,7 @@ public class GameManager : MonoBehaviour
         if (tilt && camMode == 2) cam.transform.Rotate(0, 0, -tiltSmooth * 0.6f, Space.Self);
         cam.fieldOfView += (fov - cam.fieldOfView) * Mathf.Min(1, Time.deltaTime * 4);
         model.helmet.gameObject.SetActive(camMode != 2);
+        if (model.haloPillar != null) model.haloPillar.SetActive(camMode != 2);
         if (model.cockpitFloor) model.cockpitFloor.SetActive(camMode == 2);
         cam.nearClipPlane = camMode >= 2 ? 0.05f : 0.3f;
     }

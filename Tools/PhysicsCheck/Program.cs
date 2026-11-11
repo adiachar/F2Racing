@@ -379,11 +379,16 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
     Console.WriteLine($"  0-100 {t100:F2}s (perfect traction; real 2.2-2.6 with wheelspin) | 0-200 {t200:F2}s (2025 cars ~4.4-4.6) | 0-300 {t300:F2}s | top {top:F0} km/h, engine only {noK.vx * 3.6:F0} (real speed traps 325-345)");
     Console.WriteLine($"  braking from 320: peak {peakB:F2} g (real 5-6) | 200-0 in {Stop(200):F0} m | 100-0 in {Stop(100):F0} m (real 15-17)");
     Console.WriteLine($"  cornering g at km/h {string.Join(" ", lat)} (real: ~2 slow, 4-5 fast)");
-    foreach (var (nm, t2, real) in new[] { ("Monaco", FormulaSim.Circuits.Monaco.Build(), 72.051), ("Spa", FormulaSim.Circuits.Spa.Build(), 104.361) })
+    Console.WriteLine($"  {"circuit",-14} {"ideal",8} {"pole",8} {"error",7}  speed km/h  length  elev");
+    var errs = new List<double>();
+    foreach (var def in FormulaSim.Circuits.All.Where(d => d.realPole > 0))
     {
-        var r = RacingLine.Compute(t2, new CarConfig(), 1.3, 0.97, 0.95);
-        Console.WriteLine($"  {nm}: ideal lap {r.lapTime:F2}s, real 2026 pole {real:F2}s ({(r.lapTime / real - 1) * 100:+0.0;-0.0}%), speed {r.speed.Min() * 3.6:F0}-{r.speed.Max() * 3.6:F0} km/h");
+        var t2 = def.Build(); var r = RacingLine.Compute(t2, new CarConfig(), 1.3, 0.97, 0.95);
+        double e = (r.lapTime / def.realPole - 1) * 100; errs.Add(e);
+        string elevTxt = t2.h == null ? "flat" : $"{t2.h.Max() - t2.h.Min():F0} m";
+        Console.WriteLine($"  {def.name,-14} {r.lapTime,8:F2} {def.realPole,8:F2} {e,6:+0.0;-0.0}%  {r.speed.Min() * 3.6,4:F0}-{r.speed.Max() * 3.6,3:F0}  {t2.length,6:F0}  {elevTxt}");
     }
+    Console.WriteLine($"  mean error {errs.Average():+0.0;-0.0}%, spread (sd) {Math.Sqrt(errs.Select(x => (x - errs.Average()) * (x - errs.Average())).Average()):F1}%");
 }
 
 // track port check against the web track.js (point count, length, a few samples)

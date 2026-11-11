@@ -9,6 +9,7 @@ public class CarModel : MonoBehaviour
 {
     public Transform body;
     public GameObject cockpitFloor;
+    public GameObject haloPillar; // hidden in the cockpit camera (a driver sees round it with two eyes)
     Transform steerWheel; float steerPitch;
     // turn the steering wheel in the cockpit: steer -1..1 (+ = right), about a third of a turn each way
     public void SetSteer(float steer) { if (steerWheel != null) steerWheel.localRotation = Quaternion.Euler(steerPitch, 0, -steer * 120f); }
@@ -417,6 +418,7 @@ public class CarModel : MonoBehaviour
                 go.transform.localPosition = piv; go.transform.localRotation = Quaternion.Euler(cm.steerPitch, 0, 0);
                 cm.steerWheel = go.transform; mid = 5;
             }
+            if (name == "halo_pillar") cm.haloPillar = go;
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
             if (name.EndsWith("_tyre")) TyreStripes(go.transform, pos, nv, mats[7]);

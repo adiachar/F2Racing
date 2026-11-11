@@ -98,7 +98,15 @@ MAT = {'paint_red': 0, 'paint_white': 1, 'carbon': 2, 'metal': 3, 'tyre': 4, 'hu
 r = export_mesh(get(GROUPS['paint']), 31000); out.append(('paint_red', MAT['paint_red'], (0, 0, 0)) + r)
 for g, tgt in (('carbon', 56000), ('white', 1000), ('metal', 1500), ('light', 400)):
     r = export_mesh(get(GROUPS[g]), tgt)
-    if r: out.append((g, MAT[g], (0, 0, 0)) + r)
+    if r and g == 'carbon':
+        # the halo's centre pillar as its own part: the cockpit camera hides it (a driver sees round it with two
+        # eyes; a single camera would show it as a bar down the middle of the screen)
+        pos, nrm, faces = r; c = pos[faces].mean(1)
+        sel = (np.abs(c[:, 0]) < 0.06) & (c[:, 2] > 0.55) & (c[:, 2] < 1.2) & (c[:, 1] > 0.71) & (c[:, 1] < 0.80)
+        out.append(('carbon', MAT[g], (0, 0, 0), pos, nrm, faces[~sel]))
+        if sel.any(): out.append(('halo_pillar', MAT[g], (0, 0, 0), pos, nrm, faces[sel]))
+        print('halo pillar triangles', int(sel.sum()))
+    elif r: out.append((g, MAT[g], (0, 0, 0)) + r)
 if FULL:
     for nm, names, mid in (('decals', ['sf25_decals', 'sf25_decals2', 'numbers'], 7), ('sw', ['sf25_sw', 'sf25_sw_carbon', 'sf25_sw_decals', 'sf25_lcd'], 8), ('misc', ['gp21_cinture.005', 'driver_color', 'glass', 'plastic_interior.002'], 9)):
         r = export_mesh(get(names), 10**9)

@@ -158,16 +158,64 @@ namespace FormulaSim
                                    { 2350, 100 }, { 2700, 82 }, { 3150, 64 }, { 3800, 48 }, { 4500, 30 }, { 4950, 2 }, { 5500, 12 },
                                    { 6100, 30 }, { 6700, 46 } },
         };
-        // more circuits from the TUM racetrack database (OpenStreetMap centre lines, measured widths); flat for now
-        static CircuitDef Tum(string id, string name, double[,] d, double forest) => new CircuitDef { id = id, name = name, metric = d, style = CircuitStyle.Parkland, forest = forest };
-        public static readonly CircuitDef Monza = Tum("monza", "Monza", TrackDataTum.Monza, 0.8);           // royal park
-        public static readonly CircuitDef Silverstone = Tum("silverstone", "Silverstone", TrackDataTum.Silverstone, 0.15);
-        public static readonly CircuitDef Suzuka = Tum("suzuka", "Suzuka", TrackDataTum.Suzuka, 0.5);
-        public static readonly CircuitDef Austin = Tum("austin", "Austin", TrackDataTum.Austin, 0.1);
-        public static readonly CircuitDef Budapest = Tum("budapest", "Hungaroring", TrackDataTum.Budapest, 0.3);
-        public static readonly CircuitDef Catalunya = Tum("catalunya", "Barcelona", TrackDataTum.Catalunya, 0.2);
-        public static readonly CircuitDef Spielberg = Tum("spielberg", "Red Bull Ring", TrackDataTum.Spielberg, 0.5);
-        public static readonly CircuitDef Zandvoort = Tum("zandvoort", "Zandvoort", TrackDataTum.Zandvoort, 0.2);
+        // more circuits from the TUM racetrack database (OpenStreetMap centre lines, measured widths).
+        // realPole: 2026 F1 qualifying pole (dry Q3). elev: height profiles are ESTIMATES, not surveyed: total
+        // height range and the position of the high/low points come from published figures (formula1.com "Highs and
+        // lows - which F1 track has the most elevation changes", 2016, unless noted); the corner distances come from
+        // the ideal-line speed minima on these centre lines; everything in between is interpolated by eye.
+        static CircuitDef Tum(string id, string name, double[,] d, double forest, double pole = 0, double[,] elev = null) =>
+            new CircuitDef { id = id, name = name, metric = d, style = CircuitStyle.Parkland, forest = forest, realPole = pole, elev = elev };
+        // Monza (royal park): pole 1:21.786 Gasly 2026. 12.8 m range: main dip on the drag between Lesmo 2 and
+        // Ascari (under the old banking), downhill run to Parabolica, slight incline up the start straight.
+        // Corners: Rettifilo 932, Roggia 2146, Lesmo 2544 / 2882, Ascari 3952-4142, Parabolica 5227 m.
+        public static readonly CircuitDef Monza = Tum("monza", "Monza", TrackDataTum.Monza, 0.8, 81.786,
+            new double[,] { { 0, 6 }, { 932, 8 }, { 1600, 10 }, { 2146, 11.5 }, { 2544, 12.8 }, { 2882, 11 }, { 3400, 0 },
+                            { 3952, 7 }, { 4142, 8 }, { 5227, 3 } });
+        // Silverstone: pole 1:28.111 Antonelli 2026. 11.3 m range: the main drop is out of Stowe down to Vale/Club;
+        // otherwise near flat, rising gently along Hangar Straight. Corners: Village 892, Loop 1042, Brooklands 1998,
+        // Luffield 2182, Copse 3138, Maggotts/Becketts 3722-4020, Stowe 5079, Vale 5513, Club 5595 m.
+        public static readonly CircuitDef Silverstone = Tum("silverstone", "Silverstone", TrackDataTum.Silverstone, 0.15, 88.111,
+            new double[,] { { 0, 3 }, { 400, 4 }, { 1000, 5 }, { 2000, 5 }, { 3138, 6 }, { 3900, 7 }, { 4300, 8 }, { 4700, 10 },
+                            { 5079, 11.3 }, { 5513, 0.5 }, { 5595, 0 }, { 5800, 2 } });
+        // Suzuka: pole 1:28.778 Antonelli 2026. 40.4 m range: low point between T1 and T2 (the track falls from the
+        // chicane all the way down), the Esses and Dunlop climb, high point just past Spoon, undulating run to 130R,
+        // which crosses over the Degner-hairpin leg on the bridge (crossing at 2550 / 4924 m: upper leg kept higher).
+        // Corners: T2 874, Esses 1116-1738, Degner 2300 / 2458, hairpin 2920, Spoon 3814-3952, chicane 5389 m.
+        public static readonly CircuitDef Suzuka = Tum("suzuka", "Suzuka", TrackDataTum.Suzuka, 0.5, 88.778,
+            new double[,] { { 0, 8 }, { 750, 0 }, { 1116, 6 }, { 1398, 11 }, { 1738, 17 }, { 2000, 22 }, { 2300, 21 }, { 2458, 17 },
+                            { 2550, 15 }, { 2920, 13 }, { 3400, 24 }, { 3814, 37 }, { 4050, 40.4 }, { 4400, 36 }, { 4700, 33 },
+                            { 4924, 26 }, { 5389, 16 } });
+        // Austin (COTA): pole 1:34.035 Antonelli 2026. 30.9 m range (formula1.com; COTA quotes 133 ft / 40.5 m):
+        // lowest point between T19 and T20, then the short steep climb (~11 %, f1chronicle.com) to the T1 crest;
+        // downhill through T2 and the Esses, the back straight, then low through the stadium section.
+        // Corners: T1 666, Esses 1270-1724, T9 1978, T10 2186, T11 2594, T12 3782, T15 4296, T19 5049, T20 5363 m.
+        public static readonly CircuitDef Austin = Tum("austin", "Austin", TrackDataTum.Austin, 0.1, 94.035,
+            new double[,] { { 0, 3 }, { 330, 8 }, { 640, 30.9 }, { 800, 24 }, { 1270, 21 }, { 1724, 19 }, { 1978, 17 }, { 2186, 15 },
+                            { 2594, 12 }, { 3782, 6 }, { 4296, 4 }, { 4520, 4 }, { 5049, 2 }, { 5250, 0 }, { 5363, 1 } });
+        // Hungaroring: pole 1:17.207 Norris 2026. 34.7 m range: downhill from the start line until T3 (low point),
+        // then a steady climb back to the high point on the start-finish straight.
+        // Corners: T1 642, T2 1156, T3 1344, T4 1820, T5 2032, T6 2386, T8/9 2622-2730, T11 3106, T12 3536, T14 4128 m.
+        public static readonly CircuitDef Budapest = Tum("budapest", "Hungaroring", TrackDataTum.Budapest, 0.3, 77.207,
+            new double[,] { { 0, 34.7 }, { 642, 20 }, { 1156, 8 }, { 1344, 0 }, { 1820, 8 }, { 2032, 10 }, { 2386, 14 }, { 2622, 17 },
+                            { 3106, 22 }, { 3536, 26 }, { 3822, 29 }, { 4128, 32 } });
+        // Barcelona: pole 1:14.679 Russell 2026. 29.6 m range: high point out of T12, dropping nearly 30 m to the low
+        // point at T1; Campsa (T9) is a blind uphill crest, T5 a downhill braking zone. NOTE this TUM centre line still
+        // has the T14/T15 chicane (pre-2023 layout), the 2026 pole was set on the faster layout without it.
+        // Corners: T1 838, T3 1168, T4 1714, T5 2146, T7 2556, T9 2902, T10 3502, T12 3736, chicane 4018-4148 m.
+        public static readonly CircuitDef Catalunya = Tum("catalunya", "Barcelona", TrackDataTum.Catalunya, 0.2, 74.679,
+            new double[,] { { 0, 9 }, { 838, 0 }, { 948, 1 }, { 1168, 6 }, { 1714, 5 }, { 2146, 2 }, { 2556, 12 }, { 2902, 22 },
+                            { 3502, 14 }, { 3620, 18 }, { 3736, 26 }, { 3850, 29.6 }, { 4018, 26 }, { 4148, 22 } });
+        // Red Bull Ring: pole 1:06.113 Russell 2026. 63.5 m range (circuit: 65 m, max incline 12 %, decline 9.3 %,
+        // redbullring.com): lowest point on the start-finish straight, ~63 m climbed by Remus (T3), the steepest
+        // section right after T1-T2; down through T4-T6, a dip then uphill at T7, downhill again to T9/T10.
+        // Corners: T1 448, T3 1396, T4 2208, T6 2738, T7 3034, T9 3786, T10 3986 m.
+        public static readonly CircuitDef Spielberg = Tum("spielberg", "Red Bull Ring", TrackDataTum.Spielberg, 0.5, 66.113,
+            new double[,] { { 0, 2 }, { 200, 8 }, { 448, 22 }, { 900, 52 }, { 1320, 63.5 }, { 1396, 63 }, { 1800, 50 }, { 2208, 36 },
+                            { 2500, 28 }, { 2738, 22 }, { 2900, 16 }, { 3034, 19 }, { 3400, 15 }, { 3786, 10 }, { 3986, 4 }, { 4250, 0 } });
+        // Zandvoort: pole 1:11.163 Norris 2026. Flat: no published height range found (only the 18-19 deg banking of
+        // Hugenholtz T3 and Luyendyk T14, and Hunserug T4 being "one of the highest points"), so no profile yet.
+        // This centre line is 4317 m vs the official 4259 m.
+        public static readonly CircuitDef Zandvoort = Tum("zandvoort", "Zandvoort", TrackDataTum.Zandvoort, 0.2, 71.163);
         // order matters: the AI tuning table (AiTuning.Trained) uses the same order
         public static readonly CircuitDef[] All = { Test, Monaco, Spa, Monza, Silverstone, Suzuka, Austin, Budapest, Catalunya, Spielberg, Zandvoort };
     }
