@@ -60,26 +60,26 @@ namespace FormulaSim
         // invented names and teams (no real drivers, teams or liveries)
         public static readonly DriverProfile[] Grid =
         {
-            D("K. Arden",    "Silver Arrow",  1.00, 0.95, 0.70, 0.75f, 0.78f, 0.80f),
-            D("M. Voss",     "Night Bull",    0.99, 0.97, 0.95, 0.10f, 0.13f, 0.35f),
-            D("L. Hartwell", "Rosso",         0.96, 0.96, 0.75, 0.75f, 0.05f, 0.07f),
-            D("N. Lindqvist","Papaya",        0.95, 0.93, 0.60, 1.00f, 0.50f, 0.05f),
-            D("G. Rowe",     "Silver Arrow",  0.93, 0.94, 0.65, 0.75f, 0.78f, 0.80f),
-            D("O. Pascoe",   "Papaya",        0.92, 0.90, 0.55, 1.00f, 0.50f, 0.05f),
-            D("I. Haddad",   "Night Bull",    0.88, 0.82, 0.80, 0.10f, 0.13f, 0.35f),
+            D("K. Arden",    "Argent",  1.00, 0.95, 0.70, 0.75f, 0.78f, 0.80f),
+            D("M. Voss",     "Midnight Comet",    0.99, 0.97, 0.95, 0.10f, 0.13f, 0.35f),
+            D("L. Hartwell", "Vermilion",         0.96, 0.96, 0.75, 0.75f, 0.05f, 0.07f),
+            D("N. Lindqvist","Solstice",        0.95, 0.93, 0.60, 1.00f, 0.50f, 0.05f),
+            D("G. Rowe",     "Argent",  0.93, 0.94, 0.65, 0.75f, 0.78f, 0.80f),
+            D("O. Pascoe",   "Solstice",        0.92, 0.90, 0.55, 1.00f, 0.50f, 0.05f),
+            D("I. Haddad",   "Midnight Comet",    0.88, 0.82, 0.80, 0.10f, 0.13f, 0.35f),
             D("C. Sainz-Rey","Blue Works",    0.85, 0.92, 0.60, 0.05f, 0.30f, 0.75f),
             D("A. Albrecht", "Blue Works",    0.83, 0.90, 0.50, 0.05f, 0.30f, 0.75f),
             D("F. Alvaro",   "Emerald",       0.82, 0.96, 0.85, 0.02f, 0.40f, 0.30f),
-            D("P. Garnier",  "Alpine Blue",   0.78, 0.88, 0.65, 0.20f, 0.50f, 0.95f),
-            D("N. Holz",     "Four Rings",    0.75, 0.93, 0.45, 0.55f, 0.57f, 0.60f),
-            D("E. Okafor",   "Stars",         0.72, 0.85, 0.70, 0.90f, 0.90f, 0.92f),
-            D("Y. Tanaka",   "Junior Bull",   0.68, 0.80, 0.75, 0.25f, 0.35f, 0.85f),
-            D("O. Bergman",  "Stars",         0.65, 0.78, 0.80, 0.90f, 0.90f, 0.92f),
-            D("G. Bastos",   "Four Rings",    0.60, 0.80, 0.55, 0.55f, 0.57f, 0.60f),
-            D("F. Colombo",  "Alpine Blue",   0.52, 0.70, 0.75, 0.20f, 0.50f, 0.95f),
-            D("A. Lindahl",  "Junior Bull",   0.48, 0.72, 0.60, 0.25f, 0.35f, 0.85f),
-            D("S. Paredes",  "Liberty",       0.40, 0.84, 0.50, 0.85f, 0.85f, 0.20f),
-            D("V. Bergstrom","Liberty",       0.33, 0.86, 0.35, 0.85f, 0.85f, 0.20f),
+            D("P. Garnier",  "Glacier",   0.78, 0.88, 0.65, 0.20f, 0.50f, 0.95f),
+            D("N. Holz",     "Quadrant",    0.75, 0.93, 0.45, 0.55f, 0.57f, 0.60f),
+            D("E. Okafor",   "Meridian",         0.72, 0.85, 0.70, 0.90f, 0.90f, 0.92f),
+            D("Y. Tanaka",   "Comet Academy",   0.68, 0.80, 0.75, 0.25f, 0.35f, 0.85f),
+            D("O. Bergman",  "Meridian",         0.65, 0.78, 0.80, 0.90f, 0.90f, 0.92f),
+            D("G. Bastos",   "Quadrant",    0.60, 0.80, 0.55, 0.55f, 0.57f, 0.60f),
+            D("F. Colombo",  "Glacier",   0.52, 0.70, 0.75, 0.20f, 0.50f, 0.95f),
+            D("A. Lindahl",  "Comet Academy",   0.48, 0.72, 0.60, 0.25f, 0.35f, 0.85f),
+            D("S. Paredes",  "Harbour",       0.40, 0.84, 0.50, 0.85f, 0.85f, 0.20f),
+            D("V. Bergstrom","Harbour",       0.33, 0.86, 0.35, 0.85f, 0.85f, 0.20f),
             D("L. Strand",   "Emerald",       0.15, 0.62, 0.55, 0.02f, 0.40f, 0.30f),
         };
     }
@@ -94,6 +94,7 @@ namespace FormulaSim
         public double progress;           // laps + fraction, for race positions
         public double offset;             // current sideways offset from the racing line (traffic)
         public bool recovered;
+        public double target;             // the speed target of the last Think (m/s), for diagnostics
 
         readonly Track track; readonly RacingLine line; readonly AiTuning tune;
         readonly double[] speed;          // this driver's own target speeds
@@ -176,6 +177,17 @@ namespace FormulaSim
             if (player != null && playerIdx >= 0) See(playerIdx, playerLateral, Math.Sqrt(player.vx * player.vx + player.vy * player.vy));
             if (blocked || want != 0) offsetTarget = Clamp(offsetTarget + want * dt * 2.5, -3.2, 3.2);
             else if (!alongside) offsetTarget *= Math.Max(0, 1 - dt * 0.8);
+            // The aim point is clamped to the track (room, below), and the racing line already runs within 0.3 m of
+            // that clamp at most apexes. A sideways offset (traffic) carried into a bend therefore pins the aim point
+            // to the track edge, whose bends are much tighter than the line's: at racing-line speed the car snaps
+            // round or runs wide. So the offset may only use the room the line leaves over the next 1.5 s (40 m at
+            // least) and is wound back in time before the bend, keeping the path a parallel copy of the line.
+            {
+                double roomA = track.width / 2 - 1.0, maxL = 3.2, maxR = 3.2;
+                int nA = (int)Math.Round(Math.Max(40, v * 1.5) / track.ds);
+                for (int k = 0; k <= nA; k += 2) { int j = (idx + k) % N; maxL = Math.Min(maxL, roomA - line.off[j]); maxR = Math.Min(maxR, roomA + line.off[j]); }
+                offsetTarget = Clamp(offsetTarget, -Math.Max(0, maxR), Math.Max(0, maxL));
+            }
             offset += Clamp(offsetTarget - offset, -2.2 * dt, 2.2 * dt);
 
             // ---- steering: aim at a point on the line ahead (pure pursuit) ----
@@ -201,9 +213,16 @@ namespace FormulaSim
             if (mistakeT > 0) mistakeT -= dt;
             double vt = Math.Min(V(ip), V(idx) + 3) * lapPace * (mistakeT > 0 ? 1.07 : 1);
             if (Math.Abs(offset) > 0.8) vt *= 0.985;      // off the ideal line: a little slower
-            // drive to the grip the tyres have now (cold, overheated or worn tyres): corner speed goes with sqrt(grip)
-            vt *= Math.Sqrt(Clamp(Math.Min(car.gripF, car.gripR), 0.8, 1.0));
+            // drive to the grip the tyres have now (cold, overheated or worn tyres). Without downforce corner speed goes
+            // with grip^(1/2); with it the load itself grows with speed, so corner speed reacts more strongly:
+            // m v^2 k = mu (W + D v^2)^e gives v ~ mu^(1 / (2 - 2 e s)), s = the downforce share of the load: about
+            // mu^0.6 at 100 km/h, mu^0.8 at 200, mu^1.1 at 300 (with a plain sqrt the AI overdrove fast bends on cold tyres).
+            {
+                double down = 0.5 * 1.225 * car.cfg.clA * vt * vt, share = down / (down + car.cfg.mass * 9.81);
+                vt *= Math.Pow(Clamp(Math.Min(car.gripF, car.gripR), 0.8, 1.0), 1 / (2 - 2 * car.cfg.loadExp * share));
+            }
             vt = Math.Min(vt, speedCap);
+            target = vt;
             double err = vt - v;
             double thr = Clamp(err * tune.kThr, 0, 1), brk = Clamp(-err * tune.kBrk, 0, 1);
             if (brk > 0.02) thr = 0;

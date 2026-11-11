@@ -349,6 +349,77 @@ if (args.Length > 0 && args[0] == "train")
     return;
 }
 
+// ---- diagnostics: dotnet run -- curv <id> <from m> <to m>: raw vs fitted centre-line curvature, line, speeds ----
+if (args.Length > 3 && args[0] == "curv")
+{
+    var inv = CultureInfo.InvariantCulture;
+    int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == args[1]); var def = FormulaSim.Circuits.All[ti];
+    double s0 = double.Parse(args[2], inv), s1 = double.Parse(args[3], inv);
+    var t = def.Build(); var rawT = def.metric != null ? Track.Build(TrackDataTum.Centre(def.metric), TrackDataTum.MeanWidth(def.metric)) : t;
+    var line = RacingLine.Compute(t, new CarConfig());
+    var tu = AiTuning.For(ti); var ai = (double[])line.SpeedProfile(new CarConfig(), tu.grip, tu.brakeUse).Clone(); line = RacingLine.Compute(t, new CarConfig());
+    for (int i = 0; i < t.N; i++) if (t.pts[i].s >= s0 && t.pts[i].s <= s1 && i % 2 == 0)
+        Console.WriteLine($"{t.pts[i].s,6:F0}  raw k {rawT.pts[Math.Min(i, rawT.N - 1)].curv * 1000,7:F2}  fit k {t.pts[i].curv * 1000,7:F2}  line k {line.curv[i] * 1000,7:F2}  off {line.off[i],5:F1}  ai {ai[i] * 3.6,4:F0}");
+    return;
+}
+
+// ---- diagnostics: dotnet run -- kinks [id]: curvature spikes the corner fit leaves at the edges of its windows ----
+if (args.Length > 0 && args[0] == "kinks")
+{
+    foreach (var def in FormulaSim.Circuits.All.Where(d => d.metric != null && d.curveFit != null && (args.Length < 2 || d.id == args[1])))
+    {
+        var t = def.Build(); var raw = Track.Build(TrackDataTum.Centre(def.metric), TrackDataTum.MeanWidth(def.metric)); var f = def.curveFit;
+        var outp = new List<string>();
+        for (int c = 0; c < f.GetLength(0); c++)
+            foreach (var edge in new[] { f[c, 0] - f[c, 2], f[c, 0] + f[c, 2] })
+            {
+                // the fitted bend's peak |k| within 20 m of the edge, against the smoothest of the two neighbours 20-40 m away
+                double pk = 0, at = 0, nb = 1e9;
+                for (int i = 0; i < t.N; i++)
+                {
+                    double d = t.pts[i].s - edge, k = Math.Abs(t.pts[i].curv);
+                    if (Math.Abs(d) <= 20 && k > pk) { pk = k; at = t.pts[i].s; }
+                }
+                double l = 0, r = 0;
+                for (int i = 0; i < t.N; i++) { double d = t.pts[i].s - at; if (d >= -40 && d <= -20) l = Math.Max(l, Math.Abs(t.pts[i].curv)); if (d >= 20 && d <= 40) r = Math.Max(r, Math.Abs(t.pts[i].curv)); }
+                nb = Math.Max(l, r);
+                if (pk > 1.0 / 400 && pk > 1.2 * nb) outp.Add($"{at:F0} m (edge of {f[c, 0]}): R {1 / pk:F0} m vs {1 / Math.Max(1e-6, nb):F0} m around");
+            }
+        // how much of the lap the racing line spends pressed against its limit (where any traffic offset hits the aim clamp)
+        double AtEdge(Track tt) { var l = RacingLine.Build(tt); double lim = tt.width / 2 - 1.3; return 100.0 * l.off.Count(o => Math.Abs(o) > lim - 0.05) / tt.N; }
+        Console.WriteLine($"{def.name}: line at its limit {AtEdge(raw):F0}% of the lap unfitted, {AtEdge(t):F0}% fitted; {(outp.Count == 0 ? "no edge kinks" : string.Join("; ", outp))}");
+    }
+    return;
+}
+
+// ---- diagnostics: dotnet run -- trace <id>: the race test on one circuit; for every reset, the car's state from
+// about 0.5 s before it started to slide (body slip over 5 deg) until shortly after ("ofs" = its traffic offset) ----
+if (args.Length > 1 && args[0] == "trace")
+{
+    int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == args[1]);
+    var t = FormulaSim.Circuits.All[ti].Build(); var line = RacingLine.Compute(t, new CarConfig());
+    var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length; var hf = t.h != null ? new HeightField(t) : null;
+    for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
+    var hist = new List<string>[n]; for (int k = 0; k < n; k++) hist[k] = new List<string>();
+    double time = 0; int steps = 0;
+    while (time < 6 * 130 && ds.Min(d => d.lap) < 5)
+    {
+        if (steps++ % 4 == 0)
+            for (int k = 0; k < n; k++)
+            {
+                var d = ds[k]; var c = d.car;
+                double vb = Math.Sqrt(c.vx * c.vx + c.vy * c.vy), slip = Math.Atan2(c.vy, Math.Max(0.1, c.vx)) * 180 / Math.PI;
+                d.Think(4 * H, time, ds, null, -1, 0);
+                if (d.idx >= 0) { hist[k].Add($"      {time,6:F2}s yaw {c.r,5:F2} delta {c.delta * 180 / Math.PI,5:F1} lock {c.lockAngle * 180 / Math.PI,4:F1} s {t.pts[d.idx].s,5:F0} v {vb * 3.6,4:F0} tgt {d.target * 3.6,4:F0} line {line.speed[d.idx] * 3.6,4:F0} lat {d.lateral,5:F1} lineoff {line.off[d.idx] + d.offset,5:F1} ofs {d.offset,5:F1} slip {slip,5:F1} steer {d.LastInput.steer,5:F2} thr {d.LastInput.throttle:F2} brk {d.LastInput.brake:F2} lap {d.lap} grip {c.gripF:F3}/{c.gripR:F3} T {c.tyreTF:F0}/{c.tyreTR:F0} brakeT {c.brakeTF:F0}/{c.brakeTR:F0} bias {c.biasNow:F2}"); if (hist[k].Count > 300) hist[k].RemoveAt(0); }
+                if (d.recovered) { Console.WriteLine($"RESET {d.who.name} (pace {d.who.pace:F2}) at {t.pts[d.idx].s:F0} m, t {time:F1}"); { int on = hist[k].FindIndex(h => { var w = h.Split("slip")[1].Trim().Split(' ')[0]; return Math.Abs(double.Parse(w, CultureInfo.InvariantCulture)) > 5; }); if (on < 0) on = hist[k].Count - 1; for (int q = Math.Max(0, on - 30); q < Math.Min(hist[k].Count, on + 12); q += 2) Console.WriteLine(hist[k][q]); } hist[k].Clear(); }
+            }
+        if (steps % 4 == 1) for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) Traffic.Collide(ds[i].car, ds[j].car);
+        foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
+        time += H;
+    }
+    return;
+}
+
 // ---- race test: dotnet run -- race [fuel] ("fuel": start on a 70 kg race fuel load instead of qualifying trim) ----
 if (args.Length > 0 && args[0] == "race")
 {
