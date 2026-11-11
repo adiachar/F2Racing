@@ -21,5 +21,7 @@ Rules for every change: run `Tools/SyntaxCheck` (`dotnet run -- ../../Assets`) a
 
 ## Overnight log (Nov 12)
 - Done: cockpit eye under the halo with the centre pillar hidden; engine sound per class; start menu and results; sky, clouds and sun glare; road shader (asphalt, rubbered line, kerbs, paint, grid); fuel, tyre surface heat and pressures, brake migration, marbles, wind, kerb load transfer; 2026 poles and elevation for 8 circuits; AI retrained.
-- In progress: TUM corner-curvature fit (ideal laps +5–11% vs pole); trackside detail (barriers, fences, grandstands, pits); brake-bias setting, haptics, pit stop.
+- Done (03:00–04:30): brake bias, haptics, pit stop; trackside (barriers, fences, stands, pits, gantry) + SetTriangles fix; TUM corner fit (mean +2.2% vs pole), Barcelona 2023 layout, Zandvoort banking (physics only).
+- In progress (04:30): Suzuka/RBR AI resets; liveries + TV camera (+ replay if simple).
+- Open: corner-speed targets are estimates; Zandvoort banking not shown in the road mesh; Hungaroring/Zandvoort/RBR still 3.5–4.8% slow.
 - Next: variable track width, Zandvoort banking, liveries, replay/TV cameras, weather, CI compile check.
