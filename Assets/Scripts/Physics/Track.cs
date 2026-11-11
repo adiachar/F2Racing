@@ -166,18 +166,102 @@ namespace FormulaSim
             double ox = raw[first, 0], oy = raw[first, 1];
             var pts = new double[n, 2];
             for (int i = 0; i < n; i++) { int k = (i + first) % n; pts[i, 0] = raw[k, 0] - ox; pts[i, 1] = raw[k, 1] - oy; }
-            var t = Build(pts, width);
-            if (curveSigma > 0 || curveFit != null) t = Build(t.SmoothedCurvature(sAt => SigmaAt(sAt, curveSigma, curveFit)), width);
+            var t = Smoothed(Build(pts, width), curveSigma, curveFit);
             if (elev != null) t.SetElevation(elev);
             return t;
         }
 
-        // the curvature window at distance s: the fitted value of the corner within 60 m, otherwise the default
+        // the track rebuilt with each bend's curvature spread out (see SmoothedCurvature); unchanged without a fit
+        public static Track Smoothed(Track t, double curveSigma, double[,] curveFit)
+        {
+            if (curveSigma <= 0 && curveFit == null) return t;
+            return Build(t.SmoothedCurvature(sAt => SigmaAt(sAt, curveSigma, curveFit)), t.width);
+        }
+
+        // Measured centre lines (TUM): spread each listed bend's curvature over a Gaussian window (fit rows {s, sigma,
+        // reach}: the turn of every point within reach of s is spread over +-3 sigma), one bend at a time and only
+        // inside that bend's own stretch of track: the stretch keeps its segment lengths (so the track length), its
+        // total turn, and both ends, so the rest of the circuit does not move at all.
+        public static Track LocalFit(Track t, double[,] fit, bool keepLength = true)
+        {
+            if (fit == null) return t;
+            int N = t.N; double ds = t.ds;
+            var px = new double[N]; var py = new double[N];
+            for (int i = 0; i < N; i++) { px[i] = t.pts[i].x; py[i] = t.pts[i].y; }
+            int W(int i) => ((i % N) + N) % N;
+            for (int c = 0; c < fit.GetLength(0); c++)
+            {
+                double sg = fit[c, 1], reach = fit.GetLength(1) > 2 ? fit[c, 2] : 60;
+                if (sg < 0.5) continue;
+                int ic = (int)Math.Round(fit[c, 0] / ds), r = (int)Math.Ceiling(reach / ds), g = (int)Math.Ceiling(3 * sg / ds);
+                int i0 = ic - r - g - 2, m = 2 * (r + g + 2);            // the stretch: points i0 .. i0 + m
+                if (m >= N / 2) continue;
+                var len = new double[m]; var hd = new double[m];
+                for (int j = 0; j < m; j++)
+                {
+                    double dx = px[W(i0 + j + 1)] - px[W(i0 + j)], dy = py[W(i0 + j + 1)] - py[W(i0 + j)];
+                    len[j] = Math.Sqrt(dx * dx + dy * dy); hd[j] = Math.Atan2(dy, dx);
+                }
+                var turn = new double[m];                                 // turn at point j (between segment j-1 and j)
+                for (int j = 1; j < m; j++)
+                {
+                    double d = hd[j] - hd[j - 1];
+                    while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+                    double s = (j - (ic - i0)) * ds;
+                    if (Math.Abs(s) > reach) { turn[j] += d; continue; }
+                    double ks = 0;
+                    for (int q = -g; q <= g; q++) ks += Math.Exp(-0.5 * (q * ds / sg) * (q * ds / sg));
+                    for (int q = -g; q <= g; q++) turn[Math.Min(m - 1, Math.Max(1, j + q))] += d * Math.Exp(-0.5 * (q * ds / sg) * (q * ds / sg)) / ks;
+                }
+                // integrate the new stretch from its first point, then pull its far end back onto the old one
+                var qx = new double[m + 1]; var qy = new double[m + 1];
+                double x = px[W(i0)], y = py[W(i0)], h = hd[0];
+                for (int j = 0; j < m; j++) { if (j > 0) h += turn[j]; qx[j] = x; qy[j] = y; x += Math.Cos(h) * len[j]; y += Math.Sin(h) * len[j]; }
+                qx[m] = x; qy[m] = y;
+                double ex = qx[m] - px[W(i0 + m)], ey = qy[m] - py[W(i0 + m)];
+                for (int j = 1; j < m; j++) { double u = (double)j / m; u = u * u * (3 - 2 * u); px[W(i0 + j)] = qx[j] - ex * u; py[W(i0 + j)] = qy[j] - ey * u; }
+            }
+            var P = new double[N, 2];
+            for (int i = 0; i < N; i++) { P[i, 0] = px[i]; P[i, 1] = py[i]; }
+            // a rounder bend cuts in a little and the lap gets shorter: scale the circuit (about its middle) back to
+            // the measured length; that moves nothing by more than a few metres
+            if (!keepLength) return Build(P, t.width);
+            double k = t.length / Build(P, t.width).length, cx = 0, cy = 0;
+            for (int i = 0; i < N; i++) { cx += px[i] / N; cy += py[i] / N; }
+            for (int i = 0; i < N; i++) { P[i, 0] = cx + (px[i] - cx) * k; P[i, 1] = cy + (py[i] - cy) * k; }
+            return Build(P, t.width);
+        }
+
+        // the curvature window at distance s: the fitted value of the corner within its reach (third column, m;
+        // 60 m when there is none), otherwise the default
         public static double SigmaAt(double s, double sigma0, double[,] fit)
         {
             if (fit == null) return sigma0;
-            for (int i = 0; i < fit.GetLength(0); i++) if (Math.Abs(fit[i, 0] - s) <= 60) return fit[i, 1];
+            bool reach = fit.GetLength(1) > 2;
+            for (int i = 0; i < fit.GetLength(0); i++) if (Math.Abs(fit[i, 0] - s) <= (reach ? fit[i, 2] : 60)) return fit[i, 1];
             return sigma0;
+        }
+
+        // banking of every point (rad, + = the road rises to the right of the direction of travel, so it leans into
+        // a left-hand bend); null = no banked corners
+        public double[] bank;
+        // keys {from s, to s, degrees}: each stretch leans into its own bend (the side follows the stretch's total
+        // turn), easing in and out over 25 m at the ends
+        public void SetBanking(double[,] keys)
+        {
+            bank = new double[N];
+            for (int k = 0; k < keys.GetLength(0); k++)
+            {
+                double s0 = keys[k, 0], s1 = keys[k, 1], turn = 0;
+                for (int i = 0; i < N; i++) if (pts[i].s >= s0 && pts[i].s <= s1) turn += pts[i].curv * ds;
+                double b = Math.Sign(turn) * keys[k, 2] * Math.PI / 180;
+                for (int i = 0; i < N; i++)
+                {
+                    double s = pts[i].s; if (s < s0 || s > s1) continue;
+                    double u = Math.Min(1, Math.Min(s - s0, s1 - s) / 25); u = u * u * (3 - 2 * u);
+                    bank[i] = b * u;
+                }
+            }
         }
 
         public double[] h; // height of every point (m); null = flat circuit

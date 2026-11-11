@@ -156,33 +156,119 @@ if (args.Length > 0 && args[0] == "lab")
     return;
 }
 
-// ---- fit corner shapes to real corner speeds: dotnet run -- fitgeo ----
+// ---- centre line radius and ideal speed every 20 m: dotnet run -- profile <circuit id> ----
+if (args.Length > 1 && args[0] == "profile")
+{
+    var def = FormulaSim.Circuits.All.First(d => d.id == args[1]); var t = def.Build(); var line = RacingLine.Compute(t, new CarConfig(), 1.3, 0.97, 0.95);
+    int step = (int)Math.Round(20 / t.ds);
+    for (int i = 0; i < t.N; i += step)
+        Console.WriteLine($"{t.pts[i].s,6:F0} m  radius {(Math.Abs(t.pts[i].curv) > 1e-5 ? 1 / t.pts[i].curv : 99999),8:F0}  line {(Math.Abs(line.curv[i]) > 1e-5 ? 1 / line.curv[i] : 99999),8:F0}  {line.speed[i] * 3.6,4:F0} km/h{(t.bank != null && t.bank[i] != 0 ? $"  bank {t.bank[i] * 180 / Math.PI:F1}" : "")}");
+    return;
+}
+
+// ---- corner speed minima of the ideal lap: dotnet run -- corners [circuit id] ----
+// Lists every local speed minimum (s, km/h) and, where the circuit has real corner speeds, the comparison.
+if (args.Length > 0 && args[0] == "corners")
+{
+    var inv = CultureInfo.InvariantCulture;
+    foreach (var def in FormulaSim.Circuits.All.Where(d => d.realPole > 0 && (args.Length < 2 || d.id == args[1])))
+    {
+        var t = def.Build(); var line = RacingLine.Compute(t, new CarConfig(), 1.3, 0.97, 0.95);
+        var mins = new List<string>(); int w = (int)Math.Round(40 / t.ds);
+        for (int i = 0; i < t.N; i++)
+        {
+            double v = line.speed[i]; bool isMin = true;
+            for (int j = -w; j <= w && isMin; j++) if (j != 0 && line.speed[((i + j) % t.N + t.N) % t.N] < v - 1e-9) isMin = false;
+            if (isMin && line.speed[(i - 1 + t.N) % t.N] > v && v < line.speed.Max() - 3) mins.Add($"{t.pts[i].s:F0}:{v * 3.6:F0}");
+        }
+        Console.WriteLine($"{def.name} lap {line.lapTime:F2} (pole {def.realPole:F2}, {(line.lapTime / def.realPole - 1) * 100:+0.0;-0.0}%) minima s:km/h {string.Join(" ", mins)}");
+        if (def.realCorners != null)
+        {
+            var rc = def.realCorners;
+            for (int c = 0; c < rc.GetLength(0); c++)
+            {
+                double mn = 1e9, at = 0; double win = Math.Min(45, rc.GetLength(1) > 2 ? rc[c, 2] : 45);
+                for (int i = 0; i < t.N; i++) if (Math.Abs(t.pts[i].s - rc[c, 0]) < win && line.speed[i] < mn) { mn = line.speed[i]; at = t.pts[i].s; }
+                Console.WriteLine($"   corner at {rc[c, 0],5:F0}: real {rc[c, 1],3:F0}, ideal {mn * 3.6,3:F0} km/h at {at:F0} m ({(mn * 3.6 / rc[c, 1] - 1) * 100:+0;-0}%)");
+            }
+        }
+    }
+    return;
+}
+
+// ---- fit corner shapes to real corner speeds: dotnet run -- fitgeo [circuit id, default monaco] ----
+// For each corner in CircuitDef.realCorners {s, km/h [, reach m]} find the curvature window (Track.SmoothedCurvature)
+// that makes the ideal lap's minimum speed there match the real one; writes the table back into Circuit.cs.
 if (args.Length > 0 && args[0] == "fitgeo")
 {
-    var def = FormulaSim.Circuits.Monaco; var real = def.realCorners; int nc = real.GetLength(0);
+    string fid = args.Length > 1 ? args[1] : "monaco";
+    var def = FormulaSim.Circuits.All.First(d => d.id == fid); var real = def.realCorners; int nc = real.GetLength(0);
+    bool hasReach = real.GetLength(1) > 2; double sigMax = def.metric != null ? 120 : 24;
     var sig = new double[nc]; for (int c = 0; c < nc; c++) sig[c] = def.curveSigma;
-    double[,] Table() { var f = new double[nc, 2]; for (int c = 0; c < nc; c++) { f[c, 0] = real[c, 0]; f[c, 1] = sig[c]; } return f; }
+    double[,] Table()
+    {
+        var f = new double[nc, hasReach ? 3 : 2];
+        for (int c = 0; c < nc; c++) { f[c, 0] = real[c, 0]; f[c, 1] = sig[c]; if (hasReach) f[c, 2] = real[c, 2]; }
+        return f;
+    }
+    Track Make() => def.metric != null ? Track.LocalFit(Track.Build(TrackDataTum.Centre(def.metric), TrackDataTum.MeanWidth(def.metric)), Table())
+                                       : Track.FromLonLat(def.lonlat, def.width, def.startAt, def.elev, def.curveSigma, Table());
+    double maxMove = args.Length > 2 ? double.Parse(args[2], CultureInfo.InvariantCulture) : 5;   // m, how far a corner may move
+    var rawT = def.metric != null ? Track.Build(TrackDataTum.Centre(def.metric), TrackDataTum.MeanWidth(def.metric)) : null;
+    double[] moved = new double[nc]; Track loose = null;
     double[] Ratios()
     {
-        var t = Track.FromLonLat(def.lonlat, def.width, def.startAt, def.elev, def.curveSigma, Table());
+        var t = Make();
+        if (def.metric != null && def.elev != null) t.SetElevation(def.elev);
+        if (def.bank != null) t.SetBanking(def.bank);
         var line = RacingLine.Compute(t, new CarConfig(), 1.3, 0.97, 0.95);
         var r = new double[nc];
-        for (int c = 0; c < nc; c++) { double mn = 1e9; for (int i = 0; i < t.N; i++) if (Math.Abs(t.pts[i].s - real[c, 0]) < 45) mn = Math.Min(mn, line.speed[i]); r[c] = mn * 3.6 / real[c, 1]; }
+        for (int c = 0; c < nc; c++)
+        {
+            double mn = 1e9, win = Math.Min(45, hasReach ? real[c, 2] : 45);
+            for (int i = 0; i < t.N; i++) if (Math.Abs(t.pts[i].s - real[c, 0]) < win) mn = Math.Min(mn, line.speed[i]);
+            r[c] = mn * 3.6 / real[c, 1];
+            // the TUM centre lines are measured: the fitted bend may not wander more than maxMove from them
+            moved[c] = 0;
+            if (rawT != null)
+            {
+                if (c == 0) loose = Track.LocalFit(rawT, Table(), false); // movement is measured before the lap is scaled back to length
+                double span = (hasReach ? real[c, 2] : 60) + 3 * sig[c];
+                for (int i = 0; i < loose.N; i++) if (Math.Abs(loose.pts[i].s - real[c, 0]) <= span) moved[c] = Math.Max(moved[c], rawT.Nearest(loose.pts[i].x, loose.pts[i].y).dist);
+            }
+        }
         return r;
     }
     for (int pass = 0; pass < 3; pass++)
         for (int c = 0; c < nc; c++)
         {
-            double lo = 0, hi = 24;
-            for (int it = 0; it < 7; it++) { sig[c] = (lo + hi) / 2; if (Ratios()[c] < 1) lo = sig[c]; else hi = sig[c]; }
-            sig[c] = (lo + hi) / 2;
+            double lo = 0, hi = sigMax;
+            for (int it = 0; it < 8; it++) { sig[c] = (lo + hi) / 2; if (Ratios()[c] < 1 && moved[c] <= maxMove) lo = sig[c]; else hi = sig[c]; }
+            sig[c] = lo;
+            if (sig[c] < 0.5) sig[c] = 0;
         }
     var rr = Ratios(); double se = 0; foreach (var x in rr) se += Math.Log(x) * Math.Log(x);
     Console.WriteLine($"fitted: RMS corner speed error {Math.Sqrt(se / nc) * 100:F1}%; ratios {string.Join(" ", rr.Select(x => x.ToString("F2", CultureInfo.InvariantCulture)))}");
-    string rows = string.Join(", ", Enumerable.Range(0, nc).Select(c => "{ " + real[c, 0].ToString(CultureInfo.InvariantCulture) + ", " + sig[c].ToString("F1", CultureInfo.InvariantCulture) + " }"));
+    if (rawT != null) Console.WriteLine($"moved (m): {string.Join(" ", moved.Select(x => x.ToString("F1", CultureInfo.InvariantCulture)))}");
+    if (def.metric != null)
+    {
+        // how far the fitted centre line moved away from the measured one (nearest-point distance)
+        var raw = rawT; var fit = Make();
+        double mv = 0, mvAt = 0;
+        foreach (var p in fit.pts) { var n = raw.Nearest(p.x, p.y); if (n.dist > mv) { mv = n.dist; mvAt = p.s; } }
+        Console.WriteLine($"length {raw.length:F0} -> {fit.length:F0} m; centre line moved at most {mv:F1} m (at {mvAt:F0} m)");
+    }
+    string rows = string.Join(", ", Enumerable.Range(0, nc).Select(c => "{ " + real[c, 0].ToString(CultureInfo.InvariantCulture) + ", " + sig[c].ToString("F1", CultureInfo.InvariantCulture)
+        + (hasReach ? ", " + real[c, 2].ToString(CultureInfo.InvariantCulture) : "") + " }"));
     var path = Path.Combine(AppContext.BaseDirectory.Split("/bin/")[0], "../../Assets/Scripts/Physics/Circuit.cs");
-    var src = File.ReadAllText(path); int a = src.IndexOf("curveFit = "), b = src.IndexOf("/*CURVEFIT*/");
-    File.WriteAllText(path, src[..a] + "curveFit = new double[,] { " + rows + " }, " + src[b..]);
+    var src = File.ReadAllText(path); string marker = "/*CURVEFIT:" + fid + "*/";
+    int b = src.IndexOf(marker);
+    if (b < 0) Console.WriteLine($"no {marker} marker in Circuit.cs; table not written");
+    else
+    {
+        int a = src.LastIndexOf("new double[,]", b), close = src.LastIndexOf('}', b);
+        File.WriteAllText(path, src[..a] + "new double[,] { " + rows + " }" + src[(close + 1)..]);
+    }
     Console.WriteLine("curveFit = { " + rows + " }");
     return;
 }
@@ -215,8 +301,11 @@ if (args.Length > 0 && args[0] == "train")
     }
     double[] lo = { 2, 0.05, 0.0, 0.1, 0.1, 0.70, 0.60 }, hi = { 12, 0.5, 0.4, 1.5, 1.5, 1.05, 1.0 };
     var result = new List<double[]>(); var tracks = Circuits(); var swAll = System.Diagnostics.Stopwatch.StartNew(); long laps = 0;
+    // dotnet run -- train <circuit id>: retrain only that circuit, keep the others' gains
+    string only = args.Length > 1 ? args[1] : null;
     for (int ti = 0; ti < tracks.Length; ti++)
     {
+        if (only != null && FormulaSim.Circuits.All[ti].id != only) { result.Add(AiTuning.Trained[ti]); continue; }
         var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
         var rnd = new Random(42 + ti);
         double[] mean = new AiTuning().ToArray(), sig = { 1.5, 0.06, 0.05, 0.15, 0.15, 0.05, 0.06 };
@@ -270,14 +359,14 @@ if (args.Length > 0 && args[0] == "race")
         var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
         var hf = t.h != null ? new HeightField(t) : null;
         for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = raceFuel }, DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
-        double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n];
+        double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n]; var where = new List<string>();
         double tMin = 999, tMaxF = 0, tMaxR = 0, tSumF = 0, tSumR = 0; int tN = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         while (time < 6 * 130 && ds.Min(d => d.lap) < 5)
         {
             if (steps++ % 4 == 0)
             {
-                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; } }
+                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap < 1 ? "*" : "")}"); } }
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
             }
             if (steps % 240 == 0) { var c0 = ds[0].car; tMin = Math.Min(tMin, Math.Min(c0.tyreTF, c0.tyreTR)); tMaxF = Math.Max(tMaxF, c0.tyreTF); tMaxR = Math.Max(tMaxR, c0.tyreTR); if (time > 60) { tSumF += c0.tyreTF; tSumR += c0.tyreTR; tN++; } }
@@ -286,6 +375,7 @@ if (args.Length > 0 && args[0] == "race")
         }
         Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}; wear after {ds[0].lap} laps F {ds[0].car.wearF * 100:F1}% R {ds[0].car.wearR * 100:F1}%; fuel {ds[0].car.fuel:F1} kg left, {ds[0].car.fuelLastLap:F2} kg last lap");
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
+        Console.WriteLine($"  resets at (m from the start, * = first lap): {string.Join(" ", where)}");
         int pos = 1;
         foreach (var d in ds.OrderByDescending(d => d.progress))
             Console.WriteLine($"  P{pos++,-2} {d.who.name,-13} pace {d.who.pace:F2} best {d.bestLap:F2} resets {rec[ds.IndexOf(d)]}");

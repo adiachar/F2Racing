@@ -233,6 +233,7 @@ namespace FormulaSim
         public double aeroBalance, downforce, dragForce;           // front share now, N, N
         public bool bottoming;
         public double grade;                // slope of the road in the direction the car points (rise per metre, + = uphill)
+        public double bank;                 // rad, road banking across the car (+ = the road rises to the car's right)
         public double wheelSpin;
         public double lockV = double.NaN, csBlend, lockAngle;
         public double wR = double.NaN;      // rear wheel spin speed (rad/s)
@@ -475,8 +476,10 @@ namespace FormulaSim
             // extra fuel sinks the car and meets the tyres' load sensitivity instead of getting grip for free
             double nF0 = fz0F, nR0 = fz0R;
             if (m != c.mass) { double rb = L * c.frontWeight; nF0 = c.mass * G * rb / L; nR0 = c.mass * G * (L - rb) / L; }
-            fzF = Math.Max(300, fz0F - transfer + down * aeroF);
-            fzR = Math.Max(300, fz0R + transfer + down * (1 - aeroF));
+            // banking: the road takes part of the weight and of the cornering load as extra normal force
+            double bankN = bank == 0 ? 0 : m * G * (Math.Cos(bank) - 1) + m * ayF * Math.Sin(bank);
+            fzF = Math.Max(300, fz0F - transfer + down * aeroF + bankN * b / L);
+            fzR = Math.Max(300, fz0R + transfer + down * (1 - aeroF) + bankN * a / L);
             ayF = ayF + (ay - ayF) * Math.Min(1, dt * 10);
             double dLat = m * Math.Abs(ayF) * hcg / c.track;
             if (c.chassis)
@@ -680,7 +683,7 @@ namespace FormulaSim
             // ---------- integrate ----------
             double cd = Math.Cos(delta), sd = Math.Sin(delta);
             double Fx = FxF * cd - FyF * sd + FxRl - resist - m * G * grade; // gravity pulls the car back on a climb
-            double Fy = FxF * sd + FyF * cd + FyR;
+            double Fy = FxF * sd + FyF * cd + FyR + m * G * Math.Sin(bank); // on a banked road gravity pulls down the slope
             double Mz = a * (FxF * sd + FyF * cd) - b * FyR + (c.track / 2) * (dragL - dragR) * dir;
             if (windy) { Fy += windSide; Mz += windSide * c.sideCp; }
             // brake balance actually reaching the road: front share of all retarding force (brakes, engine, MGU-K)

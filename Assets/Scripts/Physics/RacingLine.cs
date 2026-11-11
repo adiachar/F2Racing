@@ -22,6 +22,7 @@ namespace FormulaSim
         public sbyte[] phase;    // +1 accelerate (green), 0 at the cornering limit / coast (yellow), -1 brake (red)
         public double lapTime;   // s, integrated over the speed profile
         public double[] grade;   // road slope at each point (rise per metre, + = uphill); null on a flat circuit
+        public double[] bank;    // road banking at each point (rad, see Track.bank); null = none
 
         public static RacingLine Compute(Track t, CarConfig cfg, double margin = 1.3, double safety = 0.82, double brakeUse = 0.8)
         {
@@ -31,6 +32,7 @@ namespace FormulaSim
                 rl.grade = new double[t.N];
                 for (int i = 0; i < t.N; i++) rl.grade[i] = (t.h[(i + 1) % t.N] - t.h[(i - 1 + t.N) % t.N]) / (2 * t.ds);
             }
+            rl.bank = t.bank;
             rl.SpeedProfile(cfg, safety, brakeUse);
             return rl;
         }
@@ -103,6 +105,18 @@ namespace FormulaSim
                 double fF = fz0F + down * c.aeroFront, fR = fz0R + down * (1 - c.aeroFront);
                 return safety * c.mu * (fz0F * Math.Pow(fF / fz0F, e) + c.rearGrip * fz0R * Math.Pow(fR / fz0R, e));
             }
+            // on a banked bend (b > 0 leans into the bend): the tyres only have to give the cornering force the
+            // slope does not, and the road presses the car down harder (same split as the weight)
+            double gripB(double v, double kap, double b)
+            {
+                double extra = m * G * (Math.Cos(b) - 1) + m * v * v * kap * Math.Sin(b);
+                double down = kq * v * v * c.clA;
+                double fF = Math.Max(300, fz0F + down * c.aeroFront + extra * c.frontWeight), fR = Math.Max(300, fz0R + down * (1 - c.aeroFront) + extra * (1 - c.frontWeight));
+                return safety * c.mu * (fz0F * Math.Pow(fF / fz0F, e) + c.rearGrip * fz0R * Math.Pow(fR / fz0R, e));
+            }
+            double B(int i) => bank == null ? 0 : bank[i] * Math.Sign(curv[i]);   // + = leaning into the bend
+            double Lat(int i, double v) { double kap = Math.Abs(curv[i]), b = B(i); return b == 0 ? m * v * v * kap : Math.Abs(m * v * v * kap * Math.Cos(b) - m * G * Math.Sin(b)); }
+            double Grip(int i, double v) { double b = B(i); return b == 0 ? grip(v) : gripB(v, Math.Abs(curv[i]), b); }
             double pMax = 0;
             for (double rpm = c.idleRpm; rpm <= c.redline; rpm += 100) pMax = Math.Max(pMax, FormulaCar.TorqueAt(c, rpm) * rpm * 2 * Math.PI / 60);
             pMax *= c.driveEff;
@@ -112,6 +126,15 @@ namespace FormulaSim
             for (int i = 0; i < N; i++)
             {
                 double kap = Math.Abs(curv[i]);
+                if (B(i) != 0)
+                {
+                    // banked: the limit is not monotonic near zero speed (the car could slide down the slope), so
+                    // search downwards from the top speed
+                    double lo2 = 0, hi2 = vTop;
+                    if (Lat(i, vTop) <= Grip(i, vTop)) { vc[i] = vTop; continue; }
+                    for (int it = 0; it < 40; it++) { double mid = (lo2 + hi2) / 2; if (Lat(i, mid) <= Grip(i, mid)) lo2 = mid; else hi2 = mid; }
+                    vc[i] = lo2; continue;
+                }
                 if (m * vTop * vTop * kap <= grip(vTop)) { vc[i] = vTop; continue; }
                 double lo = 0, hi = vTop;
                 for (int it = 0; it < 40; it++) { double mid = (lo + hi) / 2; if (m * mid * mid * kap <= grip(mid)) lo = mid; else hi = mid; }
@@ -130,7 +153,7 @@ namespace FormulaSim
                 {
                     int j = (i + 1) % N; double vi = v[i], q = kq * vi * vi;
                     // friction circle: grip used for cornering isn't available for accelerating; only the rear drives
-                    double total = grip(vi), lat = m * vi * vi * Math.Abs(curv[i]);
+                    double total = bank == null ? grip(vi) : Grip(i, vi), lat = bank == null ? m * vi * vi * Math.Abs(curv[i]) : Lat(i, vi);
                     double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat)) * (1 - c.frontWeight);
                     double push = pMax / Math.Max(vi, 5);
                     if (ers && charge[i]) push += c.driveEff * FormulaCar.ErsPowerAt(c, vi) / Math.Max(vi, 15);
@@ -141,7 +164,7 @@ namespace FormulaSim
                 for (int pass = 0; pass < 2; pass++) for (int i = N - 1; i >= 0; i--)
                 {
                     int j = (i + 1) % N; double vj = v[j], q = kq * vj * vj;
-                    double total = grip(vj), lat = m * vj * vj * Math.Abs(curv[j]);
+                    double total = bank == null ? grip(vj) : Grip(j, vj), lat = bank == null ? m * vj * vj * Math.Abs(curv[j]) : Lat(j, vj);
                     double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat));
                     double a = Math.Max(0.5, (Math.Min(spare, c.brakeForce) + q * c.cdA) / m * brakeUse + (grade != null ? G * grade[i] : 0)); // some braking in reserve; downhill it takes longer
                     v[i] = Math.Min(v[i], Math.Sqrt(vj * vj + 2 * a * ds[i]));
