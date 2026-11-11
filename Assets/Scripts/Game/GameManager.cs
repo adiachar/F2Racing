@@ -208,6 +208,7 @@ public class GameManager : MonoBehaviour
     void ResetCar()
     {
         car = new FormulaCar(PlayerConfig());
+        if (model != null) model.SetStripe(CarModel.StripeFor((Compound)compIdx));
         SetupRivals();
         if (playground) { car.x = WorldBuilder.PadStart.x - 15; car.y = WorldBuilder.PadStart.y; car.heading = 0; }
         else
@@ -591,9 +592,9 @@ public class GameManager : MonoBehaviour
         {
             // 2 = cockpit (driver's eyes, low behind the halo); 3 = halo cam (just above the driver's head)
             bool halo = camMode == 3;
-            pos = tr.TransformPoint(halo ? new Vector3(0, 1.02f, 0.12f - lonG * 0.03f) : new Vector3(0, 0.83f, 0.10f - lonG * 0.03f));
-            look = tr.TransformPoint(new Vector3(0, (halo ? 0.55f : 0.60f) + lonG * 0.2f, 30));
-            fov = (halo ? 66 : 58) + Mathf.Min(speed, 90) * 0.05f; // helmet-cam references: a fairly narrow view
+            pos = tr.TransformPoint(halo ? new Vector3(0, 1.02f, 0.12f - lonG * 0.03f) : new Vector3(0, 0.822f, 0.395f - lonG * 0.03f));
+            look = tr.TransformPoint(new Vector3(0, (halo ? 0.55f : -0.63f) + lonG * 0.2f, 30)); // cockpit: 2.8 deg down, fitted to a real F1 onboard frame
+            fov = (halo ? 66 : 51) + Mathf.Min(speed, 90) * 0.04f; // cockpit: fitted to a real F1 onboard frame (eye, angle and view solved from its halo, tyre and wheel positions)
             // the surface shakes the driver's head: kerb ridges, gravel, grass
             float sh = (float)car.vib * Mathf.Min(1, speed / 20f) * (halo ? 0.006f : 0.009f);
             if (sh > 0) pos += tr.up * (Mathf.PerlinNoise(Time.time * 37f, 0.3f) - 0.5f) * 2 * sh + tr.right * (Mathf.PerlinNoise(0.7f, Time.time * 29f) - 0.5f) * sh;

@@ -264,7 +264,8 @@ public class CarModel : MonoBehaviour
     // logos, decals, numbers and cockpit interior removed, reduced to ~53k triangles, own red/white paint.
     public const string Credit = "Car model based on \"2026 Ferrari SF-26\" by Tyler_Dave (Sketchfab), CC BY 4.0. Modified: logos removed, simplified, repainted.";
     static readonly System.Collections.Generic.Dictionary<string, Mesh[]> meshCache = new System.Collections.Generic.Dictionary<string, Mesh[]>();
-    Material lightMat; bool braking;
+    Material lightMat, stripeMat; bool braking;
+    public void SetStripe(Color c) { if (stripeMat != null) stripeMat.color = c; }
     // rear light glows when the driver brakes
     public void SetBrake(bool on)
     {
@@ -284,7 +285,53 @@ public class CarModel : MonoBehaviour
     }
 
     // res: "Car/car" (full detail, the player's car) or "Car/car_lod" (light copy for rivals); paint: body colour
-    public static CarModel CreateFromAsset(string res = "Car/car", Color? paint = null, bool rival = false)
+    // the coloured compound stripe on both sidewalls: a clean ring at 79-86% of the tyre radius, laid just
+    // outside the sidewall (found from the tyre's own vertices), turning with the wheel
+    static readonly System.Collections.Generic.Dictionary<string, Mesh> stripeCache = new System.Collections.Generic.Dictionary<string, Mesh>();
+    static void TyreStripes(Transform tyre, Vector3[] pos, int nv, Material m)
+    {
+        float R = 0; for (int i = 0; i < nv; i++) R = Mathf.Max(R, new Vector2(pos[i].y, pos[i].z).magnitude);
+        float r0 = 0.79f * R, r1 = 0.86f * R, xo = float.MinValue, xi = float.MaxValue;
+        for (int i = 0; i < nv; i++)
+        {
+            float rr = new Vector2(pos[i].y, pos[i].z).magnitude;
+            if (rr > r0 && rr < r1) { xo = Mathf.Max(xo, pos[i].x); xi = Mathf.Min(xi, pos[i].x); }
+        }
+        if (xo <= xi) return;
+        string key = R.ToString("F3") + xo.ToString("F3") + xi.ToString("F3");
+        if (!stripeCache.TryGetValue(key, out var mesh))
+        {
+            const int Seg = 48;
+            var v = new Vector3[(Seg + 1) * 4]; var nr = new Vector3[v.Length]; var t = new System.Collections.Generic.List<int>();
+            for (int side = 0; side < 2; side++)
+            {
+                float x = side == 0 ? xo + 0.003f : xi - 0.003f; var n = new Vector3(side == 0 ? 1 : -1, 0, 0);
+                int b = side * (Seg + 1) * 2;
+                for (int k = 0; k <= Seg; k++)
+                {
+                    float a = k * Mathf.PI * 2 / Seg, c = Mathf.Cos(a), sn = Mathf.Sin(a);
+                    v[b + k * 2] = new Vector3(x, c * r0, sn * r0); v[b + k * 2 + 1] = new Vector3(x, c * r1, sn * r1);
+                    nr[b + k * 2] = n; nr[b + k * 2 + 1] = n;
+                    if (k < Seg)
+                    {
+                        int q = b + k * 2;
+                        if (side == 0) { t.Add(q); t.Add(q + 1); t.Add(q + 2); t.Add(q + 2); t.Add(q + 1); t.Add(q + 3); }
+                        else { t.Add(q); t.Add(q + 2); t.Add(q + 1); t.Add(q + 2); t.Add(q + 3); t.Add(q + 1); }
+                    }
+                }
+            }
+            mesh = new Mesh { vertices = v, normals = nr }; mesh.SetTriangles(t, 0); mesh.RecalculateBounds();
+            stripeCache[key] = mesh;
+        }
+        var go = new GameObject("Stripe"); go.transform.SetParent(tyre, false);
+        go.AddComponent<MeshFilter>().sharedMesh = mesh;
+        var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = m; r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+    }
+
+    // Pirelli sidewall colours: Soft red, Medium yellow, Hard white
+    public static Color StripeFor(FormulaSim.Compound c) => c == FormulaSim.Compound.Soft ? new Color(0.85f, 0.08f, 0.08f) : c == FormulaSim.Compound.Medium ? new Color(0.95f, 0.78f, 0.1f) : new Color(0.92f, 0.92f, 0.9f);
+
+    public static CarModel CreateFromAsset(string res = "Car/car", Color? paint = null, bool rival = false, Color? stripe = null)
     {
         var ta = Resources.Load<TextAsset>(res);
         if (ta == null) return null;
@@ -298,9 +345,12 @@ public class CarModel : MonoBehaviour
             Paint(new Color(0.93f, 0.93f, 0.94f), 1f, 0.9f, 0.05f, 0.86f, 0.15f),           // 1 white paint
             Paint(new Color(0.06f, 0.065f, 0.075f), 0.55f, 0.7f, 0.1f, 0.6f, 0.25f),        // 2 carbon (satin)
             Paint(new Color(0.55f, 0.57f, 0.6f), 0.3f, 0.8f, 0.9f, 0.8f, 0.9f),             // 3 metal
-            WorldBuilder.Mat(new Color(0.045f, 0.045f, 0.05f), null, 0.22f),                 // 4 tyre rubber
+            // 4 tyre rubber: dark grey with a soft sheen that brightens towards the rounded shoulders, so the tyre
+            // reads as a thick rubber body rather than a flat black shape
+            Paint(new Color(0.085f, 0.085f, 0.09f), 0.22f, 0.38f, 0f, 0.25f, 0f),
             Paint(new Color(0.2f, 0.21f, 0.23f), 0.3f, 0.75f, 0.85f, 0.75f, 0.85f),         // 5 rims / discs
             WorldBuilder.Glow(new Color(1f, 0.15f, 0.12f), new Color(0.25f, 0.02f, 0.02f)),  // 6 rear light
+            Paint(stripe ?? StripeFor(FormulaSim.Compound.Soft), 0.25f, 0.5f, 0f, 0.3f, 0f),     // 7 tyre sidewall stripe
         };
         meshCache.TryGetValue(res, out var cached); var made = cached == null ? new Mesh[n] : null;
         var root = new GameObject("Car");
@@ -338,7 +388,9 @@ public class CarModel : MonoBehaviour
                     pos = pos2; nrm = nrm2; idx = idx2;
                 }
                 mesh = new Mesh { indexFormat = pos.Length > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
-                mesh.vertices = pos; mesh.normals = nrm; mesh.triangles = idx; mesh.RecalculateBounds();
+                mesh.vertices = pos; mesh.normals = nrm;
+                mesh.triangles = idx;
+                mesh.RecalculateBounds();
                 made[p] = mesh;
             }
             var go = new GameObject(name);
@@ -367,10 +419,11 @@ public class CarModel : MonoBehaviour
             }
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
+            if (name.EndsWith("_tyre")) TyreStripes(go.transform, pos, nv, mats[7]);
             if (rival) r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; // rivals keep only the soft blob shadow
         }
         if (made != null) meshCache[res] = made;
-        cm.lightMat = mats[6];
+        cm.lightMat = mats[6]; cm.stripeMat = mats[7];
         // the model has no driver: add a helmet in the cockpit (hidden in cockpit view)
         {
             var h = GameObject.CreatePrimitive(PrimitiveType.Sphere); Destroy(h.GetComponent<Collider>());
