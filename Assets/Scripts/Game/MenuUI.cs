@@ -2,7 +2,7 @@
 //  * Start menu: circuit picker with a track-outline preview, car class, rivals, rival level, race length,
 //    "Free practice" and "Race".
 //  * Loading: one plain frame on screen before the (slow) circuit build starts.
-//  * Results: finishing order, best laps and gaps, "Race again" / "Menu".
+//  * Results: finishing order, best laps and gaps, "Race again" / "Menu" / "Replay" (last 60 s, TV cameras).
 // A plain C# class: GameManager owns the game settings and hands them in by ref; this class draws, keeps the page
 // that is up and the race-length setting. The game is paused while any page is showing (GameManager checks Showing).
 // Layout units are the HUD's: 390 units = screen height of a landscape phone (see S). Touch targets are 44+ units.
@@ -13,13 +13,14 @@ using UnityEngine;
 public sealed class MenuUI
 {
     public enum Page { None, Start, Loading, Results }
-    public enum Choice { None, RaceAgain }
+    public enum Choice { None, RaceAgain, Replay }
 
     public Page page = Page.Start;
     public bool Showing => page != Page.None;
     public bool practice;                                  // the session the loading page is starting
     public static readonly int[] LapCounts = { 1, 3, 5, 10 };
     public int lapsIdx;                                    // race length, saved as "laps"
+    public bool canReplay;                                 // GameManager: a recording of the race's end is there to play
 
     // one car in the results; GameManager fills these when the player takes the flag
     public struct Row { public string name; public Color colour; public bool player; public double progress, best; }
@@ -311,7 +312,9 @@ public sealed class MenuUI
         cell.fontStyle = FontStyle.Normal;
 
         // buttons
-        float bw = Mathf.Min(S(190), (tw - S(10)) / 2), by = panel.yMax - pad - S(50);
+        int nb = canReplay ? 3 : 2;
+        float bw = Mathf.Min(S(190), (tw - (nb - 1) * S(10)) / nb), by = panel.yMax - pad - S(50);
+        if (canReplay && GUI.Button(new Rect(panel.xMax - pad - 3 * bw - 2 * S(10), by, bw, S(50)), "REPLAY", secondary)) return Choice.Replay;
         if (GUI.Button(new Rect(panel.xMax - pad - 2 * bw - S(10), by, bw, S(50)), "MENU", secondary)) page = Page.Start;
         if (GUI.Button(new Rect(panel.xMax - pad - bw, by, bw, S(50)), "RACE AGAIN", primary)) return Choice.RaceAgain;
         return Choice.None;

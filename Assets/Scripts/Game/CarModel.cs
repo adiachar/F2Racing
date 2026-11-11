@@ -210,6 +210,7 @@ public class CarModel : MonoBehaviour
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = m;
             r.shadowCastingMode = shadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
         }
+        cm.liveryBody = paint; cm.liverySecond = accent; // the code-built car: body = primary, accent parts = secondary
         Part(P, paint, "Paint"); Part(A, accent, "Accent"); Part(C, carbon, "Carbon"); Part(D, dark, "Dark");
 
         // driver: helmet with visor
@@ -267,6 +268,19 @@ public class CarModel : MonoBehaviour
     static readonly System.Collections.Generic.Dictionary<string, Mesh[]> meshCache = new System.Collections.Generic.Dictionary<string, Mesh[]>();
     Material lightMat, stripeMat; bool braking;
     public void SetStripe(Color c) { if (stripeMat != null) stripeMat.color = c; }
+
+    // two-tone livery (Livery.cs): body = primary, split into secondary + accent line by CarPaint.shader; the wing
+    // elements (the model's "white" parts: front wing, rear-wing flaps) take the secondary colour
+    Material liveryBody, liverySecond;
+    public void SetLivery(Livery l)
+    {
+        if (liveryBody != null)
+        {
+            liveryBody.color = l.primary;
+            if (liveryBody.HasProperty("_Livery")) { liveryBody.SetFloat("_Livery", 1); liveryBody.SetColor("_Color2", l.secondary); liveryBody.SetColor("_Color3", l.accent); }
+        }
+        if (liverySecond != null) liverySecond.color = l.secondary;
+    }
     // rear light glows when the driver brakes
     public void SetBrake(bool on)
     {
@@ -425,7 +439,7 @@ public class CarModel : MonoBehaviour
             if (rival) r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; // rivals keep only the soft blob shadow
         }
         if (made != null) meshCache[res] = made;
-        cm.lightMat = mats[6]; cm.stripeMat = mats[7];
+        cm.lightMat = mats[6]; cm.stripeMat = mats[7]; cm.liveryBody = mats[0]; cm.liverySecond = mats[1];
         // the model has no driver: add a helmet in the cockpit (hidden in cockpit view)
         {
             var h = GameObject.CreatePrimitive(PrimitiveType.Sphere); Destroy(h.GetComponent<Collider>());

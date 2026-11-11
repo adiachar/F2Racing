@@ -4,6 +4,9 @@
 //  * below the horizon the coat reflects the road instead of the sky, which gives the body its horizon line,
 //  * a tight sun highlight, and a metallic tint for metal parts.
 // _CarLit (global, 0..1) dims reflections when the car is in a baked shadow (tunnel, under buildings).
+// Livery (_Livery = 1, body paint only): a second colour on the engine cover, the sidepod tops and the nose tip, with a
+// thin accent line along its edge. The areas are found from the car's own shape in object space (position and which
+// way the surface faces), so the imported body needs no UVs, mask texture or extra mesh data.
 Shader "F2/CarPaint"
 {
     Properties
@@ -12,6 +15,9 @@ Shader "F2/CarPaint"
         _Coat ("Clear coat", Range(0, 1)) = 1
         _Gloss ("Gloss", Range(0, 1)) = 0.9
         _Metal ("Metal", Range(0, 1)) = 0.2
+        _Color2 ("Livery secondary", Color) = (0.93, 0.93, 0.94, 1)
+        _Color3 ("Livery accent", Color) = (0.1, 0.1, 0.11, 1)
+        _Livery ("Livery split (0 off, 1 on)", Float) = 0
     }
     SubShader
     {
@@ -27,7 +33,8 @@ Shader "F2/CarPaint"
             #include "UnityCG.cginc"
             #include "Lighting.cginc"
 
-            fixed4 _Color;
+            fixed4 _Color, _Color2, _Color3;
+            half _Livery;
             half _Coat, _Gloss, _Metal;
             half _CarLit;
             half4 _GroundRefl;
@@ -39,6 +46,8 @@ Shader "F2/CarPaint"
                 half3 n : TEXCOORD1;
                 half3 amb : TEXCOORD2;
                 UNITY_FOG_COORDS(3)
+                float3 op : TEXCOORD4; // object-space position and normal, for the livery split
+                half3 on : TEXCOORD5;
             };
 
             v2f vert (appdata_base v)
@@ -48,6 +57,7 @@ Shader "F2/CarPaint"
                 o.wp = mul(unity_ObjectToWorld, v.vertex).xyz;
                 o.n = UnityObjectToWorldNormal(v.normal);
                 o.amb = ShadeSH9(half4(o.n, 1));
+                o.op = v.vertex.xyz; o.on = v.normal;
                 UNITY_TRANSFER_FOG(o, o.pos);
                 return o;
             }
@@ -59,6 +69,25 @@ Shader "F2/CarPaint"
                 half3 L = normalize(_WorldSpaceLightPos0.xyz);
                 half ndl = saturate(dot(N, L));
                 half3 base = _Color.rgb;
+                if (_Livery > 0.5)
+                {
+                    // car space: +z forward (nose tip at z 2.8), +y up, x across; ny = how much the surface faces up
+                    float3 p = i.op; half ny = normalize(i.on).y; float ax = abs(p.x);
+                    // sidepods: the part beside the cockpit, from the inlets back
+                    half side = step(0.30, ax) * step(-1.2, p.z) * step(p.z, 0.99);
+                    half sideSec = side * step(p.z, 0.95) * step(0.55, ny);
+                    half sideAcc = side * step(0.42, ny) * (1.0 - sideSec);
+                    // engine cover: the spine behind the driver (rear-wing endplates are wider and stay primary)
+                    half eng = step(ax, 0.32) * step(-1.7, p.z) * step(p.z, -0.01);
+                    half engSec = eng * step(p.z, -0.05) * step(0.30, ny);
+                    half engAcc = eng * step(0.18, ny) * (1.0 - engSec);
+                    // nose tip, in the front wing's colour
+                    half noseSec = step(2.45, p.z);
+                    half noseAcc = step(2.40, p.z) * (1.0 - noseSec);
+                    half sec = saturate(sideSec + engSec + noseSec);
+                    half acc = saturate(sideAcc + engAcc + noseAcc) * (1.0 - sec);
+                    base = lerp(lerp(base, _Color2.rgb, sec), _Color3.rgb, acc);
+                }
                 half3 diff = base * (ndl * _LightColor0.rgb + i.amb) * (1.0 - _Metal * 0.6);
                 half3 R = reflect(-V, N);
                 half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, (1.0 - _Gloss) * 6.0);
