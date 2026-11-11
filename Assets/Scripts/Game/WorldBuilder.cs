@@ -12,6 +12,8 @@ public static class WorldBuilder
     public static Vector2 PadStart => new Vector2(Pad.xMin + 40, Pad.center.y);
 
     static Material baseMat;
+    // true when Road.shader draws the road (asphalt, rubber, lines, kerbs, grid); Scenery.Rubber then adds no overlay
+    public static bool RoadShaded;
     // ---------------------------------------------------------------- hills
     // Height of the ground at a point (0 everywhere on a flat circuit). The road, scenery and cars all use it.
     public static HeightField Height;
@@ -132,6 +134,21 @@ public static class WorldBuilder
         if (r > 0.985f) c += 55; else if (r > 0.95f) c += 22; else if (r < 0.04f) c -= 18;
         return new Color32(B(c), B(c + 1), B(c + 4), 255);
     });
+    // Road.shader's asphalt, four grey layers in one tiling texture (all tile seamlessly):
+    //  R = aggregate grain (fine stones, pores), read at 5 m per tile
+    //  G = metre-scale blotches, B = soft resurfaced patches (read again at ~43 m per tile, to hide the repeat)
+    //  A = bright stones that catch the sun
+    public static Texture2D RoadTex() => Tex(256, 256, (u, v, x, y) =>
+    {
+        float f = Fbm(u, v, 64, 2, 5), h = Hash(x, y, 77), h2 = Hash(x >> 1, y >> 1, 91);
+        float g = 0.5f + (f - 0.5f) * 0.9f, stone = 0;
+        if (h2 > 0.93f) { g += 0.22f + 0.1f * h; stone = 0.6f + 0.4f * h; }
+        else if (h > 0.985f) { g += 0.3f; stone = 1; }
+        else if (h < 0.05f) g -= 0.22f;
+        float blot = 0.5f + (Fbm(u, v, 4, 4, 21) - 0.5f) * 2.4f;
+        float pf = Fbm(u, v, 2, 3, 33), patch = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.55f, 0.62f, pf));
+        return new Color32(B(g * 255), B(blot * 255), B(patch * 255), B(stone * 255));
+    });
     public static Texture2D GrassTex() => Tex(256, 256, (u, v, x, y) =>
     {
         float r = Hash(x, y, 31);
@@ -182,10 +199,10 @@ public static class WorldBuilder
             }
         }
     }
-    public static GameObject MeshObj(string name, List<Vector3> v, List<Vector2> uv, List<int> tri, Material m, bool shadows = true)
+    public static GameObject MeshObj(string name, List<Vector3> v, List<Vector2> uv, List<int> tri, Material m, bool shadows = true, List<Vector2> uv2 = null)
     {
         var mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-        mesh.SetVertices(v); mesh.SetUVs(0, uv); mesh.SetTriangles(tri, 0);
+        mesh.SetVertices(v); mesh.SetUVs(0, uv); if (uv2 != null) mesh.SetUVs(2, uv2); // (channel 2: static batching may treat channel 1 as lightmap UVs) mesh.SetTriangles(tri, 0);
         mesh.RecalculateNormals(); mesh.RecalculateBounds();
         var go = new GameObject(name);
         go.AddComponent<MeshFilter>().sharedMesh = mesh;
@@ -251,8 +268,89 @@ public static class WorldBuilder
             }
         }
 
+        // every run of points where cond(i) holds, as (first, last) with last exclusive
+        void Runs(System.Func<int, bool> cond, System.Action<int, int> emit)
+        {
+            int k = 0;
+            while (k < t.N)
+            {
+                if (!cond(k)) { k++; continue; }
+                int j = k; while (j < t.N && cond(j)) j++;
+                emit(k, j); k = j;
+            }
+        }
+
         // road
         var asphalt = Mat(Color.white, AsphaltTex(), 0.15f);
+        // Road.shader draws asphalt, rubber, lines, kerbs and grid in one pass on the baked vertex light. It needs the
+        // baked lighting (the same test LightBake.Begin makes); otherwise the road is built the old way below.
+        var roadSh = Resources.Load<Shader>("Road"); var bakedSh = Resources.Load<Shader>("Baked");
+        RoadShaded = roadSh != null && roadSh.isSupported && bakedSh != null && bakedSh.isSupported;
+        MeshRenderer roadR = null; Material roadMat = null;
+        if (RoadShaded)
+        {
+            // the racing line the rubber follows (the same line GameManager draws), and how much rubber each part
+            // of it gets: more in corners, where tyres slide, than on the straights
+            var rl = RacingLine.Build(t);
+            var rub = new float[t.N];
+            {
+                const int Win = 10; double sum = 0;
+                for (int k = -Win; k <= Win; k++) sum += System.Math.Abs(rl.curv[((k % t.N) + t.N) % t.N]);
+                for (int i = 0; i < t.N; i++)
+                {
+                    rub[i] = 0.45f + 0.55f * Mathf.Clamp01((float)(sum / (2 * Win + 1)) * 45f);
+                    sum += System.Math.Abs(rl.curv[(i + Win + 1) % t.N]) - System.Math.Abs(rl.curv[((i - Win) % t.N + t.N) % t.N]);
+                }
+            }
+            var v = new List<Vector3>(); var uv = new List<Vector2>(); var uv2 = new List<Vector2>(); var tri = new List<int>();
+            // uv0 = (lateral m, + = left; distance along m), uv2 = (racing-line offset m, rubber 0..1); see Road.shader
+            const int K = 6;
+            for (int i = 0; i <= t.N; i++)
+            {
+                var p = t.pts[i % t.N]; float d = (float)(i * t.ds);
+                var line = new Vector2((float)rl.off[i % t.N], rub[i % t.N]);
+                for (int c = 0; c <= K; c++)
+                {
+                    float lat = Wd / 2 - Wd * c / K;
+                    v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2(lat, d)); uv2.Add(line);
+                    if (i < t.N && c < K) { int k = i * (K + 1) + c; tri.Add(k); tri.Add(k + K + 1); tri.Add(k + 1); tri.Add(k + K + 1); tri.Add(k + K + 2); tri.Add(k + 1); }
+                }
+            }
+            // kerbs in the same mesh (uv2.y = -1 marks them; uv2.x = 0 at the track edge .. 1 at the raised outer lip)
+            void KerbRun(int i0, int i1, float side)
+            {
+                float inner = side * Wd / 2, outer = side * (Wd / 2 + Kerb);
+                float left = Mathf.Max(inner, outer), right = Mathf.Min(inner, outer);
+                float hl = side > 0 ? 0.09f : 0.05f, hr = side > 0 ? 0.05f : 0.09f, al = side > 0 ? 1f : 0f;
+                int start = v.Count;
+                for (int i = i0; i <= i1; i++)
+                {
+                    var p = t.pts[i % t.N]; float d = (float)(i * t.ds);
+                    v.Add(W(p.x + p.nx * left, p.y + p.ny * left, hl)); uv.Add(new Vector2(left, d)); uv2.Add(new Vector2(al, -1));
+                    v.Add(W(p.x + p.nx * right, p.y + p.ny * right, hr)); uv.Add(new Vector2(right, d)); uv2.Add(new Vector2(1 - al, -1));
+                    if (i < i1)
+                    {
+                        int k = start + (i - i0) * 2;
+                        tri.Add(k); tri.Add(k + 2); tri.Add(k + 1);
+                        tri.Add(k + 2); tri.Add(k + 3); tri.Add(k + 1);
+                    }
+                }
+            }
+            Runs(i => t.kerbL[i] > 0, (k, j) => KerbRun(k, j, 1));
+            Runs(i => t.kerbR[i] > 0, (k, j) => KerbRun(k, j, -1));
+            // baked like any other surface first (LightBake only lights the plain materials), Road.shader after
+            var roadGo = MeshObj("Road", v, uv, tri, asphalt, true, uv2); roadGo.transform.SetParent(root);
+            roadR = roadGo.GetComponent<MeshRenderer>();
+            roadMat = new Material(roadSh) { mainTexture = RoadTex() };
+            roadMat.SetFloat("_HalfWidth", Wd / 2);
+            // grid slots as GameManager places the cars: slot k at track point N - 14 - 4k, 22 slots, 1.8 m off centre
+            roadMat.SetVector("_Grid", new Vector4((float)((t.N - 14) * t.ds), (float)(4 * t.ds), 22, 1.8f));
+            roadMat.SetVector("_SunDir", -sunGo.transform.forward);
+            roadMat.SetColor("_SunCol", sun.color * sun.intensity);
+            if (Street(t)) roadMat.SetColor("_Asphalt", new Color(0.30f, 0.30f, 0.31f)); // town streets: older, greyer surface
+            RoadSurface.Attach(root.gameObject, roadSh);
+        }
+        else
         {
             var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
             // several columns across the width, so baked shadows can fall part-way across the road
@@ -269,7 +367,8 @@ public static class WorldBuilder
             }
             MeshObj("Road", v, uv, tri, asphalt).transform.SetParent(root);
         }
-        // white edge lines
+        // white edge lines, start/finish line and grid boxes as geometry (Road.shader paints them itself)
+        if (!RoadShaded)
         {
             var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
             Strip(t, 0, t.N, Wd / 2 - 0.15f, Wd / 2 - 0.4f, 0.045f, 4, v, uv, tri);
@@ -296,21 +395,13 @@ public static class WorldBuilder
         }
         // kerbs, astroturf and gravel traps, from the circuit's layout (the same data the tyres read)
         {
-            // every run of points where cond(i) holds, as (first, last) with last exclusive
-            void Runs(System.Func<int, bool> cond, System.Action<int, int> emit)
-            {
-                int k = 0;
-                while (k < t.N)
-                {
-                    if (!cond(k)) { k++; continue; }
-                    int j = k; while (j < t.N && cond(j)) j++;
-                    emit(k, j); k = j;
-                }
-            }
             var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
-            Runs(i => t.kerbL[i] > 0, (k, j) => Strip(t, k, j, Wd / 2, Wd / 2 + Kerb, 0.05f, 3, v, uv, tri, 0.09f));
-            Runs(i => t.kerbR[i] > 0, (k, j) => Strip(t, k, j, -Wd / 2, -(Wd / 2 + Kerb), 0.05f, 3, v, uv, tri, 0.09f));
-            MeshObj("Kerbs", v, uv, tri, Mat(Color.white, KerbTex())).transform.SetParent(root);
+            if (!RoadShaded) // (Road.shader draws the kerbs as part of the road)
+            {
+                Runs(i => t.kerbL[i] > 0, (k, j) => Strip(t, k, j, Wd / 2, Wd / 2 + Kerb, 0.05f, 3, v, uv, tri, 0.09f));
+                Runs(i => t.kerbR[i] > 0, (k, j) => Strip(t, k, j, -Wd / 2, -(Wd / 2 + Kerb), 0.05f, 3, v, uv, tri, 0.09f));
+                MeshObj("Kerbs", v, uv, tri, Mat(Color.white, KerbTex())).transform.SetParent(root);
+            }
             if (t.def != null && t.def.style == CircuitStyle.Parkland)
             {
                 // a 2 m astroturf strip behind the kerb (or the track edge) all the way round
@@ -456,6 +547,8 @@ public static class WorldBuilder
             cs2.shadows = LightShadows.None; cs2.cullingMask = 1 << LightBake.CarLayer;
             LightBake.CarSun = cs2;
         }
+        // the road is lit now (vertex colours): hand it to Road.shader
+        if (roadR != null) { if (LightBake.Active) roadR.sharedMaterial = roadMat; else RoadShaded = false; }
         StaticBatchingUtility.Combine(root.gameObject);
 
         // one reflection capture of sky + ground, rendered once: cheap, and makes the paint look real

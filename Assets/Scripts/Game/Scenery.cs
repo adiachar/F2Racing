@@ -195,6 +195,12 @@ public static class Scenery
     // the dark band of laid-down rubber along the racing line
     public static GameObject Rubber(Track t, RacingLine line, Transform parent)
     {
+        if (WorldBuilder.RoadShaded)
+        {
+            // Road.shader already darkens the racing line (and the tyre tracks in it): no see-through overlay needed
+            var empty = new GameObject("Rubber"); empty.transform.SetParent(parent, false);
+            return empty;
+        }
         var b = new Buf(); int N = line.N; const float half = 1.5f, h = 0.04f;
         for (int i = 0; i < N; i++)
         {
