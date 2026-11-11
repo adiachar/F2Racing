@@ -1,6 +1,5 @@
-// Soft sun glare for phones (see Sky.cs): a camera-facing quad, one texture read, additive. It is pushed to the
-// far plane in the vertex shader, so trees, buildings and the Monaco tunnel roof hide it, and it only fills the
-// sky pixels around the sun. Brightness (_Color) is set from script: it fades as the sun leaves the screen.
+// Soft sun glare for phones (see Sky.cs): a camera-facing quad, one texture read, additive. It sits near the far
+// plane, so trees, buildings and the Monaco tunnel roof hide it, and it mostly fills only sky pixels round the sun. Brightness (_Color) is set from script: it fades as the sun leaves the screen.
 Shader "F2/SunGlare"
 {
     Properties
@@ -33,11 +32,6 @@ Shader "F2/SunGlare"
             {
                 v2f o;
                 o.pos = UnityObjectToClipPos(v.vertex);
-                #if defined(UNITY_REVERSED_Z)
-                o.pos.z = o.pos.w * 0.000001;
-                #else
-                o.pos.z = o.pos.w * 0.999999;
-                #endif
                 o.uv = v.uv;
                 return o;
             }

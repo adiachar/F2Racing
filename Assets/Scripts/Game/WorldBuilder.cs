@@ -207,21 +207,7 @@ public static class WorldBuilder
         // test-drive pad sits just south of whichever circuit is loaded
         Pad = new Rect(cx - 400, (float)bb.minY - 300 - 480, 800, 480);
 
-        // sky, light, fog: procedural skybox (sun, atmosphere), fog matched to its horizon
-        var skyMat = Resources.Load<Material>("Sky");
-        if (skyMat != null)
-        {
-            skyMat = new Material(skyMat);
-            skyMat.SetFloat("_SunSize", 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f);
-            skyMat.SetFloat("_AtmosphereThickness", 0.85f); skyMat.SetFloat("_Exposure", 1.25f);
-            skyMat.SetColor("_SkyTint", new Color(0.5f, 0.6f, 0.75f)); skyMat.SetColor("_GroundColor", new Color(0.38f, 0.42f, 0.36f));
-            RenderSettings.skybox = skyMat;
-        }
-        var sky = new Color(0.72f, 0.80f, 0.88f);
-        RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = sky;
-        RenderSettings.fogStartDistance = 300; RenderSettings.fogEndDistance = 1800;
-        if (Street(t)) { RenderSettings.fogColor = new Color(0.80f, 0.82f, 0.85f); RenderSettings.fogStartDistance = 220; RenderSettings.fogEndDistance = 1500; } // sea haze
-        else if (t.def != null && t.def.forest > 0.6) { RenderSettings.fogColor = new Color(0.66f, 0.74f, 0.78f); RenderSettings.fogStartDistance = 180; RenderSettings.fogEndDistance = 1300; } // damp Ardennes air
+        // sky, light, fog: procedural skybox (sun, atmosphere) tuned per circuit, fog matched to its horizon (Sky.cs)
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
         RenderSettings.ambientSkyColor = new Color(0.62f, 0.72f, 0.85f);
         RenderSettings.ambientEquatorColor = new Color(0.55f, 0.6f, 0.6f);
@@ -230,6 +216,7 @@ public static class WorldBuilder
         var sun = sunGo.AddComponent<Light>(); sun.type = LightType.Directional; sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.25f;
         sun.shadows = LightShadows.Soft; sun.shadowStrength = 0.8f; sun.shadowBias = 0.03f; sun.shadowNormalBias = 0.3f;
         sunGo.transform.rotation = Quaternion.Euler(48, -35, 0);
+        var skyLook = Sky.Setup(t, Street(t), sun);
 
         // ground
         var grassTex = GrassTex();
@@ -478,8 +465,10 @@ public static class WorldBuilder
         probe.mode = UnityEngine.Rendering.ReflectionProbeMode.Realtime;
         probe.refreshMode = UnityEngine.Rendering.ReflectionProbeRefreshMode.ViaScripting;
         probe.size = new Vector3(5000, 2000, 5000); probe.resolution = 128; probe.hdr = false;
-        probe.cullingMask = 0; probe.farClipPlane = 3000; // sky only: grass reflected in the glossy paint showed as green patches
-        probe.RenderProbe();
+        // sky only (skybox + the cloud/haze layer): grass reflected in the glossy paint showed as green patches
+        probe.cullingMask = 1 << Sky.Layer; probe.farClipPlane = 3000;
+        // clouds + sun glare (camera-following, so made after static batching); renders the probe once, clouds included
+        Sky.Create(root, skyLook, -sunGo.transform.forward, probe);
         // what the car paint reflects below the horizon (the road), and full reflections unless in shade
         Shader.SetGlobalColor("_GroundRefl", Street(t) ? new Color(0.15f, 0.15f, 0.16f) : new Color(0.13f, 0.16f, 0.12f));
         Shader.SetGlobalFloat("_CarLit", 1f);

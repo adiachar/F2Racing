@@ -1,6 +1,6 @@
-// Cloud layer + horizon haze for phones (see Sky.cs). Drawn on a dome round the camera, pushed to the far plane
-// in the vertex shader, so it only fills sky pixels that nothing else covered (early depth test) and needs no
-// fog. Per pixel: the view ray is projected onto a flat cloud deck (perspective-correct, clouds converge at the
+// Cloud layer + horizon haze for phones (see Sky.cs). Drawn on a sphere round the camera just inside the far
+// plane, after all opaque geometry, so the depth test rejects every pixel that is not sky (early-z) and it
+// needs no fog. Per pixel: the view ray is projected onto a flat cloud deck (perspective-correct, clouds converge at the
 // horizon), two reads of one tiling noise texture (big shapes + detail, scrolling at different speeds), a
 // coverage threshold, thick = darker bases, a bright rim towards the sun, and a band of fog colour at the
 // horizon so the sky always meets the fogged hills in exactly the fog colour.
@@ -54,12 +54,6 @@ Shader "F2/Clouds"
                 v2f o;
                 float4 wp = mul(unity_ObjectToWorld, v.vertex);
                 o.pos = mul(UNITY_MATRIX_VP, wp);
-                // onto the far plane: behind everything, drawn only where the sky shows
-                #if defined(UNITY_REVERSED_Z)
-                o.pos.z = o.pos.w * 0.000001;
-                #else
-                o.pos.z = o.pos.w * 0.999999;
-                #endif
                 o.dir = wp.xyz - _WorldSpaceCameraPos.xyz;
                 return o;
             }
@@ -83,7 +77,7 @@ Shader "F2/Clouds"
                 sd *= sd; sd *= sd; sd *= sd; // ^8
                 col += _SunCol.rgb * (sd * (1.0 - thick) * 0.6);
                 // far clouds take on the haze colour, and fade out before the horizon
-                col = lerp(col, unity_FogColor.rgb, smoothstep(0.3, 0.0, h) * 0.65);
+                col = lerp(col, unity_FogColor.rgb, (1.0 - smoothstep(0.0, 0.3, h)) * 0.65);
                 half ca = a * smoothstep(0.0, 0.16, h);
 
                 // horizon haze: fog colour at (and below) the horizon, thinning upwards

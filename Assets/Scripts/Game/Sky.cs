@@ -1,0 +1,347 @@
+// Sky.cs — the sky on top of Unity's procedural skybox, for almost nothing on a phone:
+//  * per-circuit look (cloud cover, skybox tint / exposure, fog), chosen from the circuit id (Spa grey, Monaco sunny),
+//  * a cloud layer + horizon haze (Clouds.shader) on a sphere round the camera just inside the far plane, drawn
+//    after the opaque world so the depth test leaves it only the sky pixels; one tiling noise texture made at load, 2 reads per pixel, scrolling with the wind,
+//  * a soft sun glare (SunGlare.shader): a camera-facing additive quad that fades as the sun leaves the screen.
+// Cost: +2 draw calls (+1 when the sun is off-screen), no per-frame allocations. The cloud sphere sits on its own
+// layer so the one-off sky reflection probe (cars' paint) captures it too: Create renders the probe and keeps the
+// sphere round the probe until that render has finished.
+using FormulaSim;
+using UnityEngine;
+
+[DefaultExecutionOrder(1000)] // after the camera has been moved for this frame
+public class Sky : MonoBehaviour
+{
+    public const int Layer = 1; // built-in "TransparentFX" layer, used for nothing else: the reflection probe renders it
+
+    public struct Look
+    {
+        public float cover;            // 0 clear .. 1 overcast
+        public float haze;             // strength of the horizon haze band
+        public float deck;             // cloud deck scale (smaller = bigger clouds)
+        public float wind;             // cloud drift speed factor
+        public Color tint;             // procedural skybox _SkyTint
+        public float atmosphere, exposure;
+        public Color fog; public float fogStart, fogEnd;
+    }
+
+    // per circuit, from Track.def (id; style and forest for circuits not listed)
+    public static Look For(Track t, bool street)
+    {
+        var k = new Look
+        {
+            cover = 0.35f, haze = 0.85f, deck = 0.22f, wind = 1f, tint = new Color(0.5f, 0.6f, 0.75f), atmosphere = 0.85f, exposure = 1.25f,
+            fog = new Color(0.72f, 0.80f, 0.88f), fogStart = 300, fogEnd = 1800,
+        };
+        var d = t.def;
+        string id = d != null ? d.id : "";
+        if (street) { k.fog = new Color(0.80f, 0.82f, 0.85f); k.fogStart = 220; k.fogEnd = 1500; } // sea haze
+        else if (d != null && d.forest > 0.6) { k.fog = new Color(0.66f, 0.74f, 0.78f); k.fogStart = 180; k.fogEnd = 1300; k.cover = 0.55f; }
+        else if (d != null) k.cover = 0.3f + 0.3f * (float)d.forest;
+        switch (id)
+        {
+            case "monaco": // Riviera: deep blue, a few fair-weather clouds, sea haze
+                k.cover = 0.28f; k.haze = 0.8f; k.tint = new Color(0.42f, 0.56f, 0.80f); k.atmosphere = 0.75f; k.exposure = 1.35f;
+                break;
+            case "spa": // Ardennes: low grey deck, damp air
+                k.cover = 0.72f; k.haze = 0.95f; k.deck = 0.18f; k.tint = new Color(0.55f, 0.60f, 0.68f); k.atmosphere = 1.15f; k.exposure = 1.0f;
+                k.fog = new Color(0.66f, 0.72f, 0.76f); k.fogStart = 180; k.fogEnd = 1300;
+                break;
+            case "silverstone": // English summer: broken cloud
+                k.cover = 0.6f; k.tint = new Color(0.5f, 0.58f, 0.72f); k.atmosphere = 1.0f; k.exposure = 1.15f;
+                k.fog = new Color(0.70f, 0.76f, 0.82f); k.fogStart = 260; k.fogEnd = 1600;
+                break;
+            case "monza": // Po valley: warm, hazy, mostly clear
+                k.cover = 0.3f; k.haze = 0.95f; k.tint = new Color(0.52f, 0.60f, 0.72f); k.atmosphere = 1.0f; k.exposure = 1.25f;
+                k.fog = new Color(0.78f, 0.79f, 0.78f); k.fogStart = 240; k.fogEnd = 1500;
+                break;
+            case "suzuka":
+                k.cover = 0.45f; k.fog = new Color(0.72f, 0.79f, 0.86f);
+                break;
+            case "austin": // Texas: hot, pale, nearly cloudless
+                k.cover = 0.18f; k.tint = new Color(0.50f, 0.60f, 0.78f); k.exposure = 1.35f;
+                k.fog = new Color(0.80f, 0.82f, 0.84f); k.fogStart = 280; k.fogEnd = 1700;
+                break;
+            case "budapest": // summer heat haze
+                k.cover = 0.25f; k.haze = 0.95f; k.exposure = 1.3f;
+                k.fog = new Color(0.78f, 0.80f, 0.82f); k.fogStart = 260; k.fogEnd = 1600;
+                break;
+            case "catalunya": // Mediterranean: clear and blue
+                k.cover = 0.2f; k.tint = new Color(0.44f, 0.57f, 0.80f); k.atmosphere = 0.8f; k.exposure = 1.35f;
+                break;
+            case "spielberg": // Alps: clear air, big fair-weather cumulus
+                k.cover = 0.5f; k.haze = 0.7f; k.deck = 0.17f; k.tint = new Color(0.45f, 0.58f, 0.80f); k.atmosphere = 0.75f; k.exposure = 1.3f;
+                k.fog = new Color(0.70f, 0.79f, 0.90f); k.fogStart = 350; k.fogEnd = 2000;
+                break;
+            case "zandvoort": // North Sea dunes: windy, broken cloud, salt haze
+                k.cover = 0.55f; k.wind = 1.8f; k.haze = 0.9f; k.tint = new Color(0.52f, 0.60f, 0.72f); k.exposure = 1.15f;
+                k.fog = new Color(0.76f, 0.80f, 0.84f); k.fogStart = 240; k.fogEnd = 1500;
+                break;
+        }
+        return k;
+    }
+
+    // ---------------------------------------------------------------- setup
+    static Texture2D noiseTex, glareTex;
+    static Mesh domeMesh, quadMesh;
+    static Material cloudMat, glareMat;
+    static int glareColorId; static float glareScale = 1f; static bool glareTinted;
+
+    // Skybox, fog and the sun (call at the top of the world build, before anything is fogged or baked).
+    public static Look Setup(Track t, bool street, Light sun)
+    {
+        var k = For(t, street);
+        var skyMat = Resources.Load<Material>("Sky");
+        if (skyMat != null)
+        {
+            skyMat = new Material(skyMat);
+            skyMat.SetFloat("_SunSize", 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f);
+            skyMat.SetFloat("_AtmosphereThickness", k.atmosphere); skyMat.SetFloat("_Exposure", k.exposure);
+            skyMat.SetColor("_SkyTint", k.tint); skyMat.SetColor("_GroundColor", new Color(0.38f, 0.42f, 0.36f));
+            RenderSettings.skybox = skyMat;
+        }
+        // the cloud shader paints the horizon in exactly this colour, so sky and fogged hills always meet
+        RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = k.fog;
+        RenderSettings.fogStartDistance = k.fogStart; RenderSettings.fogEndDistance = k.fogEnd;
+        if (sun != null) RenderSettings.sun = sun; // the skybox's sun disk follows the world sun, not the cars' one
+        return k;
+    }
+
+    // Cloud sphere + sun glare, created under root once the world is built (after static batching and the light
+    // bake, which must not see them). Then renders the sky reflection probe once, clouds included.
+    public static Sky Create(Transform root, Look k, Vector3 sunDir, ReflectionProbe probe)
+    {
+        var go = new GameObject("Sky"); go.transform.SetParent(root, false);
+        var sky = go.AddComponent<Sky>();
+        sky.sunDir = sunDir.normalized;
+
+        var cs = Resources.Load<Shader>("Clouds");
+        if (cs != null && cs.isSupported)
+        {
+            if (noiseTex == null) noiseTex = CloudNoise();
+            if (domeMesh == null) domeMesh = Dome();
+            if (cloudMat == null) cloudMat = new Material(cs) { mainTexture = noiseTex };
+            float c = k.cover;
+            cloudMat.SetFloat("_Cover", c);
+            cloudMat.SetFloat("_Scale", k.deck);
+            cloudMat.SetFloat("_Haze", k.haze);
+            cloudMat.SetFloat("_HazeHeight", 0.12f);
+            cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c));
+            cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.62f, 0.65f, 0.71f), new Color(0.42f, 0.45f, 0.50f), c));
+            cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * (1f - 0.5f * c));
+            cloudMat.SetVector("_SunDir", new Vector4(sky.sunDir.x, sky.sunDir.y, sky.sunDir.z, 0));
+            cloudMat.SetVector("_Wind", new Vector4(0.030f, 0.012f, 0.050f, 0.020f) * ((0.7f + 0.6f * c) * k.wind));
+            var dome = new GameObject("Clouds"); dome.layer = Layer;
+            dome.transform.SetParent(go.transform, false);
+            dome.AddComponent<MeshFilter>().sharedMesh = domeMesh;
+            sky.dome = dome.transform;
+            Plain(dome.AddComponent<MeshRenderer>(), cloudMat);
+        }
+        // else: no clouds; the procedural skybox and fog still look as before
+
+        if (glareMat == null) glareMat = GlareMaterial();
+        if (glareMat != null)
+        {
+            if (quadMesh == null) quadMesh = Quad();
+            var q = new GameObject("SunGlare"); q.transform.SetParent(go.transform, false); // Default layer: not in the reflections
+            q.AddComponent<MeshFilter>().sharedMesh = quadMesh;
+            sky.glare = q.AddComponent<MeshRenderer>();
+            Plain(sky.glare, glareMat);
+            sky.glareMax = 0.5f * (1f - 0.65f * k.cover); // a cloudy sky diffuses the sun
+            sky.glare.enabled = false;
+        }
+        sky.probe = probe;
+        if (probe != null)
+        {
+            if (sky.dome != null)
+            {
+                sky.dome.position = probe.transform.position;
+                sky.dome.localScale = Vector3.one * (probe.farClipPlane * DomeFill);
+            }
+            sky.probeId = probe.RenderProbe();
+        }
+        return sky;
+    }
+
+    static void Plain(MeshRenderer r, Material m)
+    {
+        r.sharedMaterial = m;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
+        r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+        r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+    }
+
+    // own shader; else the legacy additive particle shader (if it is in the build); else the project's
+    // Unlit/Transparent "Shadow" material (alpha-blended white glow, can only be switched on and off)
+    static Material GlareMaterial()
+    {
+        if (glareTex == null) glareTex = GlareTexture();
+        var s = Resources.Load<Shader>("SunGlare");
+        if (s != null && s.isSupported) { glareColorId = Shader.PropertyToID("_Color"); glareTinted = true; glareScale = 1f; return new Material(s) { mainTexture = glareTex }; }
+        s = Shader.Find("Legacy Shaders/Particles/Additive");
+        if (s != null && s.isSupported) { glareColorId = Shader.PropertyToID("_TintColor"); glareTinted = true; glareScale = 0.5f; return new Material(s) { mainTexture = glareTex }; }
+        var sm = Resources.Load<Material>("Shadow");
+        if (sm != null) { glareTinted = false; return new Material(sm) { mainTexture = glareTex }; }
+        return null;
+    }
+
+    // ---------------------------------------------------------------- per frame
+    Transform dome; MeshRenderer glare; Vector3 sunDir; float glareMax, glareLast = -1f;
+    Camera cam; ReflectionProbe probe; int probeId, probeWait;
+    const float DomeFill = 0.9f;     // sphere radius / far clip (its flat facets stay inside the far plane)
+    const float GlareFill = 0.8f;    // glare distance / far clip
+    // radians: a glow ~50 degrees across; the sun stands 48 degrees up, above the top of a 62-degree view in normal
+    // driving, so mostly the halo's lower part shows, hanging into the top of the screen
+    const float GlareHalfAngle = 0.45f;
+
+    void LateUpdate()
+    {
+        // until the probe has captured the sky, the cloud sphere stays round the probe
+        if (probe != null)
+        {
+            if (probe.IsFinishedRendering(probeId) || ++probeWait > 30) probe = null;
+            else return;
+        }
+        if (cam == null || !cam.isActiveAndEnabled) { cam = Camera.main; if (cam == null) return; }
+        var ct = cam.transform; var pos = ct.position; float far = cam.farClipPlane; // far changes with the graphics level
+        if (dome != null)
+        {
+            dome.position = pos;
+            float r = far * DomeFill;
+            if (Mathf.Abs(dome.localScale.x - r) > 0.5f) dome.localScale = new Vector3(r, r, r);
+        }
+        if (glare == null) return;
+
+        // glare strength: full when the sun is inside the view, fading as it moves out past the edges (the halo still
+        // reaches in while the sun is just off-screen), zero behind
+        float gd = far * GlareFill;
+        var at = pos + sunDir * gd;
+        var vp = cam.WorldToViewportPoint(at);
+        float vis = 0f;
+        if (vp.z > 0f)
+        {
+            float e = Mathf.Min(Mathf.Min(vp.x, 1f - vp.x), Mathf.Min(vp.y, 1f - vp.y));
+            vis = Mathf.Clamp01((e + 0.35f) / 0.45f); vis = vis * vis * (3f - 2f * vis);
+            vis *= 0.6f + 0.4f * Mathf.Clamp01(Vector3.Dot(ct.forward, sunDir)); // brighter looking straight at it
+        }
+        bool on = vis > 0.01f && (glareTinted || vis > 0.35f);
+        if (glare.enabled != on) glare.enabled = on;
+        if (!on) return;
+        var gt = glare.transform;
+        gt.SetPositionAndRotation(at, ct.rotation);
+        float size = gd * GlareHalfAngle;
+        gt.localScale = new Vector3(size, size, size);
+        float k = vis * glareMax;
+        if (glareTinted && Mathf.Abs(k - glareLast) > 0.003f)
+        {
+            glareLast = k;
+            float s = glareScale; // the legacy particle shader doubles colour and alpha
+            glareMat.SetColor(glareColorId, new Color(s, 0.9f * s, 0.75f * s, k * s));
+        }
+    }
+
+    // ---------------------------------------------------------------- generated assets (made once per run)
+    static float Hash(int x, int y, int s)
+    {
+        unchecked
+        {
+            int h = x * 374761393 + y * 668265263 + s * 2147483;
+            h = (h ^ (int)((uint)h >> 13)) * 1274126177;
+            return (uint)(h ^ (int)((uint)h >> 16)) / 4294967296f;
+        }
+    }
+    // tiling value noise (period 1 in u, v), fractal sum
+    static float Fbm(float u, float v, int cells, int oct, int s)
+    {
+        float sum = 0, amp = 1, norm = 0; int c = cells;
+        for (int o = 0; o < oct; o++)
+        {
+            float fx = u * c, fy = v * c; int i = Mathf.FloorToInt(fx), j = Mathf.FloorToInt(fy);
+            float a = fx - i, b = fy - j; a = a * a * (3 - 2 * a); b = b * b * (3 - 2 * b);
+            int i0 = ((i % c) + c) % c, j0 = ((j % c) + c) % c, i1 = (i0 + 1) % c, j1 = (j0 + 1) % c;
+            float h00 = Hash(i0, j0, s + o), h10 = Hash(i1, j0, s + o), h01 = Hash(i0, j1, s + o), h11 = Hash(i1, j1, s + o);
+            sum += amp * Mathf.Lerp(Mathf.Lerp(h00, h10, a), Mathf.Lerp(h01, h11, a), b);
+            norm += amp; amp *= 0.5f; c *= 2;
+        }
+        return sum / norm;
+    }
+
+    // 256x256 cloud density in alpha: domain-warped fbm (organic shapes) plus a little billow (puffy edges),
+    // stretched to the full 0..1 range so the shader's cover threshold means the same for every seed
+    static Texture2D CloudNoise()
+    {
+        const int N = 256;
+        var val = new float[N * N]; float lo = 1e9f, hi = -1e9f;
+        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
+        {
+            float u = (float)x / N, v = (float)y / N;
+            float wx = Fbm(u, v, 4, 2, 101) - 0.5f, wy = Fbm(u, v, 4, 2, 203) - 0.5f;
+            float n = Fbm(u + wx * 0.25f, v + wy * 0.25f, 4, 5, 7) * 0.75f + (1f - Mathf.Abs(Fbm(u, v, 8, 3, 55) * 2f - 1f)) * 0.25f;
+            val[y * N + x] = n; if (n < lo) lo = n; if (n > hi) hi = n;
+        }
+        // trim the extreme tails a little so the range is well used
+        float span = hi - lo; lo += span * 0.04f; hi -= span * 0.04f;
+        var px = new Color32[N * N];
+        for (int i = 0; i < px.Length; i++)
+        {
+            byte b = (byte)Mathf.Clamp(Mathf.RoundToInt((val[i] - lo) / (hi - lo) * 255f), 0, 255);
+            px[i] = new Color32(255, 255, 255, b);
+        }
+        var t = new Texture2D(N, N, TextureFormat.RGBA32, true) { name = "CloudNoise", wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, anisoLevel = 0 };
+        t.SetPixels32(px); t.Apply(true, true);
+        return t;
+    }
+
+    // radial glow: a bright core and a wide soft halo, zero at the quad's edge
+    static Texture2D GlareTexture()
+    {
+        const int N = 64;
+        var px = new Color32[N * N];
+        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
+        {
+            float dx = (x + 0.5f) / N * 2f - 1f, dy = (y + 0.5f) / N * 2f - 1f, r = Mathf.Sqrt(dx * dx + dy * dy);
+            float g = 0f;
+            if (r < 1f) { float f = 1f - r; g = 0.55f * Mathf.Exp(-r * r * 40f) + 0.45f * f * f; }
+            px[y * N + x] = new Color32(255, 255, 255, (byte)Mathf.Clamp(Mathf.RoundToInt(g * 255f), 0, 255));
+        }
+        var t = new Texture2D(N, N, TextureFormat.RGBA32, true) { name = "SunGlare", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+        t.SetPixels32(px); t.Apply(true, true);
+        return t;
+    }
+
+    // unit sphere (16 x 8 facets); the cloud shader takes the exact view direction per pixel, so a coarse one is enough
+    static Mesh Dome()
+    {
+        const int Seg = 16, Rings = 8;
+        var v = new Vector3[(Seg + 1) * (Rings + 1)];
+        for (int r = 0; r <= Rings; r++)
+        {
+            float lat = Mathf.PI * r / Rings - Mathf.PI / 2, cl = Mathf.Cos(lat), sl = Mathf.Sin(lat);
+            for (int a = 0; a <= Seg; a++)
+            {
+                float lon = Mathf.PI * 2 * a / Seg;
+                v[r * (Seg + 1) + a] = new Vector3(Mathf.Cos(lon) * cl, sl, Mathf.Sin(lon) * cl);
+            }
+        }
+        var tri = new int[Seg * Rings * 6]; int n = 0;
+        for (int r = 0; r < Rings; r++) for (int a = 0; a < Seg; a++)
+        {
+            int i0 = r * (Seg + 1) + a, i1 = i0 + 1, i2 = i0 + Seg + 1, i3 = i2 + 1;
+            tri[n++] = i0; tri[n++] = i2; tri[n++] = i1; tri[n++] = i1; tri[n++] = i2; tri[n++] = i3;
+        }
+        var m = new Mesh { name = "SkyDome" };
+        m.vertices = v; m.triangles = tri;
+        m.bounds = new Bounds(Vector3.zero, Vector3.one * 2f);
+        return m;
+    }
+
+    static Mesh Quad()
+    {
+        var m = new Mesh { name = "GlareQuad" };
+        m.vertices = new[] { new Vector3(-1, -1, 0), new Vector3(1, -1, 0), new Vector3(1, 1, 0), new Vector3(-1, 1, 0) };
+        m.uv = new[] { new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1) };
+        m.triangles = new[] { 0, 2, 1, 0, 3, 2 };
+        m.RecalculateBounds();
+        return m;
+    }
+}
