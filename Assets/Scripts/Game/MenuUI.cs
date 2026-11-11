@@ -33,7 +33,7 @@ public sealed class MenuUI
     int loadShownFrame = -1;
 
     // results
-    Row[] results; string[] gaps; string resCircuit; int resLaps, resPos; double resTime;
+    Row[] results; string[] gaps; string resCircuit; int resLaps, resPos, resStops; double resTime;
 
     public MenuUI(string[] mapNames, int playgroundIdx, int[] rivalCounts, string[] diffNames)
     {
@@ -47,12 +47,12 @@ public sealed class MenuUI
 
     void BeginLoading(bool practiceSession) { practice = practiceSession; loadShownFrame = -1; page = Page.Loading; }
 
-    public void ShowResults(Row[] rows, string circuit, int laps, double raceTime, double refLap)
+    public void ShowResults(Row[] rows, string circuit, int laps, double raceTime, double refLap, int pitStops = 0)
     {
         var list = new List<Row>(rows);
         list.Sort((a, b) => b.progress.CompareTo(a.progress));
         results = list.ToArray(); gaps = new string[results.Length];
-        resCircuit = circuit; resLaps = laps; resTime = raceTime; resPos = 1;
+        resCircuit = circuit; resLaps = laps; resTime = raceTime; resPos = 1; resStops = pitStops;
         double lead = results.Length > 0 ? results[0].progress : 0;
         for (int i = 0; i < results.Length; i++)
         {
@@ -275,7 +275,7 @@ public sealed class MenuUI
         GUI.Label(new Rect(panel.x + pad + S(96), panel.y + S(40), S(200), S(30)), n > 1 ? $"of {n}" : "time trial", label);
         double myBest = double.NaN; foreach (var r in results) if (r.player) myBest = r.best;
         var ol = label.alignment; label.alignment = TextAnchor.MiddleRight;
-        GUI.Label(new Rect(panel.xMax - pad - S(260), panel.y + S(32), S(260), S(22)), "Race time  <b>" + Fmt(resTime) + "</b>", Rich(label));
+        GUI.Label(new Rect(panel.xMax - pad - S(340), panel.y + S(32), S(340), S(22)), "Race time  <b>" + Fmt(resTime) + "</b>" + (resStops > 0 ? $"  ({resStops} stop{(resStops > 1 ? "s" : "")})" : ""), Rich(label));
         GUI.Label(new Rect(panel.xMax - pad - S(260), panel.y + S(54), S(260), S(22)), "Best lap  <b>" + Fmt(myBest) + "</b>", Rich(label));
         label.alignment = ol; label.fontSize = (int)S(15);
 

@@ -26,6 +26,8 @@ public class GameManager : MonoBehaviour
     int mapIdx; GameObject world;
     // aero balance (share of downforce on the front axle): the main real-world setup knob for under/oversteer
     static readonly float[] Balances = { 0.45f, 0.48f, 0.50f, 0.53f }; int balIdx;
+    // brake bias (front share of brake force), applies to every car class
+    static readonly double[] Biases = { 0.53, 0.55, 0.57, 0.59, 0.61 }; int biasIdx = 2;
     EngineAudio audioEngine;
     static readonly string[] CamNames = { "Chase", "Far chase", "Cockpit", "Halo cam" };
 
@@ -50,6 +52,7 @@ public class GameManager : MonoBehaviour
         dzIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltDz", 1), 0, DeadZones.Length - 1); rangeIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltRange", 2), 0, TiltRanges.Length - 1);
         smoothIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltSmooth", 1), 0, SmoothCut.Length - 1); speedSteerIdx = Mathf.Clamp(PlayerPrefs.GetInt("speedSteer", 2), 0, SpeedSteer.Length - 1);
         ApplyScreenLock();
+        biasIdx = Mathf.Clamp(PlayerPrefs.GetInt("brakeBias", 2), 0, Biases.Length - 1); Haptics.enabled = PlayerPrefs.GetInt("haptics", 1) == 1;
         rivalIdx = Mathf.Clamp(PlayerPrefs.GetInt("rivals", 1), 0, RivalCounts.Length - 1); diffIdx = Mathf.Clamp(PlayerPrefs.GetInt("diff", 0), 0, DiffNames.Length - 1);
         ui = new MenuUI(MapNames, PlaygroundIdx, RivalCounts, DiffNames); // the start menu is up (game paused) until a session starts
 
@@ -207,7 +210,7 @@ public class GameManager : MonoBehaviour
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("class", classIdx); PlayerPrefs.SetInt("tyres", compIdx); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltDz", dzIdx); PlayerPrefs.SetInt("tiltRange", rangeIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.Save();
+        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("bal", balIdx); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("class", classIdx); PlayerPrefs.SetInt("tyres", compIdx); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltDz", dzIdx); PlayerPrefs.SetInt("tiltRange", rangeIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.SetInt("brakeBias", biasIdx); PlayerPrefs.SetInt("haptics", Haptics.enabled ? 1 : 0); PlayerPrefs.Save();
     }
 
     void ResetCar()
@@ -224,7 +227,7 @@ public class GameManager : MonoBehaviour
             var p = track.pts[track.N - (rivals.Count == 0 ? 30 : 15 + k * 4)];
             car.x = p.x + p.nx * side; car.y = p.y + p.ny * side; car.heading = System.Math.Atan2(p.ty, p.tx);
         }
-        raceTime = 0; pLap = 0; aiTick = 0;
+        raceTime = 0; pLap = 0; aiTick = 0; boxArmed = false; pitLoss = 0; pitStops = 0;
         if (raceLaps > 0) { bestLap = lastLap = null; lapNo = 1; } // a race keeps its own lap records
         idx = prevIdx = -1; lapStart = null; cut = false; offTime = wrongTime = 0; t100 = null; launchT = -1; topSpeed = 0;
         Flash(MapNames[mapIdx]);
@@ -294,7 +297,7 @@ public class GameManager : MonoBehaviour
 
     int Position()
     {
-        double mine = pLap + (idx < 0 ? 0 : (double)idx / track.N); int pos = 1;
+        double mine = pLap + (idx < 0 ? 0 : (double)idx / track.N) - pitLoss / RefLap(); int pos = 1;
         foreach (var d in rivals) if (d.progress > mine) pos++;
         return pos;
     }
@@ -430,6 +433,7 @@ public class GameManager : MonoBehaviour
         var c = CarConfig.ForClass(classIdx);
         c.tc = tc; c.abs = absOn; c.aeroFront = classIdx == 0 ? Balances[balIdx] : c.aeroFront; c.steerSpeed = 14; c.steerReturn = 18;
         c.speedSens = SpeedSteer[speedSteerIdx]; c.compound = (Compound)compIdx; c.fuelStart = RaceFuel();
+        c.brakeBias = Biases[biasIdx];
         return c;
     }
 
@@ -442,6 +446,7 @@ public class GameManager : MonoBehaviour
         if (hitT > 0) hitT -= dt;
         var input = ReadInput(dt);
         acc += dt;
+        double wallDv = 0; // biggest speed change from a barrier hit this frame (m/s), for the haptics
         while (acc >= H)
         {
             SetSurface();
@@ -449,13 +454,20 @@ public class GameManager : MonoBehaviour
             if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
             if (rivals.Count > 0 && raceTime < Countdown) input = new CarInput(input.steer, 0, 1); // wait for the lights
             car.Step(input, H);
-            if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt)) { if (hitT <= 0) Flash("Barrier!"); hitT = 1.5f; }
+            double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one
+            if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt))
+            {
+                if (hitT <= 0) Flash("Barrier!"); hitT = 1.5f;
+                double dvx = car.vx - preVx, dvy = car.vy - preVy;
+                wallDv = System.Math.Max(wallDv, System.Math.Sqrt(dvx * dvx + dvy * dvy));
+            }
             if (rivals.Count > 0) StepRivals();
             raceTime += H;
             simTime += H; acc -= H;
             frontSpin += car.vx / car.cfg.wheelRadius * H;
             if (playground) TestBench();
         }
+        if (!Paused) Rumble(wallDv);
         if (!playground) LapsAndRecover(dt);
         if (raceLaps > 0 && !playground && pLap > raceLaps && !ui.Showing) FinishRace(); // pLap 1 = crossing the line from the grid
         // g-forces for body pitch/roll and camera are low-passed, so tiny physics wobble never shakes the picture
@@ -511,6 +523,15 @@ public class GameManager : MonoBehaviour
         audioEngine.lockup = car.lockF || car.lockR ? 1 : car.brake > 0.05 ? Mathf.Clamp01((-(float)car.slipRatioR - 0.2f) / 0.4f) : 0;
         if (Paused) { audioEngine.throttle = 0; audioEngine.speed = 0; audioEngine.slide = 0; }
         if (flashT > 0) flashT -= dt;
+    }
+
+    // vibration: a wall hit by how much speed it took, otherwise the kerb / rough-surface shake (car.vib)
+    void Rumble(double wallDv)
+    {
+        if (wallDv > 1.5) { Haptics.Pulse(Mathf.Clamp(25 + (int)(wallDv * 5), 30, 140), Mathf.Clamp(90 + (int)(wallDv * 12), 90, 255)); return; }
+        double v = System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+        double shake = car.vib * System.Math.Min(1, v / 15);
+        if (shake > 0.25) Haptics.Pulse(12 + (int)(shake * 22), 50 + (int)(shake * 170));
     }
 
     void SetSurface()
@@ -590,9 +611,31 @@ public class GameManager : MonoBehaviour
                 else Flash((cut ? "Lap invalid  " : "Lap ") + Fmt(lastLap));
             }
             lapStart = simTime; lapNo++; pLap++; cut = false; car.NewLap();
+            if (boxArmed) { boxArmed = false; if (raceLaps > 0 && pLap <= raceLaps) PitStop(); }
         }
         else if (prevIdx < track.N * 0.2 && idx > track.N * 0.8) { lapStart = null; pLap--; }
     }
+
+    // ---------------------------------------------------------------- pit stop (races only)
+    // "BOX" arms a stop; on the next crossing of the line the car gets fresh tyres of the next compound and the
+    // stop's time loss is added to the player's race time (and taken off the race distance for the order).
+    // The car is not stopped on track: rivals would run into it at the line.
+    const double PitLoss = 22;
+    bool boxArmed; double pitLoss; int pitStops;
+    void PitStop()
+    {
+        var next = NextCompound;
+        car.cfg.compound = next;
+        car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0;
+        car.tyreTF = car.tyreTR = car.cfg.tyreStart;       // straight off the blankets
+        car.tyreSF = car.tyreSR = double.NaN;               // the surface temperature re-starts from the carcass
+        if (model != null) model.SetStripe(CarModel.StripeFor(next));
+        pitLoss += PitLoss; pitStops++;
+        Flash($"Pit stop: {CompoundTable.Get(next).name}  +{PitLoss:0}s");
+    }
+    Compound NextCompound => (Compound)(((int)car.cfg.compound + 1) % CompoundTable.Defs.Length);
+    // a lap time in seconds, to turn the pit time loss into race distance
+    double RefLap() => bestLap ?? lastLap ?? (line != null && line.lapTime > 0 ? line.lapTime : 90);
 
     void TestBench()
     {
@@ -662,14 +705,14 @@ public class GameManager : MonoBehaviour
     void FinishRace()
     {
         var rows = new MenuUI.Row[rivals.Count + 1];
-        rows[0] = new MenuUI.Row { name = "You", colour = new Color(1f, 0.25f, 0.2f), player = true, progress = pLap + (double)System.Math.Max(idx, 0) / track.N, best = bestLap ?? double.NaN };
+        rows[0] = new MenuUI.Row { name = "You", colour = new Color(1f, 0.25f, 0.2f), player = true, progress = pLap + (double)System.Math.Max(idx, 0) / track.N - pitLoss / RefLap(), best = bestLap ?? double.NaN };
         for (int i = 0; i < rivals.Count; i++)
         {
             var w = rivals[i].who;
             rows[i + 1] = new MenuUI.Row { name = w.name, colour = new Color(w.r, w.g, w.b), progress = rivals[i].progress, best = rivals[i].bestLap };
         }
-        double refLap = bestLap ?? lastLap ?? (line != null && line.lapTime > 0 ? line.lapTime : 90); // turns lap fractions into seconds
-        ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (rivals.Count > 0 ? Countdown : 0), refLap);
+        double refLap = RefLap(); // turns lap fractions into seconds
+        ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (rivals.Count > 0 ? Countdown : 0) + pitLoss, refLap, pitStops);
     }
 
     // ---------------------------------------------------------------- HUD
@@ -699,16 +742,23 @@ public class GameManager : MonoBehaviour
         if (GUI.Button(new Rect(x0 - 3 * (bw + S(4)), S(8), bw, bh), menuOpen ? "Close" : "Settings", btn)) { menuOpen = !menuOpen; if (!menuOpen) ApplyScreenLock(); }
         if (GUI.Button(new Rect(x0 - 2 * (bw + S(4)), S(8), bw, bh), "Cam", btn)) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); Save(); }
         if (GUI.Button(new Rect(x0 - 1 * (bw + S(4)), S(8), bw, bh), "Restart", btn)) { ResetCar(); menuOpen = false; }
+        // pit stop: arm it during a race (not on the last lap); it happens when the car next crosses the line
+        if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps)
+        {
+            var boxR = new Rect(Screen.width - S(8) - bw, S(162), bw, bh);
+            if (GUI.Button(boxR, boxArmed ? "BOXING" : "BOX", btn)) { boxArmed = !boxArmed; Flash(boxArmed ? $"Box this lap: {CompoundTable.Get(NextCompound).name}" : "Box cancelled"); }
+        }
         if (!menuOpen && !playground && (surface == 2 || hitT > 0) && GUI.Button(new Rect(Screen.width / 2 - S(60), Screen.height * 0.5f, S(120), bh), "Back on track", btn)) Recover();
         if (menuOpen)
         {
-            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera", "Tilt dead zone", "Tilt for full lock", "Tilt smoothing", "Steering at speed", "Graphics", "Tyres", "Car", "Session" };
+            string[] names = { "Sound", "Traction control", "ABS brakes", "Aero balance", "Steering", "Tilt direction", "Tilt centre", "Track", "Racing line", "Rivals", "Rival level", "Camera", "Tilt dead zone", "Tilt for full lock", "Tilt smoothing", "Steering at speed", "Graphics", "Tyres", "Car", "Session", "Brake bias", "Vibration" };
             string[] vals = { sound ? "On" : "Off", tc.ToString(), absOn ? "On" : "Off (real F1)", $"{Balances[balIdx] * 100:0}% front", tilt ? "Tilt the phone" : "Drag on screen",
                               invertTilt ? "Inverted" : "Normal", "Set straight now", MapNames[mapIdx], showLine ? "Shown" : "Hidden", RivalCounts[rivalIdx].ToString(), DiffNames[diffIdx], CamNames[camMode],
-                              $"{DeadZones[dzIdx]:0.#}°", $"{TiltRanges[rangeIdx]:0}°", SmoothNames[smoothIdx], SpeedSteerNames[speedSteerIdx], gfxIdx == 0 ? "Auto (" + GfxNames[gfxLevel] + ")" : GfxNames[gfxIdx], CompoundTable.Defs[compIdx].name + " (fit on restart)", CarConfig.ClassNames[classIdx], "Menu" };
+                              $"{DeadZones[dzIdx]:0.#}°", $"{TiltRanges[rangeIdx]:0}°", SmoothNames[smoothIdx], SpeedSteerNames[speedSteerIdx], gfxIdx == 0 ? "Auto (" + GfxNames[gfxLevel] + ")" : GfxNames[gfxIdx], CompoundTable.Defs[compIdx].name + " (fit on restart)", CarConfig.ClassNames[classIdx], "Menu",
+                              $"{Biases[biasIdx] * 100:0}% front", Haptics.enabled ? "On" : "Off" };
             int rows = (names.Length + 1) / 2;
-            float panW = Mathf.Min(Screen.width - S(40), S(600)), rh = S(28), panH = rows * rh + S(52);
-            var panel = new Rect((Screen.width - panW) / 2, (Screen.height - panH) / 2 + S(10), panW, panH);
+            float panW = Mathf.Min(Screen.width - S(40), S(600)), rh = S(26), panH = rows * rh + S(52);
+            var panel = new Rect((Screen.width - panW) / 2, Mathf.Max(S(42), (Screen.height - panH) / 2 + S(10)), panW, panH); // below the top buttons
             Fill(panel, new Color(0.05f, 0.06f, 0.08f, 0.93f));
             center.fontSize = (int)S(15); GUI.Label(new Rect(panel.x, panel.y + S(6), panW, S(24)), "<b>SETTINGS</b>   (game paused)", center);
             float cw = panW / 2;
@@ -736,6 +786,8 @@ public class GameManager : MonoBehaviour
                 if (i == 17) compIdx = (compIdx + 1) % CompoundTable.Defs.Length;
                 if (i == 16) { gfxIdx = (gfxIdx + 1) % GfxNames.Length; ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); }
                 if (i == 19) { menuOpen = false; ApplyScreenLock(); ui.page = MenuUI.Page.Start; }
+                if (i == 20) { biasIdx = (biasIdx + 1) % Biases.Length; car.cfg.brakeBias = Biases[biasIdx]; }
+                if (i == 21) { Haptics.enabled = !Haptics.enabled; if (Haptics.enabled) Haptics.Pulse(40, 160); }
                 if (i == 15) { speedSteerIdx = (speedSteerIdx + 1) % SpeedSteer.Length; car.cfg.speedSens = SpeedSteer[speedSteerIdx]; }
                 Save();
             }
@@ -774,7 +826,7 @@ public class GameManager : MonoBehaviour
         double beta = System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)) * 57.3;
         Panel(new Rect(S(8), S(8), S(178), tilt ? S(190) : S(174)));
         GUI.Label(new Rect(S(14), S(10), S(178), S(190)),
-            $"{fpsAvg:0} fps" + (renderScale < 0.99f ? $" ({renderScale * 100:0}% res)" : "") + $"\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}" +
+            $"{fpsAvg:0} fps" + (renderScale < 0.99f ? $" ({renderScale * 100:0}% res)" : "") + $"\nFront grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}   Brake bias {car.cfg.brakeBias * 100:0}%" +
             (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{CompoundTable.Get(car.cfg.compound).name} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nBrakes {car.brakeTF:0}° / {car.brakeTR:0}°" + (double.IsNaN(car.fuel) ? "" : $"\nFuel {car.fuel:0.0} kg ({car.fuelLastLap:0.00}/lap)  Tyres {car.tyrePF:0.0}/{car.tyrePR:0.0} psi") + $"\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
 
