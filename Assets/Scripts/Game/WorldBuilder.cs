@@ -441,9 +441,9 @@ public static class WorldBuilder
                 else
                 {
                     // broad-leaf: a squashed double cone (eight faces) on a trunk
-                    float cy = 4.6f * sz, rr = 2.6f * sz; int b0 = crown.Count;
-                    Ring(crown, fx, fz, cy, rr, 6, rot);
-                    crown.Add(new Vector3(fx, cy + 3.2f * sz, fz)); crown.Add(new Vector3(fx, cy - 2.4f * sz, fz)); cuv.Add(Vector2.zero); cuv.Add(Vector2.zero);
+                    float crY = 4.6f * sz, rr = 2.6f * sz; int b0 = crown.Count;
+                    Ring(crown, fx, fz, crY, rr, 6, rot);
+                    crown.Add(new Vector3(fx, crY + 3.2f * sz, fz)); crown.Add(new Vector3(fx, crY - 2.4f * sz, fz)); cuv.Add(Vector2.zero); cuv.Add(Vector2.zero);
                     for (int k = 0; k < 6; k++) { int a1 = b0 + k, a2 = b0 + (k + 1) % 6; ctri.Add(a1); ctri.Add(b0 + 6); ctri.Add(a2); ctri.Add(a1); ctri.Add(a2); ctri.Add(b0 + 7); }
                 }
                 // trunk: a thin three-sided post
