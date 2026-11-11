@@ -18,3 +18,8 @@ Rules for every change: run `Tools/SyntaxCheck` (`dotnet run -- ../../Assets`) a
 - Weather (wet track: grip, spray, wipers of light)
 - Haptics on kerbs (phone vibration)
 - Proper compile check in CI (fast job before the full build)
+
+## Overnight log (Nov 12)
+- Done: cockpit eye under the halo with the centre pillar hidden; engine sound per class; start menu and results; sky, clouds and sun glare; road shader (asphalt, rubbered line, kerbs, paint, grid); fuel, tyre surface heat and pressures, brake migration, marbles, wind, kerb load transfer; 2026 poles and elevation for 8 circuits; AI retrained.
+- In progress: TUM corner-curvature fit (ideal laps +5–11% vs pole); trackside detail (barriers, fences, grandstands, pits); brake-bias setting, haptics, pit stop.
+- Next: variable track width, Zandvoort banking, liveries, replay/TV cameras, weather, CI compile check.
