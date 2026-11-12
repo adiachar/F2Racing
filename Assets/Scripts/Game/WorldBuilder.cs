@@ -250,7 +250,7 @@ public static class WorldBuilder
         var grass = Mat(Color.white, grassTex);
         float gsize = Mathf.Max(4400, ext + 3000);
         grass.mainTextureScale = new Vector2(gsize / 10, gsize / 10);
-        Height = t.h != null ? new HeightField(t) : null;
+        Height = t.h != null || t.bank != null ? new HeightField(t) : null; // banked corners tilt the road (HeightField)
         Waterfront.Prepare(t);
         {
             // ground: one big flat sheet, plus (on a hilly circuit) a fine grid around the track that follows the hills
@@ -269,7 +269,7 @@ public static class WorldBuilder
                 }
                 MeshObj(name, v, uv, tri, grass).transform.SetParent(root);
             }
-            Sheet("Ground", cx - gsize / 2, cy - 400 - gsize / 2, gsize, gsize, 1, 1, Waterfront.HasWater ? SeaBed : Height == null ? -0.05f : -0.35f);
+            Sheet("Ground", cx - gsize / 2, cy - 400 - gsize / 2, gsize, gsize, 1, 1, Waterfront.HasWater ? SeaBed : Height == null ? -0.05f : -0.35f - (float)Height.bankDrop);
             if (Waterfront.HasWater) Waterfront.BuildWater(root, 1.0f); // about 3 m below the quay
             if (Height != null)
             {

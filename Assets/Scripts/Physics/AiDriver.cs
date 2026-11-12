@@ -169,7 +169,7 @@ namespace FormulaSim
                 if (straight && gap < safe + 12 && closing > -0.5)
                 {
                     blocked = true;
-                    double left = track.width / 2 - oLat, right = track.width / 2 + oLat; // pull out to the side with more room
+                    double left = track.HalfWidth(oIdx) - oLat, right = track.HalfWidth(oIdx) + oLat; // pull out to the side with more room
                     want += (left > right ? 1 : -1) * 2.4;
                 }
             }
@@ -185,7 +185,7 @@ namespace FormulaSim
             {
                 double roomA = track.width / 2 - 1.0, maxL = 3.2, maxR = 3.2;
                 int nA = (int)Math.Round(Math.Max(40, v * 1.5) / track.ds);
-                for (int k = 0; k <= nA; k += 2) { int j = (idx + k) % N; maxL = Math.Min(maxL, roomA - line.off[j]); maxR = Math.Min(maxR, roomA + line.off[j]); }
+                for (int k = 0; k <= nA; k += 2) { int j = (idx + k) % N; if (track.halfW != null) roomA = track.halfW[j] - 1.0; maxL = Math.Min(maxL, roomA - line.off[j]); maxR = Math.Min(maxR, roomA + line.off[j]); }
                 offsetTarget = Clamp(offsetTarget, -Math.Max(0, maxR), Math.Max(0, maxL));
             }
             offset += Clamp(offsetTarget - offset, -2.2 * dt, 2.2 * dt);
@@ -193,7 +193,7 @@ namespace FormulaSim
             // ---- steering: aim at a point on the line ahead (pure pursuit) ----
             double Ld = tune.look0 + tune.lookV * v;
             int ia = (idx + Math.Max(1, (int)Math.Round(Ld / track.ds))) % N;
-            double room = track.width / 2 - 1.0;
+            double room = track.HalfWidth(ia) - 1.0;
             double offA = Clamp(line.off[ia] + offset, -room, room);
             var pa = track.pts[ia];
             double tx = pa.x + pa.nx * offA - car.x, ty = pa.y + pa.ny * offA - car.y;
@@ -231,7 +231,7 @@ namespace FormulaSim
             var pt = track.pts[idx];
             double hd = Math.Atan2(Math.Sin(car.heading - Math.Atan2(pt.ty, pt.tx)), Math.Cos(car.heading - Math.Atan2(pt.ty, pt.tx)));
             stuckT = (v < 2.5 && simTime > 4) || Math.Abs(hd) > 1.6 ? stuckT + dt : 0;
-            offT = Math.Abs(lateral) > track.width / 2 + 3.0 ? offT + dt : 0;
+            offT = Math.Abs(lateral) > track.HalfWidth(idx) + 3.0 ? offT + dt : 0;
             recovered = false;
             if (stuckT > 2.0 || offT > 1.2)
             {

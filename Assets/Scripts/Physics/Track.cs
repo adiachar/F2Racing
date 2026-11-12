@@ -19,6 +19,13 @@ namespace FormulaSim
         public TrackPoint[] pts;
         public int N;
         public double length, ds, width;
+        // Variable width (measured TUM circuits only): half-width of every point (m), smoothed; null = width / 2
+        // everywhere. OFF by default: with it on, the race test had more AI resets (14 -> 18 on the TUM circuits,
+        // Zandvoort 0 -> 4), and the game's wall line, off-track timer and road mesh still use the single width.
+        // Used by SurfaceAt, the racing-line margin and the AI's room only. PhysicsCheck: VARWIDTH=1 turns it on.
+        public static bool VariableWidth = false;
+        public double[] halfW;
+        public double HalfWidth(int i) => halfW == null ? width / 2 : halfW[i];
 
         // layout, filled in by CircuitDef (null for a bare track): kerb width and what lies beyond it, per side
         public const double KerbWidth = 1.4;
@@ -29,7 +36,7 @@ namespace FormulaSim
         // the surface at track point i, lateral offset lat (+ = left)
         public SurfaceType SurfaceAt(int i, double lat)
         {
-            double hw = width / 2, a = Math.Abs(lat);
+            double hw = HalfWidth(i), a = Math.Abs(lat);
             if (a <= hw - 0.4) return SurfaceType.Asphalt;
             if (a <= hw - 0.15) return SurfaceType.Paint;          // white edge line
             if (a <= hw) return SurfaceType.Asphalt;

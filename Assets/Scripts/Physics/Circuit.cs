@@ -99,6 +99,7 @@ namespace FormulaSim
             var t = metric != null ? Track.LocalFit(Track.Build(TrackDataTum.Centre(metric), TrackDataTum.MeanWidth(metric)), curveFit)
                   : lonlat == null ? Track.Build(null, width) : Track.FromLonLat(lonlat, width, startAt, elev, curveSigma, curveFit);
             if (metric != null && elev != null) t.SetElevation(elev);
+            if (metric != null && Track.VariableWidth) t.halfW = TrackDataTum.HalfWidths(metric, t);
             if (bank != null) t.SetBanking(bank);
             t.def = this;
             Layout(t);

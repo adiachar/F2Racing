@@ -42,6 +42,7 @@ namespace FormulaSim
         {
             var pts = track.pts; int N = track.N;
             double lim = track.width / 2 - margin;
+            double Lim(int k) => track.halfW == null ? lim : track.halfW[k] - margin; // (variable width: per point)
             var off = new double[N];
             int w(int i) => ((i % N) + N) % N;
             double px(int i) { int k = w(i); return pts[k].x + pts[k].nx * off[k]; }
@@ -58,7 +59,7 @@ namespace FormulaSim
                         double tx = (-px(i - 2 * s) + 4 * px(i - s) + 4 * px(i + s) - px(i + 2 * s)) / 6;
                         double ty = (-py(i - 2 * s) + 4 * py(i - s) + 4 * py(i + s) - py(i + 2 * s)) / 6;
                         double o = (tx - pts[i].x) * pts[i].nx + (ty - pts[i].y) * pts[i].ny;
-                        off[i] += (Math.Max(-lim, Math.Min(lim, o)) - off[i]) * 0.7;
+                        double li = Lim(i); off[i] += (Math.Max(-li, Math.Min(li, o)) - off[i]) * 0.7;
                     }
                 }
                 if (s > 1) for (int i = 0; i < N; i += s) // interpolate the points in between for the next level

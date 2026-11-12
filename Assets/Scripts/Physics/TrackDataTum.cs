@@ -9585,6 +9585,30 @@ namespace FormulaSim
             for (int i = 0; i < n; i++) { c[i, 0] = d[i, 0]; c[i, 1] = d[i, 1]; }
             return c;
         }
+        // the measured half-width (m, (w_right + w_left) / 2) at every point of the built track t, matched by the
+        // share of the lap covered, then smoothed (Gaussian, sigma m) so the edges change gradually
+        public static double[] HalfWidths(double[,] d, Track t, double sigma = 30)
+        {
+            int n = d.GetLength(0); var cum = new double[n + 1];
+            for (int i = 1; i <= n; i++) { int a = i - 1, b = i % n; cum[i] = cum[i - 1] + System.Math.Sqrt((d[b, 0] - d[a, 0]) * (d[b, 0] - d[a, 0]) + (d[b, 1] - d[a, 1]) * (d[b, 1] - d[a, 1])); }
+            int N = t.N; var raw = new double[N]; int k = 0;
+            for (int i = 0; i < N; i++)
+            {
+                double s = t.pts[i].s / t.length * cum[n];
+                while (k < n - 1 && cum[k + 1] < s) k++;
+                double u = (s - cum[k]) / System.Math.Max(1e-9, cum[k + 1] - cum[k]); int k1 = (k + 1) % n;
+                raw[i] = 0.5 * ((d[k, 2] + d[k, 3]) * (1 - u) + (d[k1, 2] + d[k1, 3]) * u);
+            }
+            var o = new double[N]; int w = (int)System.Math.Ceiling(3 * sigma / t.ds); double ks = 0;
+            for (int j = -w; j <= w; j++) ks += System.Math.Exp(-0.5 * (j * t.ds / sigma) * (j * t.ds / sigma));
+            for (int i = 0; i < N; i++)
+            {
+                double sum = 0;
+                for (int j = -w; j <= w; j++) sum += raw[((i + j) % N + N) % N] * System.Math.Exp(-0.5 * (j * t.ds / sigma) * (j * t.ds / sigma));
+                o[i] = sum / ks;
+            }
+            return o;
+        }
         public static double MeanWidth(double[,] d)
         {
             int n = d.GetLength(0); double s = 0;

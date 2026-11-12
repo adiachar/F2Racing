@@ -5,6 +5,8 @@
 // On and beside the road (within "Shoulder" of the centreline) the height is exactly the track's own height at
 // that point along the lap, so the road is level across its width even where another part of the circuit runs
 // close by at a different level (Monaco's hairpin). Further out it blends into a smooth interpolated terrain.
+// On a banked corner (Track.bank) the cross-section is tilted about the centreline: the height at lateral offset
+// lat (+ = left) is h - lat * tan(bank), the same angle the physics uses, so the wheels sit on the visible road.
 using System;
 using System.Collections.Generic;
 
@@ -15,11 +17,20 @@ namespace FormulaSim
         const double Cell = 5, Bucket = 16;
         readonly double x0, y0; readonly int nx, ny; readonly float[] g;
         readonly Track t; readonly Dictionary<long, List<int>> hash = new Dictionary<long, List<int>>();
+        readonly double[] th, tb; // heights of the track points (zeros on a flat circuit), tan(bank) (null = none)
         public readonly double baseHeight, Shoulder;
+        // most the banking lowers any point of the road or shoulder below its centreline (0 = no banking)
+        public readonly double bankDrop;
 
         public HeightField(Track track)
         {
             t = track; Shoulder = t.width / 2 + 3.4;
+            th = t.h ?? new double[t.N];
+            if (t.bank != null)
+            {
+                tb = new double[t.N];
+                for (int i = 0; i < t.N; i++) { tb[i] = Math.Tan(t.bank[i]); bankDrop = Math.Max(bankDrop, Math.Abs(tb[i]) * (Shoulder + 5)); }
+            }
             var bb = t.Bounds(); const double Margin = 420;
             x0 = bb.minX - Margin; y0 = bb.minY - Margin;
             nx = (int)Math.Ceiling((bb.maxX - bb.minX + 2 * Margin) / Cell) + 1; ny = (int)Math.Ceiling((bb.maxY - bb.minY + 2 * Margin) / Cell) + 1;
@@ -33,7 +44,7 @@ namespace FormulaSim
             int step = Math.Max(1, (int)Math.Round(8 / t.ds)), m = (t.N + step - 1) / step;
             var px = new double[m]; var py = new double[m]; var ph = new double[m];
             double lo = double.MaxValue;
-            for (int i = 0; i < m; i++) { var p = t.pts[i * step]; px[i] = p.x; py[i] = p.y; ph[i] = t.h[i * step]; lo = Math.Min(lo, ph[i]); }
+            for (int i = 0; i < m; i++) { var p = t.pts[i * step]; px[i] = p.x; py[i] = p.y; ph[i] = th[i * step]; lo = Math.Min(lo, ph[i]); }
             baseHeight = lo;
             for (int j = 0; j < ny; j++)
             {
@@ -81,7 +92,13 @@ namespace FormulaSim
             var pb = t.pts[best];
             double along = (x - pb.x) * pb.tx + (y - pb.y) * pb.ty;
             int nb = along >= 0 ? (best + 1) % t.N : (best - 1 + t.N) % t.N;
-            double road = t.h[best] + (t.h[nb] - t.h[best]) * Math.Min(1, Math.Abs(along) / t.ds);
+            double fa = Math.Min(1, Math.Abs(along) / t.ds);
+            double road = th[best] + (th[nb] - th[best]) * fa;
+            if (tb != null)
+            {
+                double lat = (x - pb.x) * pb.nx + (y - pb.y) * pb.ny;
+                road -= lat * (tb[best] + (tb[nb] - tb[best]) * fa);
+            }
             double dist = Math.Sqrt(bd);
             if (dist <= Shoulder) return road;
             double u = (dist - Shoulder) / 5; u = u * u * (3 - 2 * u);

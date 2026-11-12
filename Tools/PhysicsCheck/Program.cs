@@ -5,6 +5,8 @@ using System.Text.Json;
 using FormulaSim;
 
 const double H = 1.0 / 240;
+// VARWIDTH=1: build the measured circuits with their per-point widths (Track.VariableWidth)
+if (Environment.GetEnvironmentVariable("VARWIDTH") == "1") Track.VariableWidth = true;
 Track[] Circuits() => FormulaSim.Circuits.All.Select(d => d.Build()).ToArray();
 string[] CircuitNames = FormulaSim.Circuits.All.Select(c => c.name).ToArray();
 
