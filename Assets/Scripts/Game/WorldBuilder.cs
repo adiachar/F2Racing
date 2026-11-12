@@ -32,7 +32,7 @@ public static class WorldBuilder
         foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
         {
             var tr = mf.transform;
-            if (mf.name == "Terrain" || mf.name == "Harbour") continue; // built at their final height already
+            if (mf.name == "Terrain" || mf.name == "Harbour" || mf.name.StartsWith("Env")) continue; // built at their final height already
             if (tr.localToWorldMatrix.isIdentity)
             {
                 var mesh = mf.sharedMesh; if (mesh == null) continue;
@@ -154,11 +154,13 @@ public static class WorldBuilder
         float pf = Fbm(u, v, 2, 3, 33), patch = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.55f, 0.62f, pf));
         return new Color32(B(g * 255), B(blot * 255), B(patch * 255), B(stone * 255));
     });
-    public static Texture2D GrassTex() => Tex(256, 256, (u, v, x, y) =>
+    // grass (or whatever covers the ground: dry grass, sand, paving) in the circuit's ground colour (Environment.cs)
+    public static Texture2D GrassTex() => GrassTex(new Color(62 / 255f, 112 / 255f, 44 / 255f));
+    public static Texture2D GrassTex(Color c) => Tex(256, 256, (u, v, x, y) =>
     {
         float r = Hash(x, y, 31);
         float k = 0.75f + Fbm(u, v, 6, 4, 9) * 0.35f + Fbm(u, v, 64, 2, 13) * 0.2f + (r > 0.9f ? 0.12f : r < 0.08f ? -0.12f : 0);
-        return new Color32(B(62 * k), B(112 * k), B(44 * k), 255);
+        return new Color32(B(c.r * 255 * k), B(c.g * 255 * k), B(c.b * 255 * k), 255);
     });
     // astroturf: green with the darker painted stripes run-off areas have
     static Texture2D TurfTex() => Tex(64, 64, (u, v, x, y) =>
@@ -238,7 +240,8 @@ public static class WorldBuilder
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
         RenderSettings.ambientSkyColor = new Color(0.62f, 0.72f, 0.85f);
         RenderSettings.ambientEquatorColor = new Color(0.55f, 0.6f, 0.6f);
-        RenderSettings.ambientGroundColor = new Color(0.3f, 0.35f, 0.25f);
+        Environment.Prepare(t); var env = Environment.Cur; // the look of the land round this circuit (Environment.cs)
+        RenderSettings.ambientGroundColor = Color.Lerp(new Color(0.3f, 0.35f, 0.25f), env.grass, 0.5f);
         var sunGo = new GameObject("Sun"); sunGo.transform.SetParent(root);
         var sun = sunGo.AddComponent<Light>(); sun.type = LightType.Directional; sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.25f;
         sun.shadows = LightShadows.Soft; sun.shadowStrength = 0.8f; sun.shadowBias = 0.03f; sun.shadowNormalBias = 0.3f;
@@ -246,36 +249,48 @@ public static class WorldBuilder
         var skyLook = Sky.Setup(t, Street(t), sun);
 
         // ground
-        var grassTex = GrassTex();
+        var grassTex = GrassTex(env.grass);
         var grass = Mat(Color.white, grassTex);
         float gsize = Mathf.Max(4400, ext + 3000);
         grass.mainTextureScale = new Vector2(gsize / 10, gsize / 10);
         Height = t.h != null || t.bank != null ? new HeightField(t) : null; // banked corners tilt the road (HeightField)
         Waterfront.Prepare(t);
         {
-            // ground: one big flat sheet, plus (on a hilly circuit) a fine grid around the track that follows the hills
-            void Sheet(string name, float x0, float y0, float w, float hgt, int nx, int ny, float yy)
+            // ground: one big flat sheet; the fine grid round the track that follows the hills is made further down
+            // (BuildTerrain), once the trackside buildings are known
+            var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
+            float gx0 = cx - gsize / 2, gy0 = cy - 400 - gsize / 2, yy = Waterfront.HasWater ? SeaBed : Height == null ? -0.05f : -0.35f - (float)Height.bankDrop;
+            for (int j = 0; j <= 1; j++) for (int i = 0; i <= 1; i++)
             {
-                var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
-                for (int j = 0; j <= ny; j++) for (int i = 0; i <= nx; i++)
-                {
-                    float px = x0 + w * i / nx, py = y0 + hgt * j / ny;
-                    // the open land is kept below any road within reach of this grid cell, so it can never bury one
-                    float hy = name == "Terrain" ? (float)Height.Lowest(px, py, w / nx * 1.1f + 2f) + yy : yy;
-                    // the harbour: the ground drops to the sea bed beyond the quay
-                    if (name == "Terrain" && Waterfront.InWater(px, py)) hy = SeaBed;
-                    v.Add(new Vector3(px, hy, py)); uv.Add(new Vector2(px / gsize, py / gsize));
-                    if (i < nx && j < ny) { int k = j * (nx + 1) + i; tri.Add(k); tri.Add(k + nx + 1); tri.Add(k + 1); tri.Add(k + 1); tri.Add(k + nx + 1); tri.Add(k + nx + 2); }
-                }
-                MeshObj(name, v, uv, tri, grass).transform.SetParent(root);
+                float px = gx0 + gsize * i, py = gy0 + gsize * j;
+                v.Add(new Vector3(px, yy, py)); uv.Add(new Vector2(px / gsize, py / gsize));
             }
-            Sheet("Ground", cx - gsize / 2, cy - 400 - gsize / 2, gsize, gsize, 1, 1, Waterfront.HasWater ? SeaBed : Height == null ? -0.05f : -0.35f - (float)Height.bankDrop);
+            tri.Add(0); tri.Add(2); tri.Add(1); tri.Add(1); tri.Add(2); tri.Add(3);
+            MeshObj("Ground", v, uv, tri, grass).transform.SetParent(root);
             if (Waterfront.HasWater) Waterfront.BuildWater(root, 1.0f); // about 3 m below the quay
-            if (Height != null)
+        }
+        // the land round the track: a grid that follows the circuit's hills (never above a road) plus the environment's
+        // own relief away from the track (Environment.Lift), coloured in patches through the vertex tint
+        void BuildTerrain()
+        {
+            if (Height == null) return;
+            float m = 400, w = (float)(bb.maxX - bb.minX) + 2 * m, hg = (float)(bb.maxY - bb.minY) + 2 * m, cell = Mathf.Max(Gfx <= 1 ? 12f : 8f, ext / 180f);
+            float x0 = (float)bb.minX - m, y0 = (float)bb.minY - m; int nx = Mathf.CeilToInt(w / cell), ny = Mathf.CeilToInt(hg / cell);
+            Environment.BuildField(t, x0, y0, w, hg);
+            var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>(); var tint = new List<Color>();
+            for (int j = 0; j <= ny; j++) for (int i = 0; i <= nx; i++)
             {
-                float m = 400, w = (float)(bb.maxX - bb.minX) + 2 * m, hg = (float)(bb.maxY - bb.minY) + 2 * m, cell = Mathf.Max(8f, ext / 180f);
-                Sheet("Terrain", (float)bb.minX - m, (float)bb.minY - m, w, hg, Mathf.CeilToInt(w / cell), Mathf.CeilToInt(hg / cell), -0.12f);
+                float px = x0 + w * i / nx, py = y0 + hg * j / ny;
+                // the open land is kept below any road within reach of this grid cell, so it can never bury one
+                float lift = Environment.Lift(px, py);
+                float hy = (float)Height.Lowest(px, py, w / nx * 1.1f + 2f) - 0.12f + Environment.Surface(px, py, lift);
+                // the harbour: the ground drops to the sea bed beyond the quay
+                if (Waterfront.InWater(px, py)) hy = SeaBed;
+                v.Add(new Vector3(px, hy, py)); uv.Add(new Vector2(px / gsize, py / gsize)); tint.Add(Environment.GroundTint(px, py, lift));
+                if (i < nx && j < ny) { int k = j * (nx + 1) + i; tri.Add(k); tri.Add(k + nx + 1); tri.Add(k + 1); tri.Add(k + 1); tri.Add(k + nx + 1); tri.Add(k + nx + 2); }
             }
+            var go = MeshObj("Terrain", v, uv, tri, grass); go.transform.SetParent(root);
+            BakeTint.Add(go.GetComponent<MeshFilter>().sharedMesh, tint.ToArray());
         }
 
         // every run of points where cond(i) holds, as (first, last) with last exclusive
@@ -468,7 +483,11 @@ public static class WorldBuilder
         }
         Waterfront.BuildTunnel(t, root);
         Trackside.Build(t, root, Street(t));
+        BuildTerrain();
         Scenery.Build(t, root, Street(t)); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
+        // landmarks, hillside blocks, yachts (Environment.cs); the blocks go with the fences, out of the baked shadow map
+        if (Trackside.Late == null) Trackside.Late = new GameObject("TracksideLate");
+        Environment.Props(t, root, Trackside.Late.transform);
 
         // playground pad + skidpad rings + distance boards + slalom cones
         {
@@ -493,65 +512,9 @@ public static class WorldBuilder
             }
         }
 
-        // trees: built straight into two combined meshes (crowns, trunks) so thousands cost two draw calls.
-        // A forest circuit (Spa) gets dense belts of spruce; others get scattered broad-leaf trees.
-        {
-            float dens = t.def != null ? (float)t.def.forest : 0.3f;
-            bool conifer = dens > 0.6f;
-            var crown = new List<Vector3>(); var cuv = new List<Vector2>(); var ctri = new List<int>();
-            var trunkV = new List<Vector3>(); var tuv = new List<Vector2>(); var ttri = new List<int>();
-            var rnd = new System.Random(7); int placed = 0, tries = 0;
-            int want = Mathf.Clamp((int)(t.length * 0.4f * dens + ext / 6), 200, 2500);
-            if (Gfx <= 1) want = want * 3 / 5; // Low: fewer trees
-            var ctint = new List<Color>(); // per-tree shade variety, multiplied into the baked light (BakeTint)
-            float near = 26f, far = conifer ? 260f : 600f;
-            // a ring of n points at height y with radius r around (x, z)
-            void Ring(List<Vector3> v, float x, float z, float y, float r, int n, float rot)
-            { for (int k = 0; k < n; k++) { float a2 = rot + k * Mathf.PI * 2 / n; v.Add(new Vector3(x + Mathf.Cos(a2) * r, y, z + Mathf.Sin(a2) * r)); cuv.Add(Vector2.zero); } }
-            void Cone(float x, float z, float y0, float y1, float r, int n, float rot)
-            {
-                int b0 = crown.Count; Ring(crown, x, z, y0, r, n, rot); int tip = crown.Count; crown.Add(new Vector3(x, y1, z)); cuv.Add(Vector2.zero);
-                for (int k = 0; k < n; k++) { ctri.Add(b0 + k); ctri.Add(tip); ctri.Add(b0 + (k + 1) % n); }
-            }
-            while (placed < want && tries++ < want * 30)
-            {
-                double x = bb.minX - far * 0.6 + rnd.NextDouble() * (bb.maxX - bb.minX + far * 1.2), y = bb.minY - far * 0.6 + rnd.NextDouble() * (bb.maxY - bb.minY + far * 1.2);
-                if (Pad.Contains(new Vector2((float)x, (float)y)) || Waterfront.InWater((float)x, (float)y) || Trackside.Blocked((float)x, (float)y, 5f)) continue;
-                double dist = t.Nearest(x, y).dist;
-                if (dist < near + (t.def != null ? t.def.barrier : 0) || dist > far) continue;
-                float sz = 0.7f + (float)rnd.NextDouble() * 0.8f, rot = (float)rnd.NextDouble() * 6.28f, fx = (float)x, fz = (float)y;
-                if (conifer)
-                {
-                    // spruce: three stacked cones
-                    float hgt = 14f * sz, r0 = 3.2f * sz;
-                    Cone(fx, fz, 1.5f * sz, hgt * 0.55f, r0, 7, rot);
-                    Cone(fx, fz, hgt * 0.35f, hgt * 0.8f, r0 * 0.75f, 7, rot + 0.4f);
-                    Cone(fx, fz, hgt * 0.6f, hgt, r0 * 0.5f, 6, rot + 0.8f);
-                }
-                else
-                {
-                    // broad-leaf: a squashed double cone (eight faces) on a trunk
-                    float crY = 4.6f * sz, rr = 2.6f * sz; int b0 = crown.Count;
-                    Ring(crown, fx, fz, crY, rr, 6, rot);
-                    crown.Add(new Vector3(fx, crY + 3.2f * sz, fz)); crown.Add(new Vector3(fx, crY - 2.4f * sz, fz)); cuv.Add(Vector2.zero); cuv.Add(Vector2.zero);
-                    for (int k = 0; k < 6; k++) { int a1 = b0 + k, a2 = b0 + (k + 1) % 6; ctri.Add(a1); ctri.Add(b0 + 6); ctri.Add(a2); ctri.Add(a1); ctri.Add(a2); ctri.Add(b0 + 7); }
-                }
-                {
-                    float sh = 0.82f + (float)rnd.NextDouble() * 0.3f, warm = (float)rnd.NextDouble() * 0.12f;
-                    var tc = new Color(sh * (1f + warm), sh, sh * (1f - warm * 0.5f), 1f);
-                    while (ctint.Count < crown.Count) ctint.Add(tc);
-                }
-                // trunk: a thin three-sided post
-                int tb = trunkV.Count; float tr2 = 0.25f * sz, th2 = conifer ? 2f * sz : 3f * sz;
-                for (int k = 0; k < 3; k++) { float a2 = rot + k * 2.094f; trunkV.Add(new Vector3(fx + Mathf.Cos(a2) * tr2, 0, fz + Mathf.Sin(a2) * tr2)); trunkV.Add(new Vector3(fx + Mathf.Cos(a2) * tr2, th2, fz + Mathf.Sin(a2) * tr2)); tuv.Add(Vector2.zero); tuv.Add(Vector2.zero); }
-                for (int k = 0; k < 3; k++) { int a1 = tb + k * 2, a2 = tb + ((k + 1) % 3) * 2; ttri.Add(a1); ttri.Add(a1 + 1); ttri.Add(a2); ttri.Add(a2); ttri.Add(a1 + 1); ttri.Add(a2 + 1); }
-                placed++;
-            }
-            var leafCol = conifer ? new Color(0.12f, 0.27f, 0.15f) : new Color(0.19f, 0.42f, 0.21f);
-            var treesGo = MeshObj("Trees", crown, cuv, ctri, Mat(leafCol)); treesGo.transform.SetParent(root);
-            BakeTint.Add(treesGo.GetComponent<MeshFilter>().sharedMesh, ctint.ToArray());
-            MeshObj("Trunks", trunkV, tuv, ttri, Mat(new Color(0.36f, 0.25f, 0.19f))).transform.SetParent(root);
-        }
+        // trees: two combined meshes (crowns, trunks), so thousands cost two draw calls. Kind, mix and density come
+        // from the circuit's environment: spruce belts at Spa, tall park trees at Monza, palms and pines at Monaco...
+        Environment.Trees(t, root, ext);
         Drape(root.gameObject);
         var late = Trackside.Late; // fences and ground decals: lit by the bake, but kept out of its shadow map
         if (late != null) Drape(late);
@@ -589,7 +552,7 @@ public static class WorldBuilder
         // clouds + sun glare (camera-following, so made after static batching); renders the probe once, clouds included
         Sky.Create(root, skyLook, -sunGo.transform.forward, probe);
         // what the car paint reflects below the horizon (the road), and full reflections unless in shade
-        Shader.SetGlobalColor("_GroundRefl", Street(t) ? new Color(0.15f, 0.15f, 0.16f) : new Color(0.13f, 0.16f, 0.12f));
+        Shader.SetGlobalColor("_GroundRefl", env.groundRefl);
         Shader.SetGlobalFloat("_CarLit", 1f);
         return root.gameObject;
     }

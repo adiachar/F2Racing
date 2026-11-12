@@ -54,46 +54,19 @@ public static class Scenery
         var bb = t.Bounds();
         float cx = (float)(bb.minX + bb.maxX) / 2, cy = (float)(bb.minY + bb.maxY) / 2;
         float ext = (float)System.Math.Max(bb.maxX - bb.minX, bb.maxY - bb.minY);
-        bool forest = t.def != null && t.def.forest > 0.6;   // Ardennes: higher, darker, wooded hills
-        float hk = forest ? 1.4f : 1f;
-        // aerial perspective: the hills already lean towards the circuit's haze colour (Sky.cs sets the fog first),
-        // the far ring more, so they separate from each other and melt into the horizon band before the fog takes over
-        var haze = RenderSettings.fogColor;
-        var nearCol = Color.Lerp(forest ? new Color(0.17f, 0.28f, 0.19f) : new Color(0.30f, 0.40f, 0.33f), haze, 0.12f);
-        var farCol = Color.Lerp(forest ? new Color(0.30f, 0.38f, 0.38f) : new Color(0.38f, 0.47f, 0.50f), haze, 0.3f);
-        Hills(parent, cx, cy, ext * 0.5f + 620, 60 * hk, 95 * hk, nearCol, 3);
-        Hills(parent, cx, cy, ext * 0.5f + 980, 130 * hk, 170 * hk, farCol, 11);
+        // the distant land: hills, mountains, a far tree line or the sea, from the circuit's environment (one mesh)
+        TownMat = null;
+        Environment.Backdrop(parent, cx, cy, ext);
         if (street) Town(t, parent);
     }
 
-    // a ring of rolling hills seen from inside
-    static void Hills(Transform parent, float cx, float cy, float radius, float hMin, float hVar, Color col, int seed)
+    // the town's wall material and window texture, shared with the environment's apartment blocks (one draw call)
+    public static Material TownMat;
+    static Texture2D winTex;
+    public static Texture2D WindowTex()
     {
-        var b = new Buf(); const int Seg = 120;
-        float H(int i)
-        {
-            float a = i * Mathf.PI * 2 / Seg;
-            return hMin + hVar * (0.5f + 0.28f * Mathf.Sin(a * 3 + seed) + 0.14f * Mathf.Sin(a * 7 + seed * 2.3f) + 0.08f * Mathf.Sin(a * 17 + seed * 0.7f));
-        }
-        for (int i = 0; i < Seg; i++)
-        {
-            float a0 = i * Mathf.PI * 2 / Seg, a1 = (i + 1) * Mathf.PI * 2 / Seg;
-            var p0 = new Vector3(cx + Mathf.Cos(a0) * radius, -4, cy + Mathf.Sin(a0) * radius);
-            var p1 = new Vector3(cx + Mathf.Cos(a1) * radius, -4, cy + Mathf.Sin(a1) * radius);
-            // slope back from the viewer so the hill catches the light like a hillside, not a wall
-            var t0 = new Vector3(cx + Mathf.Cos(a0) * (radius + 140), H(i), cy + Mathf.Sin(a0) * (radius + 140));
-            var t1 = new Vector3(cx + Mathf.Cos(a1) * (radius + 140), H(i + 1), cy + Mathf.Sin(a1) * (radius + 140));
-            if (Waterfront.InWater(p0.x, p0.z) || Waterfront.InWater(p1.x, p1.z)) continue; // open sea, no hills
-            var inward = new Vector3(cx, 60, cy) - (p0 + p1) * 0.5f;
-            Quad(b, p0, p1, t1, t0, inward, new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1));
-        }
-        Emit("Hills", b, WorldBuilder.Mat(col, null, 0f), parent, false);
-    }
-
-    // rows of town houses behind the walls of a street circuit
-    static void Town(Track t, Transform parent)
-    {
-        var win = WorldBuilder.Tex(64, 64, (u, v, x, y) =>
+        if (winTex != null) return winTex;
+        winTex = WorldBuilder.Tex(64, 64, (u, v, x, y) =>
         {
             bool glass = u > 0.22f && u < 0.78f && v > 0.25f && v < 0.80f;
             bool frame = u > 0.18f && u < 0.82f && v > 0.21f && v < 0.84f;
@@ -102,7 +75,14 @@ public static class Scenery
             byte w = (byte)(236 + (int)(Rand(x / 8, y / 8) * 14));
             return new Color32(w, w, w, 255);
         });
-        Color[] cols = { new Color(0.93f, 0.86f, 0.72f), new Color(0.90f, 0.74f, 0.62f), new Color(0.96f, 0.93f, 0.88f), new Color(0.86f, 0.80f, 0.66f) };
+        return winTex;
+    }
+
+    // rows of town houses behind the walls of a street circuit
+    static void Town(Track t, Transform parent)
+    {
+        var win = WindowTex(); var env = Environment.Cur;
+        Color[] cols = env.walls ?? new[] { new Color(0.93f, 0.86f, 0.72f), new Color(0.90f, 0.74f, 0.62f), new Color(0.96f, 0.93f, 0.88f), new Color(0.86f, 0.80f, 0.66f) };
         // with the baked lighting the colour can ride in the vertex tint (BakeTint): all houses then share one material
         // (one draw call instead of four) and get a darker band at street level; otherwise one material per colour
         bool merged = WorldBuilder.BakeReady;
@@ -119,14 +99,14 @@ public static class Scenery
             {
                 int id = i * 2 + (side > 0 ? 1 : 0);
                 if (Rand(id, 5) < gapP) continue; // gaps between blocks
-                float depth = 10 + Rand(id, 1) * 8, width = 12.4f, height = 9 + Mathf.Floor(Rand(id, 2) * 7) * 3.2f;
+                float depth = 10 + Rand(id, 1) * 8, width = 12.4f, height = (env.floorsMin + Mathf.Floor(Rand(id, 2) * (env.floorsMax - env.floorsMin + 1))) * 3.2f - 0.6f;
                 float off = clear + depth / 2;
                 float bx = (float)(p.x + p.nx * off * side), by = (float)(p.y + p.ny * off * side);
                 // keep clear of every other part of the circuit
                 // (the block itself stands clear + depth / 2 from its own track point, 2 m more than this, so only other legs fail)
                 bool free = true; float need = hw + WorldBuilder.Kerb + 3.5f + depth / 2; need *= need;
                 for (int k = 0; k < N; k += 2) { var q = t.pts[k]; float dx = (float)q.x - bx, dy = (float)q.y - by; if (dx * dx + dy * dy < need) { free = false; break; } }
-                if (!free || Waterfront.InWater(bx, by) || Trackside.Blocked(bx, by, Mathf.Max(width, depth) * 0.5f) || Waterfront.InTunnel(bx, by)) continue;
+                if (!free || Environment.Reserved(bx, by, Mathf.Max(width, depth) * 0.6f) || Waterfront.InWater(bx, by) || Trackside.Blocked(bx, by, Mathf.Max(width, depth) * 0.5f) || Waterfront.InTunnel(bx, by)) continue;
                 var c = new Vector3(bx, 0, by);
                 var tx = new Vector3((float)p.tx, 0, (float)p.ty) * (width / 2);
                 var nx = new Vector3((float)p.nx, 0, (float)p.ny) * (depth / 2);
@@ -156,7 +136,12 @@ public static class Scenery
                 count++;
             }
         }
-        for (int i = 0; i < walls.Length; i++) Emit("Town", walls[i], WorldBuilder.Mat(merged ? Color.white : cols[i], win, 0.25f), parent, true);
+        for (int i = 0; i < walls.Length; i++)
+        {
+            var wm = WorldBuilder.Mat(merged ? Color.white : cols[i], win, 0.25f);
+            if (i == 0) TownMat = wm;
+            Emit("Town", walls[i], wm, parent, true);
+        }
         Emit("TownRoofs", roofs, WorldBuilder.Mat(new Color(0.62f, 0.33f, 0.24f), null, 0.1f), parent, false);
     }
 

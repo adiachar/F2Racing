@@ -44,38 +44,39 @@ public class Sky : MonoBehaviour
                 k.cover = 0.28f; k.haze = 0.8f; k.tint = new Color(0.42f, 0.56f, 0.80f); k.atmosphere = 0.75f; k.exposure = 1.35f;
                 break;
             case "spa": // Ardennes: low grey deck, damp air
-                k.cover = 0.72f; k.haze = 0.95f; k.deck = 0.18f; k.tint = new Color(0.55f, 0.60f, 0.68f); k.atmosphere = 1.15f; k.exposure = 1.0f;
-                k.fog = new Color(0.66f, 0.72f, 0.76f); k.fogStart = 180; k.fogEnd = 1300;
+                k.cover = 0.8f; k.haze = 0.95f; k.deck = 0.18f; k.tint = new Color(0.56f, 0.60f, 0.66f); k.atmosphere = 1.15f; k.exposure = 0.95f;
+                k.fog = new Color(0.66f, 0.71f, 0.74f); k.fogStart = 160; k.fogEnd = 1250;
                 break;
-            case "silverstone": // English summer: broken cloud
-                k.cover = 0.6f; k.tint = new Color(0.5f, 0.58f, 0.72f); k.atmosphere = 1.0f; k.exposure = 1.15f;
-                k.fog = new Color(0.70f, 0.76f, 0.82f); k.fogStart = 260; k.fogEnd = 1600;
+            case "silverstone": // English summer on an open plateau: a grey, mostly closed sky
+                k.cover = 0.78f; k.deck = 0.19f; k.tint = new Color(0.55f, 0.60f, 0.68f); k.atmosphere = 1.1f; k.exposure = 1.05f;
+                k.fog = new Color(0.71f, 0.75f, 0.79f); k.fogStart = 260; k.fogEnd = 1600;
                 break;
             case "monza": // Po valley: warm, hazy, mostly clear
                 k.cover = 0.3f; k.haze = 0.95f; k.tint = new Color(0.52f, 0.60f, 0.72f); k.atmosphere = 1.0f; k.exposure = 1.25f;
-                k.fog = new Color(0.78f, 0.79f, 0.78f); k.fogStart = 240; k.fogEnd = 1500;
+                k.fog = new Color(0.82f, 0.80f, 0.74f); k.fogStart = 200; k.fogEnd = 1400;
                 break;
             case "suzuka":
                 k.cover = 0.45f; k.fog = new Color(0.72f, 0.79f, 0.86f);
                 break;
             case "austin": // Texas: hot, pale, nearly cloudless
                 k.cover = 0.18f; k.tint = new Color(0.50f, 0.60f, 0.78f); k.exposure = 1.35f;
-                k.fog = new Color(0.80f, 0.82f, 0.84f); k.fogStart = 280; k.fogEnd = 1700;
+                k.fog = new Color(0.83f, 0.82f, 0.78f); k.fogStart = 280; k.fogEnd = 1700; // dust in the air
                 break;
             case "budapest": // summer heat haze
                 k.cover = 0.25f; k.haze = 0.95f; k.exposure = 1.3f;
-                k.fog = new Color(0.78f, 0.80f, 0.82f); k.fogStart = 260; k.fogEnd = 1600;
+                k.fog = new Color(0.81f, 0.80f, 0.76f); k.fogStart = 240; k.fogEnd = 1500;
                 break;
             case "catalunya": // Mediterranean: clear and blue
-                k.cover = 0.2f; k.tint = new Color(0.44f, 0.57f, 0.80f); k.atmosphere = 0.8f; k.exposure = 1.35f;
+                k.cover = 0.2f; k.haze = 0.95f; k.tint = new Color(0.44f, 0.57f, 0.80f); k.atmosphere = 0.8f; k.exposure = 1.35f;
+                k.fog = new Color(0.82f, 0.82f, 0.80f); k.fogStart = 260; k.fogEnd = 1600; // hot haze
                 break;
             case "spielberg": // Alps: clear air, big fair-weather cumulus
                 k.cover = 0.5f; k.haze = 0.7f; k.deck = 0.17f; k.tint = new Color(0.45f, 0.58f, 0.80f); k.atmosphere = 0.75f; k.exposure = 1.3f;
                 k.fog = new Color(0.70f, 0.79f, 0.90f); k.fogStart = 350; k.fogEnd = 2000;
                 break;
             case "zandvoort": // North Sea dunes: windy, broken cloud, salt haze
-                k.cover = 0.55f; k.wind = 1.8f; k.haze = 0.9f; k.tint = new Color(0.52f, 0.60f, 0.72f); k.exposure = 1.15f;
-                k.fog = new Color(0.76f, 0.80f, 0.84f); k.fogStart = 240; k.fogEnd = 1500;
+                k.cover = 0.45f; k.wind = 2.0f; k.haze = 0.85f; k.tint = new Color(0.48f, 0.59f, 0.76f); k.exposure = 1.3f;
+                k.fog = new Color(0.78f, 0.83f, 0.87f); k.fogStart = 260; k.fogEnd = 1600;
                 break;
         }
         return k;
