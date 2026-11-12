@@ -16,7 +16,7 @@ public static class BuildScript
 
     static string Arg(string name)
     {
-        var a = Environment.GetCommandLineArgs();
+        var a = System.Environment.GetCommandLineArgs();
         for (int i = 0; i < a.Length - 1; i++) if (a[i] == name) return a[i + 1];
         return null;
     }
