@@ -9,9 +9,13 @@
 //    every gear change, rev-limiter stutter
 //  * F1 only: the MGU-K electric motor whine, pitched by road speed, brighter when deploying and lower and
 //    grittier when harvesting
-//  * tyres: a soft scrub as they approach their limit, a squeal past it, a lower howl when a wheel locks,
-//    and a harsher note for wheelspin
-//  * wind that grows with speed, a rumble on the kerbs, crunching on gravel and a soft swish on grass
+//  * tyres, the driver's grip gauge: a scrub that starts at about half the peak slip angle and gets louder and
+//    higher as the tyre nears its limit (lower for the fronts = understeer, higher for the rears = oversteer),
+//    a squeal past the limit, a tonal squeal for locked (or ABS-held) fronts, a lower howl for locked rears,
+//    and a harsher note for wheelspin that rises with the slip
+//  * wind that grows with speed (a low roar, a hiss past the helmet, slow buffeting; quieter and more
+//    turbulent in a slipstream), the plank scraping the road when the car bottoms out,
+//    a rumble on the kerbs, crunching on gravel and a soft swish on grass
 // It runs in the audio mixer callback (OnAudioFilterRead), so the delay is one small audio buffer.
 // WebGL has no such callback; there it falls back to a streamed clip (slower to react).
 // The audio thread never allocates: all state is fields, all tables are static readonly.
@@ -21,13 +25,20 @@ public class EngineAudio : MonoBehaviour
 {
     // written by the game every frame, read on the audio thread
     public volatile float rpm = 4000, throttle, slide, speed, redline = 12000;
-    public volatile float wheelspin, lockup;   // 0..1
+    public volatile float wheelspin, lockup;   // 0..1 (lockup: rear wheels)
+    public volatile float slipF, slipR;        // front / rear slip angle as a share of the angle of peak grip (1 = at the limit)
+    public volatile float lockFront;           // 0..1 front wheels locked (about 0.3 = ABS holding them at the limit)
+    public volatile float scrape;              // 0..1 floor plank touching the road
+    public volatile float tow;                 // 0..1 how deep in another car's slipstream
     public volatile bool onAsphalt = true, onKerb, shifting;
     public volatile bool muted;
     public volatile int carClass;              // 0 F1 2026, 1 Formula 2, 2 Formula 3
     public volatile float ersKw;               // MGU-K power: + deploying, - harvesting (F1 only)
     public volatile int surface;               // 0 asphalt, 1 kerb, 2 grass, 3 gravel
     const float Volume = 0.55f;
+    // volume settings, 0..1 (GameManager, Audio tab): everything, engine (with turbo and MGU-K), tyres, and
+    // effects (wind, kerbs, gravel, grass)
+    public volatile float masterVol = 1, engineVol = 1, tyreVol = 1, fxVol = 1;
 
     // ---- per-class engine voice ----
     // All three are V6s, so the firing note is always 3 pulses per crank revolution; what changes is
@@ -75,6 +86,8 @@ public class EngineAudio : MonoBehaviour
     double whistlePh, kerbPh, limPh, chatPh, ersPh, swishPh;
     float pulseGain = 1, crackle;
     float chatG, ersG, ersF = 200, ersHm, gravG, grassG, gravEnv;
+    float lockFG, scrapeG, hissG, rearBias, slipLvl, buffet, scrapeGrit;
+    readonly Biquad lockFrF = new Biquad(), scrapeF = new Biquad(), scrapeLoF = new Biquad(), hissF = new Biquad();
     readonly Biquad body1 = new Biquad(), body2 = new Biquad(), tone = new Biquad(), scrubF = new Biquad(), squealF = new Biquad(), lockF = new Biquad(), spinF = new Biquad(), windF = new Biquad(), popF = new Biquad();
     readonly Biquad chatF = new Biquad(), gravF = new Biquad(), grassF = new Biquad(), rumbleF = new Biquad();
     uint seed = 22222;
@@ -130,6 +143,7 @@ public class EngineAudio : MonoBehaviour
         spinF.BandPass(1250, 2.5f, rate); windF.LowPass(500, 0.7f, rate); popF.BandPass(900, 1.5f, rate);
         chatF.BandPass(2600, 1.5f, rate); gravF.BandPass(1900, 0.8f, rate); grassF.LowPass(400, 0.7f, rate);
         rumbleF.LowPass(90, 0.7f, rate);
+        lockFrF.BandPass(980, 7f, rate); scrapeF.BandPass(2700, 1.1f, rate); scrapeLoF.BandPass(240, 1.5f, rate); hissF.BandPass(3200, 0.6f, rate);
     }
 
     void Render(float[] data, int channels, bool add)
@@ -141,6 +155,7 @@ public class EngineAudio : MonoBehaviour
         float crackDecay = 1 - 1f / (0.012f * fs), gravDecay = Mathf.Exp(-1f / (0.004f * fs));
         float tRpm = Mathf.Clamp(rpm, 1500, 16000), tThr = Mathf.Clamp01(throttle), sp = speed, red = redline;
         bool mute = muted;
+        float vMaster = Mathf.Clamp01(masterVol) * Volume, vEng = Mathf.Clamp01(engineVol), vTyre = Mathf.Clamp01(tyreVol), vFx = Mathf.Clamp01(fxVol);
         float sl = slide;
         // per-class parameters, read once per buffer
         int cc = carClass; if (cc < 0 || cc > 2) cc = 0;
@@ -155,9 +170,27 @@ public class EngineAudio : MonoBehaviour
         bool asph = onAsphalt && surf <= 1;
         float tScrub = asph && sp > 8 ? Mathf.Clamp01((sl - 0.80f) / 0.18f) * 0.05f : 0;
         float tSqueal = asph && sp > 6 ? Mathf.Clamp((sl - 0.97f) * 1.6f, 0, 0.12f) : 0;
+        // slip angle against the angle of peak grip: the scrub starts at 45 % of it and is full at the limit,
+        // the squeal comes in just past the limit. (The terms above cover braking and traction in a straight line.)
+        float sF = slipF, sR = slipR; if (float.IsNaN(sF)) sF = 0; if (float.IsNaN(sR)) sR = 0;
+        float sMax = Mathf.Max(sF, sR), spK = asph ? Mathf.Clamp01((sp - 6f) / 10f) : 0;
+        float rise = Mathf.Clamp01((sMax - 0.45f) / 0.55f); rise *= Mathf.Sqrt(rise);
+        tScrub = Mathf.Max(tScrub, rise * 0.055f * spK);
+        tSqueal = Mathf.Max(tSqueal, Mathf.Clamp((sMax - 1.05f) * 0.2f, 0, 0.12f) * spK);
+        float tRear = sR / (sF + sR + 0.001f), tSlip = Mathf.Clamp(sMax, 0, 1.6f);
         float tLock = asph && sp > 4 ? Mathf.Clamp01(lockup) * 0.16f : 0;
-        float tSpin = asph ? Mathf.Clamp01(wheelspin) * 0.12f : 0;
-        float tWind = Mathf.Clamp01(sp / 95f); tWind = tWind * tWind * 0.11f;
+        float tLockF = asph && sp > 4 ? Mathf.Clamp01(lockFront) * 0.15f : 0;
+        float spinIn = Mathf.Clamp01(wheelspin);
+        float tSpin = asph ? spinIn * 0.12f : 0;
+        float towIn = Mathf.Clamp01(tow);
+        float tWind = Mathf.Clamp01(sp / 95f);
+        float tHiss = tWind * tWind * tWind * 0.03f * (1 - 0.3f * towIn);   // air tearing past the helmet: only really there above 200 km/h
+        tWind = tWind * tWind * 0.11f * (1 - 0.35f * towIn);
+        float buffDepth = 1.2f + 2.5f * towIn;                              // dirty air shakes the helmet more
+        float kBuf = 1 - Mathf.Exp(-6.2831853f * 5f / fs);                  // buffeting: noise below about 5 Hz
+        float scr = scrape; if (float.IsNaN(scr)) scr = 0;
+        float tScrape = sp > 10 ? Mathf.Clamp01(scr) * 0.13f * Mathf.Clamp01(sp / 50f) : 0;
+        float gritDecay = Mathf.Exp(-1f / (0.003f * fs)), gritP = (60f + sp * 6f) / fs;
         float tKerb = (onKerb || surf == 1) && sp > 5 ? 0.22f : 0;
         float tGrav = surf == 3 && sp > 1 ? Mathf.Clamp01(sp / 45f) : 0;
         float tGrass = surf == 2 && sp > 1 ? Mathf.Clamp01(sp / 40f) : 0;
@@ -179,6 +212,8 @@ public class EngineAudio : MonoBehaviour
             windG += (tWind - windG) * kS; kerbG += (tKerb - kerbG) * kS; cut += (tCut - cut) * (shifting ? 0.02f : kG);
             gravG += (tGrav - gravG) * kS; grassG += (tGrass - grassG) * kS; chatG += (tChat - chatG) * kG;
             ersG += (tErsG - ersG) * kS; ersHm += (tErsHm - ersHm) * kS; ersF += (tErsF - ersF) * kG;
+            lockFG += (tLockF - lockFG) * kS; scrapeG += (tScrape - scrapeG) * kG; hissG += (tHiss - hissG) * kS;
+            rearBias += (tRear - rearBias) * kS; slipLvl += (tSlip - slipLvl) * kS;
             if ((i & 31) == 0)
             {
                 float f0c = curRpm / 60f * 3f;
@@ -188,6 +223,10 @@ public class EngineAudio : MonoBehaviour
                 tone.LowPass(toneBase + curThr * toneThr + curRpm * toneRpm, 0.8f, fs);
                 windF.LowPass(350 + sp * 14f, 0.7f, fs);
                 if (grassG > 1e-4f) grassF.LowPass(250 + sp * 8f, 0.7f, fs);
+                // the tyre note climbs as the slip grows; fronts sound lower (understeer), rears higher (oversteer)
+                if (scrub > 1e-4f) scrubF.BandPass(620 + 380 * Mathf.Min(1, slipLvl) + 260 * rearBias, 1.2f, fs);
+                if (squeal > 1e-4f) squealF.BandPass(1500 + 450 * rearBias + 250 * Mathf.Clamp01(slipLvl - 1), 6f, fs);
+                if (spinG > 1e-4f) spinF.BandPass(1100 + 500 * spinIn, 2.5f, fs);
                 limiter = curRpm > red - 60 ? 1 : 0;
             }
             // ---- engine: one pulse per firing ----
@@ -234,7 +273,17 @@ public class EngineAudio : MonoBehaviour
             // ---- tyres, wind, kerbs, run-off ----
             float n = Noise();
             float tyres = scrubF.Run(n) * scrub + squealF.Run(n) * squeal + lockF.Run(n) * lockG + spinF.Run(n) * spinG;
-            float wind = windF.Run(Noise()) * windG;
+            if (lockFG > 1e-5f) tyres += lockFrF.Run(n) * lockFG * 2.2f;                 // narrow band = a clear squeal
+            float wn = Noise();
+            buffet += (wn - buffet) * kBuf;
+            float wind = (windF.Run(wn) * windG + hissF.Run(wn) * hissG) * Mathf.Max(0.3f, 1 + buffet * buffDepth * 8f);
+            if (scrapeG > 1e-5f)
+            {
+                // plank on the road: a gritty, bright scrape in short random bursts over a dull grinding
+                if (Noise() * 0.5f + 0.5f < gritP) scrapeGrit = 0.5f + 0.5f * Mathf.Abs(Noise());
+                scrapeGrit *= gritDecay;
+                tyres += (scrapeF.Run(n * (0.35f + scrapeGrit)) + scrapeLoF.Run(n) * 0.8f) * scrapeG;
+            }
             kerbPh += Mathf.Clamp(sp * 1.6f, 12, 70) / fs; if (kerbPh >= 1) kerbPh -= 1;
             float kerb = (kerbPh < 0.3 ? 1f : -0.4f) * kerbG * 0.5f;
             float offT = 0;
@@ -256,7 +305,7 @@ public class EngineAudio : MonoBehaviour
                     offT += (grassF.Run(n) * (0.6f + 0.4f * sw) * 0.35f + rumble * 0.07f) * grassG;
                 }
             }
-            float outS = mute ? 0 : (engine + tyres + wind + kerb + offT) * Volume;
+            float outS = mute ? 0 : (engine * vEng + tyres * vTyre + (wind + kerb + offT) * vFx) * vMaster;
             // soft limit so peaks never crackle on a phone speaker
             outS = outS / (1 + Mathf.Abs(outS));
             int o = i * channels;

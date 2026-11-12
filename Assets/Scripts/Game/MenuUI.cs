@@ -1,6 +1,6 @@
 // MenuUI.cs — the front end, drawn with IMGUI from GameManager.OnGUI:
 //  * Start menu: circuit picker with a track-outline preview, car class, rivals, rival level, race length,
-//    "Free practice" and "Race".
+//    "Free practice" and "Race", and a "Settings" button (the settings screen itself is SettingsUI.cs).
 //  * Loading: one plain frame on screen before the (slow) circuit build starts.
 //  * Results: finishing order, best laps and gaps, "Race again" / "Menu" / "Replay" (last 60 s, TV cameras).
 // A plain C# class: GameManager owns the game settings and hands them in by ref; this class draws, keeps the page
@@ -13,7 +13,7 @@ using UnityEngine;
 public sealed class MenuUI
 {
     public enum Page { None, Start, Loading, Results }
-    public enum Choice { None, RaceAgain, Replay }
+    public enum Choice { None, RaceAgain, Replay, Settings }
 
     public Page page = Page.Start;
     public bool Showing => page != Page.None;
@@ -25,9 +25,10 @@ public sealed class MenuUI
     // one car in the results; GameManager fills these when the player takes the flag
     public struct Row { public string name; public Color colour; public bool player; public double progress, best; }
 
-    static readonly Color Accent = new Color(0.882f, 0.024f, 0f);      // #E10600
-    static readonly Color PanelCol = new Color(0.035f, 0.04f, 0.055f, 0.9f);
-    static readonly Color Dim = new Color(1, 1, 1, 0.6f);
+    // the menu colours, shared with the settings screen (SettingsUI.cs)
+    public static readonly Color Accent = new Color(0.882f, 0.024f, 0f);      // #E10600
+    public static readonly Color PanelCol = new Color(0.035f, 0.04f, 0.055f, 0.9f);
+    public static readonly Color Dim = new Color(1, 1, 1, 0.6f);
 
     readonly string[] mapNames; readonly int playgroundIdx; readonly int[] rivalCounts; readonly string[] diffNames;
     readonly Texture2D[] previews; readonly double[] lengths;   // per circuit, built when first shown
@@ -106,7 +107,7 @@ public sealed class MenuUI
     public Choice Draw(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
     {
         Styles();
-        if (page == Page.Start) DrawStart(ref map, ref cls, ref riv, ref diff, loaded, loadedFor);
+        if (page == Page.Start) { if (DrawStart(ref map, ref cls, ref riv, ref diff, loaded, loadedFor)) return Choice.Settings; }
         else if (page == Page.Loading) DrawLoading(mapNames[map]);
         else if (page == Page.Results) return DrawResults();
         return Choice.None;
@@ -123,13 +124,15 @@ public sealed class MenuUI
         return index;
     }
 
-    void DrawStart(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
+    // returns true when "SETTINGS" is tapped (GameManager then shows the settings screen over the menu)
+    bool DrawStart(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
     {
         float sw = Screen.width, sh = Screen.height;
         Fill(new Rect(0, 0, sw, sh), new Color(0, 0, 0, 0.45f));
         float pw = Mathf.Min(sw - S(32), S(800)), px = (sw - pw) / 2;
         GUI.Label(new Rect(px, S(8), pw, S(42)), Application.productName.ToUpperInvariant(), title);
         Fill(new Rect(px, S(53), S(44), S(3)), Accent);
+        bool openSettings = GUI.Button(new Rect(px + pw - S(140), S(10), S(140), S(46)), "SETTINGS", secondary);
         var panel = new Rect(px, S(66), pw, S(310));
         Fill(panel, PanelCol);
         float pad = S(16), leftW = pw * 0.42f;
@@ -182,6 +185,7 @@ public sealed class MenuUI
             GUI.Label(new Rect(px, sh - S(14), pw, S(14)), CarModel.Credit, small);
             small.alignment = o; small.fontSize = (int)S(11); small.wordWrap = true;
         }
+        return openSettings;
     }
 
     string Info(int map)

@@ -13,6 +13,9 @@ public class CarModel : MonoBehaviour
     Transform steerWheel; float steerPitch;
     // turn the steering wheel in the cockpit: steer -1..1 (+ = right), about a third of a turn each way
     public void SetSteer(float steer) { if (steerWheel != null) steerWheel.localRotation = Quaternion.Euler(steerPitch, 0, -steer * 120f); }
+    // the same, by the wheel's real angle in degrees (+ = turned left); used by DriverFeel with the real steering ratio
+    public void SetSteerDeg(float deg) { if (steerWheel != null) steerWheel.localRotation = Quaternion.Euler(steerPitch, 0, deg); }
+    public Transform SteerWheel => steerWheel; // null on the code-built fallback car (it has no steering wheel)
     public Transform[] frontPivots = new Transform[2], frontSpin = new Transform[2], rearSpin = new Transform[2];
     public Transform helmet;
 
