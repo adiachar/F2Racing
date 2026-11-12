@@ -226,6 +226,22 @@ namespace FormulaSim
             double err = vt - v;
             double thr = Clamp(err * tune.kThr, 0, 1), brk = Clamp(-err * tune.kBrk, 0, 1);
             if (brk > 0.02) thr = 0;
+            // trail-braking stability: braking or lifting deep in a long bend shifts load off the rear, and the hot,
+            // fully loaded rear tyres step out (the car yaws faster than the line turns). Ease off the brake and hold
+            // a whiff of throttle (cancels engine braking and the MGU-K's lift drag) until the rear grips again.
+            if (v > 20 && err < 0)
+            {
+                // only in a bend that keeps turning the same way (in esses the yaw rate leads the line's curvature) and
+                // only with the body sliding out (slip angle past what a gripping car shows; at turn-in the car yaws
+                // ahead of the line under it, but does not slide)
+                double kL = line.curv[idx], kA = line.curv[(idx + (int)Math.Round(0.5 * v / track.ds)) % N];
+                double yawExcess = car.r * Math.Sign(kL) - Math.Abs(v * kL), beta = -Math.Atan2(car.vy, Math.Max(5, car.vx)) * Math.Sign(kL) * 180 / Math.PI;
+                if (Math.Abs(kL) > 0.003 && kA * Math.Sign(kL) > 0.5 * Math.Abs(kL) && yawExcess > 0.05 && beta > 3.2)
+                {
+                    double ease = Clamp((beta - 3.2) / 1.3, 0, 1);
+                    brk *= 1 - ease; thr = brk > 0.02 ? 0 : 0.12 * ease;
+                }
+            }
 
             // ---- stuck, spun or far off the track: put the car back on the line ----
             var pt = track.pts[idx];
