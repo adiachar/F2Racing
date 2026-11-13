@@ -337,8 +337,9 @@ if (args.Length > 0 && args[0] == "train")
             }
             Console.WriteLine($"{CircuitNames[ti]} gen {gen + 1}: best lap {(bestCost < 1000 ? bestCost.ToString("F2") + " s" : "off track")}");
         }
-        // back off a little from the knife edge so the gains also hold up in traffic
-        best = (double[])best.Clone(); best[5] *= 0.985; best[6] *= 0.97;
+        // back off a little from the knife edge so the gains also hold up in traffic (3 % of grip: with turbo lag and
+        // tyre relaxation in the car, 1.5 % left about twice as many resets in the race test)
+        best = (double[])best.Clone(); best[5] *= 0.97; best[6] *= 0.97;
         double lapT = Eval(t, line, best, out double wl);
         Console.WriteLine($"{CircuitNames[ti]}: trained lap {lapT:F2} s (max {wl:F2} m from the centre, track half-width {t.width / 2:F1}) gains {string.Join(", ", best.Select(b => b.ToString("F3", CultureInfo.InvariantCulture)))}");
         result.Add(best);
@@ -499,8 +500,17 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
 {
     const double g = 9.81;
     CarConfig F1() => new CarConfig { tc = TcMode.High };
-    var car = new FormulaCar(F1()); double t = 0, t100 = 0, t200 = 0, t300 = 0, top = 0;
-    while (t < 60) { car.Step(new CarInput(0, 1, 0), H); t += H; double k = car.vx * 3.6; top = Math.Max(top, k); if (t100 == 0 && k >= 100) t100 = t; if (t200 == 0 && k >= 200) t200 = t; if (t300 == 0 && k >= 300) t300 = t; }
+    // standing start, full throttle: times to 100 / 200 / 300 km/h and the top speed
+    (double t100, double t200, double t300, double top) Acc(CarConfig cc)
+    {
+        var car = new FormulaCar(cc); double t = 0, t100 = 0, t200 = 0, t300 = 0, top = 0;
+        while (t < 60) { car.Step(new CarInput(0, 1, 0), H); t += H; double k = car.vx * 3.6; top = Math.Max(top, k); if (t100 == 0 && k >= 100) t100 = t; if (t200 == 0 && k >= 200) t200 = t; if (t300 == 0 && k >= 300) t300 = t; }
+        return (t100, t200, t300, top);
+    }
+    // real standing starts are race starts: full tank, no MGU-K below 50 km/h, no traction control (TC Low is the
+    // nearest to a driver feathering the throttle; High = perfect traction, Off = foot flat with wheelspin)
+    var race = Acc(new CarConfig { fuelStart = 70 }); var raceHi = Acc(new CarConfig { fuelStart = 70, tc = TcMode.High }); var raceOff = Acc(new CarConfig { fuelStart = 70, tc = TcMode.Off });
+    var (t100, t200, t300, top) = Acc(F1());
     var c0 = new CarConfig { tc = TcMode.High, ersPower = 0 }; var noK = new FormulaCar(c0); for (int i = 0; i < 240 * 60; i++) noK.Step(new CarInput(0, 1, 0), H);
     var bc = new FormulaCar(F1()) { vx = 320 / 3.6, gear = 8 }; double peakB = 0;
     for (int i = 0; i < 240 * 2; i++) { bc.Step(new CarInput(0, 0, 1), H); if (i > 60) peakB = Math.Min(peakB, bc.ax / g); }
@@ -516,7 +526,7 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
             for (int i = 0; i < 240 * 3; i++)
             {
                 double sp = Math.Sqrt(c2.vx * c2.vx + c2.vy * c2.vy);
-                c2.Step(new CarInput(st, sp < kmh / 3.6 ? 0.6 : 0.2, 0), H);
+                c2.Step(new CarInput(st, sp < kmh / 3.6 ? 1.0 : 0.2, 0), H); // full throttle below the target: with the MGU-K faded out, 60 % no longer holds 280 km/h at 4-5 g
                 if (Math.Abs(Math.Atan2(c2.vy, c2.vx)) > 0.3) { ok = false; break; }
                 if (i > 240 * 2) { sum += Math.Abs(c2.ay) / g; n++; }
             }
@@ -539,7 +549,14 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
         Console.WriteLine($"  brakes: {t0:F0} C -> front {peakF:F0} C, rear {peakR:F0} C after 340->80 km/h (Brembo: ~1000 C), {bt.brakeTF:F0} C after 12 s flat out; 200-0 cold brakes {cold.x - xc:F0} m vs warm {warm.x - xw:F0} m");
     }
     Console.WriteLine("F1 2026 car vs real figures:");
-    Console.WriteLine($"  0-100 {t100:F2}s (perfect traction; real 2.2-2.6 with wheelspin) | 0-200 {t200:F2}s (2025 cars ~4.4-4.6) | 0-300 {t300:F2}s | top {top:F0} km/h, engine only {noK.vx * 3.6:F0} (real speed traps 325-345)");
+    Console.WriteLine($"  race start (70 kg fuel, TC Low): 0-100 {race.t100:F2}s (real 2026 W17 / MCL40: 2.8-2.9) | 0-200 {race.t200:F2}s (4.7-4.9) | 100-200 {race.t200 - race.t100:F2}s (2.0-2.1) | 0-300 {race.t300:F2}s (~9.9) | 200-300 {race.t300 - race.t200:F2}s (~5) | top {race.top:F0} km/h (344-347)");
+    Console.WriteLine($"    same start, TC High (perfect traction): {raceHi.t100:F2} / {raceHi.t200:F2} / {raceHi.t300:F2}s; TC Off (foot flat): {raceOff.t100:F2} / {raceOff.t200:F2} / {raceOff.t300:F2}s");
+    Console.WriteLine($"  qualifying trim (15 kg), TC High: 0-100 {t100:F2}s | 0-200 {t200:F2}s | 0-300 {t300:F2}s | top {top:F0} km/h, engine only {noK.vx * 3.6:F0}");
+    foreach (var (k, real) in new[] { (1, "real F2: 0-100 2.9, 0-200 6.6"), (2, "real F3: 0-100 3.1, 0-200 7.8") })
+    {
+        var lo = CarConfig.ForClass(k); var hi = CarConfig.ForClass(k); hi.tc = TcMode.High; var a = Acc(lo); var b = Acc(hi);
+        Console.WriteLine($"  {CarConfig.ClassNames[k]}: 0-100 {a.t100:F2}s, 0-200 {a.t200:F2}s (TC Low); {b.t100:F2} / {b.t200:F2}s (TC High); top {a.top:F0} km/h ({real})");
+    }
     Console.WriteLine($"  braking from 320: peak {peakB:F2} g (real 5-6) | 200-0 in {Stop(200):F0} m | 100-0 in {Stop(100):F0} m (real 15-17)");
     Console.WriteLine($"  cornering g at km/h {string.Join(" ", lat)} (real: ~2 slow, 4-5 fast)");
     Console.WriteLine($"  {"circuit",-14} {"ideal",8} {"pole",8} {"error",7}  speed km/h  length  elev");

@@ -155,20 +155,18 @@ namespace FormulaSim
         public static readonly CircuitDef Spa = new CircuitDef
         {
             id = "spa", name = "Spa", metric = TrackDataTum.Spa, style = CircuitStyle.Parkland, realPole = 104.361, forest = 1,
-            // Height profile (m, relative): ESTIMATE from published facts, not surveyed: 102 m between the highest
-            // point (Les Combes) and the lowest (Stavelot), Eau Rouge to Raidillon climbs ~35 m at up to 17-18 %.
-            elev = new double[,] { { 0, 52 }, { 400, 50 }, { 700, 30 }, { 950, 12 }, { 1150, 40 }, { 1300, 50 }, { 2000, 88 },
-                                   { 2350, 100 }, { 2700, 82 }, { 3150, 64 }, { 3800, 48 }, { 4500, 30 }, { 4950, 2 }, { 5500, 12 },
-                                   { 6100, 30 }, { 6700, 46 } },
+            // Height profile: measured (TrackElev). 102 m between the highest point (just before Les Combes) and the
+            // lowest (after Stavelot, before Paul Frere); La Source 56 m, Eau Rouge 24 m, top of Raidillon 47 m, the
+            // steepest stretch 14 % up Raidillon; Les Combes to Stavelot is all downhill (up to 8 %).
+            elev = TrackElev.Spa,
             realCorners = new double[,] { { 404, 65, 60 }, { 2432, 140, 35 }, { 2508, 150, 35 }, { 2662, 175, 60 }, { 3300, 155, 60 }, { 3838, 255, 80 },
                                           { 4518, 185, 60 }, { 4664, 170, 60 }, { 4959, 165, 60 }, { 6753, 72, 40 } },
             curveFit = new double[,] { { 404, 7.0, 60 }, { 2432, 10.8, 35 }, { 2508, 19.2, 35 }, { 2662, 24.4, 60 }, { 3300, 19.2, 60 }, { 3838, 30.9, 80 }, { 4518, 32.8, 60 }, { 4664, 23.0, 60 }, { 4959, 27.2, 60 }, { 6753, 10.8, 40 } }, /*CURVEFIT:spa*/
         };
         // more circuits from the TUM racetrack database (OpenStreetMap centre lines, measured widths).
-        // realPole: 2026 F1 qualifying pole (dry Q3). elev: height profiles are ESTIMATES, not surveyed: total
-        // height range and the position of the high/low points come from published figures (formula1.com "Highs and
-        // lows - which F1 track has the most elevation changes", 2016, unless noted); the corner distances come from
-        // the ideal-line speed minima on these centre lines; everything in between is interpolated by eye.
+        // realPole: 2026 F1 qualifying pole (dry Q3; checked against the timing archive). elev: measured height
+        // profiles (TrackElev in TrackDataTum.cs: the F1 timing feed's car heights on the 2026 pole laps); the corner
+        // distances and heights in the comments below are the official turn positions laid on these centre lines.
         // A new piece of track: rows from+1 .. to-1 of a TUM centre line are replaced by a smooth cubic (Hermite) curve
         // that leaves row from and joins row to along the old directions; a row about every 5 m, widths blended.
         static double[,] Bypass(double[,] d, int from, int to)
@@ -199,6 +197,61 @@ namespace FormulaSim
             for (int i = 0; i < rows.Count; i++) for (int c = 0; c < 4; c++) r[i, c] = rows[i][c];
             return r;
         }
+        // A corrected piece of track: rows from+1 .. to-1 of a TUM centre line are replaced by a smooth curve (centripetal
+        // Catmull-Rom spline) through the given points (x, y in the centre line's own coordinates), leaving row from
+        // and joining row to along the old directions; a row about every 5 m, widths blended.
+        static double[,] Reroute(double[,] d, int from, int to, double[,] via)
+        {
+            int n = d.GetLength(0), nv = via.GetLength(0);
+            var c = new System.Collections.Generic.List<(double x, double y)> { (d[from - 3, 0], d[from - 3, 1]), (d[from, 0], d[from, 1]) };
+            for (int i = 0; i < nv; i++) c.Add((via[i, 0], via[i, 1]));
+            c.Add((d[to, 0], d[to, 1])); c.Add((d[to + 3, 0], d[to + 3, 1]));
+            var fine = new System.Collections.Generic.List<(double x, double y)>();
+            for (int k = 1; k + 2 < c.Count; k++)
+            {
+                var (p0, p1, p2, p3) = (c[k - 1], c[k], c[k + 1], c[k + 2]);
+                double Kn((double x, double y) a, (double x, double y) b) => Math.Sqrt(Math.Sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)));
+                double t0 = 0, t1 = t0 + Kn(p0, p1), t2 = t1 + Kn(p1, p2), t3 = t2 + Kn(p2, p3);
+                for (int j = 0; j < 200; j++)
+                {
+                    double t = t1 + (t2 - t1) * j / 200;
+                    (double x, double y) L((double x, double y) a, (double x, double y) b, double ta, double tb) => (a.x + (b.x - a.x) * (t - ta) / (tb - ta), a.y + (b.y - a.y) * (t - ta) / (tb - ta));
+                    var a1 = L(p0, p1, t0, t1); var a2 = L(p1, p2, t1, t2); var a3 = L(p2, p3, t2, t3);
+                    var b1 = L(a1, a2, t0, t2); var b2 = L(a2, a3, t1, t3);
+                    fine.Add(L(b1, b2, t1, t2));
+                }
+            }
+            fine.Add((d[to, 0], d[to, 1]));
+            int M = fine.Count - 1; var cum = new double[M + 1];
+            for (int k = 1; k <= M; k++) cum[k] = cum[k - 1] + Math.Sqrt((fine[k].x - fine[k - 1].x) * (fine[k].x - fine[k - 1].x) + (fine[k].y - fine[k - 1].y) * (fine[k].y - fine[k - 1].y));
+            int m = Math.Max(2, (int)Math.Round(cum[M] / 5));
+            var rows = new System.Collections.Generic.List<double[]>();
+            for (int i = 0; i <= from; i++) rows.Add(new[] { d[i, 0], d[i, 1], d[i, 2], d[i, 3] });
+            for (int j = 1, k = 0; j < m; j++)
+            {
+                double target = cum[M] * j / m; while (cum[k + 1] < target) k++;
+                double u = (target - cum[k]) / Math.Max(1e-9, cum[k + 1] - cum[k]), w = (double)j / m;
+                rows.Add(new[] { fine[k].x + (fine[k + 1].x - fine[k].x) * u, fine[k].y + (fine[k + 1].y - fine[k].y) * u, d[from, 2] + (d[to, 2] - d[from, 2]) * w, d[from, 3] + (d[to, 3] - d[from, 3]) * w });
+            }
+            for (int i = to; i < n; i++) rows.Add(new[] { d[i, 0], d[i, 1], d[i, 2], d[i, 3] });
+            var r = new double[rows.Count, 4];
+            for (int i = 0; i < rows.Count; i++) for (int q = 0; q < 4; q++) r[i, q] = rows[i][q];
+            return r;
+        }
+        // The same centre line begun k rows later (moves the start/finish line k x 5 m along the lap).
+        static double[,] StartAtRow(double[,] d, int k)
+        {
+            int n = d.GetLength(0); var r = new double[n, 4];
+            for (int i = 0; i < n; i++) for (int q = 0; q < 4; q++) r[i, q] = d[(i + k) % n, q];
+            return r;
+        }
+        // The same centre line with its x and y multiplied by f (widths unchanged): brings the lap length to the official one.
+        static double[,] Scaled(double[,] d, double f)
+        {
+            int n = d.GetLength(0); var r = new double[n, 4];
+            for (int i = 0; i < n; i++) { r[i, 0] = d[i, 0] * f; r[i, 1] = d[i, 1] * f; r[i, 2] = d[i, 2]; r[i, 3] = d[i, 3]; }
+            return r;
+        }
         // Corner shapes: the TUM centre lines make many bends far tighter than the real road (Copse 193 km/h on the
         // ideal lap, Loop 47). Each circuit lists real minimum speeds for its main corners (realCorners: ESTIMATES
         // for a 2026 car from 2024-25 pole-lap speed traces and corner guides, rounded to 5 km/h, not measured), and
@@ -207,79 +260,90 @@ namespace FormulaSim
         // real: realCorners {s, km/h, reach m}; fit: the fitted curveFit {s, window m, reach m} (dotnet run -- fitgeo <id>)
         static CircuitDef Tum(string id, string name, double[,] d, double forest, double pole = 0, double[,] elev = null, double[,] real = null, double[,] fit = null, double[,] bank = null) =>
             new CircuitDef { id = id, name = name, metric = d, style = CircuitStyle.Parkland, forest = forest, realPole = pole, elev = elev, realCorners = real, curveFit = fit, bank = bank };
-        // Monza (royal park): pole 1:21.786 Gasly 2026. 12.8 m range: main dip on the drag between Lesmo 2 and
-        // Ascari (under the old banking), downhill run to Parabolica, slight incline up the start straight.
-        // Corners: Rettifilo 932, Roggia 2146, Lesmo 2544 / 2882, Ascari 3952-4142, Parabolica 5227 m.
+        // Monza (royal park): pole 1:21.786 Gasly 2026. 12.4 m range: a steady gentle climb from Parabolica (the lowest
+        // point) up the start straight and through Curva Grande to the highest point before Roggia, down through the
+        // Lesmos to the dip at the Serraglio underpass (2.4 % down, 1.6 % up), then gently down from Ascari to Parabolica.
+        // Corners: Rettifilo 925-988, Curva Grande 1506, Roggia 2156-2210, Lesmo 2570 / 2888, Ascari 3959-4155, Parabolica 5244 m.
         public static readonly CircuitDef Monza = Tum("monza", "Monza", TrackDataTum.Monza, 0.8, 81.786,
-            new double[,] { { 0, 6 }, { 932, 8 }, { 1600, 10 }, { 2146, 11.5 }, { 2544, 12.8 }, { 2882, 11 }, { 3400, 0 },
-                            { 3952, 7 }, { 4142, 8 }, { 5227, 3 } },
+            TrackElev.Monza,
             new double[,] { { 932, 72, 60 }, { 2146, 110, 60 }, { 2544, 195, 80 }, { 2882, 175, 80 }, { 3952, 200, 60 }, { 4142, 210, 90 }, { 5200, 200, 120 } },
             new double[,] { { 932, 7.5, 60 }, { 2146, 8.9, 60 }, { 2544, 34.7, 80 }, { 2882, 21.1, 80 }, { 3952, 22.0, 60 }, { 4142, 9.8, 90 }, { 5200, 39.8, 120 } } /*CURVEFIT:monza*/);
-        // Silverstone: pole 1:28.111 Antonelli 2026. 11.3 m range: the main drop is out of Stowe down to Vale/Club;
-        // otherwise near flat, rising gently along Hangar Straight. Corners: Village 892, Loop 1042, Brooklands 1998,
-        // Luffield 2182, Copse 3138, Maggotts/Becketts 3722-4020, Stowe 5079, Vale 5513, Club 5595 m.
+        // Silverstone: pole 1:28.111 Antonelli 2026. 11.2 m range: lowest on the start straight just after Club, rising
+        // to the Village/Loop/Aintree plateau, a shallow dip at Brooklands/Woodcote, highest before Maggotts; down from
+        // Chapel along Hangar Straight (with a 2 % rise into Stowe), then the main drop (3.5 %) out of Stowe to Vale.
+        // Corners: Abbey 459, Village 876, Loop 1045, Brooklands 1978, Luffield 2204, Copse 3091, Maggotts/Becketts
+        // 3648-4034, Stowe 5046, Vale 5499, Club 5586-5738 m.
         public static readonly CircuitDef Silverstone = Tum("silverstone", "Silverstone", TrackDataTum.Silverstone, 0.15, 88.111,
-            new double[,] { { 0, 3 }, { 400, 4 }, { 1000, 5 }, { 2000, 5 }, { 3138, 6 }, { 3900, 7 }, { 4300, 8 }, { 4700, 10 },
-                            { 5079, 11.3 }, { 5513, 0.5 }, { 5595, 0 }, { 5800, 2 } },
+            TrackElev.Silverstone,
             new double[,] { { 396, 280, 80 }, { 892, 120, 60 }, { 1042, 75, 60 }, { 1248, 205, 60 }, { 1998, 125, 90 }, { 2182, 115, 60 },
                             { 3138, 280, 80 }, { 3722, 280, 60 }, { 3888, 230, 60 }, { 4020, 220, 60 }, { 5079, 240, 80 }, { 5513, 115, 40 }, { 5595, 130, 40 } },
             new double[,] { { 396, 28.6, 80 }, { 892, 21.6, 60 }, { 1042, 18.8, 60 }, { 1248, 27.7, 60 }, { 1998, 21.1, 90 }, { 2182, 2.3, 60 }, { 3138, 14.5, 80 }, { 3722, 26.2, 60 }, { 3888, 0.0, 60 }, { 4020, 32.8, 60 }, { 5079, 37.5, 80 }, { 5513, 19.2, 40 }, { 5595, 20.2, 40 } } /*CURVEFIT:silverstone*/);
-        // Suzuka: pole 1:28.778 Antonelli 2026. 40.4 m range: low point between T1 and T2 (the track falls from the
-        // chicane all the way down), the Esses and Dunlop climb, high point just past Spoon, undulating run to 130R,
-        // which crosses over the Degner-hairpin leg on the bridge (crossing at 2550 / 4924 m: upper leg kept higher).
-        // Corners: T2 874, Esses 1116-1738, Degner 2300 / 2458, hairpin 2920, Spoon 3814-3952, chicane 5389 m.
+        // Suzuka: pole 1:28.778 Antonelli 2026. 40.1 m range: the start straight runs downhill to the lowest point
+        // just after T1; the Esses and Dunlop climb 30 m (up to 7 %), a dip through the Degners (under the bridge), up
+        // to the hairpin and on to the highest point at Spoon; 7.5 % down out of Spoon, level across the bridge (the
+        // upper leg at 4910 m is 6.4 m above the lower leg at 2550 m), up to the chicane and down again to the line.
+        // Corners: T1 728, T2 845, Esses 1092-1539, Dunlop 1859, Degner 2275 / 2430, hairpin 2905, Spoon 3802-3961,
+        // 130R 5005, chicane 5402-5476 m.
         public static readonly CircuitDef Suzuka = Tum("suzuka", "Suzuka", TrackDataTum.Suzuka, 0.5, 88.778,
-            new double[,] { { 0, 8 }, { 750, 0 }, { 1116, 6 }, { 1398, 11 }, { 1738, 17 }, { 2000, 22 }, { 2300, 21 }, { 2458, 17 },
-                            { 2550, 15 }, { 2920, 13 }, { 3400, 24 }, { 3814, 37 }, { 4050, 40.4 }, { 4400, 36 }, { 4700, 33 },
-                            { 4924, 26 }, { 5389, 16 } },
+            TrackElev.Suzuka,
             new double[,] { { 874, 150, 60 }, { 1116, 215, 50 }, { 1218, 190, 50 }, { 1398, 205, 60 }, { 1598, 195, 60 }, { 1738, 220, 60 }, { 2300, 215, 60 }, { 2458, 140, 60 }, { 3800, 205, 50 }, { 3952, 175, 60 } },
             new double[,] { { 874, 29.5, 60 }, { 1116, 14.1, 50 }, { 1218, 31.4, 50 }, { 1398, 24.4, 60 }, { 1598, 34.2, 60 }, { 1738, 34.7, 60 }, { 2300, 10.8, 60 }, { 2458, 20.2, 60 }, { 3800, 19.2, 50 }, { 3952, 30.5, 60 } } /*CURVEFIT:suzuka*/);
-        // Austin (COTA): pole 1:34.035 Antonelli 2026. 30.9 m range (formula1.com; COTA quotes 133 ft / 40.5 m):
-        // lowest point between T19 and T20, then the short steep climb (~11 %, f1chronicle.com) to the T1 crest;
-        // downhill through T2 and the Esses, the back straight, then low through the stadium section.
-        // Corners: T1 666, Esses 1270-1724, T9 1978, T10 2186, T11 2594, T12 3782, T15 4296, T19 5049, T20 5363 m.
+        // Austin (COTA): pole 1:34.035 Antonelli 2026. 29.5 m range (measured 30.3 m; formula1.com 30.9 m): lowest
+        // point between T19 and T20, a gentle rise along the start straight, then the climb to the T1 crest (26 m in
+        // 250 m, 12.4 % at the steepest) and straight back down (11 %) to T2; a second rise to T9 (23 m), down to the
+        // T11 hairpin and along the back straight to the low stadium section.
+        // Corners: T1 663, Esses 1180-1505, T9 1986, T10 2198, T11 2586, T12 3790, T15 4306, T19 5055, T20 5375 m.
         public static readonly CircuitDef Austin = Tum("austin", "Austin", TrackDataTum.Austin, 0.1, 94.035,
-            new double[,] { { 0, 3 }, { 330, 8 }, { 640, 30.9 }, { 800, 24 }, { 1270, 21 }, { 1724, 19 }, { 1978, 17 }, { 2186, 15 },
-                            { 2594, 12 }, { 3782, 6 }, { 4296, 4 }, { 4520, 4 }, { 5049, 2 }, { 5250, 0 }, { 5363, 1 } },
+            TrackElev.Austin,
             new double[,] { { 666, 62, 60 }, { 1270, 235, 45 }, { 1362, 205, 45 }, { 1586, 215, 60 }, { 1724, 150, 60 }, { 1916, 165, 30 }, { 1978, 150, 30 }, { 2186, 250, 60 }, { 2594, 62, 60 }, { 3782, 72, 60 }, { 4018, 90, 45 }, { 4110, 125, 45 }, { 4296, 60, 60 }, { 5049, 150, 60 }, { 5363, 80, 60 } },
             new double[,] { { 666, 14.1, 60 }, { 1270, 4.2, 45 }, { 1362, 22.0, 45 }, { 1586, 0.0, 60 }, { 1724, 19.2, 60 }, { 1916, 30.9, 30 }, { 1978, 9.8, 30 }, { 2186, 29.5, 60 }, { 2594, 13.1, 60 }, { 3782, 15.0, 60 }, { 4018, 21.1, 45 }, { 4110, 7.5, 45 }, { 4296, 11.7, 60 }, { 5049, 8.9, 60 }, { 5363, 15.9, 60 } } /*CURVEFIT:austin*/);
-        // Hungaroring: pole 1:17.207 Norris 2026. 34.7 m range: downhill from the start line until T3 (low point),
-        // then a steady climb back to the high point on the start-finish straight.
-        // Corners: T1 642, T2 1156, T3 1344, T4 1820, T5 2032, T6 2386, T8/9 2622-2730, T11 3106, T12 3536, T14 4128 m.
+        // Hungaroring: pole 1:17.207 Norris 2026. 34.7 m range: highest on the start straight, downhill through T1
+        // and T2 (7 % at the steepest, after T2) to the lowest point 150 m after T3, then a steady climb (5.7 % into T4)
+        // back up through the middle sector, a dip between T11 and T13, and up out of T14.
+        // Corners: T1 655, T2 1160, T3 1345, T4 1826, T5 2065, T6/7 2408-2453, T8/9 2618-2758, T11 3150, T12 3547, T13 3813, T14 4104 m.
         public static readonly CircuitDef Budapest = Tum("budapest", "Hungaroring", TrackDataTum.Budapest, 0.3, 77.207,
-            new double[,] { { 0, 34.7 }, { 642, 20 }, { 1156, 8 }, { 1344, 0 }, { 1820, 8 }, { 2032, 10 }, { 2386, 14 }, { 2622, 17 },
-                            { 3106, 22 }, { 3536, 26 }, { 3822, 29 }, { 4128, 32 } },
+            TrackElev.Budapest,
             new double[,] { { 642, 85, 60 }, { 1344, 155, 60 }, { 1820, 185, 60 }, { 2042, 160, 60 }, { 2386, 95, 60 }, { 2622, 160, 50 }, { 2730, 135, 50 }, { 3106, 205, 60 }, { 3536, 100, 60 }, { 3822, 105, 60 }, { 4090, 155, 60 } },
             new double[,] { { 642, 20.6, 60 }, { 1344, 6.6, 60 }, { 1820, 17.3, 60 }, { 2042, 30.5, 60 }, { 2386, 6.1, 60 }, { 2622, 19.7, 50 }, { 2730, 23.4, 50 }, { 3106, 32.8, 60 }, { 3536, 11.2, 60 }, { 3822, 27.7, 60 }, { 4090, 35.6, 60 } } /*CURVEFIT:budapest*/);
-        // Barcelona: pole 1:14.679 Russell 2026. 29.6 m range: high point out of T12, dropping nearly 30 m to the low
-        // point at T1; Campsa (T9) is a blind uphill crest, T5 a downhill braking zone. The TUM centre line has the
-        // 2007-2022 T13 / T14-T15 chicane / T16; the 2023+ layout (the 2026 pole) runs one long right-hander from the
-        // end of the T12 straight onto the start straight: rebuilt here (Bypass) as a smooth curve between the two
-        // straights. That takes 20 m off the lap (real: 4.675 -> 4.657 km in 2023, -18 m). The old T10 (La Caixa)
-        // is still the pre-2021 hairpin, a little tighter than the one raced now.
-        // Corners: T1 838, T3 1168, T4 1714, T5 2146, T7 2556, T9 2902, T10 3502, T12 3736, T13-T14 ~4100 m.
-        public static readonly CircuitDef Catalunya = Tum("catalunya", "Barcelona", Bypass(TrackDataTum.Catalunya, 798, 849), 0.2, 74.679,
-            new double[,] { { 0, 9 }, { 838, 0 }, { 948, 1 }, { 1168, 6 }, { 1714, 5 }, { 2146, 2 }, { 2556, 12 }, { 2902, 22 },
-                            { 3502, 14 }, { 3620, 18 }, { 3736, 26 }, { 3850, 29.6 }, { 4000, 26 }, { 4128, 22 } },
-            new double[,] { { 838, 125, 50 }, { 948, 165, 50 }, { 1168, 240, 80 }, { 1714, 160, 60 }, { 2146, 105, 60 }, { 2556, 150, 60 }, { 2902, 230, 60 }, { 3502, 85, 60 }, { 3620, 150, 50 }, { 3736, 150, 60 } },
-            new double[,] { { 838, 15.5, 50 }, { 948, 19.7, 50 }, { 1168, 39.4, 80 }, { 1714, 29.5, 60 }, { 2146, 27.7, 60 }, { 2556, 24.4, 60 }, { 2902, 36.6, 60 }, { 3502, 20.2, 60 }, { 3620, 3.8, 50 }, { 3736, 31.4, 60 } } /*CURVEFIT:catalunya*/);
-        // Red Bull Ring: pole 1:06.113 Russell 2026. 63.5 m range (circuit: 65 m, max incline 12 %, decline 9.3 %,
-        // redbullring.com): lowest point on the start-finish straight, ~63 m climbed by Remus (T3), the steepest
-        // section right after T1-T2; down through T4-T6, a dip then uphill at T7, downhill again to T9/T10.
-        // Corners: T1 448, T3 1396, T4 2208, T6 2738, T7 3034, T9 3786, T10 3986 m.
+        // Barcelona: pole 1:14.679 Russell 2026. 29.5 m range: lowest point at T1, up through T3 to T4 (21 m), down to
+        // T6 (6 % in the T5 braking zone), the 6 % climb from T7 over the Campsa crest (T9), a dip at T10, and up to
+        // the highest point 120 m after T12, then downhill all the way to T1.
+        // Layout: the TUM centre line is the 2007-2020 one. The 2023+ layout (the 2026 pole) differs in two places,
+        // both rebuilt here: (1) T10 (La Caixa), since 2021 a wider, earlier left-hander: the real racing line ran up to
+        // 25 m outside the old hairpin; rerouted through points of the present OpenStreetMap centre line (the f1-circuits
+        // dataset), which the 2026 pole laps follow within 3 m. (2) T13-T14: one long right-hander instead of the
+        // T13 / chicane / T16 (Bypass). Lap length 4654 m (official 4657 m).
+        // Corners: T1 844, T3 1185, T4 1762, T5 2195, T7 2551, T9 2910, T10 3510, T12 3764, T13 4043, T14 4359 m.
+        static readonly double[,] CatalunyaT10 = { { 0.4, 212.8 }, { 1.5, 222.6 }, { -1.5, 233.5 }, { -6.5, 242.2 }, { -13.8, 249.4 }, { -24.3, 257.6 }, { -41.5, 265.3 }, { -52.1, 268.0 },
+                                                   { -66.8, 270.1 }, { -79.4, 270.8 }, { -92.2, 270.1 }, { -106.1, 266.7 }, { -125.5, 257.5 }, { -138.8, 250.0 } };
+        public static readonly CircuitDef Catalunya = Tum("catalunya", "Barcelona", Reroute(Bypass(TrackDataTum.Catalunya, 798, 849), 688, 738, CatalunyaT10), 0.2, 74.679,
+            TrackElev.Catalunya,
+            new double[,] { { 838, 125, 50 }, { 948, 165, 50 }, { 1168, 240, 80 }, { 1714, 160, 60 }, { 2146, 105, 60 }, { 2556, 150, 60 }, { 2902, 230, 60 }, { 3510, 110, 60 }, { 3759, 150, 60 } },
+            new double[,] { { 838, 14.5, 50 }, { 948, 19.7, 50 }, { 1168, 39.8, 80 }, { 1714, 29.5, 60 }, { 2146, 28.1, 60 }, { 2556, 24.4, 60 }, { 2902, 36.1, 60 }, { 3510, 21.6, 60 }, { 3759, 32.8, 60 } } /*CURVEFIT:catalunya*/);
+        // Red Bull Ring: pole 1:06.113 Russell 2026. 63.2 m range (circuit: 65 m, max incline 12 %, decline 9.3 %,
+        // redbullring.com): lowest point on the start-finish straight, 15 m up by T1, 30 m by the T2 kink, the steepest
+        // climb (11.7 %) into Remus (T3), highest point 80 m after it; down to T4 (35 m), level to T6, 8.8 % down after
+        // T6 to T7, a small rise to T9, then down through T10 to the line.
+        // Corners: T1 463, T3 1402, T4 2225, T6 2737, T7 3051, T9 3790, T10 3994 m.
         public static readonly CircuitDef Spielberg = Tum("spielberg", "Red Bull Ring", TrackDataTum.Spielberg, 0.5, 66.113,
-            new double[,] { { 0, 2 }, { 200, 8 }, { 448, 22 }, { 900, 52 }, { 1320, 63.5 }, { 1396, 63 }, { 1800, 50 }, { 2208, 36 },
-                            { 2500, 28 }, { 2738, 22 }, { 2900, 16 }, { 3034, 19 }, { 3400, 15 }, { 3786, 10 }, { 3986, 4 }, { 4250, 0 } },
+            TrackElev.Spielberg,
             new double[,] { { 448, 95, 60 }, { 1396, 70, 60 }, { 2208, 110, 60 }, { 2738, 185, 80 }, { 3034, 190, 90 }, { 3786, 225, 60 }, { 3986, 140, 80 } },
             new double[,] { { 448, 7.5, 60 }, { 1396, 15.9, 60 }, { 2208, 21.6, 60 }, { 2738, 37.5, 80 }, { 3034, 36.1, 90 }, { 3786, 30.9, 60 }, { 3986, 15.0, 80 } } /*CURVEFIT:spielberg*/);
-        // Zandvoort: pole 1:11.163 Norris 2026. Flat: no published height range found (only Hunserug T4 being "one of
-        // the highest points"), so no profile yet. Banked: Hugenholtz T3 and Arie Luyendyk T14, up to 19 and 18 deg at the
-        // outer edge (progressive): the racing line runs on the lower part, so about half of that is used here.
-        // This centre line is 4317 m vs the official 4259 m.
-        public static readonly CircuitDef Zandvoort = Tum("zandvoort", "Zandvoort", TrackDataTum.Zandvoort, 0.2, 71.163, elev: null,
-            real: new double[,] { { 420, 115, 60 }, { 742, 160, 60 }, { 872, 125, 35 }, { 942, 135, 35 }, { 1764, 235, 80 }, { 2104, 160, 60 }, { 2349, 105, 60 }, { 2619, 135, 60 }, { 3181, 80, 30 }, { 3245, 110, 30 }, { 3613, 165, 60 } },
-            fit: new double[,] { { 420, 39.4, 60 }, { 742, 21.6, 60 }, { 872, 26.7, 35 }, { 942, 26.7, 35 }, { 1764, 39.8, 80 }, { 2104, 12.7, 60 }, { 2349, 21.6, 60 }, { 2619, 30.5, 60 }, { 3181, 8.4, 30 }, { 3245, 25.3, 30 }, { 3613, 29.1, 60 } } /*CURVEFIT:zandvoort*/,
-            bank: new double[,] { { 830, 990, 9.5 }, { 3680, 4000, 9 } });
+        // Zandvoort: pole 1:11.163 Norris 2026. 8.6 m range (measured 9.0 m; published 8.9 m): Tarzan and Hugenholtz
+        // low, a 6 % climb out of Hugenholtz to the Hunserug (T4), a dip at T5, the highest point between T6 and
+        // Scheivlak, low through the back section, and a 6 m hump before the last corner.
+        // Banked: Hugenholtz T3 and Arie Luyendyk T14, up to 19 and 18 deg at the outer edge (progressive): the racing
+        // line runs on the lower part, so about half of that is used here.
+        // Layout: the TUM centre line is the pre-2020 circuit (4307 m; its Hugenholtz hairpin reached 13 m further out
+        // than today's, and the 2026 racing line ran 12 m off it). Rebuilt here: Hugenholtz rerouted through points of
+        // the present OpenStreetMap centre line (the f1-circuits dataset; the 2026 pole laps follow it within 5 m), the
+        // start line moved 40 m on to the real timing line (it sat 57 m early), and the remaining 0.7 % of excess
+        // length scaled out: 4259 m, the official length.
+        static readonly double[,] ZandvoortT3 = { { 33.8, -15.5 }, { 30.6, -30.0 }, { 30.4, -43.0 }, { 36.0, -56.1 }, { 46.0, -65.4 }, { 58.3, -70.1 } };
+        public static readonly CircuitDef Zandvoort = Tum("zandvoort", "Zandvoort", Scaled(StartAtRow(Reroute(TrackDataTum.Zandvoort, 166, 196, ZandvoortT3), 8), 0.9930), 0.2, 71.163, elev: TrackElev.Zandvoort,
+            real: new double[,] { { 377, 115, 60 }, { 697, 160, 60 }, { 845, 130, 50 }, { 1684, 235, 80 }, { 2022, 160, 60 }, { 2265, 105, 60 }, { 2533, 135, 60 }, { 3091, 115, 30 }, { 3185, 95, 30 }, { 3520, 165, 60 } },
+            fit: new double[,] { { 377, 39.4, 60 }, { 697, 25.8, 60 }, { 845, 32.8, 50 }, { 1684, 39.8, 80 }, { 2022, 11.2, 60 }, { 2265, 20.6, 60 }, { 2533, 30.5, 60 }, { 3091, 16.9, 30 }, { 3185, 0.0, 30 }, { 3520, 29.1, 60 } } /*CURVEFIT:zandvoort*/,
+            bank: new double[,] { { 795, 905, 9.5 }, { 3585, 3905, 9 } });
         // order matters: the AI tuning table (AiTuning.Trained) uses the same order
         public static readonly CircuitDef[] All = { Test, Monaco, Spa, Monza, Silverstone, Suzuka, Austin, Budapest, Catalunya, Spielberg, Zandvoort };
     }

@@ -9,19 +9,22 @@ namespace FormulaSim
         public const double MonacoWidth = 9.0;
         // the circuit data begins near Casino Square; the real start/finish line is about 2450 m further on
         public const double MonacoStart = 2450;
-        // Height profile: {distance from the start line (m), height above sea level (m)}. ESTIMATE from the known
-        // shape of the lap (about 42 m from the harbour up to Casino Square); not surveyed data.
+        // Height profile: {distance from the start line (m), height above sea level (m)}, one row every 40 m. MEASURED:
+        // the height channel (z) of the Formula 1 timing feed's car positions, median of the five fastest Q3 laps of
+        // the 2026 Monaco Grand Prix (github.com/TracingInsights/2026, read through FastF1), laid on this outline by
+        // matching the laps' x, y to it; 41.9 m from the swimming pool up to Casino Square (published: 42 m). The
+        // feed's heights are relative: the lowest point (the quay at the swimming pool) is set to 4 m above the sea.
         public static readonly double[,] MonacoElev =
         {
-            { 0, 7 }, { 196, 9 },            // start line, Sainte Devote
-            { 480, 26 }, { 758, 43 },        // Beau Rivage climb, Massenet
-            { 840, 47 }, { 900, 46 },        // crest, Casino Square
-            { 1110, 38 }, { 1244, 27 },      // Mirabeau, Grand Hotel hairpin
-            { 1338, 20 }, { 1424, 11 },      // lower Mirabeau, Portier
-            { 1530, 9 }, { 1930, 8 },        // tunnel
-            { 2084, 5 }, { 2364, 4 },        // harbour chicane, Tabac
-            { 2716, 4 }, { 2914, 5 },        // swimming pool, Rascasse
-            { 3100, 6 },                     // Anthony Noghes
+            { 0, 6.6 }, { 40, 6.7 }, { 80, 7.2 }, { 120, 8.3 }, { 160, 9.5 }, { 200, 10.8 }, { 240, 13.6 }, { 280, 16.8 }, { 320, 20.2 }, { 360, 23.8 },
+            { 400, 27.4 }, { 440, 31.1 }, { 480, 34.6 }, { 520, 37.6 }, { 560, 40.5 }, { 600, 42.3 }, { 640, 42.5 }, { 680, 42.8 }, { 720, 43.1 }, { 760, 43.9 },
+            { 800, 44.9 }, { 840, 45.1 }, { 880, 45.8 }, { 920, 43.5 }, { 960, 40.7 }, { 1000, 37.7 }, { 1040, 34.7 }, { 1080, 31.9 }, { 1120, 28.7 }, { 1160, 25.7 },
+            { 1200, 23.0 }, { 1240, 21.4 }, { 1280, 18.0 }, { 1320, 15.2 }, { 1360, 12.2 }, { 1400, 10.9 }, { 1440, 10.9 }, { 1480, 10.7 }, { 1520, 10.6 }, { 1560, 10.6 },
+            { 1600, 10.5 }, { 1640, 10.5 }, { 1680, 10.5 }, { 1720, 10.6 }, { 1760, 10.5 }, { 1800, 10.4 }, { 1840, 10.5 }, { 1880, 10.5 }, { 1920, 10.6 }, { 1960, 9.9 },
+            { 2000, 8.2 }, { 2040, 6.4 }, { 2080, 5.4 }, { 2120, 5.3 }, { 2160, 5.3 }, { 2200, 5.4 }, { 2240, 5.4 }, { 2280, 5.4 }, { 2320, 5.4 }, { 2360, 5.1 },
+            { 2400, 4.7 }, { 2440, 4.6 }, { 2480, 4.6 }, { 2520, 4.4 }, { 2560, 4.3 }, { 2600, 4.3 }, { 2640, 4.3 }, { 2680, 4.3 }, { 2720, 4.1 }, { 2760, 4.2 },
+            { 2800, 4.1 }, { 2840, 4.3 }, { 2880, 5.0 }, { 2920, 6.8 }, { 2960, 8.3 }, { 3000, 7.4 }, { 3040, 6.8 }, { 3080, 6.8 }, { 3120, 6.7 }, { 3160, 6.6 },
+            { 3200, 6.6 }, { 3240, 6.7 }, { 3280, 6.6 },
         };
         public static readonly double[,] Monaco = {
             { 7.4271910, 43.7394040 }, { 7.4271710, 43.7394940 }, { 7.4271990, 43.7395750 }, { 7.4272710, 43.7396860 },

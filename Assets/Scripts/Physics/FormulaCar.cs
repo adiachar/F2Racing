@@ -36,7 +36,7 @@ namespace FormulaSim
         public double track = 1.58;          // m, track width (1.9 m car, 280/375 mm tyres)
         public double latTransferFront = 0.5;
         public double cdA = 1.10;            // drag area m^2, wings closed (corner mode) (est.)
-        public double clA = 4.0;             // downforce area m^2, corner mode (est.)
+        public double clA = 4.2;             // downforce area m^2, corner mode (est.)
         public bool activeAero = true;       // 2026 active aero: wings open on straights (straight mode)
         public double cdAX = 0.70, clAX = 2.5; // drag / downforce area with wings open (est.)
         public double aeroFront = 0.45;
@@ -44,7 +44,9 @@ namespace FormulaSim
         // combustion engine: 1.6 V6 turbo, ~400 kW from 10,500 rpm (fuel-flow limited), 15,000 rpm allowed
         public double peakTorque = 365;      // Nm at the crank
         public double[] torqueRpm = { 4000, 6000, 8000, 10500, 12000, 13000 };
-        public double[] torqueFrac = { 0.55, 0.80, 0.96, 1.0, 0.875, 0.80 };
+        // low revs: no MGU-H in 2026, so the turbo is off boost until the revs come up (est., fitted to the measured
+        // 2.8-2.9 s 0-100 km/h of the 2026 cars; above 50 km/h the MGU-K fills the hole)
+        public double[] torqueFrac = { 0.30, 0.60, 0.96, 1.0, 0.875, 0.80 };
         public double redline = 12000, idleRpm = 4000;
         public double[] gearTopSpeeds = { 130, 165, 200, 232, 262, 292, 322, 350 }; // km/h at the limiter, 8 gears (est.)
         public double driveEff = 0.94;
@@ -53,7 +55,25 @@ namespace FormulaSim
         public double ersCapacity = 4e6;     // J usable
         public double ersHarvestLap = 8.5e6; // J per lap
         public double ersLiftPower = 100e3;  // W harvested when coasting off-throttle (est.)
+        // FIA 2026 C5.2.12: at a standing start the MGU-K may only be used once the car has reached 50 km/h
+        public double ersStartKmh = 50;
+        // energy management (est.): 8.5 MJ a lap pays for only ~24 s of 350 kW, so the cars spend it out of the
+        // corners and fade it out long before the FIA ramp-down. Full power to ersFadeFrom km/h, then linearly down
+        // to ersFadeFrac of it at ersFadeTo km/h. Fitted to measured 2026 cars: 100-200 km/h in ~2.0 s but
+        // 200-300 km/h in ~5 s (W17, MCL40).
+        public double ersFadeFrom = 200, ersFadeTo = 300, ersFadeFrac = 0.15;
         public double shiftTime = 0.03;
+        // ---- feel: turbo lag, tyre relaxation, downshift kick (all 0 = off, as in the JS prototype) ----
+        // turbo without MGU-H: boost follows the throttle with a lag (d boost/dt = (throttle - boost) / tau); off boost
+        // the engine gives turboNa of its torque. The MGU-K covers the hole while the battery has charge.
+        public double turboLag = 0.35;       // s to spool up (est.; falls away 3x slower off throttle)
+        public double turboNa = 0.45;        // share of the torque left with no boost (est.)
+        // tyre relaxation: a tyre needs to roll about one radius before the side force follows a new slip angle
+        // (Pacejka, Tyre and Vehicle Dynamics ch. 5): d alpha'/dt = (v / relaxLen) (alpha - alpha')
+        public double relaxLen = 0.35;       // m
+        // downshift: the engine is spun up through the rear tyres; the throttle blip covers most of it and the rest,
+        // engine inertia x rev jump x ratio / wheel radius x downshiftKick (N s), brakes the rear axle for ~0.06 s
+        public double downshiftKick = 0.3;
         public double clutchEngage = 13;     // m/s (47 km/h) by which the launch clutch is fully engaged
         public double brakeForce = 46000;    // N total at full pedal (enough for ~5 g with downforce)
         public double brakeBias = 0.57;      // front share
@@ -152,7 +172,7 @@ namespace FormulaSim
             // grip (mu) and downforce (clA) of F2 and F3 are fitted so that their gap to the F1 car at Monaco and Spa
             // matches the real gap between 2025 F2 / F3 poles and 2026 F1 poles (fit error 0.1 %)
             // F2 / F3 fuel flow: no flow limit; estimated from power at ~30 % efficiency (est.)
-            if (k == 1) { var c = LegacyF2(); c.chassis = true; c.brakeTemps = true; c.speedSens = 0.5; c.mu = 1.70; c.clA = 4.0; c.clAX = 4.0; c.fuel = true; c.fuelFlow = 120; c.tyreSurface = true; c.kerbTransfer = true; return c; }
+            if (k == 1) { var c = LegacyF2(); c.chassis = true; c.brakeTemps = true; c.speedSens = 0.5; c.mu = 1.70; c.clA = 4.0; c.clAX = 4.0; c.fuel = true; c.fuelFlow = 120; c.tyreSurface = true; c.kerbTransfer = true; c.relaxLen = 0.33; c.downshiftKick = 0.3; return c; }
             if (k == 2) return new CarConfig
             {
                 mass = 673, inertiaZ = 720, wheelbase = 2.95, frontWeight = 0.44, cgHeight = 0.29, wheelRadius = 0.30,
@@ -161,7 +181,7 @@ namespace FormulaSim
                 peakTorque = 360, torqueRpm = new double[] { 3000, 5000, 6500, 7500, 8000, 8500 }, torqueFrac = new[] { 0.55, 0.82, 0.97, 1.0, 0.97, 0.88 },
                 redline = 8500, idleRpm = 2500, gearTopSpeeds = new double[] { 115, 150, 182, 212, 242, 275 }, driveEff = 0.88,
                 ersPower = 0, shiftTime = 0.05, brakeForce = 17000, brakeBias = 0.58, maxLockDeg = 18, speedSens = 0.5,
-                fuelFlow = 75, sideCyA = 3.5,
+                fuelFlow = 75, sideCyA = 3.5, turboLag = 0, relaxLen = 0.30, // naturally aspirated
             };
             return new CarConfig();
         }
@@ -176,6 +196,7 @@ namespace FormulaSim
             redline = 8750, idleRpm = 3000, gearTopSpeeds = new double[] { 128, 168, 207, 245, 283, 320 }, driveEff = 0.80,
             ersPower = 0, shiftTime = 0.05, brakeForce = 22500, brakeBias = 0.60, maxLockDeg = 18,
             fuel = false, tyreSurface = false, kerbTransfer = false, // the JS prototype had none of these (golden test)
+            turboLag = 0, relaxLen = 0, downshiftKick = 0,
         };
     }
 
@@ -246,6 +267,9 @@ namespace FormulaSim
         public double tyreSF = double.NaN, tyreSR, tyrePF, tyrePR, dirtF, dirtR;
         public double biasNow;              // front share of all braking force right now (brakes + engine + MGU-K)
         public double windX, windY;         // m/s, world frame: the way the air is moving (set by the game per session)
+        public double boost = double.NaN;   // 0..1 turbo boost now
+        double relF = double.NaN, relR, kick; // relaxed slip angles (rad), downshift impulse left (N s)
+        public bool standingStart;          // pulling away from rest: no MGU-K drive until ersStartKmh (FIA 2026)
         public void NewLap() { ersHarvested = 0; fuelLastLap = fuelThisLap; fuelThisLap = 0; }
 
         // combustion engine's peak power from the torque curve (cached), for the fuel flow
@@ -290,6 +314,7 @@ namespace FormulaSim
         public static double ErsPowerAt(CarConfig c, double v)
         {
             double kmh = Math.Abs(v) * 3.6, f = kmh <= 290 ? 1 : kmh <= 340 ? (1800 - 5 * kmh) / 350 : kmh < 345 ? (345 - kmh) / 5 * (100.0 / 350) : 0;
+            if (kmh > c.ersFadeFrom) f = Math.Min(f, 1 - (1 - c.ersFadeFrac) * Math.Min(1, (kmh - c.ersFadeFrom) / (c.ersFadeTo - c.ersFadeFrom)));
             return c.ersPower * f;
         }
 
@@ -319,7 +344,12 @@ namespace FormulaSim
         public void Shift(int dir)
         {
             int g = (int)Clamp(gear + dir, 1, cfg.gearTopSpeeds.Length);
-            if (g != gear) { gear = g; shiftTimer = cfg.shiftTime; }
+            if (g != gear)
+            {
+                if (g < gear && cfg.downshiftKick > 0 && vx > 1)
+                    kick += cfg.downshiftKick * cfg.engineInertia * (vx / cfg.wheelRadius) * (GearRatio(cfg, g) - GearRatio(cfg, gear)) * GearRatio(cfg, g) / cfg.wheelRadius;
+                gear = g; shiftTimer = cfg.shiftTime;
+            }
         }
 
         struct Combined { public double Fx, Fy, use; public bool slide, limited; }
@@ -567,16 +597,26 @@ namespace FormulaSim
             }
             else if (shiftTimer <= 0)
             {
-                if (rpm < c.redline && !dry) { double te = TorqueAt(c, rpm) * thr; fdrive = te * ratio * c.driveEff / c.wheelRadius; pIce = te * rpm * Math.PI / 30; }
+                double kBoost = 1;
+                if (c.turboLag > 0)
+                {
+                    if (double.IsNaN(boost)) boost = 1;                   // a fresh car is on the grid with the turbo spooled
+                    double want = speed < 0.5 ? 1 : thr;                   // (the driver holds the revs before the start)
+                    boost += (want - boost) * Math.Min(1, dt / (want > boost ? c.turboLag : 3 * c.turboLag));
+                    kBoost = c.turboNa + (1 - c.turboNa) * boost;
+                }
+                if (rpm < c.redline && !dry) { double te = TorqueAt(c, rpm) * thr * kBoost; fdrive = te * ratio * c.driveEff / c.wheelRadius; pIce = te * rpm * Math.PI / 30; }
                 if (thr < 0.05 && vx > 1) fdrive -= (rpm / c.redline) * 1200 * c.engineBrake; // engine braking (EB map)
             }
+            if (kick > 0) { double fk = Math.Min(kick / 0.06, kick / dt); kick -= fk * dt; if (vx > 1) fdrive -= fk; else kick = 0; }
             // ---------- hybrid (MGU-K + battery) ----------
             double fK = 0, harvestW = 0;
             if (c.ersPower > 0)
             {
                 if (double.IsNaN(ersEnergy)) ersEnergy = c.ersCapacity;
                 double room = Math.Min(c.ersCapacity - ersEnergy, c.ersHarvestLap - ersHarvested);
-                if (!reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && ersEnergy > 0)
+                if (Math.Abs(vx) < 0.5) standingStart = true; else if (Math.Abs(vx) * 3.6 >= c.ersStartKmh) standingStart = false;
+                if (!standingStart && !reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && ersEnergy > 0)
                 {
                     fK = thr * c.driveEff * ErsPowerAt(c, vx) / Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
                     fdrive += fK;
@@ -600,6 +640,12 @@ namespace FormulaSim
             double vxs = Math.Max(Math.Abs(vx), 4);
             alphaF = Math.Atan2(vy + a * r, vxs) - delta * (vx >= 0 ? 1 : -1);
             alphaR = Math.Atan2(vy - b * r, vxs);
+            if (c.relaxLen > 0)
+            {
+                if (double.IsNaN(relF)) { relF = alphaF; relR = alphaR; }
+                double kr = Math.Min(1, Math.Max(Math.Abs(vx), 2) * dt / c.relaxLen);
+                relF += (alphaF - relF) * kr; relR += (alphaR - relR) * kr; alphaF = relF; alphaR = relR;
+            }
             double FyF = -DF * Magic(c, alphaF, fzF / nF0);
 
             int dir = vx > 0.05 ? 1 : vx < -0.05 ? -1 : 0;
