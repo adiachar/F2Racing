@@ -93,6 +93,7 @@ namespace FormulaSim
         // tunnel: covered from tunnelFrom to tunnelTo (m from the start line)
         public double tunnelFrom, tunnelTo;
         public double forest = 0.3;      // 0 = open land, 1 = dense forest round the circuit (Spa)
+        public int pitSide;              // side of the start straight the real pit lane is on: +1 left, -1 right of the direction of travel; 0 = let the world builder choose
 
         public Track Build()
         {
@@ -141,7 +142,7 @@ namespace FormulaSim
         public static readonly CircuitDef Monaco = new CircuitDef
         {
             id = "monaco", name = "Monaco", lonlat = TrackData.Monaco, width = TrackData.MonacoWidth, startAt = TrackData.MonacoStart,
-            elev = TrackData.MonacoElev, style = CircuitStyle.Street, barrier = 2.65, realPole = 72.051, forest = 0.1,
+            elev = TrackData.MonacoElev, style = CircuitStyle.Street, barrier = 2.65, realPole = 72.051, forest = 0.1, pitSide = -1,
             waterFrom = 1540, waterTo = 2890, waterX = 400, waterY = -100,   // Port Hercule and the sea
             tunnelFrom = 1560, tunnelTo = 1880,                               // the tunnel under the hotel
             // real minimum corner speeds (km/h) from published corner guides (F1 Chronicle, Honda, circuit guides);
@@ -154,7 +155,7 @@ namespace FormulaSim
         };
         public static readonly CircuitDef Spa = new CircuitDef
         {
-            id = "spa", name = "Spa", metric = TrackDataTum.Spa, style = CircuitStyle.Parkland, realPole = 104.361, forest = 1,
+            id = "spa", name = "Spa", metric = TrackDataTum.Spa, style = CircuitStyle.Parkland, realPole = 104.361, forest = 1, pitSide = -1,
             // Height profile: measured (TrackElev). 102 m between the highest point (just before Les Combes) and the
             // lowest (after Stavelot, before Paul Frere); La Source 56 m, Eau Rouge 24 m, top of Raidillon 47 m, the
             // steepest stretch 14 % up Raidillon; Les Combes to Stavelot is all downhill (up to 8 %).
@@ -258,8 +259,10 @@ namespace FormulaSim
         // dotnet run -- fitgeo <id> [max move m] fits each bend's curvature window (Track.LocalFit) to them, with no
         // bend allowed to move more than 6 m from the measured centre line.
         // real: realCorners {s, km/h, reach m}; fit: the fitted curveFit {s, window m, reach m} (dotnet run -- fitgeo <id>)
-        static CircuitDef Tum(string id, string name, double[,] d, double forest, double pole = 0, double[,] elev = null, double[,] real = null, double[,] fit = null, double[,] bank = null) =>
-            new CircuitDef { id = id, name = name, metric = d, style = CircuitStyle.Parkland, forest = forest, realPole = pole, elev = elev, realCorners = real, curveFit = fit, bank = bank };
+        // pit: the pit lane's side of the start straight (-1 right, +1 left), from where the cars leave the pits in the
+        // 2026 qualifying position data: on the right everywhere here except Austin (the only anticlockwise lap).
+        static CircuitDef Tum(string id, string name, double[,] d, double forest, double pole = 0, double[,] elev = null, double[,] real = null, double[,] fit = null, double[,] bank = null, int pit = -1) =>
+            new CircuitDef { id = id, name = name, metric = d, style = CircuitStyle.Parkland, forest = forest, realPole = pole, elev = elev, realCorners = real, curveFit = fit, bank = bank, pitSide = pit };
         // Monza (royal park): pole 1:21.786 Gasly 2026. 12.4 m range: a steady gentle climb from Parabolica (the lowest
         // point) up the start straight and through Curva Grande to the highest point before Roggia, down through the
         // Lesmos to the dip at the Serraglio underpass (2.4 % down, 1.6 % up), then gently down from Ascari to Parabolica.
@@ -296,7 +299,7 @@ namespace FormulaSim
         public static readonly CircuitDef Austin = Tum("austin", "Austin", TrackDataTum.Austin, 0.1, 94.035,
             TrackElev.Austin,
             new double[,] { { 666, 62, 60 }, { 1270, 235, 45 }, { 1362, 205, 45 }, { 1586, 215, 60 }, { 1724, 150, 60 }, { 1916, 165, 30 }, { 1978, 150, 30 }, { 2186, 250, 60 }, { 2594, 62, 60 }, { 3782, 72, 60 }, { 4018, 90, 45 }, { 4110, 125, 45 }, { 4296, 60, 60 }, { 5049, 150, 60 }, { 5363, 80, 60 } },
-            new double[,] { { 666, 14.1, 60 }, { 1270, 4.2, 45 }, { 1362, 22.0, 45 }, { 1586, 0.0, 60 }, { 1724, 19.2, 60 }, { 1916, 30.9, 30 }, { 1978, 9.8, 30 }, { 2186, 29.5, 60 }, { 2594, 13.1, 60 }, { 3782, 15.0, 60 }, { 4018, 21.1, 45 }, { 4110, 7.5, 45 }, { 4296, 11.7, 60 }, { 5049, 8.9, 60 }, { 5363, 15.9, 60 } } /*CURVEFIT:austin*/);
+            new double[,] { { 666, 14.1, 60 }, { 1270, 4.2, 45 }, { 1362, 22.0, 45 }, { 1586, 0.0, 60 }, { 1724, 19.2, 60 }, { 1916, 30.9, 30 }, { 1978, 9.8, 30 }, { 2186, 29.5, 60 }, { 2594, 13.1, 60 }, { 3782, 15.0, 60 }, { 4018, 21.1, 45 }, { 4110, 7.5, 45 }, { 4296, 11.7, 60 }, { 5049, 8.9, 60 }, { 5363, 15.9, 60 } } /*CURVEFIT:austin*/, pit: 1);
         // Hungaroring: pole 1:17.207 Norris 2026. 34.7 m range: highest on the start straight, downhill through T1
         // and T2 (7 % at the steepest, after T2) to the lowest point 150 m after T3, then a steady climb (5.7 % into T4)
         // back up through the middle sector, a dip between T11 and T13, and up out of T14.

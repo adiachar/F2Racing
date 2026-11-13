@@ -315,8 +315,12 @@ public static class Trackside
             // circuit centre: the pits usually sit on the inside
             var bb = t.Bounds(); var mid = new Vector3((float)(bb.minX + bb.maxX) * 0.5f, 0, (float)(bb.minY + bb.maxY) * 0.5f);
             int bestLen = 0, bestSide = 0, bestA = 0;
+            // the real pit side where the circuit data gives it (CircuitDef.pitSide); the other side only if that one has no room
+            int want = t.def != null ? t.def.pitSide : 0;
+            for (int pass = 0; pass < 2 && bestLen < 4; pass++)
             for (int sg = -1; sg <= 1; sg += 2)
             {
+                if (want != 0 && (pass == 0) != (sg == want)) continue;
                 int run = 0, runA = 0;
                 for (int b = 0; b <= nb; b++)
                 {
