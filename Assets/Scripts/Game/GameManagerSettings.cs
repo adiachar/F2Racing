@@ -225,8 +225,8 @@ public partial class GameManager
         // ---- CAR SETUP
         var setup = new SettingsUI.Tab("CAR SETUP");
         setup.Choice("Car", "In a session this restarts it with the new car.", CarConfig.ClassNames, 0, () => classIdx, v => { classIdx = v; if (InRace) { BuildLine(); ResetCar(); } }).NoReset();
-        var tyreNames = new string[CompoundTable.Defs.Length]; for (int i = 0; i < tyreNames.Length; i++) tyreNames[i] = CompoundTable.Defs[i].name;
-        setup.Choice("Tyre compound", "Soft grips most and wears fastest. Fitted at the next restart.", tyreNames, 0, () => compIdx, v => compIdx = v);
+        setup.Choice("Tyre compound", "Soft grips most, wears fastest. Inters for damp, Wets for rain. Fitted at the next restart.", Weather.TyreNames(), 0,
+            () => tyreSet, v => { tyreSet = v; compIdx = (int)Weather.PhysicsCompound(v); });
         setup.Slider("Aero balance", "Downforce on the front. More = sharper turn-in, looser rear.", 44, 54, 0.5f, 45, () => aeroBal, v => { aeroBal = v; SetupChanged(); }, v => $"{v:0.0}% F")
             .LockedWhen(() => classIdx == 0 ? null : "F1 2026 car only.");
         setup.Slider("Brake bias", "Braking on the front. Less = the car turns in more, rears lock sooner.", 50, 65, 0.5f, 57, () => brakeBiasPct, v => { brakeBiasPct = v; SetupChanged(); }, v => $"{v:0.0}% F");
@@ -272,6 +272,8 @@ public partial class GameManager
         var rivalNames = new string[RivalCounts.Length]; for (int i = 0; i < rivalNames.Length; i++) rivalNames[i] = RivalCounts[i] == 0 ? "None" : RivalCounts[i].ToString();
         game.Choice("Rivals", "Cars to race against. In a race this restarts it.", rivalNames, 1, () => rivalIdx, v => { rivalIdx = v; if (InRace) ResetCar(); }).NoReset();
         game.Choice("Rival level", "How fast the rivals drive. In a race this restarts it.", DiffNames, 0, () => diffIdx, v => { diffIdx = v; if (InRace) ResetCar(); }).NoReset();
+        game.Choice("Weather", "Damp: a drying line, less grip off it. Wet: rain, spray, much less grip. Rivals fit the right tyres at the next restart.", Weather.Names, 0,
+            () => Weather.Index, v => { Weather.Index = v; ApplyWeather(); });
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
         game.Choice("Driver read-out", "Grip, tyres, brakes and fuel in the top-left corner.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
         game.Choice("Mini-map", "The circuit map in the top-right corner.", hideShow, 1, () => hudMap ? 1 : 0, v => hudMap = v == 1);

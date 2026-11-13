@@ -3,6 +3,8 @@
 //  * a clear coat that reflects the sky probe, strongest at grazing angles (Fresnel),
 //  * below the horizon the coat reflects the road instead of the sky, which gives the body its horizon line,
 //  * a tight sun highlight, and a metallic tint for metal parts.
+// _Wet (global, Weather.cs: 0 dry .. 1 wet): a water film on the body: slightly darker, deeper base, a glossier and
+// stronger clear coat. No extra cost when dry beyond a few multiplies.
 // _CarLit (global, 0..1) dims reflections when the car is in a baked shadow (tunnel, under buildings).
 // Livery (_Livery = 1, body paint only): a second colour on the engine cover, the sidepod tops and the nose tip, with a
 // thin accent line along its edge. The areas are found from the car's own shape in object space (position and which
@@ -37,6 +39,7 @@ Shader "F2/CarPaint"
             half _Livery;
             half _Coat, _Gloss, _Metal;
             half _CarLit;
+            half _Wet;
             half4 _GroundRefl;
 
             struct v2f
@@ -88,17 +91,18 @@ Shader "F2/CarPaint"
                     half acc = saturate(sideAcc + engAcc + noseAcc) * (1.0 - sec);
                     base = lerp(lerp(base, _Color2.rgb, sec), _Color3.rgb, acc);
                 }
-                half3 diff = base * (ndl * _LightColor0.rgb + i.amb) * (1.0 - _Metal * 0.6);
+                half gloss = saturate(_Gloss + 0.08 * _Wet);
+                half3 diff = base * (ndl * _LightColor0.rgb + i.amb) * (1.0 - _Metal * 0.6) * (1.0 - 0.12 * _Wet);
                 half3 R = reflect(-V, N);
-                half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, (1.0 - _Gloss) * 6.0);
+                half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, (1.0 - gloss) * 6.0);
                 half3 env = DecodeHDR(envRaw, unity_SpecCube0_HDR);
-                env = lerp(env, _GroundRefl.rgb, smoothstep(0.02, -0.12, R.y));
+                env = lerp(env, _GroundRefl.rgb, 1.0 - smoothstep(-0.12, 0.02, R.y));
                 env *= lerp(0.35, 1.0, _CarLit);
                 half nv = saturate(dot(N, V));
                 half f = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
-                half coat = f * _Coat;
+                half coat = saturate(f * _Coat * (1.0 + 0.35 * _Wet) + 0.03 * _Wet);
                 half3 H = normalize(L + V);
-                half spec = pow(saturate(dot(N, H)), lerp(16.0, 512.0, _Gloss)) * ndl * lerp(0.5, 6.0, _Gloss);
+                half spec = pow(saturate(dot(N, H)), lerp(16.0, 512.0, gloss)) * ndl * lerp(0.5, 6.0, gloss);
                 half3 col = diff * (1.0 - coat) + env * (coat + _Metal * base) + spec * _LightColor0.rgb * (_Coat + _Metal);
                 fixed4 c = fixed4(col, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);

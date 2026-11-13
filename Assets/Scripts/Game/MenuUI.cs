@@ -133,7 +133,7 @@ public sealed class MenuUI
         GUI.Label(new Rect(px, S(8), pw, S(42)), Application.productName.ToUpperInvariant(), title);
         Fill(new Rect(px, S(53), S(44), S(3)), Accent);
         bool openSettings = GUI.Button(new Rect(px + pw - S(140), S(10), S(140), S(46)), "SETTINGS", secondary);
-        var panel = new Rect(px, S(66), pw, S(310));
+        var panel = new Rect(px, S(66), pw, S(330));
         Fill(panel, PanelCol);
         float pad = S(16), leftW = pw * 0.42f;
         bool pg = map == playgroundIdx;
@@ -155,12 +155,12 @@ public sealed class MenuUI
         // right: session
         float rx = panel.x + leftW + pad, rw = panel.xMax - pad - rx, ry = ly + S(20);
         GUI.Label(new Rect(rx, ly, rw, S(16)), "SESSION", caption);
-        float rowH = S(44), rowGap = S(6), labW = rw * 0.36f;
-        string[] labels = { "Car", "Rivals", "Rival level", "Race length" };
+        float rowH = S(40), rowGap = S(4), labW = rw * 0.36f;
+        string[] labels = { "Car", "Rivals", "Rival level", "Race length", "Weather" };
         for (int i = 0; i < labels.Length; i++)
         {
             float y = ry + i * (rowH + rowGap);
-            GUI.enabled = i == 0 || !pg; // the playground has no race
+            GUI.enabled = i == 0 || i == 4 || !pg; // the playground has no race
             GUI.Label(new Rect(rx, y, labW, rowH), labels[i], label);
             var sr = new Rect(rx + labW, y, rw - labW, rowH);
             if (i == 0) cls = Stepper(sr, cls, CarConfig.ClassNames.Length, CarConfig.ClassNames[cls]);
@@ -171,6 +171,7 @@ public sealed class MenuUI
                 int n = Stepper(sr, lapsIdx, LapCounts.Length, LapCounts[lapsIdx] + (LapCounts[lapsIdx] == 1 ? " lap" : " laps"));
                 if (n != lapsIdx) { lapsIdx = n; PlayerPrefs.SetInt("laps", lapsIdx); }
             }
+            if (i == 4) Weather.Index = Stepper(sr, Weather.Index, Weather.Names.Length, Weather.Names[Weather.Index]); // applied and saved at the start of the session
         }
         GUI.enabled = true;
         float by = panel.yMax - pad - S(54), bw = (rw - S(10)) / 2;

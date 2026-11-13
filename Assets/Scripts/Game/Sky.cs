@@ -3,6 +3,8 @@
 //  * a cloud layer + horizon haze (Clouds.shader) on a sphere round the camera just inside the far plane, drawn
 //    after the opaque world so the depth test leaves it only the sky pixels; one tiling noise texture made at load, 2 reads per pixel, scrolling with the wind,
 //  * a soft sun glare (SunGlare.shader): a camera-facing additive quad that fades as the sun leaves the screen.
+// Weather (Weather.cs): Damp / Wet close the sky (more cloud, greyer, darker), pull the fog in and take the sun glare
+// away, by changing these same values (Wetted); SetWeather re-applies them at once when the setting changes.
 // Cost: +2 draw calls (+1 when the sun is off-screen), no per-frame allocations. The cloud sphere sits on its own
 // layer so the one-off sky reflection probe (cars' paint) captures it too: Create renders the probe and keeps the
 // sphere round the probe until that render has finished.
@@ -82,6 +84,85 @@ public class Sky : MonoBehaviour
         return k;
     }
 
+    // ---------------------------------------------------------------- weather
+    // the circuit's look under rain: w 0 = dry (unchanged), 0.5 = damp (broken grey cloud), 1 = wet (closed, raining)
+    public static Look Wetted(Look k, float w)
+    {
+        if (w <= 0f) return k;
+        var grey = new Color(0.50f, 0.53f, 0.57f);
+        k.cover = Mathf.Lerp(k.cover, 0.98f, Mathf.Clamp01(w * 1.4f));
+        k.haze = Mathf.Lerp(k.haze, 1f, w);
+        k.deck = Mathf.Lerp(k.deck, 0.15f, w);                       // a low, even deck
+        k.wind *= 1f + 0.8f * w;
+        k.tint = Color.Lerp(k.tint, new Color(0.55f, 0.57f, 0.60f), w);
+        k.atmosphere = Mathf.Lerp(k.atmosphere, 1.3f, w);
+        k.exposure *= 1f - 0.35f * w;
+        k.fog = Color.Lerp(k.fog, grey, Mathf.Clamp01(w * 1.3f));
+        k.fogStart *= 1f - 0.75f * w;                                  // wet: fog from ~25 % of the dry start
+        k.fogEnd *= 1f - 0.55f * w;                                    // and gone by ~45 % of the dry distance
+        return k;
+    }
+    static float GlareMax(Look k, float w) => 0.5f * (1f - 0.65f * k.cover) * Mathf.Clamp01(1f - 1.6f * w); // none in the rain
+
+    static Look dryLook; static bool haveLook;
+    static Material skyInst; static Light sunLight; static float sunBase = -1f, shadowBase = 1f;
+    public static Sky Current;                                         // the live sky (null before the first build)
+    // 0..1: how much of the sun reaches the ground through the cloud (the cars' sun light follows this)
+    public static float SunShare => 1f - 0.55f * Weather.Wetness;
+
+    // Re-applies the sky, fog, clouds, sun and glare for a new weather without rebuilding the world, and re-renders
+    // the cars' sky reflection once (a one-off, like at the build).
+    public static void SetWeather(float w)
+    {
+        if (!haveLook) return;
+        var k = Wetted(dryLook, w);
+        SkyAndFog(k);
+        if (cloudMat != null) CloudParams(k);
+        SunFor(w);
+        var s = Current;
+        if (s == null) return;
+        s.glareMax = GlareMax(k, w); s.glareLast = -1f;
+        if (s.probeRef != null && s.probeRef.isActiveAndEnabled)
+        {
+            s.probe = s.probeRef; s.probeWait = 0;
+            if (s.dome != null) { s.dome.position = s.probeRef.transform.position; s.dome.localScale = Vector3.one * (s.probeRef.farClipPlane * DomeFill); }
+            s.probeId = s.probeRef.RenderProbe();
+        }
+    }
+
+    static void SkyAndFog(Look k)
+    {
+        if (skyInst != null)
+        {
+            skyInst.SetFloat("_AtmosphereThickness", k.atmosphere); skyInst.SetFloat("_Exposure", k.exposure);
+            skyInst.SetColor("_SkyTint", k.tint);
+        }
+        RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = k.fog;
+        RenderSettings.fogStartDistance = k.fogStart; RenderSettings.fogEndDistance = k.fogEnd;
+        var cam = Camera.main; if (cam != null && cam.clearFlags == CameraClearFlags.SolidColor) cam.backgroundColor = k.fog;
+    }
+
+    static void SunFor(float w)
+    {
+        if (sunLight == null) return;
+        if (sunBase < 0f) { sunBase = sunLight.intensity; shadowBase = sunLight.shadowStrength; }
+        sunLight.intensity = sunBase * (1f - 0.55f * w);
+        sunLight.shadowStrength = shadowBase * (1f - 0.7f * w);        // overcast: soft, faint shadows
+    }
+
+    static void CloudParams(Look k)
+    {
+        float c = k.cover;
+        cloudMat.SetFloat("_Cover", c);
+        cloudMat.SetFloat("_Scale", k.deck);
+        cloudMat.SetFloat("_Haze", k.haze);
+        cloudMat.SetFloat("_HazeHeight", 0.12f);
+        cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c) * (1f - 0.3f * Weather.Wetness));
+        cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.62f, 0.65f, 0.71f), new Color(0.42f, 0.45f, 0.50f), c) * (1f - 0.2f * Weather.Wetness));
+        cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * (1f - 0.5f * c));
+        cloudMat.SetVector("_Wind", new Vector4(0.030f, 0.012f, 0.050f, 0.020f) * ((0.7f + 0.6f * c) * k.wind));
+    }
+
     // ---------------------------------------------------------------- setup
     static Texture2D noiseTex, glareTex;
     static Mesh domeMesh, quadMesh;
@@ -91,7 +172,9 @@ public class Sky : MonoBehaviour
     // Skybox, fog and the sun (call at the top of the world build, before anything is fogged or baked).
     public static Look Setup(Track t, bool street, Light sun)
     {
-        var k = For(t, street);
+        dryLook = For(t, street); haveLook = true;
+        var k = Wetted(dryLook, Weather.Wetness);
+        sunLight = sun; sunBase = -1f; // dimmed in Create, after the road has read the dry sun colour and the bake is done
         var skyMat = Resources.Load<Material>("Sky");
         if (skyMat != null)
         {
@@ -99,7 +182,7 @@ public class Sky : MonoBehaviour
             skyMat.SetFloat("_SunSize", 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f);
             skyMat.SetFloat("_AtmosphereThickness", k.atmosphere); skyMat.SetFloat("_Exposure", k.exposure);
             skyMat.SetColor("_SkyTint", k.tint); skyMat.SetColor("_GroundColor", new Color(0.38f, 0.42f, 0.36f));
-            RenderSettings.skybox = skyMat;
+            RenderSettings.skybox = skyMat; skyInst = skyMat;
         }
         // the cloud shader paints the horizon in exactly this colour, so sky and fogged hills always meet
         RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = k.fog;
@@ -122,16 +205,8 @@ public class Sky : MonoBehaviour
             if (noiseTex == null) noiseTex = CloudNoise();
             if (domeMesh == null) domeMesh = Dome();
             if (cloudMat == null) cloudMat = new Material(cs) { mainTexture = noiseTex };
-            float c = k.cover;
-            cloudMat.SetFloat("_Cover", c);
-            cloudMat.SetFloat("_Scale", k.deck);
-            cloudMat.SetFloat("_Haze", k.haze);
-            cloudMat.SetFloat("_HazeHeight", 0.12f);
-            cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c));
-            cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.62f, 0.65f, 0.71f), new Color(0.42f, 0.45f, 0.50f), c));
-            cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * (1f - 0.5f * c));
+            CloudParams(k);
             cloudMat.SetVector("_SunDir", new Vector4(sky.sunDir.x, sky.sunDir.y, sky.sunDir.z, 0));
-            cloudMat.SetVector("_Wind", new Vector4(0.030f, 0.012f, 0.050f, 0.020f) * ((0.7f + 0.6f * c) * k.wind));
             var dome = new GameObject("Clouds"); dome.layer = Layer;
             dome.transform.SetParent(go.transform, false);
             dome.AddComponent<MeshFilter>().sharedMesh = domeMesh;
@@ -148,10 +223,11 @@ public class Sky : MonoBehaviour
             q.AddComponent<MeshFilter>().sharedMesh = quadMesh;
             sky.glare = q.AddComponent<MeshRenderer>();
             Plain(sky.glare, glareMat);
-            sky.glareMax = 0.5f * (1f - 0.65f * k.cover); // a cloudy sky diffuses the sun
+            sky.glareMax = GlareMax(k, Weather.Wetness); // a cloudy sky diffuses the sun; none in the rain
             sky.glare.enabled = false;
         }
-        sky.probe = probe;
+        sky.probe = probe; sky.probeRef = probe; Current = sky;
+        SunFor(Weather.Wetness);
         if (probe != null)
         {
             if (sky.dome != null)
@@ -188,7 +264,7 @@ public class Sky : MonoBehaviour
 
     // ---------------------------------------------------------------- per frame
     Transform dome; MeshRenderer glare; Vector3 sunDir; float glareMax, glareLast = -1f;
-    Camera cam; ReflectionProbe probe; int probeId, probeWait;
+    Camera cam; ReflectionProbe probe, probeRef; int probeId, probeWait;
     const float DomeFill = 0.9f;     // sphere radius / far clip (its flat facets stay inside the far plane)
     const float GlareFill = 0.8f;    // glare distance / far clip
     // radians: a glow ~50 degrees across; the sun stands 48 degrees up, above the top of a 62-degree view in normal
@@ -225,7 +301,7 @@ public class Sky : MonoBehaviour
             vis = Mathf.Clamp01((e + 0.35f) / 0.45f); vis = vis * vis * (3f - 2f * vis);
             vis *= 0.6f + 0.4f * Mathf.Clamp01(Vector3.Dot(ct.forward, sunDir)); // brighter looking straight at it
         }
-        bool on = vis > 0.01f && (glareTinted || vis > 0.35f);
+        bool on = vis > 0.01f && glareMax > 0.001f && (glareTinted || vis > 0.35f);
         if (glare.enabled != on) glare.enabled = on;
         if (!on) return;
         var gt = glare.transform;

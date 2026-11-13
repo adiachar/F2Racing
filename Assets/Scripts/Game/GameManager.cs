@@ -50,6 +50,8 @@ public partial class GameManager : MonoBehaviour
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
         mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == PlaygroundIdx; camMode = Mathf.Clamp(PlayerPrefs.GetInt("cam", 0), 0, CamNames.Length - 1); sound = PlayerPrefs.GetInt("snd", 1) == 1; showLine = PlayerPrefs.GetInt("line", 0) == 1; absOn = PlayerPrefs.GetInt("abs", 1) == 1; classIdx = Mathf.Clamp(PlayerPrefs.GetInt("class", 0), 0, CarConfig.ClassNames.Length - 1); compIdx = Mathf.Clamp(PlayerPrefs.GetInt("tyres", 0), 0, CompoundTable.Defs.Length - 1); gfxIdx = Mathf.Clamp(PlayerPrefs.GetInt("gfx", 0), 0, GfxNames.Length - 1);
         LoadSettings(); // everything the settings screen added (GameManagerSettings.cs)
+        Weather.Load(); // before the world is built: the sky and fog are made for it
+        tyreSet = Mathf.Clamp(PlayerPrefs.GetInt("tyreSet", compIdx), 0, Weather.Sets - 1); carSet = tyreSet;
         smoothIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltSmooth", 1), 0, SmoothCut.Length - 1); speedSteerIdx = Mathf.Clamp(PlayerPrefs.GetInt("speedSteer", 2), 0, SpeedSteer.Length - 1);
         ApplyScreenLock();
         Haptics.enabled = PlayerPrefs.GetInt("haptics", 1) == 1;
@@ -66,12 +68,17 @@ public partial class GameManager : MonoBehaviour
         cam.clearFlags = RenderSettings.skybox != null ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor; cam.backgroundColor = RenderSettings.fogColor;
         camGo.AddComponent<AudioListener>();
         audioEngine = camGo.AddComponent<EngineAudio>(); audioEngine.muted = !sound;
+        weatherFx = WeatherFx.Create(cam);
         ApplyAudio(); ApplyDisplay();
         ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx);
         ResetCar();
     }
 
-    int compIdx; // tyre compound
+    int compIdx; // tyre compound (physics; follows tyreSet)
+    int tyreSet, carSet, rivalSet; // tyre set chosen / on the player's car now / on the rivals (Weather: 0-2 slicks, 3 inter, 4 wet)
+    WeatherFx weatherFx;
+    // weather changed (start menu or settings): sky, fog, sun, glare and the road / paint globals at once
+    void ApplyWeather() { Weather.PushGlobals(); Sky.SetWeather(Weather.Wetness); }
     int builtFor = -1; double wallAt = 1e9; float hitT; bool menuOpen, absOn = true;
     void LoadMap()
     {
@@ -215,6 +222,7 @@ public partial class GameManager : MonoBehaviour
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
         PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("class", classIdx); PlayerPrefs.SetInt("tyres", compIdx); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.SetInt("haptics", Haptics.enabled ? 1 : 0); Livery.PlayerIndex = liveryIdx;
+        PlayerPrefs.SetInt("tyreSet", tyreSet); Weather.Save();
         SaveSettings(); // also writes the old "bal", "tiltDz", "tiltRange" and "brakeBias" keys
         PlayerPrefs.Save();
     }
@@ -223,7 +231,8 @@ public partial class GameManager : MonoBehaviour
     {
         car = new FormulaCar(PlayerConfig());
         car.windX = windX; car.windY = windY;
-        if (model != null) model.SetStripe(CarModel.StripeFor((Compound)compIdx));
+        carSet = tyreSet;
+        if (model != null) model.SetStripe(Weather.Stripe(carSet));
         SetupRivals();
         if (playground) { car.x = WorldBuilder.PadStart.x - 15; car.y = WorldBuilder.PadStart.y; car.heading = 0; }
         else
@@ -254,12 +263,17 @@ public partial class GameManager : MonoBehaviour
         rivals.Clear(); rivalModels.Clear(); rivalSpin.Clear(); rivalFar.Clear(); rivalNear.Clear();
         int count = playground || line == null || raceLaps == 0 ? 0 : RivalCounts[rivalIdx]; // free practice: alone
         var grid = DriverProfile.Grid;
+        rivalSet = Weather.BestSet(); // the rivals start on the right tyres for the weather
         for (int k = 0; k < count; k++)
         {
             // spread the picks over the whole field: stars, midfield and backmarkers
             var who = grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
             var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel();
-            var d = new AiDriver(track, line, rc, who, AiTuning.For(builtFor), DiffScale[diffIdx], k + 1);
+            rc.compound = Weather.PhysicsCompound(rivalSet);
+            // the speed profile's grip share multiplies the tyre mu directly (RacingLine.SpeedProfile), so the wet
+            // factor of their tyres on the racing line slows corners and braking just as the grip loss does
+            var tune = AiTuning.For(builtFor); tune.grip *= Weather.TrackFactor(rivalSet, 1);
+            var d = new AiDriver(track, line, rc, who, tune, DiffScale[diffIdx], k + 1);
             d.Place(track.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8);
             d.car.windX = windX; d.car.windY = windY;
             rivals.Add(d); rivalSpin.Add(0);
@@ -311,7 +325,7 @@ public partial class GameManager : MonoBehaviour
         for (int i = 0; i < rivals.Count; i++)
         {
             var d = rivals[i];
-            if (aiTick % 4 == 1) WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles);
+            if (aiTick % 4 == 1) { WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles); Weather.Apply(track, line, d.car, d.idx, d.lateral, rivalSet); }
             d.car.Step(raceTime >= Countdown ? d.LastInput : new CarInput(0, 0, 1), H);
         }
     }
@@ -458,6 +472,7 @@ public partial class GameManager : MonoBehaviour
     {
         var c = CarConfig.ForClass(classIdx);
         c.tc = tc; c.abs = absOn;
+        compIdx = (int)Weather.PhysicsCompound(tyreSet);
         c.speedSens = SpeedSteer[speedSteerIdx]; c.compound = (Compound)compIdx; c.fuelStart = RaceFuel();
         cfgClass = classIdx; ApplySetup(c); // steering rates and lock, aero balance, brakes, differential, ride heights
         return c;
@@ -519,7 +534,7 @@ public partial class GameManager : MonoBehaviour
             // the cars' sun dims when the player's car is inside a baked shadow
             float lit = playground ? 1 : LightBake.Sun((float)car.x, (float)car.y, model.transform.position.y + 0.6f);
             carLit += (lit - carLit) * Mathf.Min(1, dt * 8);
-            LightBake.CarSun.intensity = 1.25f * (0.12f + 0.88f * carLit);
+            LightBake.CarSun.intensity = 1.25f * (0.12f + 0.88f * carLit) * Sky.SunShare;
             Shader.SetGlobalFloat("_CarLit", carLit);
         }
         model.SetBrake(car.brake > 0.05); model.SetSteer((float)car.steerIn);
@@ -540,11 +555,18 @@ public partial class GameManager : MonoBehaviour
         }
         if (!Paused && raceLaps > 0 && !playground) Record(dt, rx, ry, rh, rd);
         UpdateSkids();
+        if (weatherFx != null)
+        {
+            weatherFx.Begin(gfxLevel, Paused ? 0f : (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy));
+            weatherFx.Spray(model.transform, (float)car.vx);
+            for (int i = 0; i < rivals.Count; i++) if (rivalNear[i]) weatherFx.Spray(rivalModels[i].transform, (float)rivals[i].car.vx);
+            weatherFx.End();
+        }
         AutoQuality();
         audioEngine.rpm = (float)car.rpm; audioEngine.throttle = (float)car.throttle;
         audioEngine.speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
         audioEngine.slide = Mathf.Max((float)car.useF, (float)car.useR); audioEngine.onAsphalt = surface != 2; audioEngine.onKerb = car.vib > 0.3;
-        audioEngine.carClass = classIdx;
+        audioEngine.carClass = classIdx; audioEngine.wet = Weather.Wetness;
         audioEngine.ersKw = double.IsNaN(car.ersKw) ? 0f : (float)car.ersKw;
         audioEngine.surface = surface != 2 ? surface
             : (car.wType[0] == SurfaceType.Gravel || car.wType[1] == SurfaceType.Gravel || car.wType[2] == SurfaceType.Gravel || car.wType[3] == SurfaceType.Gravel) ? 3 : 2;
@@ -578,6 +600,7 @@ public partial class GameManager : MonoBehaviour
             prevIdx = idx < 0 ? n.idx : idx; idx = n.idx; playerLat = n.lateral;
             double lat = System.Math.Abs(n.lateral), hw = track.width / 2;
             WheelContact.Update(track, line, car, idx, n.lateral, rubber, marbles);
+            Weather.Apply(track, line, car, idx, n.lateral, carSet); // wet grip, after the surface grip (game side only)
             // 0 = all on the track, 1 = a tyre on a kerb, 2 = a tyre off the circuit
             int onTrack = 0, onKerb = 0;
             for (int w = 0; w < 4; w++)
@@ -590,7 +613,7 @@ public partial class GameManager : MonoBehaviour
             return;
         }
         var s = surface == 0 ? Surfaces.Asphalt : surface == 1 ? Surfaces.Kerb : Surfaces.Grass;
-        car.surfaceMu = s.mu; car.surfaceDrag = s.drag;
+        car.surfaceMu = s.mu * Weather.PadFactor(surface, carSet); car.surfaceDrag = s.drag;
     }
 
     // rubber laid down on the circuit this session (0 = green track, 1 = fully rubbered-in): grows with the
@@ -655,16 +678,17 @@ public partial class GameManager : MonoBehaviour
     bool boxArmed; double pitLoss; int pitStops;
     void PitStop()
     {
-        var next = NextCompound;
+        carSet = NextSet; var next = Weather.PhysicsCompound(carSet);
         car.cfg.compound = next;
         car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0;
         car.tyreTF = car.tyreTR = car.cfg.tyreStart;       // straight off the blankets
         car.tyreSF = car.tyreSR = double.NaN;               // the surface temperature re-starts from the carcass
-        if (model != null) model.SetStripe(CarModel.StripeFor(next));
+        if (model != null) model.SetStripe(Weather.Stripe(carSet));
         pitLoss += PitLoss; pitStops++;
-        Flash($"Pit stop: {CompoundTable.Get(next).name}  +{PitLoss:0}s");
+        Flash($"Pit stop: {Weather.TyreName(carSet)}  +{PitLoss:0}s");
     }
-    Compound NextCompound => (Compound)(((int)car.cfg.compound + 1) % CompoundTable.Defs.Length);
+    // the next tyre set: the one for the weather first (a wet race boxes for wets), then round the rest
+    int NextSet => Weather.BestSet() != carSet ? Weather.BestSet() : (carSet + 1) % Weather.Sets;
     // a lap time in seconds, to turn the pit time loss into race distance
     double RefLap() => bestLap ?? lastLap ?? (line != null && line.lapTime > 0 ? line.lapTime : 90);
 
@@ -889,7 +913,7 @@ public partial class GameManager : MonoBehaviour
     {
         raceLaps = ui.practice ? 0 : MenuUI.LapCounts[ui.lapsIdx];
         if (lineFor != classIdx && world != null) { Destroy(world); world = null; } // new class: rebuild with its racing line
-        LoadMap();
+        LoadMap(); ApplyWeather(); // the menu may have changed the weather
         menuOpen = false; ApplyScreenLock();
         ResetCar(); Save();
         acc = 0; ui.page = MenuUI.Page.None;
@@ -955,7 +979,7 @@ public partial class GameManager : MonoBehaviour
         if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps)
         {
             var boxR = new Rect(Screen.width - S(8) - bw, S(162), bw, bh);
-            if (GUI.Button(boxR, boxArmed ? "BOXING" : "BOX", btn)) { boxArmed = !boxArmed; Flash(boxArmed ? $"Box this lap: {CompoundTable.Get(NextCompound).name}" : "Box cancelled"); }
+            if (GUI.Button(boxR, boxArmed ? "BOXING" : "BOX", btn)) { boxArmed = !boxArmed; Flash(boxArmed ? $"Box this lap: {Weather.TyreName(NextSet)}" : "Box cancelled"); }
         }
         if (!menuOpen && !playground && (surface == 2 || hitT > 0) && GUI.Button(new Rect(Screen.width / 2 - S(60), Screen.height * 0.5f, S(120), bh), "Back on track", btn)) Recover();
         // top-centre: lap time or test data
@@ -996,7 +1020,7 @@ public partial class GameManager : MonoBehaviour
         Panel(new Rect(S(8), S(8), S(178), tilt ? S(190) : S(174)));
         GUI.Label(new Rect(S(14), S(10), S(178), S(190)),
             (showFps ? fpsText + "\n" : "") + $"Front grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}   Brake bias {car.cfg.brakeBias * 100:0}%" +
-            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{CompoundTable.Get(car.cfg.compound).name} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nBrakes {car.brakeTF:0}° / {car.brakeTR:0}°" + (double.IsNaN(car.fuel) ? "" : $"\nFuel {car.fuel:0.0} kg ({car.fuelLastLap:0.00}/lap)  Tyres {car.tyrePF:0.0}/{car.tyrePR:0.0} psi") + $"\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
+            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{Weather.TyreName(carSet)} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nBrakes {car.brakeTF:0}° / {car.brakeTR:0}°" + (double.IsNaN(car.fuel) ? "" : $"\nFuel {car.fuel:0.0} kg ({car.fuelLastLap:0.00}/lap)  Tyres {car.tyrePF:0.0}/{car.tyrePR:0.0} psi") + $"\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
             (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
         }
 

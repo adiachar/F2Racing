@@ -16,6 +16,8 @@
 //  * wind that grows with speed (a low roar, a hiss past the helmet, slow buffeting; quieter and more
 //    turbulent in a slipstream), the plank scraping the road when the car bottoms out,
 //    a rumble on the kerbs, crunching on gravel and a soft swish on grass
+//  * weather (wet 0..1, Weather.cs): rain hissing on the car when it rains, and the tyres' spray hiss on a wet
+//    road, rising with speed (two noise filters on the effects channel); wet tyres squeal less
 // It runs in the audio mixer callback (OnAudioFilterRead), so the delay is one small audio buffer.
 // WebGL has no such callback; there it falls back to a streamed clip (slower to react).
 // The audio thread never allocates: all state is fields, all tables are static readonly.
@@ -35,6 +37,7 @@ public class EngineAudio : MonoBehaviour
     public volatile int carClass;              // 0 F1 2026, 1 Formula 2, 2 Formula 3
     public volatile float ersKw;               // MGU-K power: + deploying, - harvesting (F1 only)
     public volatile int surface;               // 0 asphalt, 1 kerb, 2 grass, 3 gravel
+    public volatile float wet;                 // 0 dry, 0.5 damp, 1 wet (raining)
     const float Volume = 0.55f;
     // volume settings, 0..1 (GameManager, Audio tab): everything, engine (with turbo and MGU-K), tyres, and
     // effects (wind, kerbs, gravel, grass)
@@ -86,7 +89,8 @@ public class EngineAudio : MonoBehaviour
     double whistlePh, kerbPh, limPh, chatPh, ersPh, swishPh;
     float pulseGain = 1, crackle;
     float chatG, ersG, ersF = 200, ersHm, gravG, grassG, gravEnv;
-    float lockFG, scrapeG, hissG, rearBias, slipLvl, buffet, scrapeGrit;
+    float lockFG, scrapeG, hissG, rearBias, slipLvl, buffet, scrapeGrit, rainG, sprayG;
+    readonly Biquad rainF = new Biquad(), sprayF = new Biquad();
     readonly Biquad lockFrF = new Biquad(), scrapeF = new Biquad(), scrapeLoF = new Biquad(), hissF = new Biquad();
     readonly Biquad body1 = new Biquad(), body2 = new Biquad(), tone = new Biquad(), scrubF = new Biquad(), squealF = new Biquad(), lockF = new Biquad(), spinF = new Biquad(), windF = new Biquad(), popF = new Biquad();
     readonly Biquad chatF = new Biquad(), gravF = new Biquad(), grassF = new Biquad(), rumbleF = new Biquad();
@@ -144,6 +148,7 @@ public class EngineAudio : MonoBehaviour
         chatF.BandPass(2600, 1.5f, rate); gravF.BandPass(1900, 0.8f, rate); grassF.LowPass(400, 0.7f, rate);
         rumbleF.LowPass(90, 0.7f, rate);
         lockFrF.BandPass(980, 7f, rate); scrapeF.BandPass(2700, 1.1f, rate); scrapeLoF.BandPass(240, 1.5f, rate); hissF.BandPass(3200, 0.6f, rate);
+        rainF.BandPass(5200, 0.5f, rate); sprayF.BandPass(1800, 0.8f, rate);
     }
 
     void Render(float[] data, int channels, bool add)
@@ -170,13 +175,16 @@ public class EngineAudio : MonoBehaviour
         bool asph = onAsphalt && surf <= 1;
         float tScrub = asph && sp > 8 ? Mathf.Clamp01((sl - 0.80f) / 0.18f) * 0.05f : 0;
         float tSqueal = asph && sp > 6 ? Mathf.Clamp((sl - 0.97f) * 1.6f, 0, 0.12f) : 0;
+        float wetIn = Mathf.Clamp01(wet); if (float.IsNaN(wet)) wetIn = 0;
+        float tRain = wetIn > 0.75f ? 0.014f + 0.012f * Mathf.Clamp01(sp / 80f) : 0;      // drops on the bodywork and helmet
+        float tSpray = asph || surf == 1 ? wetIn * Mathf.Clamp01(sp / 60f) * 0.06f : 0;   // water off the tyres
         // slip angle against the angle of peak grip: the scrub starts at 45 % of it and is full at the limit,
         // the squeal comes in just past the limit. (The terms above cover braking and traction in a straight line.)
         float sF = slipF, sR = slipR; if (float.IsNaN(sF)) sF = 0; if (float.IsNaN(sR)) sR = 0;
         float sMax = Mathf.Max(sF, sR), spK = asph ? Mathf.Clamp01((sp - 6f) / 10f) : 0;
         float rise = Mathf.Clamp01((sMax - 0.45f) / 0.55f); rise *= Mathf.Sqrt(rise);
         tScrub = Mathf.Max(tScrub, rise * 0.055f * spK);
-        tSqueal = Mathf.Max(tSqueal, Mathf.Clamp((sMax - 1.05f) * 0.2f, 0, 0.12f) * spK);
+        tSqueal = Mathf.Max(tSqueal, Mathf.Clamp((sMax - 1.05f) * 0.2f, 0, 0.12f) * spK) * (1 - 0.6f * wetIn);
         float tRear = sR / (sF + sR + 0.001f), tSlip = Mathf.Clamp(sMax, 0, 1.6f);
         float tLock = asph && sp > 4 ? Mathf.Clamp01(lockup) * 0.16f : 0;
         float tLockF = asph && sp > 4 ? Mathf.Clamp01(lockFront) * 0.15f : 0;
@@ -214,6 +222,7 @@ public class EngineAudio : MonoBehaviour
             ersG += (tErsG - ersG) * kS; ersHm += (tErsHm - ersHm) * kS; ersF += (tErsF - ersF) * kG;
             lockFG += (tLockF - lockFG) * kS; scrapeG += (tScrape - scrapeG) * kG; hissG += (tHiss - hissG) * kS;
             rearBias += (tRear - rearBias) * kS; slipLvl += (tSlip - slipLvl) * kS;
+            rainG += (tRain - rainG) * kS; sprayG += (tSpray - sprayG) * kS;
             if ((i & 31) == 0)
             {
                 float f0c = curRpm / 60f * 3f;
@@ -222,6 +231,7 @@ public class EngineAudio : MonoBehaviour
                 body2.BandPass(Mathf.Clamp(f0c * b2Mul, 300, 3200), b2Q, fs);
                 tone.LowPass(toneBase + curThr * toneThr + curRpm * toneRpm, 0.8f, fs);
                 windF.LowPass(350 + sp * 14f, 0.7f, fs);
+                if (sprayG > 1e-4f) sprayF.BandPass(900 + sp * 22f, 0.8f, fs);
                 if (grassG > 1e-4f) grassF.LowPass(250 + sp * 8f, 0.7f, fs);
                 // the tyre note climbs as the slip grows; fronts sound lower (understeer), rears higher (oversteer)
                 if (scrub > 1e-4f) scrubF.BandPass(620 + 380 * Mathf.Min(1, slipLvl) + 260 * rearBias, 1.2f, fs);
@@ -277,6 +287,8 @@ public class EngineAudio : MonoBehaviour
             float wn = Noise();
             buffet += (wn - buffet) * kBuf;
             float wind = (windF.Run(wn) * windG + hissF.Run(wn) * hissG) * Mathf.Max(0.3f, 1 + buffet * buffDepth * 8f);
+            if (rainG > 1e-5f) wind += rainF.Run(wn) * rainG;
+            if (sprayG > 1e-5f) wind += sprayF.Run(n) * sprayG;
             if (scrapeG > 1e-5f)
             {
                 // plank on the road: a gritty, bright scrape in short random bursts over a dull grinding

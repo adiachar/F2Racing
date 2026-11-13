@@ -1,4 +1,7 @@
 // Road.cginc — shared code of Road.shader (both levels). Define ROAD_HQ before including for the Medium/High path.
+// Weather: the global _Wet (Weather.cs: 0 dry, 0.5 damp, 1 wet; set with Shader.SetGlobalFloat, not a material
+// property) darkens the surface and mirrors the sky in it with a water Fresnel term. Damp: the racing line has dried.
+// Wet: standing water in the low, off-line patches (HQ only). At _Wet = 0 every wet term is zero.
 #ifndef F2_ROAD_INCLUDED
 #define F2_ROAD_INCLUDED
 #include "UnityCG.cginc"
@@ -21,6 +24,8 @@ struct v2f
 #ifdef ROAD_HQ
     float3 view : TEXCOORD4;  // surface -> camera (world)
     half3 n : TEXCOORD5;
+#else
+    half fres : TEXCOORD4;    // Low: Fresnel (1 - N.V)^5 per vertex, for the wet sky reflection
 #endif
 };
 
@@ -28,6 +33,7 @@ sampler2D _MainTex;
 fixed4 _Asphalt, _Dust, _Paint, _KerbRed, _SunCol;
 float _HalfWidth, _MipBias;
 float4 _Grid, _SunDir;
+half _Wet; // global (Weather.cs)
 
 v2f vert (appdata v)
 {
@@ -51,6 +57,9 @@ v2f vert (appdata v)
 #ifdef ROAD_HQ
     o.view = toCam;
     o.n = UnityObjectToWorldNormal(v.normal);
+#else
+    half fv = 1.0 - saturate(dot(toCam / max(dist, 1e-3), UnityObjectToWorldNormal(v.normal)));
+    half fv2 = fv * fv; o.fres = fv2 * fv2 * fv;
 #endif
     return o;
 }
@@ -124,7 +133,25 @@ fixed4 frag (v2f i) : SV_Target
     kc *= 1.0 - 0.25 * smoothstep(0.82, 1.0, across);                 // outer lip
     col = kerb ? kc : col;
 
+    // ---- wet: damp already looks well wet off the line; in the damp the racing line has dried (none of that when wet)
+    half wv = saturate(_Wet * 1.6);
+    half dryLine = kerb ? 0.0 : broad * saturate(2.0 - 2.0 * _Wet);
+    half wet = wv * (1.0 - 0.85 * dryLine);
+#ifdef ROAD_HQ
+    // standing water (wet only): in the low, resurfaced patches and dips of the macro layer, off the line and
+    // towards the edges where the camber drains to
+    half low = saturate((blotch + 0.6 * patch - 0.58) * 5.0) + edge * 0.5;
+    half pool = kerb ? 0.0 : saturate(low * saturate(abs(x) * 0.8 - 1.0) * saturate(_Wet * 2.0 - 1.0));
+#else
+    half pool = 0.0;
+#endif
+    // wet asphalt is about half as bright; paint and kerbs (smooth, light) darken less; water darkens more still
+    half darken = kerb ? 0.28 : 0.45 - 0.23 * paint;
+    col *= (1.0 - wet * darken) * (1.0 - 0.3 * pool);
+
     col *= i.color;
+    // the sky over the road is seen in the wet surface: as bright as the open sky, less in tunnels and deep shade
+    half skyVis = saturate(dot(i.color, half3(0.3, 0.59, 0.11)) * 1.4);
 
 #ifdef ROAD_HQ
     // ---- sheen: low sun glints off the asphalt (polished rubber and paint more), the sky at grazing angles
@@ -134,12 +161,21 @@ fixed4 frag (v2f i) : SV_Target
     half s = saturate(dot(V, R));
     // rough asphalt: a broad forward-scatter lobe (the road brightens looking towards the sun even when it is high)
     // plus a tight glint; s^32 by repeated squaring
-    half broad = saturate(s * 1.6 - 0.6); broad *= broad;
+    half lobe = saturate(s * 1.6 - 0.6); lobe *= lobe;
     half s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s32 = s8 * s8; s32 *= s32;
     half gloss = 0.35 + 0.55 * rub + 0.4 * paint + (kerb ? 0.5 : 0.0) + 0.5 * d.a * fade; // stones sparkle near
-    half3 spec = _SunCol.rgb * (broad * 0.45 + s32 * 0.6) * gloss * i.misc.w;
+    half3 spec = _SunCol.rgb * (lobe * 0.45 + s32 * 0.6) * gloss * i.misc.w;
     half f = 1.0 - saturate(dot(V, N)); half f2 = f * f; half fres = f2 * f2 * f;
-    col += spec + unity_FogColor.rgb * (fres * 0.22 * (0.6 + 0.4 * gloss));
+    // wet: a water film mirrors the sky (Schlick, F0 = 0.02 for water) and the sun in a sharp, bright glint
+    // (s^128), dimmed by the overcast; rubber and puddles are the smoothest, so they shine most
+    half wetG = saturate(wet * (0.75 + 0.25 * paint + 0.3 * rub) + pool);
+    half s128 = s32 * s32; s128 *= s128;
+    spec += _SunCol.rgb * ((s32 * 0.8 + s128 * 3.0) * wetG * (1.0 - 0.7 * _Wet) * (0.3 + 0.7 * i.misc.w));
+    col = lerp(col, unity_FogColor.rgb * skyVis, saturate((0.02 + 0.98 * fres) * wetG * 0.95));
+    col += spec + unity_FogColor.rgb * (fres * 0.22 * (0.6 + 0.4 * gloss) * (1.0 - wetG));
+#else
+    // Low: the same sky mirror, with the Fresnel term from the vertex shader; no glint
+    col = lerp(col, unity_FogColor.rgb * skyVis, saturate((0.02 + 0.98 * i.fres) * wet * 0.85));
 #endif
 
     fixed4 c = fixed4(col, 1);
