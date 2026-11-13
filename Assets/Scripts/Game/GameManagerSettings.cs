@@ -162,7 +162,7 @@ public partial class GameManager
     float AssistBrake()
     {
         if (brakeAssist == 0 || playground || car == null || car.reverse || line == null || line.speed == null || track == null || idx < 0 || line.N != track.N) return 0;
-        if (rivals.Count > 0 && raceTime < Countdown) return 0;
+        if (GridStart && raceTime < Countdown) return 0;
         double v = car.vx; if (v < 8) return 0;
         int ahead = (int)(v * 0.3 / track.ds);
         double vt = double.MaxValue;
@@ -272,6 +272,7 @@ public partial class GameManager
         var rivalNames = new string[RivalCounts.Length]; for (int i = 0; i < rivalNames.Length; i++) rivalNames[i] = RivalCounts[i] == 0 ? "None" : RivalCounts[i].ToString();
         game.Choice("Rivals", "Cars to race against. In a race this restarts it.", rivalNames, 1, () => rivalIdx, v => { rivalIdx = v; if (InRace) ResetCar(); }).NoReset();
         game.Choice("Rival level", "How fast the rivals drive. In a race this restarts it.", DiffNames, 0, () => diffIdx, v => { diffIdx = v; if (InRace) ResetCar(); }).NoReset();
+        game.Choice("Grid position", "Where you start a race: last, random, pole or a set place. In a race this restarts it.", MenuUI.GridNames, 0, () => ui.gridIdx, v => { ui.SetGrid(v); if (InRace) ResetCar(); }).NoReset();
         game.Choice("Weather", "Damp: a drying line, less grip off it. Wet: rain, spray, much less grip. Rivals fit the right tyres at the next restart.", Weather.Names, 0,
             () => Weather.Index, v => { Weather.Index = v; ApplyWeather(); });
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);

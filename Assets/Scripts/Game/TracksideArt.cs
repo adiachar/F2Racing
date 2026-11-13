@@ -287,4 +287,60 @@ public static class TracksideArt
         t.SetPixels32(px); t.Apply(true, true);
         return t;
     }
+
+    // ---------------------------------------------------------------- start lights
+    // The gantry's lamps are baked into the merged trackside mesh, so the lit lamps are one small extra mesh of ten
+    // glowing quads laid just in front of them (same layout as Trackside's gantry at track point 0): one draw call,
+    // rebuilt only when the count changes. litCount 0..5 = columns lit from the left; 0 hides it.
+    static GameObject lightsGo; static Mesh lightsMesh; static FormulaSim.Track lightsFor; static int lightsLit = -1;
+    public static void SetStartLights(int litCount, FormulaSim.Track t = null, Transform parent = null)
+    {
+        litCount = Mathf.Clamp(litCount, 0, 5);
+        if (t != null && (lightsGo == null || lightsFor != t)) BuildStartLights(t, parent);
+        if (lightsGo == null) return;
+        if (litCount == lightsLit) return;
+        lightsLit = litCount;
+        lightsGo.SetActive(litCount > 0);
+        if (litCount == 0) return;
+        var cols = new Color32[40];
+        for (int q = 0; q < 10; q++)
+        {
+            int col = q / 2; var c = col < litCount ? new Color32(255, 30, 20, 255) : new Color32(0, 0, 0, 0);
+            for (int k = 0; k < 4; k++) cols[q * 4 + k] = c;
+        }
+        lightsMesh.colors32 = cols;
+    }
+
+    static void BuildStartLights(FormulaSim.Track t, Transform parent)
+    {
+        if (lightsGo != null) Object.Destroy(lightsGo);
+        var p = t.pts[0];
+        Vector3 c = new Vector3((float)p.x, 0f, (float)p.y), T = new Vector3((float)p.tx, 0f, (float)p.ty).normalized;
+        Vector3 Nn = new Vector3((float)p.nx, 0f, (float)p.ny).normalized, up = Vector3.up;
+        const float beamY = 6.8f; // as Trackside's gantry
+        Vector3 panel = c + up * (beamY - 1.2f) - T * 0.3f;
+        Vector3 right = Vector3.Cross(-T, up).normalized;
+        var v = new Vector3[40]; var tri = new int[60];
+        for (int col = 0; col < 5; col++)
+            for (int row = 0; row < 2; row++)
+            {
+                int q = col * 2 + row, b = q * 4;
+                Vector3 lc = panel + Nn * ((col - 2) * 0.95f) + up * (row == 0 ? 0.3f : -0.3f) - T * 0.19f;
+                const float h = 0.17f;
+                v[b] = lc - right * h - up * h; v[b + 1] = lc + right * h - up * h; v[b + 2] = lc + right * h + up * h; v[b + 3] = lc - right * h + up * h;
+                for (int k = 0; k < 4; k++) v[b + k].y += WorldBuilder.H(v[b + k].x, v[b + k].z);
+                tri[q * 6] = b; tri[q * 6 + 1] = b + 2; tri[q * 6 + 2] = b + 1; tri[q * 6 + 3] = b; tri[q * 6 + 4] = b + 3; tri[q * 6 + 5] = b + 2;
+            }
+        lightsMesh = new Mesh { name = "StartLights", vertices = v, triangles = tri, colors32 = new Color32[40] };
+        lightsMesh.RecalculateBounds();
+        lightsGo = new GameObject("StartLights");
+        if (parent != null) lightsGo.transform.SetParent(parent, false);
+        lightsGo.AddComponent<MeshFilter>().sharedMesh = lightsMesh;
+        var mr = lightsGo.AddComponent<MeshRenderer>();
+        var sh = Shader.Find("Sprites/Default"); // always in builds; vertex colour, no lighting, both faces
+        mr.sharedMaterial = new Material(sh);
+        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; mr.receiveShadows = false;
+        lightsGo.SetActive(false);
+        lightsFor = t; lightsLit = -1;
+    }
 }

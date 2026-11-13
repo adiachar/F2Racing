@@ -235,17 +235,17 @@ public partial class GameManager : MonoBehaviour
         if (model != null) model.SetStripe(Weather.Stripe(carSet));
         SetupRivals();
         if (playground) { car.x = WorldBuilder.PadStart.x - 15; car.y = WorldBuilder.PadStart.y; car.heading = 0; }
+        else if (GridStart) PlacePlayerOnGrid(); // a race: the slot chosen on the start menu (GameManagerStart.cs)
         else
         {
-            // the player starts from the last grid slot
-            int k = rivals.Count; double side = rivals.Count == 0 ? 0 : (k % 2 == 0 ? 1 : -1) * 1.8;
-            var p = track.pts[track.N - (rivals.Count == 0 ? 30 : 15 + k * 4)];
-            car.x = p.x + p.nx * side; car.y = p.y + p.ny * side; car.heading = System.Math.Atan2(p.ty, p.tx);
+            var p = track.pts[track.N - 30]; // practice: alone, on the centre of the straight
+            car.x = p.x; car.y = p.y; car.heading = System.Math.Atan2(p.ty, p.tx);
         }
         raceTime = 0; pLap = 0; aiTick = 0; boxArmed = false; pitLoss = 0; pitStops = 0;
         if (raceLaps > 0) { bestLap = lastLap = null; lapNo = 1; } // a race keeps its own lap records
         idx = prevIdx = -1; lapStart = null; cut = false; offTime = wrongTime = 0; t100 = null; launchT = -1; topSpeed = 0;
         Flash(MapNames[mapIdx]);
+        StartReset(); // lights, launch, jump-start check (GameManagerStart.cs)
     }
 
     // ---------------------------------------------------------------- rivals
@@ -254,7 +254,7 @@ public partial class GameManager : MonoBehaviour
     static readonly double[] DiffScale = { 0.82, 0.89, 0.95, 1.0 }; int diffIdx;
     readonly List<AiDriver> rivals = new List<AiDriver>(); readonly List<CarModel> rivalModels = new List<CarModel>(); readonly List<float> rivalSpin = new List<float>();
     readonly List<CarModel> rivalFar = new List<CarModel>(); readonly List<bool> rivalNear = new List<bool>();
-    const double Countdown = 3; double raceTime; int pLap, aiTick; double playerLat;
+    double raceTime; int pLap, aiTick; double playerLat;
 
     void SetupRivals()
     {
@@ -264,6 +264,7 @@ public partial class GameManager : MonoBehaviour
         int count = playground || line == null || raceLaps == 0 ? 0 : RivalCounts[rivalIdx]; // free practice: alone
         var grid = DriverProfile.Grid;
         rivalSet = Weather.BestSet(); // the rivals start on the right tyres for the weather
+        ChooseGridSlot(count + 1);
         for (int k = 0; k < count; k++)
         {
             // spread the picks over the whole field: stars, midfield and backmarkers
@@ -274,7 +275,7 @@ public partial class GameManager : MonoBehaviour
             // factor of their tyres on the racing line slows corners and braking just as the grip loss does
             var tune = AiTuning.For(builtFor); tune.grip *= Weather.TrackFactor(rivalSet, 1);
             var d = new AiDriver(track, line, rc, who, tune, DiffScale[diffIdx], k + 1);
-            d.Place(track.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8);
+            PlaceRival(d, k); // the k-th grid slot the player does not take (GameManagerStart.cs)
             d.car.windX = windX; d.car.windY = windY;
             rivals.Add(d); rivalSpin.Add(0);
             var col = new Color(who.r, who.g, who.b);
@@ -326,7 +327,7 @@ public partial class GameManager : MonoBehaviour
         {
             var d = rivals[i];
             if (aiTick % 4 == 1) { WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles); Weather.Apply(track, line, d.car, d.idx, d.lateral, rivalSet); }
-            d.car.Step(raceTime >= Countdown ? d.LastInput : new CarInput(0, 0, 1), H);
+            d.car.Step(RivalStartInput(i, d), H); // held until lights out + reaction time, then the launch clutch
         }
     }
 
@@ -495,8 +496,8 @@ public partial class GameManager : MonoBehaviour
             SetSurface();
             px = car.x; py = car.y; ph = car.heading; pd = car.delta;
             if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
-            if (rivals.Count > 0 && raceTime < Countdown) input = new CarInput(input.steer, 0, 1); // wait for the lights
-            car.Step(input, H);
+            car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
+            StartAfterStep();
             double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one
             if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt))
             {
@@ -538,6 +539,7 @@ public partial class GameManager : MonoBehaviour
             Shader.SetGlobalFloat("_CarLit", carLit);
         }
         model.SetBrake(car.brake > 0.05); model.SetSteer((float)car.steerIn);
+        model.Feed(car, dt, surface == 0);
         for (int i = 0; i < rivals.Count; i++)
         {
             var c = rivals[i].car;
@@ -552,6 +554,7 @@ public partial class GameManager : MonoBehaviour
             double back = (1 - acc / H) * H, cch = System.Math.Cos(c.heading), csh = System.Math.Sin(c.heading);
             rm.Apply(c.x - (c.vx * cch - c.vy * csh) * back, c.y - (c.vx * csh + c.vy * cch) * back, c.heading - c.r * back, c.delta, rivalSpin[i], rivalSpin[i], 0, 0);
             rm.SetBrake(c.brake > 0.05);
+            rm.Feed(c, dt);
         }
         if (!Paused && raceLaps > 0 && !playground) Record(dt, rx, ry, rh, rd);
         UpdateSkids();
@@ -571,6 +574,7 @@ public partial class GameManager : MonoBehaviour
         audioEngine.surface = surface != 2 ? surface
             : (car.wType[0] == SurfaceType.Gravel || car.wType[1] == SurfaceType.Gravel || car.wType[2] == SurfaceType.Gravel || car.wType[3] == SurfaceType.Gravel) ? 3 : 2;
         audioEngine.redline = (float)car.cfg.redline; audioEngine.shifting = car.shiftTimer > 0;
+        StartAudio();
         audioEngine.wheelspin = car.throttle > 0.05 ? Mathf.Clamp01(((float)car.slipRatioR - 0.14f) / 0.4f) : 0;
         audioEngine.lockup = car.lockR ? 1 : car.brake > 0.05 ? Mathf.Clamp01((-(float)car.slipRatioR - 0.2f) / 0.4f) : 0; // rears; the fronts have their own squeal
         DriverFeel.FeedAudio(audioEngine, car, audioEngine.speed); // slip angles against the limit, front lock-up, plank scrape, slipstream
@@ -930,7 +934,7 @@ public partial class GameManager : MonoBehaviour
             rows[i + 1] = new MenuUI.Row { name = w.name, colour = new Color(w.r, w.g, w.b), progress = rivals[i].progress, best = rivals[i].bestLap };
         }
         double refLap = RefLap(); // turns lap fractions into seconds
-        ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (rivals.Count > 0 ? Countdown : 0) + pitLoss, refLap, pitStops);
+        ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (GridStart ? Countdown : 0) + pitLoss, refLap, pitStops, jumped ? JumpPenalty : 0);
     }
 
     // ---------------------------------------------------------------- HUD
@@ -1025,11 +1029,7 @@ public partial class GameManager : MonoBehaviour
         }
 
         if (hudMap) DrawMiniMap();
-        if (rivals.Count > 0 && raceTime < Countdown + 0.8)
-        {
-            center.fontSize = (int)S(54);
-            GUI.Label(new Rect(0, Screen.height * 0.18f, Screen.width, S(70)), raceTime < Countdown ? Mathf.CeilToInt((float)(Countdown - raceTime)).ToString() : "GO!", center);
-        }
+        DrawStartLights(); // the five red lights (GameManagerStart.cs)
 
         // pedals
         Pedal(GasRect, pedalGas, new Color(0.24f, 0.86f, 0.52f), "GAS");

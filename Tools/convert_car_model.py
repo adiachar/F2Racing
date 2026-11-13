@@ -1,6 +1,10 @@
 # Convert the SF-26 glb into a compact, logo-free, mobile-ready mesh file for the game.
 # Output: car.bytes (custom binary, read by CarModel.cs) — Unity frame: x right, y up, z forward, origin = CG on the ground.
+# Format F2M2: per part name, material, pivot, positions, normals, RGBA8 vertex colours, indices. Colours:
+#   R = ambient occlusion seen along the normal (255 = open), B = the same for the back face (two-sided parts),
+#   G = brake-disc mask on the wheel hub parts (CarPaint.shader makes it glow with the brake temperature).
 import trimesh, numpy as np, struct, fast_simplification, sys
+from scipy.spatial import cKDTree
 # usage: convert.py [lod|far|full]
 MODE = sys.argv[1] if len(sys.argv) > 1 else ''
 # lod = rival cars close by, far = rival cars in the distance (the game swaps between them by distance)
@@ -91,11 +95,58 @@ Mlin = np.zeros((3, 3)); Mlin[2, L_AX] = np.sign(fz - rz); Mlin[0, W_AX] = (1 if
 MIRROR = np.linalg.det(Mlin) < 0
 print('axis map det', np.linalg.det(Mlin), 'flip winding', MIRROR)
 
-out = []  # (name, matId, pivot(xyz), pos, nrm, faces)
+# ---------------------------------------------------------------- baked ambient occlusion (vertex colours)
+# The whole car (full detail) is sampled into a voxel grid; from every exported vertex rays are marched out over the
+# hemisphere around its normal. Cheap at run time (one multiply in the shader) and it darkens the panel gaps,
+# the gaps between bodywork and floor, the inside of the sidepod undercut and the spokes' roots.
+VS = 0.015
+def make_grid(meshes, pad=0.5):
+    pts = []
+    for m in meshes:
+        if m is None: continue
+        n = int(min(700_000, max(2000, m.area * scale * scale / (VS * 0.6) ** 2)))
+        for k in range(0, n, 100_000):   # in batches: the sampler's temporaries are large
+            pts.append(to_unity(np.asarray(trimesh.sample.sample_surface(m, min(100_000, n - k))[0])).astype(np.float32))
+    pts = np.concatenate(pts); lo = pts.min(0) - pad; dims = np.ceil((pts.max(0) + pad - lo) / VS).astype(int) + 1
+    g = np.zeros(dims, bool); ij = ((pts - lo) / VS).astype(int); g[ij[:, 0], ij[:, 1], ij[:, 2]] = True
+    d = g.copy()  # thicken the shell by one voxel so marching rays cannot step through it
+    for ax in range(3):
+        for sh in (1, -1): d |= np.roll(g, sh, ax)
+    return d, lo
+_k = np.arange(24) + 0.5; _phi = np.arccos(1 - 2 * _k / 24); _th = np.pi * (1 + 5 ** 0.5) * _k
+DIRS = np.stack([np.cos(_th) * np.sin(_phi), np.cos(_phi), np.sin(_th) * np.sin(_phi)], 1)
+STEPS = np.arange(0.03, 0.46, 0.025)
+def bake_ao(P, N, grid, ground=True):
+    g, lo = grid; res = np.empty(len(P), np.float32)
+    for c0 in range(0, len(P), 1500):
+        p = P[c0:c0 + 1500]; n = N[c0:c0 + 1500]
+        cs = n @ DIRS.T; w = np.clip(cs, 0, None) ** 0.7 * (cs > 0.1)                      # (V, D)
+        q = p[:, None, None, :] + n[:, None, None, :] * 0.03 + DIRS[None, :, None, :] * STEPS[None, None, :, None]
+        ij = np.floor((q - lo) / VS).astype(int)
+        inside = np.all((ij >= 0) & (ij < np.array(g.shape)), -1)
+        ij = np.clip(ij, 0, np.array(g.shape) - 1)
+        hit = g[ij[..., 0], ij[..., 1], ij[..., 2]] & inside
+        if ground: hit |= q[..., 1] < 0.0
+        fall = 1 - STEPS / 0.55                                                              # near occluders count more
+        occ = (hit * fall[None, None, :]).max(-1)                                            # (V, D)
+        res[c0:c0 + 1500] = 1 - (occ * w).sum(1) / np.maximum(w.sum(1), 1e-6)
+    return res
+def colours(P, N, grid, ground=True, two=False, g_mask=None):
+    a = bake_ao(P, N, grid, ground); b = bake_ao(P, -N, grid, ground) if two else a
+    c = np.zeros((len(P), 4), np.uint8)
+    c[:, 0] = np.clip(a * 255, 0, 255); c[:, 2] = np.clip(b * 255, 0, 255); c[:, 3] = 255
+    if g_mask is not None: c[:, 1] = g_mask * 255
+    return c
+_allsrc = [get(v) for v in GROUPS.values()]
+GRID = make_grid(_allsrc); del _allsrc; import gc; gc.collect()
+print('AO grid', GRID[0].shape)
+TWO = {1, 2, 3, 6}   # two-sided materials (CarModel twins them): bake the back face too
+
+out = []  # (name, matId, pivot(xyz), pos, nrm, faces, colours)
 MAT = {'paint_red': 0, 'paint_white': 1, 'carbon': 2, 'metal': 3, 'tyre': 4, 'hub': 5, 'light': 6, 'white': 1}
 # body paint: one colour, kept at full detail (it is the smooth surface the eye rests on, and what the driver sees
 # from the cockpit; simplifying it left jagged shards)
-r = export_mesh(get(GROUPS['paint']), 31000); out.append(('paint_red', MAT['paint_red'], (0, 0, 0)) + r)
+r = export_mesh(get(GROUPS['paint']), 31000); out.append(('paint_red', MAT['paint_red'], (0, 0, 0)) + r + (colours(r[0], r[1], GRID),))
 for g, tgt in (('carbon', 56000), ('white', 1000), ('metal', 1500), ('light', 400)):
     r = export_mesh(get(GROUPS[g]), tgt)
     if r and g == 'carbon':
@@ -103,22 +154,27 @@ for g, tgt in (('carbon', 56000), ('white', 1000), ('metal', 1500), ('light', 40
         # eyes; a single camera would show it as a bar down the middle of the screen)
         pos, nrm, faces = r; c = pos[faces].mean(1)
         sel = (np.abs(c[:, 0]) < 0.06) & (c[:, 2] > 0.55) & (c[:, 2] < 1.2) & (c[:, 1] > 0.71) & (c[:, 1] < 0.80)
-        out.append(('carbon', MAT[g], (0, 0, 0), pos, nrm, faces[~sel]))
-        if sel.any(): out.append(('halo_pillar', MAT[g], (0, 0, 0), pos, nrm, faces[sel]))
+        col = colours(pos, nrm, GRID, two=True)
+        out.append(('carbon', MAT[g], (0, 0, 0), pos, nrm, faces[~sel], col))
+        if sel.any(): out.append(('halo_pillar', MAT[g], (0, 0, 0), pos, nrm, faces[sel], col))
         print('halo pillar triangles', int(sel.sum()))
-    elif r: out.append((g, MAT[g], (0, 0, 0)) + r)
+    elif r: out.append((g, MAT[g], (0, 0, 0)) + r + (colours(r[0], r[1], GRID, two=MAT[g] in TWO),))
 if FULL:
     for nm, names, mid in (('decals', ['sf25_decals', 'sf25_decals2', 'numbers'], 7), ('sw', ['sf25_sw', 'sf25_sw_carbon', 'sf25_sw_decals', 'sf25_lcd'], 8), ('misc', ['gp21_cinture.005', 'driver_color', 'glass', 'plastic_interior.002'], 9)):
         r = export_mesh(get(names), 10**9)
-        if r: out.append((nm, mid, (0, 0, 0)) + r)
+        if r: out.append((nm, mid, (0, 0, 0)) + r + (colours(r[0], r[1], GRID),))
 # wheels: split tyre + hub per wheel, pivot at the wheel centre (so it can spin and steer)
 hub = get(GROUPS['hub'])
+discs = get(['discs.008']); DISC = cKDTree(to_unity(np.asarray(discs.vertices))) if discs is not None else None
 for key, nm in (((front_sign, 1), 'FL'), ((front_sign, -1), 'FR'), ((-front_sign, 1), 'RL'), ((-front_sign, -1), 'RR')):
     piv = None
     for src, kind in ((tyre, 'tyre'), (hub, 'hub')):
         c2 = src.triangles_center
         sel = (np.sign(c2[:, L_AX] - mid_l) == key[0]) & (np.sign(c2[:, W_AX]) == key[1])
         sub = src.submesh([np.where(sel)[0]], append=True)
+        if kind == 'tyre':   # wheel AO from the wheel itself only (it spins), tyre + hub of this wheel
+            hc = hub.triangles_center; hs = (np.sign(hc[:, L_AX] - mid_l) == key[0]) & (np.sign(hc[:, W_AX]) == key[1])
+            wgrid = make_grid([sub, hub.submesh([np.where(hs)[0]], append=True)], pad=0.1)
         if kind == 'tyre':
             piv = to_unity(((sub.bounds[0] + sub.bounds[1]) / 2)[None])[0]
             # The model's wheels have camber and toe; spun about the car's cross axis they would wobble.
@@ -140,13 +196,16 @@ for key, nm in (((front_sign, 1), 'FL'), ((front_sign, -1), 'FR'), ((-front_sign
                       ('hubstatic', sub.submesh([np.where(~outward)[0]], append=True), 900, 150)]
         for kname, mesh, t2, t3 in pieces:
             r = export_mesh(mesh, t2, smooth_angle=50, lod_tris=t3)
+            gm = None
+            if kname != 'tyre' and DISC is not None: gm = (DISC.query(r[0], distance_upper_bound=0.012)[0] < 0.012).astype(np.float32)
+            col = colours(r[0], r[1], wgrid, ground=False, g_mask=gm)
             pos = (r[0] - piv.astype(np.float32)) @ Rw.T - shift; nr = (r[1] @ Rw.T).astype(np.float32)
             # the simplifier sometimes throws a vertex far out of place; keep every vertex inside the original part
             fv = (to_unity(np.asarray(mesh.vertices)) - piv) @ Rw.T - shift; rmax = np.hypot(fv[:, 1], fv[:, 2]).max()
             pos[:, 0] = np.clip(pos[:, 0], fv[:, 0].min(), fv[:, 0].max())
             rr = np.hypot(pos[:, 1], pos[:, 2]); k = np.minimum(1, rmax / np.maximum(rr, 1e-9)); pos[:, 1] *= k; pos[:, 2] *= k
             pos = pos.astype(np.float32)
-            out.append((f'wheel_{nm}_{kname}', MAT['hub' if kname != 'tyre' else 'tyre'], tuple(piv)) + (pos, nr, r[2]))
+            out.append((f'wheel_{nm}_{kname}', MAT['hub' if kname != 'tyre' else 'tyre'], tuple(piv)) + (pos, nr, r[2], col))
 # steering wheel: its own part, stored facing straight down the car (axis = z) so the game can turn it; the part
 # name carries how far the column is tilted back
 sw = get(['sf25_sw', 'sf25_sw_carbon'])
@@ -156,17 +215,17 @@ if sw is not None and MODE != 'far':
     cc = full - full.mean(0); ev, evec = np.linalg.eigh(cc.T @ cc); ax = evec[:, 0]; ax[0] = 0; ax /= np.linalg.norm(ax); ax *= np.sign(ax[2])
     pitch = np.degrees(np.arctan2(-ax[1], ax[2]))        # Unity: +pitch about x tips +z down
     a = np.radians(-pitch); Rx = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
-    out.append((f'steer_{pitch:.2f}', MAT['carbon'], tuple(c)) + (((r[0] - c.astype(np.float32)) @ Rx.T).astype(np.float32), (r[1] @ Rx.T).astype(np.float32), r[2]))
+    out.append((f'steer_{pitch:.2f}', MAT['carbon'], tuple(c)) + (((r[0] - c.astype(np.float32)) @ Rx.T).astype(np.float32), (r[1] @ Rx.T).astype(np.float32), r[2], colours(r[0], r[1], GRID)))
     print('steering wheel centre', np.round(c, 3), 'column pitch', round(pitch, 2))
 # helmet position: just ahead of the airbox, above the cockpit
 total = 0
 with open(OUT, 'wb') as f:
-    f.write(b'F2M1'); f.write(struct.pack('<i', len(out)))
-    for nm, mid, piv, pos, nrm, faces in out:
+    f.write(b'F2M2'); f.write(struct.pack('<i', len(out)))
+    for nm, mid, piv, pos, nrm, faces, col in out:
         b = nm.encode(); f.write(struct.pack('<i', len(b))); f.write(b)
         f.write(struct.pack('<i3f', mid, *piv))
         f.write(struct.pack('<ii', len(pos), faces.size))
-        f.write(pos.tobytes()); f.write(nrm.tobytes()); f.write(faces.astype('<i4').tobytes())
+        f.write(pos.tobytes()); f.write(nrm.tobytes()); f.write(np.ascontiguousarray(col, np.uint8).tobytes()); f.write(faces.astype('<i4').tobytes())
         total += len(faces); print(f'{nm:18s} mat {mid} verts {len(pos):6d} tris {len(faces):6d} pivot {np.round(piv,3)}')
 allp = np.concatenate([o[3] + np.array(o[2], np.float32) for o in out])
 print('TOTAL tris', total, 'bounds', np.round(allp.min(0), 3), np.round(allp.max(0), 3))

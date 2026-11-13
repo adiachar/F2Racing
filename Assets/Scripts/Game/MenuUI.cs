@@ -20,6 +20,10 @@ public sealed class MenuUI
     public bool practice;                                  // the session the loading page is starting
     public static readonly int[] LapCounts = { 1, 3, 5, 10 };
     public int lapsIdx;                                    // race length, saved as "laps"
+    // where the player starts a race: 0 Back, 1 Random, 2 Pole, 3.. = P2, P3, ... (saved as "gridPos")
+    public static readonly string[] GridNames = { "Back", "Random", "Pole", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16" };
+    public int gridIdx;
+    public void SetGrid(int v) { gridIdx = Mathf.Clamp(v, 0, GridNames.Length - 1); PlayerPrefs.SetInt("gridPos", gridIdx); }
     public bool canReplay;                                 // GameManager: a recording of the race's end is there to play
 
     // one car in the results; GameManager fills these when the player takes the flag
@@ -35,13 +39,14 @@ public sealed class MenuUI
     int loadShownFrame = -1;
 
     // results
-    Row[] results; string[] gaps; string resCircuit; int resLaps, resPos, resStops; double resTime;
+    Row[] results; string[] gaps; string resCircuit; int resLaps, resPos, resStops; double resTime, resPenalty;
 
     public MenuUI(string[] mapNames, int playgroundIdx, int[] rivalCounts, string[] diffNames)
     {
         this.mapNames = mapNames; this.playgroundIdx = playgroundIdx; this.rivalCounts = rivalCounts; this.diffNames = diffNames;
         previews = new Texture2D[mapNames.Length]; lengths = new double[mapNames.Length];
         lapsIdx = Mathf.Clamp(PlayerPrefs.GetInt("laps", 1), 0, LapCounts.Length - 1);
+        gridIdx = Mathf.Clamp(PlayerPrefs.GetInt("gridPos", 0), 0, GridNames.Length - 1);
     }
 
     // true once the "Loading…" frame has been on screen: GameManager.Update then builds the circuit
@@ -49,12 +54,12 @@ public sealed class MenuUI
 
     void BeginLoading(bool practiceSession) { practice = practiceSession; loadShownFrame = -1; page = Page.Loading; }
 
-    public void ShowResults(Row[] rows, string circuit, int laps, double raceTime, double refLap, int pitStops = 0)
+    public void ShowResults(Row[] rows, string circuit, int laps, double raceTime, double refLap, int pitStops = 0, double penalty = 0)
     {
         var list = new List<Row>(rows);
         list.Sort((a, b) => b.progress.CompareTo(a.progress));
         results = list.ToArray(); gaps = new string[results.Length];
-        resCircuit = circuit; resLaps = laps; resTime = raceTime; resPos = 1; resStops = pitStops;
+        resCircuit = circuit; resLaps = laps; resTime = raceTime; resPos = 1; resStops = pitStops; resPenalty = penalty;
         double lead = results.Length > 0 ? results[0].progress : 0;
         for (int i = 0; i < results.Length; i++)
         {
@@ -155,12 +160,12 @@ public sealed class MenuUI
         // right: session
         float rx = panel.x + leftW + pad, rw = panel.xMax - pad - rx, ry = ly + S(20);
         GUI.Label(new Rect(rx, ly, rw, S(16)), "SESSION", caption);
-        float rowH = S(40), rowGap = S(4), labW = rw * 0.36f;
-        string[] labels = { "Car", "Rivals", "Rival level", "Race length", "Weather" };
+        float rowH = S(34), rowGap = S(3), labW = rw * 0.36f;
+        string[] labels = { "Car", "Rivals", "Rival level", "Race length", "Grid position", "Weather" };
         for (int i = 0; i < labels.Length; i++)
         {
             float y = ry + i * (rowH + rowGap);
-            GUI.enabled = i == 0 || i == 4 || !pg; // the playground has no race
+            GUI.enabled = i == 0 || i == 5 || !pg; // the playground has no race
             GUI.Label(new Rect(rx, y, labW, rowH), labels[i], label);
             var sr = new Rect(rx + labW, y, rw - labW, rowH);
             if (i == 0) cls = Stepper(sr, cls, CarConfig.ClassNames.Length, CarConfig.ClassNames[cls]);
@@ -171,7 +176,8 @@ public sealed class MenuUI
                 int n = Stepper(sr, lapsIdx, LapCounts.Length, LapCounts[lapsIdx] + (LapCounts[lapsIdx] == 1 ? " lap" : " laps"));
                 if (n != lapsIdx) { lapsIdx = n; PlayerPrefs.SetInt("laps", lapsIdx); }
             }
-            if (i == 4) Weather.Index = Stepper(sr, Weather.Index, Weather.Names.Length, Weather.Names[Weather.Index]); // applied and saved at the start of the session
+            if (i == 4) { int n = Stepper(sr, gridIdx, GridNames.Length, GridNames[gridIdx]); if (n != gridIdx) SetGrid(n); }
+            if (i == 5) Weather.Index = Stepper(sr, Weather.Index, Weather.Names.Length, Weather.Names[Weather.Index]); // applied and saved at the start of the session
         }
         GUI.enabled = true;
         float by = panel.yMax - pad - S(54), bw = (rw - S(10)) / 2;
@@ -281,7 +287,7 @@ public sealed class MenuUI
         GUI.Label(new Rect(panel.x + pad + S(96), panel.y + S(40), S(200), S(30)), n > 1 ? $"of {n}" : "time trial", label);
         double myBest = double.NaN; foreach (var r in results) if (r.player) myBest = r.best;
         var ol = label.alignment; label.alignment = TextAnchor.MiddleRight;
-        GUI.Label(new Rect(panel.xMax - pad - S(340), panel.y + S(32), S(340), S(22)), "Race time  <b>" + Fmt(resTime) + "</b>" + (resStops > 0 ? $"  ({resStops} stop{(resStops > 1 ? "s" : "")})" : ""), Rich(label));
+        GUI.Label(new Rect(panel.xMax - pad - S(460), panel.y + S(32), S(460), S(22)), "Race time  <b>" + Fmt(resTime) + "</b>" + (resStops > 0 ? $"  ({resStops} stop{(resStops > 1 ? "s" : "")})" : "") + (resPenalty > 0 ? $"  (+{resPenalty:0} s jump start)" : ""), Rich(label));
         GUI.Label(new Rect(panel.xMax - pad - S(260), panel.y + S(54), S(260), S(22)), "Best lap  <b>" + Fmt(myBest) + "</b>", Rich(label));
         label.alignment = ol; label.fontSize = (int)S(15);
 
