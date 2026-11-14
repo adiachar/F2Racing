@@ -26,9 +26,11 @@ half4 _GradeGain;       // rgb, 1 = neutral
 
 inline half3 F2Tone(half3 x)
 {
-    // x (a x + b) / (x (c x + d) + e); denominator >= 0.14, so always safe on half precision
+    // bright, clean "Real Racing" curve: exactly linear up to 0.8 (no crushed shadows, no dimmed mid-tones), then a soft
+    // shoulder so sunlit highlights above 1 roll off to white instead of clipping: 1.0 -> 0.90, 1.5 -> 0.96, 3 -> 0.98
     x = max(x, (half3)0.0);
-    return saturate((x * (2.51 * x + 0.05)) / (x * (2.43 * x + 0.59) + 0.14));
+    half3 h = max(x - 0.8, (half3)0.0);
+    return min(x, 0.8 + h / (1.0 + h * 5.0));
 }
 
 #if defined(F2_GRADE_LOW)

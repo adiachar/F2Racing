@@ -15,7 +15,9 @@ public struct GradeLook
 public static class Grade
 {
     // keeps mid-grey where it was with the tone curve on (the curve alone would brighten the mids)
-    public const float BaseExposure = 0.78f;
+    // global punch on top of every circuit look: richer colour, a little more contrast, much less lifted (hazy) black
+    public const float PunchSat = 1.12f, PunchCon = 1.06f, LiftKeep = 0.35f;
+    public const float BaseExposure = 1.06f; // a bright, sunny broadcast look (0.78 with the old film curve read as a dark "movie")
 
     static readonly int idExp = Shader.PropertyToID("_GradeExposure"), idSat = Shader.PropertyToID("_GradeSat"),
         idTint = Shader.PropertyToID("_GradeTint"), idCon = Shader.PropertyToID("_GradeContrast"),
@@ -102,26 +104,26 @@ public static class Grade
     {
         Last = g;
         Shader.SetGlobalFloat(idExp, g.exposure * BaseExposure);
-        Shader.SetGlobalFloat(idSat, g.sat);
-        Shader.SetGlobalFloat(idCon, g.contrast);
+        Shader.SetGlobalFloat(idSat, g.sat * PunchSat);
+        Shader.SetGlobalFloat(idCon, g.contrast * PunchCon);
         Shader.SetGlobalVector(idTint, new Vector4(g.tint.x, g.tint.y, g.tint.z, 1));
-        Shader.SetGlobalVector(idLift, new Vector4(g.lift.x, g.lift.y, g.lift.z, 0));
+        Shader.SetGlobalVector(idLift, new Vector4(g.lift.x * LiftKeep, g.lift.y * LiftKeep, g.lift.z * LiftKeep, 0));
         Shader.SetGlobalVector(idGamma, new Vector4(g.gamma.x, g.gamma.y, g.gamma.z, 0));
         Shader.SetGlobalVector(idGain, new Vector4(g.gain.x, g.gain.y, g.gain.z, 1));
     }
 
     // the same maths on the CPU (for a solid-colour camera background, which no shader draws), sRGB colour in and out
-    static float Tone(float x) { x = Mathf.Max(x, 0); return Mathf.Clamp01(x * (2.51f * x + 0.05f) / (x * (2.43f * x + 0.59f) + 0.14f)); }
+    static float Tone(float x) { x = Mathf.Max(x, 0); float h = Mathf.Max(x - 0.8f, 0); return Mathf.Min(x, 0.8f + h / (1 + h * 5)); }
     public static Color Apply(Color srgb)
     {
         var g = Last; var c = srgb.linear; float e = g.exposure * BaseExposure;
         float r = Tone(c.r * g.tint.x * e), gg = Tone(c.g * g.tint.y * e), b = Tone(c.b * g.tint.z * e);
         float l = 0.2126f * r + 0.7152f * gg + 0.0722f * b;
-        r = Mathf.Max(0, l + (r - l) * g.sat); gg = Mathf.Max(0, l + (gg - l) * g.sat); b = Mathf.Max(0, l + (b - l) * g.sat);
+        float sa = g.sat * PunchSat; r = Mathf.Max(0, l + (r - l) * sa); gg = Mathf.Max(0, l + (gg - l) * sa); b = Mathf.Max(0, l + (b - l) * sa);
         float P(float v, float lift, float gam, float gain)
         {
-            float p = Mathf.Clamp01((Mathf.Sqrt(v) - 0.45f) * g.contrast + 0.45f);
-            p = p * gain + lift * (1 - p); p = Mathf.Clamp01(p + gam * p * (1 - p));
+            float p = Mathf.Clamp01((Mathf.Sqrt(v) - 0.45f) * g.contrast * PunchCon + 0.45f);
+            p = p * gain + lift * LiftKeep * (1 - p); p = Mathf.Clamp01(p + gam * p * (1 - p));
             return p * p;
         }
         return new Color(P(r, g.lift.x, g.gamma.x, g.gain.x), P(gg, g.lift.y, g.gamma.y, g.gain.y), P(b, g.lift.z, g.gamma.z, g.gain.z), srgb.a).gamma;
