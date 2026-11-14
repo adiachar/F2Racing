@@ -262,13 +262,14 @@ public partial class GameManager : MonoBehaviour
         foreach (var m in rivalFar) if (m != null) Destroy(m.gameObject);
         rivals.Clear(); rivalModels.Clear(); rivalSpin.Clear(); rivalFar.Clear(); rivalNear.Clear();
         int count = playground || line == null || raceLaps == 0 ? 0 : RivalCounts[rivalIdx]; // free practice: alone
+        var field = SessionField(ref count); // weekend / championship / qualifying field in grid order, null = quick race (Qualifying.cs)
         var grid = DriverProfile.Grid;
         rivalSet = Weather.BestSet(); // the rivals start on the right tyres for the weather
         ChooseGridSlot(count + 1);
         for (int k = 0; k < count; k++)
         {
             // spread the picks over the whole field: stars, midfield and backmarkers
-            var who = grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
+            var who = field != null ? field[k] : grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
             var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel();
             rc.compound = Weather.PhysicsCompound(rivalSet);
             // the speed profile's grip share multiplies the tyre mu directly (RacingLine.SpeedProfile), so the wet
@@ -285,6 +286,7 @@ public partial class GameManager : MonoBehaviour
             var far = CarModel.CreateFromAsset("Car/car_far", col, true); if (far != null) { far.SetLivery(liv); far.gameObject.SetActive(false); }
             rivalFar.Add(far); rivalNear.Add(true);
         }
+        AfterSetupRivals(); // qualifying: the show cars spread round the lap (Qualifying.cs)
         ClearRecording();
     }
 
@@ -514,6 +516,7 @@ public partial class GameManager : MonoBehaviour
         }
         if (!Paused) Rumble(wallDv);
         if (!playground) LapsAndRecover(dt);
+        QualiUpdate(); // qualifying clock and flag (Qualifying.cs)
         if (raceLaps > 0 && !playground && pLap > raceLaps && !ui.Showing) FinishRace(); // pLap 1 = crossing the line from the grid
         // g-forces for body pitch/roll and camera are low-passed, so tiny physics wobble never shakes the picture
         float kg = Mathf.Min(1, dt * 6);
@@ -917,10 +920,12 @@ public partial class GameManager : MonoBehaviour
     void StartSession()
     {
         raceLaps = ui.practice ? 0 : MenuUI.LapCounts[ui.lapsIdx];
+        PrepareSession(); // weekend / championship: qualifying, circuit of the round, grid (Qualifying.cs)
         if (lineFor != classIdx && world != null) { Destroy(world); world = null; } // new class: rebuild with its racing line
         LoadMap(); ApplyWeather(); // the menu may have changed the weather
         menuOpen = false; ApplyScreenLock();
         ResetCar(); Save();
+        SessionStarted(); // qualifying timing, team livery (Qualifying.cs)
         acc = 0; ui.page = MenuUI.Page.None;
     }
 
@@ -936,10 +941,11 @@ public partial class GameManager : MonoBehaviour
         }
         double refLap = RefLap(); // turns lap fractions into seconds
         ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (GridStart ? Countdown : 0) + pitLoss, refLap, pitStops, jumped ? JumpPenalty : 0);
+        RaceFinished(rows); // places gained, fastest lap, championship points (Qualifying.cs)
     }
 
     // ---------------------------------------------------------------- HUD
-    GUIStyle big, small, btn, center, gearStyle;
+    GUIStyle big, small, btn, center;
     Texture2D white;
     void OnGUI()
     {
@@ -961,6 +967,7 @@ public partial class GameManager : MonoBehaviour
             if (choice == MenuUI.Choice.RaceAgain) { ResetCar(); ui.page = MenuUI.Page.None; }
             else if (choice == MenuUI.Choice.Replay) StartReplay();
             else if (choice == MenuUI.Choice.Settings) menuOpen = true;
+            else if (choice != MenuUI.Choice.None) SessionChoice(choice); // weekend flow (Qualifying.cs)
             return;
         }
         if (replaying)
@@ -973,6 +980,7 @@ public partial class GameManager : MonoBehaviour
             if (GUI.Button(new Rect(Screen.width - S(8) - S(110), S(8), S(110), S(30)), "End replay", btn)) StopReplay();
             return;
         }
+        DrawQualiHud(); // qualifying clock and live timing (Qualifying.cs)
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
 
         // top-right: Settings, Camera, Restart. Everything else lives in the settings screen.
@@ -987,47 +995,8 @@ public partial class GameManager : MonoBehaviour
             if (GUI.Button(boxR, boxArmed ? "BOXING" : "BOX", btn)) { boxArmed = !boxArmed; Flash(boxArmed ? $"Box this lap: {Weather.TyreName(NextSet)}" : "Box cancelled"); }
         }
         if (!menuOpen && !playground && (surface == 2 || hitT > 0) && GUI.Button(new Rect(Screen.width / 2 - S(60), Screen.height * 0.5f, S(120), bh), "Back on track", btn)) Recover();
-        // top-centre: lap time or test data
-        string top, sub;
-        if (playground) { top = "TEST DATA (ours vs real F1)"; sub = $"0-100 {(t100.HasValue ? t100.Value.ToString("0.00") + "s" : "—")} (real 2.2-2.6)  ·  top {topSpeed * (unitsIdx == 1 ? 0.621371 : 1):0} {SpeedUnit}"; }
-        else { top = lapStart.HasValue ? Fmt(simTime - lapStart.Value) : "--:--.---"; sub = (rivals.Count > 0 ? $"P{Position()}/{rivals.Count + 1}  ·  " : "") + (raceLaps > 0 ? $"Lap {Mathf.Clamp(pLap, 1, raceLaps)}/{raceLaps}" : $"Lap {lapNo}") + $"  ·  Last {Fmt(lastLap)}  ·  Best {Fmt(bestLap)}"; }
-        float py = S(44);
-        Panel(new Rect(Screen.width / 2 - S(150), py, S(300), S(44)));
-        center.fontSize = (int)S(18); GUI.Label(new Rect(Screen.width / 2 - S(150), py, S(300), S(26)), top, center);
-        center.fontSize = (int)S(11); GUI.Label(new Rect(Screen.width / 2 - S(150), py + S(22), S(300), S(20)), sub, center);
-
-        // dash
-        var dash = new Rect(Screen.width / 2 - S(95), Screen.height - S(80), S(190), S(70));
-        Panel(dash);
-        GUI.Label(new Rect(dash.x, dash.y + S(2), dash.width * 0.72f, S(40)), $"{speed * (unitsIdx == 1 ? 2.23694f : 3.6f):0}<size={(int)S(12)}> {SpeedUnit}</size>", big);
-        if (gearStyle == null) { gearStyle = new GUIStyle(big); gearStyle.normal.textColor = new Color(1f, 0.82f, 0.25f); }
-        gearStyle.fontSize = (int)S(24);
-        GUI.Label(new Rect(dash.x + dash.width * 0.7f, dash.y + S(2), dash.width * 0.3f, S(40)), car.reverse ? "R" : car.gear.ToString(), gearStyle);
-        float rpmFrac = Mathf.Clamp01((float)((car.rpm - car.cfg.idleRpm) / (car.cfg.redline - car.cfg.idleRpm)));
-        Fill(new Rect(dash.x + S(10), dash.y + S(44), dash.width - S(20), S(6)), new Color(1, 1, 1, 0.2f));
-        Fill(new Rect(dash.x + S(10), dash.y + S(44), (dash.width - S(20)) * rpmFrac, S(6)), Color.Lerp(new Color(0.24f, 0.86f, 0.52f), new Color(1f, 0.3f, 0.23f), rpmFrac));
-        center.fontSize = (int)S(10);
-        string lights = (car.tcActive ? "<color=#ffb020>TC</color>" : "TC") + "   " + (car.absActive ? "<color=#ffb020>ABS</color>" : "ABS") + "   " +
-                        (car.lockF || car.lockR ? "<color=#ff4b3a>LOCK</color>" : "LOCK") + "   " + (car.spinR ? "<color=#ff4b3a>SPIN</color>" : "SPIN");
-        // hybrid battery and active-aero state
-        float batt = double.IsNaN(car.ersEnergy) ? 1f : (float)(car.ersEnergy / car.cfg.ersCapacity);
-        Fill(new Rect(dash.x, dash.yMax + S(2), dash.width, S(5)), new Color(1, 1, 1, 0.2f));
-        Fill(new Rect(dash.x, dash.yMax + S(2), dash.width * batt, S(5)), car.ersKw > 1 ? new Color(0.3f, 0.75f, 1f) : car.ersKw < -1 ? new Color(0.24f, 0.86f, 0.52f) : new Color(0.75f, 0.8f, 0.85f));
-        lights += "   " + (car.aeroX > 0.5 ? "<color=#4cc3ff>WING</color>" : "WING");
-        GUI.Label(new Rect(dash.x, dash.y + S(50), dash.width, S(18)), lights, center);
-
-        // telemetry
-        double beta = System.Math.Atan2(car.vy, System.Math.Max(System.Math.Abs(car.vx), 1)) * 57.3;
-        string fpsText = showFps ? $"{fpsAvg:0} fps" + (renderScale < 0.99f ? $" ({renderScale * 100:0}% res)" : "") : "";
-        if (!hudInfo) { if (showFps) { Panel(new Rect(S(8), S(8), S(110), S(20))); GUI.Label(new Rect(S(14), S(10), S(110), S(18)), fpsText, small); } }
-        else
-        {
-        Panel(new Rect(S(8), S(8), S(178), tilt ? S(190) : S(174)));
-        GUI.Label(new Rect(S(14), S(10), S(178), S(190)),
-            (showFps ? fpsText + "\n" : "") + $"Front grip {car.useF * 100:0}%\nRear grip {car.useR * 100:0}%\nRear spin {car.slipRatioR * 100:0}%\nSlide {beta:0.0}°\nG {System.Math.Sqrt(car.ax * car.ax + car.ay * car.ay) / 9.81:0.0}   Brake bias {car.cfg.brakeBias * 100:0}%" +
-            (car.cfg.chassis && !double.IsNaN(car.tyreTF) ? $"\n{Weather.TyreName(carSet)} {car.tyreTF:0}° / {car.tyreTR:0}°, worn {car.wearF * 100:0} / {car.wearR * 100:0}%\nBrakes {car.brakeTF:0}° / {car.brakeTR:0}°" + (double.IsNaN(car.fuel) ? "" : $"\nFuel {car.fuel:0.0} kg ({car.fuelLastLap:0.00}/lap)  Tyres {car.tyrePF:0.0}/{car.tyrePR:0.0} psi") + $"\nRide {car.rideF * 1000:0} / {car.rideR * 1000:0} mm\nAero {car.downforce / 9.81:0} kg, {car.aeroBalance * 100:0}% front" + (car.tow > 0.05 ? $"\nSlipstream {car.tow * 100:0}%" : "") : "") +
-            (tilt ? $"\nTilt {(tiltSmooth < -0.5f ? "L" : tiltSmooth > 0.5f ? "R" : "")} {Mathf.Abs(tiltSmooth):0}° → steer {Mathf.Abs(TiltToSteer()) * 100:0}%" : ""), small);
-        }
+        // timing tower, timing panel and sectors, steering-wheel display, banners (RaceHud.cs)
+        DrawRaceHud(speed);
 
         if (hudMap) DrawMiniMap();
         DrawStartLights(); // the five red lights (GameManagerStart.cs)
@@ -1035,10 +1004,9 @@ public partial class GameManager : MonoBehaviour
         // pedals
         Pedal(GasRect, pedalGas, new Color(0.24f, 0.86f, 0.52f), "GAS");
         Pedal(BrakeRect, pedalBrake, new Color(1f, 0.3f, 0.23f), "BRAKE");
-        if (!tilt) { center.fontSize = (int)S(11); GUI.Label(new Rect(S(20), Screen.height - S(40), Screen.width * 0.4f, S(20)), "Touch & drag to steer", center); }
+        if (!tilt) { center.fontSize = (int)S(11); GUI.Label(new Rect(S(20), Screen.height - S(40), S(190), S(20)), "Touch & drag to steer", center); }
 
         if (Time.realtimeSinceStartup < 8f) { small.fontSize = (int)S(9); GUI.Label(new Rect(S(8), Screen.height - S(16), Screen.width, S(14)), CarModel.Credit, small); small.fontSize = (int)S(11); }
-        if (flashT > 0) { center.fontSize = (int)S(18); Panel(new Rect(Screen.width / 2 - S(140), Screen.height * 0.38f, S(280), S(34))); GUI.Label(new Rect(Screen.width / 2 - S(140), Screen.height * 0.38f, S(280), S(34)), flash, center); }
     }
     void Panel(Rect r) => Fill(r, new Color(0, 0, 0, 0.35f));
     void Fill(Rect r, Color c) { var o = GUI.color; GUI.color = c; GUI.DrawTexture(r, white); GUI.color = o; }

@@ -27,6 +27,7 @@ public partial class GameManager
         int g = ui != null ? ui.gridIdx : 0;
         cars = Mathf.Clamp(cars, 1, StartGrid.Slots);
         playerSlot = g == 0 ? cars - 1 : g == 1 ? UnityEngine.Random.Range(0, cars) : g == 2 ? 0 : Mathf.Min(g - 2, cars - 1);
+        int q = GridSlotOverride(cars); if (q >= 0) playerSlot = q; // the qualifying result (Qualifying.cs)
     }
 
     // rival k (0-based) takes the k-th free slot; also rolls his reaction time

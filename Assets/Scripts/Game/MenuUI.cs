@@ -12,8 +12,19 @@ using UnityEngine;
 
 public sealed class MenuUI
 {
-    public enum Page { None, Start, Loading, Results }
-    public enum Choice { None, RaceAgain, Replay, Settings }
+    public enum Page { None, Start, Loading, Results, Season, QualiResult }
+    public enum Choice { None, RaceAgain, Replay, Settings, StartRace }
+
+    // game mode (saved as "gameMode"): a quick race, a race weekend (qualifying + race), or the championship (SeasonUI.cs)
+    public const int ModeQuick = 0, ModeWeekend = 1, ModeChampionship = 2;
+    public static readonly string[] ModeNames = { "Quick race", "Race weekend", "Championship" };
+    public int mode;
+    public static readonly int[] QualiMinutes = { 5, 8, 12, 18 }; // qualifying length, game minutes (saved as "qualiLen")
+    public int qualiIdx = 1;
+    public bool quali;                                     // the session the loading page is starting is qualifying
+    public readonly SeasonUI season;
+    public string resultNote;                              // GameManager: grid -> finish, fastest lap, points (results page)
+    public bool seasonNext;                                // results of a championship round: "Next round" instead of "Race again"
 
     public Page page = Page.Start;
     public bool Showing => page != Page.None;
@@ -39,7 +50,7 @@ public sealed class MenuUI
     int loadShownFrame = -1;
 
     // results
-    Row[] results; string[] gaps; string resCircuit; int resLaps, resPos, resStops; double resTime, resPenalty;
+    Row[] results; string[] gaps; int fastestRow = -1; string resCircuit; int resLaps, resPos, resStops; double resTime, resPenalty;
 
     public MenuUI(string[] mapNames, int playgroundIdx, int[] rivalCounts, string[] diffNames)
     {
@@ -47,18 +58,22 @@ public sealed class MenuUI
         previews = new Texture2D[mapNames.Length]; lengths = new double[mapNames.Length];
         lapsIdx = Mathf.Clamp(PlayerPrefs.GetInt("laps", 1), 0, LapCounts.Length - 1);
         gridIdx = Mathf.Clamp(PlayerPrefs.GetInt("gridPos", 0), 0, GridNames.Length - 1);
+        mode = Mathf.Clamp(PlayerPrefs.GetInt("gameMode", 0), 0, ModeNames.Length - 1);
+        qualiIdx = Mathf.Clamp(PlayerPrefs.GetInt("qualiLen", 1), 0, QualiMinutes.Length - 1);
+        season = new SeasonUI(this);
     }
 
     // true once the "Loading…" frame has been on screen: GameManager.Update then builds the circuit
     public bool LoadDue => page == Page.Loading && loadShownFrame >= 0 && Time.frameCount > loadShownFrame + 1;
 
-    void BeginLoading(bool practiceSession) { practice = practiceSession; loadShownFrame = -1; page = Page.Loading; }
+    public void BeginLoading(bool practiceSession, bool qualifying = false) { practice = practiceSession; quali = qualifying; loadShownFrame = -1; page = Page.Loading; }
 
     public void ShowResults(Row[] rows, string circuit, int laps, double raceTime, double refLap, int pitStops = 0, double penalty = 0)
     {
         var list = new List<Row>(rows);
         list.Sort((a, b) => b.progress.CompareTo(a.progress));
-        results = list.ToArray(); gaps = new string[results.Length];
+        results = list.ToArray(); gaps = new string[results.Length]; resultNote = null; seasonNext = false;
+        fastestRow = -1; for (int i = 0; i < results.Length; i++) if (results[i].best > 0 && !double.IsNaN(results[i].best) && (fastestRow < 0 || results[i].best < results[fastestRow].best)) fastestRow = i;
         resCircuit = circuit; resLaps = laps; resTime = raceTime; resPos = 1; resStops = pitStops; resPenalty = penalty;
         double lead = results.Length > 0 ? results[0].progress : 0;
         for (int i = 0; i < results.Length; i++)
@@ -72,8 +87,8 @@ public sealed class MenuUI
     }
 
     // ------------------------------------------------------------------ drawing
-    static float S(float v) => v * Screen.height / 390f;
-    GUIStyle title, caption, label, value, small, arrow, primary, secondary, cell;
+    internal static float S(float v) => v * Screen.height / 390f;
+    internal GUIStyle title, caption, label, value, small, arrow, primary, secondary, cell;
     static Texture2D Tex(Color c)
     {
         var t = new Texture2D(1, 1, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave };
@@ -106,7 +121,7 @@ public sealed class MenuUI
         title.fontSize = (int)S(30); caption.fontSize = (int)S(11); label.fontSize = (int)S(15); value.fontSize = (int)S(15);
         small.fontSize = (int)S(11); cell.fontSize = (int)S(12); arrow.fontSize = (int)S(26); secondary.fontSize = (int)S(15); primary.fontSize = (int)S(17);
     }
-    static void Fill(Rect r, Color c) { var o = GUI.color; GUI.color = c; GUI.DrawTexture(r, Texture2D.whiteTexture); GUI.color = o; }
+    internal static void Fill(Rect r, Color c) { var o = GUI.color; GUI.color = c; GUI.DrawTexture(r, Texture2D.whiteTexture); GUI.color = o; }
 
     // Draws the page that is up. loaded / loadedFor: the circuit GameManager has built now (its preview needs no rebuild).
     public Choice Draw(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
@@ -115,11 +130,13 @@ public sealed class MenuUI
         if (page == Page.Start) { if (DrawStart(ref map, ref cls, ref riv, ref diff, loaded, loadedFor)) return Choice.Settings; }
         else if (page == Page.Loading) DrawLoading(mapNames[map]);
         else if (page == Page.Results) return DrawResults();
+        else if (page == Page.Season) return season.DrawHub(ref map);
+        else if (page == Page.QualiResult) return season.DrawQuali();
         return Choice.None;
     }
 
     // "‹ value ›" with square arrow buttons; returns the new index
-    int Stepper(Rect r, int index, int count, string text)
+    internal int Stepper(Rect r, int index, int count, string text)
     {
         float b = r.height;
         if (GUI.Button(new Rect(r.x, r.y, b, b), "<", arrow)) index = (index - 1 + count) % count;
@@ -138,6 +155,7 @@ public sealed class MenuUI
         GUI.Label(new Rect(px, S(8), pw, S(42)), Application.productName.ToUpperInvariant(), title);
         Fill(new Rect(px, S(53), S(44), S(3)), Accent);
         bool openSettings = GUI.Button(new Rect(px + pw - S(140), S(10), S(140), S(46)), "SETTINGS", secondary);
+        { int nm = Stepper(new Rect(px + pw - S(140) - S(10) - S(250), S(10), S(250), S(46)), mode, ModeNames.Length, ModeNames[mode]); if (nm != mode) { mode = nm; PlayerPrefs.SetInt("gameMode", mode); } }
         var panel = new Rect(px, S(66), pw, S(330));
         Fill(panel, PanelCol);
         float pad = S(16), leftW = pw * 0.42f;
@@ -160,12 +178,13 @@ public sealed class MenuUI
         // right: session
         float rx = panel.x + leftW + pad, rw = panel.xMax - pad - rx, ry = ly + S(20);
         GUI.Label(new Rect(rx, ly, rw, S(16)), "SESSION", caption);
-        float rowH = S(30), rowGap = S(2), labW = rw * 0.36f; // 7 rows fit above the buttons
-        string[] labels = { "Car", "Rivals", "Rival level", "Race length", "Grid position", "Weather", "Time of day" };
+        float rowH = S(26), rowGap = S(2), labW = rw * 0.36f; // 8 rows fit above the buttons
+        bool champ = mode == ModeChampionship;
+        string[] labels = { "Car", champ ? "Rivals (full grid)" : "Rivals", "Rival level", "Race length", "Grid position", "Weather", "Time of day", "Qualifying" };
         for (int i = 0; i < labels.Length; i++)
         {
             float y = ry + i * (rowH + rowGap);
-            GUI.enabled = i == 0 || i >= 5 || !pg; // the playground has no race
+            GUI.enabled = (i == 0 || (i >= 5 && i < 7) || !pg) && !(i == 1 && champ) && !(i == 7 && mode == ModeQuick); // the playground has no race
             GUI.Label(new Rect(rx, y, labW, rowH), labels[i], label);
             var sr = new Rect(rx + labW, y, rw - labW, rowH);
             if (i == 0) cls = Stepper(sr, cls, CarConfig.ClassNames.Length, CarConfig.ClassNames[cls]);
@@ -185,12 +204,24 @@ public sealed class MenuUI
                 int cur = (int)TimeOfDay.For(street), n = Stepper(sr, cur, TimeOfDay.Count(street), TimeOfDay.Names[cur]);
                 if (n != cur) TimeOfDay.Set(n, false);
             }
+            if (i == 7) { int n = Stepper(sr, qualiIdx, QualiMinutes.Length, QualiMinutes[qualiIdx] + " min"); if (n != qualiIdx) { qualiIdx = n; PlayerPrefs.SetInt("qualiLen", qualiIdx); } }
         }
         GUI.enabled = true;
         float by = panel.yMax - pad - S(54), bw = (rw - S(10)) / 2;
-        if (GUI.Button(new Rect(rx, by, bw, S(54)), pg ? "DRIVE" : "FREE PRACTICE", secondary)) BeginLoading(true);
-        GUI.enabled = !pg;
-        if (GUI.Button(new Rect(rx + bw + S(10), by, bw, S(54)), "RACE", primary)) BeginLoading(false);
+        if (mode == ModeWeekend && !pg)
+        {
+            // race weekend: practice, or qualifying -> race, or straight to the race from the chosen grid position
+            float b3 = (rw - S(20)) / 3;
+            if (GUI.Button(new Rect(rx, by, b3, S(54)), "PRACTICE", secondary)) BeginLoading(true);
+            if (GUI.Button(new Rect(rx + b3 + S(10), by, b3, S(54)), "SKIP QUALI", secondary)) BeginLoading(false);
+            if (GUI.Button(new Rect(rx + 2 * (b3 + S(10)), by, b3, S(54)), "QUALIFYING", primary)) BeginLoading(false, true);
+        }
+        else
+        {
+            if (GUI.Button(new Rect(rx, by, bw, S(54)), pg ? "DRIVE" : "FREE PRACTICE", secondary)) BeginLoading(true);
+            GUI.enabled = !pg || champ;
+            if (GUI.Button(new Rect(rx + bw + S(10), by, bw, S(54)), champ ? "CHAMPIONSHIP" : "RACE", primary)) { if (champ) season.Open(); else BeginLoading(false); }
+        }
         GUI.enabled = true;
 
         // licence credit for the car model (CC BY): always on the start menu
@@ -301,7 +332,13 @@ public sealed class MenuUI
         // table: one column up to 8 cars, two beyond
         int cols = n > 8 ? 2 : 1, perCol = (n + cols - 1) / cols;
         float tx = panel.x + pad, tw = pw - 2 * pad, colGap = S(14), cw = (tw - (cols - 1) * colGap) / cols;
-        float headY = panel.y + S(88), tableY = headY + S(18), tableH = panel.yMax - pad - S(50) - S(12) - tableY;
+        if (!string.IsNullOrEmpty(resultNote))
+        {
+            var oc0 = caption.fontSize; caption.fontSize = (int)S(11);
+            GUI.Label(new Rect(panel.x + pad, panel.y + S(78), pw - 2 * pad, S(18)), resultNote, caption);
+            caption.fontSize = oc0;
+        }
+        float headY = panel.y + S(98), tableY = headY + S(18), tableH = panel.yMax - pad - S(50) - S(12) - tableY;
         float rh = Mathf.Min(S(28), tableH / Mathf.Max(1, perCol));
         for (int c = 0; c < cols; c++)
         {
@@ -322,7 +359,7 @@ public sealed class MenuUI
             GUI.Label(new Rect(x + cw * 0.02f, y, cw * 0.1f, rh), (i + 1).ToString(), cell);
             Fill(new Rect(x + cw * 0.11f, y + rh * 0.25f, S(4), rh * 0.5f), r.player ? Color.white : r.colour);
             GUI.Label(new Rect(x + cw * 0.14f, y, cw * 0.44f, rh), r.name, cell);
-            GUI.Label(new Rect(x + cw * 0.58f, y, cw * 0.22f, rh), Fmt(r.best), cell);
+            GUI.Label(new Rect(x + cw * 0.58f, y, cw * 0.22f, rh), i == fastestRow ? "<color=#c070ff>" + Fmt(r.best) + "</color>" : Fmt(r.best), Rich(cell));
             cell.alignment = TextAnchor.MiddleRight;
             GUI.Label(new Rect(x + cw * 0.78f, y, cw * 0.2f, rh), gaps[i], cell);
             cell.alignment = TextAnchor.MiddleLeft;
@@ -334,7 +371,8 @@ public sealed class MenuUI
         float bw = Mathf.Min(S(190), (tw - (nb - 1) * S(10)) / nb), by = panel.yMax - pad - S(50);
         if (canReplay && GUI.Button(new Rect(panel.xMax - pad - 3 * bw - 2 * S(10), by, bw, S(50)), "REPLAY", secondary)) return Choice.Replay;
         if (GUI.Button(new Rect(panel.xMax - pad - 2 * bw - S(10), by, bw, S(50)), "MENU", secondary)) page = Page.Start;
-        if (GUI.Button(new Rect(panel.xMax - pad - bw, by, bw, S(50)), "RACE AGAIN", primary)) return Choice.RaceAgain;
+        if (seasonNext) { if (GUI.Button(new Rect(panel.xMax - pad - bw, by, bw, S(50)), Season.Over ? "STANDINGS" : "NEXT ROUND", primary)) season.Open(); }
+        else if (GUI.Button(new Rect(panel.xMax - pad - bw, by, bw, S(50)), "RACE AGAIN", primary)) return Choice.RaceAgain;
         return Choice.None;
     }
     static GUIStyle Rich(GUIStyle s) { s.richText = true; return s; }

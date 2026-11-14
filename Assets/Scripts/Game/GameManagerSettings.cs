@@ -31,7 +31,7 @@ public partial class GameManager
     // audio (percent)
     float volMaster = 100, volEngine = 100, volFx = 100, volTyres = 100;
     // game
-    int unitsIdx; bool hudInfo = true, hudMap = true;
+    int unitsIdx; bool hudInfo = true, hudMap = true, hudTower = true, hudSectors = true, hudDelta = true;
 
     float steerGain => steerGainPct * 0.01f;
     float FpsTarget => fpsIdx == 0 ? 30f : 60f;
@@ -81,6 +81,7 @@ public partial class GameManager
         fpsIdx = LoadI("fps", 1, 1); resPct = LoadF("resScale", 100, 50, 100); shadowsOn = PlayerPrefs.GetInt("shadows", 1) == 1; showFps = PlayerPrefs.GetInt("showFps", 1) == 1;
         volMaster = LoadF("volMaster", 100, 0, 100); volEngine = LoadF("volEngine", 100, 0, 100); volFx = LoadF("volFx", 100, 0, 100); volTyres = LoadF("volTyres", 100, 0, 100);
         unitsIdx = LoadI("units", 0, 1); hudInfo = PlayerPrefs.GetInt("hudInfo", 1) == 1; hudMap = PlayerPrefs.GetInt("hudMap", 1) == 1;
+        hudTower = PlayerPrefs.GetInt("hudTower", 1) == 1; hudSectors = PlayerPrefs.GetInt("hudSectors", 1) == 1; hudDelta = PlayerPrefs.GetInt("hudDelta", 1) == 1;
     }
 
     void SaveSettings()
@@ -103,6 +104,7 @@ public partial class GameManager
         PlayerPrefs.SetInt("fps", fpsIdx); PlayerPrefs.SetFloat("resScale", resPct); PlayerPrefs.SetInt("shadows", shadowsOn ? 1 : 0); PlayerPrefs.SetInt("showFps", showFps ? 1 : 0);
         PlayerPrefs.SetFloat("volMaster", volMaster); PlayerPrefs.SetFloat("volEngine", volEngine); PlayerPrefs.SetFloat("volFx", volFx); PlayerPrefs.SetFloat("volTyres", volTyres);
         PlayerPrefs.SetInt("units", unitsIdx); PlayerPrefs.SetInt("hudInfo", hudInfo ? 1 : 0); PlayerPrefs.SetInt("hudMap", hudMap ? 1 : 0);
+        PlayerPrefs.SetInt("hudTower", hudTower ? 1 : 0); PlayerPrefs.SetInt("hudSectors", hudSectors ? 1 : 0); PlayerPrefs.SetInt("hudDelta", hudDelta ? 1 : 0);
     }
 
     // ---------------------------------------------------------------- applying
@@ -278,8 +280,11 @@ public partial class GameManager
         game.Choice("Time of day", "Sun height and colour, sky and shadows. Night is for street circuits (floodlit); elsewhere it is evening. In a session this reloads the circuit.", TimeOfDay.Names, TimeOfDay.Default,
             () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset();
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
-        game.Choice("Driver read-out", "Grip, tyres, brakes and fuel in the top-left corner.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
+        game.Choice("Driver read-out", "Tyres, brakes and fuel beside the steering-wheel display.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
         game.Choice("Mini-map", "The circuit map in the top-right corner.", hideShow, 1, () => hudMap ? 1 : 0, v => hudMap = v == 1);
+        game.Toggle("Timing tower", "Order, gaps and tyres on the left in a race. Tap it for gap / interval, the arrow for all cars.", true, () => hudTower, v => hudTower = v);
+        game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
+        game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();
