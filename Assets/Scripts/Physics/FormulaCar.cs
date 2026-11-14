@@ -184,6 +184,38 @@ namespace FormulaSim
         public double kerbLift = 0.5;        // share of a surface's bump height that lifts the tyre on average (est.)
         // tyres that ran through grass, gravel or astroturf pick up dirt and grip less until it wears off
         public double dirtLoss = 0.08, dirtClear = 400; // grip lost when fully dirty; metres driven to clear about 63 %
+        // ---- damage (FormulaCar.Damage, FormulaCar.ApplyImpact) ----
+        // Off by default, so the golden test and older set-ups are unchanged; the game turns it on for "Damage: Full".
+        // Impacts are always recorded in car.damage (the model shows them in "Visual only"); only with this flag do
+        // they change the physics. Magnitudes: one "point" of downforce = 0.01 of the lift coefficient, about 0.18 %
+        // of a ~5.5 CL car (Autosport, "What F1 technical directors mean when they talk about points of downforce").
+        //  * front wing: Leclerc's endplate damage at China 2025 cost 20-30 points (~4-5 % of the total = ~10-12 %
+        //    of the front axle's share); Albon losing an endplate at Baku 2023 cost ~0.3 s a lap (Vowles). One side
+        //    fully gone here = 30 % of the front downforce (an endplate is about 0.4 of a side = 12 %).
+        //  * floor: Verstappen's floor damage (Hungary 2023, debris) cost up to 100 points (~18 %), Bottas'
+        //    (Hungary 2021) ~50 points; a fully wrecked floor here = 18 % of all downforce.
+        //  * rear wing / rear bodywork: Hamilton's kerb damage (Austria 2020) cost ~30 points; the whole rear wing is
+        //    taken as ~35 % of the rear axle's downforce and ~12 % of the drag (est.).
+        //  * suspension / steering: a bent wishbone or track rod puts the wheel out of line by up to dmgToe degrees
+        //    (setup toe is only 0.05-0.2 deg, so under a degree is already a strong pull) plus a steering offset (est.).
+        //  * puncture: a deflated tyre keeps about a third of its grip, drops the corner ~5 cm (est.).
+        public bool damage = false;
+        public double dmgFrontWing = 0.30;   // front downforce lost per side of the front wing at damage 1
+        public double dmgRearWing = 0.35;    // rear downforce lost at rear-wing damage 1
+        public double dmgRearDrag = 0.12;    // drag lost at rear-wing damage 1 (less wing); broken front parts add dmgFrontDrag per side
+        public double dmgFrontDrag = 0.02;
+        public double dmgFloor = 0.18;       // total downforce lost at floor damage 1
+        public double dmgToe = 0.3;          // deg of toe at suspension damage 1 (the wheel turns out on the damaged side)
+        public double dmgSteer = 0.15;       // deg of steering offset at front suspension damage 1 (~2 deg at the steering wheel; at 250 km/h 0.3 deg of road-wheel angle is ~0.7 g)
+        public double dmgRearToe = 1.0;      // the rear toe as a share of dmgToe
+        public double dmgSuspGrip = 0.08;    // grip lost at a corner with suspension damage 1 (camber and geometry out)
+        public double dmgSpeed = 11;         // m/s of closing speed above dmgMinSpeed that wrecks a part (about 40 km/h)
+        public double dmgMinSpeed = 2.5;     // m/s (9 km/h), lighter touches do nothing (game-friendly: AI nudges in the pack)
+        public double punctGrip = 0.33;      // share of grip a deflated tyre keeps
+        public double punctDrop = 0.05;      // m, the corner drops on the rim
+        public double punctRoll = 0.08;      // rolling drag of a flat tyre, as a share of a quarter of the weight
+        public double punctKerbChance = 0.01; // per hard strike of a sausage kerb at speed
+        public double punctHitChance = 0.25; // per heavy wheel hit (wall or car), scaled by the impact
 
         public CarConfig Clone()
         {
@@ -251,6 +283,27 @@ namespace FormulaSim
         public CarInput(double steer, double throttle, double brake) { this.steer = steer; this.throttle = throttle; this.brake = brake; }
     }
 
+    // Damage to the car, 0 (fine) .. 1 (wrecked) per part. Wheels / corners: FL, FR, RL, RR (L = left).
+    // Punctures: 0 = fine, otherwise the tyre deflates from just above 0 to 1 over about 1.5 s.
+    public struct Damage
+    {
+        public double wingFL, wingFR, wingRear, floor;
+        public double suspFL, suspFR, suspRL, suspRR;
+        public double punctFL, punctFR, punctRL, punctRR;
+        public int hits;                     // impacts recorded so far (the model throws debris for each new one)
+        public int punctures, kerbPunctures; // tyres cut so far (all, and of those by kerbs)
+        public double lastSize, lastX, lastY; // the last impact: 0..1 size, car-frame place (m ahead of the CG, m to the left)
+        public double Susp(int w) => w == 0 ? suspFL : w == 1 ? suspFR : w == 2 ? suspRL : suspRR;
+        public double Punct(int w) => w == 0 ? punctFL : w == 1 ? punctFR : w == 2 ? punctRL : punctRR;
+        public void SetSusp(int w, double v) { v = v < 0 ? 0 : v > 1 ? 1 : v; if (w == 0) suspFL = v; else if (w == 1) suspFR = v; else if (w == 2) suspRL = v; else suspRR = v; }
+        public void SetPunct(int w, double v) { if (w == 0) punctFL = v; else if (w == 1) punctFR = v; else if (w == 2) punctRL = v; else punctRR = v; }
+        public bool Any => wingFL + wingFR + wingRear + floor + suspFL + suspFR + suspRL + suspRR + punctFL + punctFR + punctRL + punctRR > 0;
+        public bool Punctured => punctFL + punctFR + punctRL + punctRR > 0;
+        public bool WingsDamaged => wingFL + wingFR + wingRear > 0;
+        // worth a stop for a new wing (or a flat tyre): the AI boxes at the next crossing of the line
+        public bool NeedsPit => wingFL + wingFR > 0.9 || wingRear > 0.6 || Punctured;
+    }
+
     public static class Surfaces
     {
         // peak friction relative to dry asphalt; kerbs use anti-slip paint
@@ -316,6 +369,111 @@ namespace FormulaSim
         public bool standingStart;          // pulling away from rest: no MGU-K drive until ersStartKmh (FIA 2026)
         public double deployMap = 1;        // -1..2 deploy map here (set by the game / AI from RacingLine.deploy; see CarConfig.ersMapSoc)
         public void NewLap() { ersHarvested = 0; fuelLastLap = fuelThisLap; fuelThisLap = 0; }
+
+        // ---------- damage ----------
+        public Damage damage;               // always recorded; changes the physics only with cfg.damage
+        readonly double[] dmgMu = { 1, 1, 1, 1 };   // per-wheel grip factor from damage (filled in Step)
+        readonly SurfaceType[] dmgPrevType = new SurfaceType[4];
+        uint dmgRng = 0x9E3779B9u;          // deterministic dice for punctures (same run, same result)
+        public void SeedDamage(int seed) { dmgRng = (uint)seed * 2654435761u + 0x9E3779B9u; if (dmgRng == 0) dmgRng = 1; }
+        double Dice() { dmgRng ^= dmgRng << 13; dmgRng ^= dmgRng >> 17; dmgRng ^= dmgRng << 5; return dmgRng / 4294967296.0; }
+        static double Sat(double v) => v < 0 ? 0 : v > 1 ? 1 : v;
+
+        // A hit: closing speed (m/s, along the contact normal) and where on the car it landed (car frame: lx m ahead of
+        // the CG, ly m to the left). Called by Traffic.Collide and Traffic.Wall.
+        public void ApplyImpact(double relSpeed, double lx, double ly, bool wall = false)
+        {
+            var c = cfg;
+            double e = (relSpeed - c.dmgMinSpeed) / c.dmgSpeed;
+            if (e <= 0) return;
+            if (wall) e *= 1.3;             // a wall does not give like another car's bodywork
+            e = Math.Min(1.5, e);
+            double aF = c.wheelbase * (1 - c.frontWeight), bR = c.wheelbase * c.frontWeight;
+            bool left = ly > 0, side = Math.Abs(ly) > 0.55;
+            int wF = left ? 0 : 1, wRr = left ? 2 : 3;
+            ref Damage d = ref damage;
+            if (lx > aF + 0.15)
+            {
+                // ahead of the front wheels: the front wing (both sides when it is hit square on)
+                if (!side) { d.wingFL = Sat(d.wingFL + 0.75 * e); d.wingFR = Sat(d.wingFR + 0.75 * e); }
+                else if (left) { d.wingFL = Sat(d.wingFL + e); d.wingFR = Sat(d.wingFR + 0.15 * e); }
+                else { d.wingFR = Sat(d.wingFR + e); d.wingFL = Sat(d.wingFL + 0.15 * e); }
+                if (side) d.SetSusp(wF, d.Susp(wF) + 0.25 * e);
+            }
+            else if (lx > 0)
+            {
+                // beside the front wheel: the wheel takes it (wishbones, track rod), the endplate goes too
+                if (side) { d.SetSusp(wF, d.Susp(wF) + 0.8 * e); if (left) d.wingFL = Sat(d.wingFL + 0.4 * e); else d.wingFR = Sat(d.wingFR + 0.4 * e); }
+                d.floor = Sat(d.floor + 0.15 * e);
+            }
+            else if (lx > -bR - 0.15)
+            {
+                if (side) d.SetSusp(wRr, d.Susp(wRr) + 0.7 * e);
+                d.floor = Sat(d.floor + 0.25 * e);
+            }
+            else
+            {
+                // from behind: rear wing, diffuser
+                d.wingRear = Sat(d.wingRear + 0.45 * e); d.floor = Sat(d.floor + 0.15 * e);
+                if (side) d.SetSusp(wRr, d.Susp(wRr) + 0.35 * e);
+            }
+            // a heavy hit on a wheel can cut the tyre
+            if (side && relSpeed > 5)
+            {
+                int w = lx > 0 ? wF : wRr;
+                if (d.Punct(w) == 0 && Dice() < c.punctHitChance * Math.Min(1, (relSpeed - 5) / 10)) { d.SetPunct(w, 1e-3); d.punctures++; }
+            }
+            d.hits++; d.lastSize = Math.Min(1, e); d.lastX = lx; d.lastY = ly;
+        }
+
+        // the pit crew fits a new nose / rear wing (suspension and floor damage stay)
+        public void RepairWings() { damage.wingFL = damage.wingFR = damage.wingRear = 0; }
+        // new tyres: no more punctures
+        public void FixPunctures() { damage.punctFL = damage.punctFR = damage.punctRL = damage.punctRR = 0; }
+        public void ClearDamage() { int h = damage.hits; damage = default; damage.hits = h; }   // (hits kept: the model compares it)
+
+        // How much of the undamaged car's cornering grip is left at speed v (0..1, the weaker axle). For the AI's
+        // speed profile; 1 when damage physics is off.
+        public double DamageGrip(double v)
+        {
+            if (!cfg.damage || !damage.Any) return 1;
+            var c = cfg; ref Damage d = ref damage;
+            double W = c.mass * G, D = 0.5 * RHO * c.clA * v * v;
+            double wf = W * c.frontWeight, wr = W - wf, df = D * c.aeroFront, dr = D - df;
+            double fl = Sat(c.dmgFrontWing * (d.wingFL + d.wingFR)), rl = Sat(c.dmgRearWing * d.wingRear), kl = Sat(c.dmgFloor * d.floor);
+            double gF = (WheelDmgMu(0) + WheelDmgMu(1)) / 2, gR = (WheelDmgMu(2) + WheelDmgMu(3)) / 2;
+            double kF = Math.Pow((wf + df * (1 - fl) * (1 - kl)) / (wf + df), c.loadExp) * gF;
+            double kR = Math.Pow((wr + dr * (1 - rl) * (1 - kl)) / (wr + dr), c.loadExp) * gR;
+            return Math.Min(kF, kR);
+        }
+        double WheelDmgMu(int w)
+        {
+            double p = damage.Punct(w);
+            return (1 - cfg.dmgSuspGrip * damage.Susp(w)) * (p > 0 ? 1 - (1 - cfg.punctGrip) * Math.Min(1, p) : 1);
+        }
+        // toe of each axle from bent suspension (rad, + = wheels point left): a damaged wheel turns out on its side
+        double FrontToe() => cfg.dmgToe * Math.PI / 180 * (damage.suspFL - damage.suspFR) / 2;
+        double RearToe() => cfg.dmgToe * cfg.dmgRearToe * Math.PI / 180 * (damage.suspRL - damage.suspRR) / 2;
+        public double SteerOffsetDeg => cfg.dmgSteer * (damage.suspFL - damage.suspFR) + FrontToe() * 180 / Math.PI;
+
+        // per step, damage physics only: tyres deflating, kerb strikes, per-wheel grip
+        void DamageStep(double dt, double speed)
+        {
+            var c = cfg; ref Damage d = ref damage;
+            for (int w = 0; w < 4; w++)
+            {
+                double p = d.Punct(w);
+                if (p > 0 && p < 1) d.SetPunct(w, Math.Min(1, p + dt / 1.5));
+                // hitting a sausage kerb hard: floor damage now and then, and a small chance of a cut tyre
+                if (wType[w] == SurfaceType.SausageKerb && dmgPrevType[w] != SurfaceType.SausageKerb && speed > 25)
+                {
+                    d.floor = Sat(d.floor + 0.03 * Math.Min(2, speed / 50));
+                    if (d.Punct(w) == 0 && Dice() < c.punctKerbChance * Math.Min(2, speed / 50)) { d.SetPunct(w, 1e-3); d.punctures++; d.kerbPunctures++; }
+                }
+                dmgPrevType[w] = wType[w];
+                dmgMu[w] = WheelDmgMu(w);
+            }
+        }
 
         // combustion engine's peak power from the torque curve (cached), for the fuel flow
         double icePeakKey1 = double.NaN, icePeakKey2 = double.NaN, icePeak;
@@ -492,6 +650,7 @@ namespace FormulaSim
             double lockA = speedLock + (fullLock - speedLock) * csBlend;
             lockAngle = lockA;
             delta = -steerIn * lockA; // + delta = left
+            if (c.damage) { DamageStep(dt, speed); delta += SteerOffsetDeg * Math.PI / 180; } // bent steering: the wheels point off-centre
 
             throttle = Clamp(input.throttle, 0, 1);
             brake = Clamp(input.brake, 0, 1);
@@ -567,6 +726,20 @@ namespace FormulaSim
                 double tf = c.toeF * Math.PI / 180, tr2 = c.toeR * Math.PI / 180;
                 drag += (tf * tf + tr2 * tr2) * 2 * 250e3 * (vx > 1 ? 1 : 0);
             }
+            if (c.damage && damage.Any)
+            {
+                // damaged aero: the front wing carries part of the front's share, the rear wing part of the rear's, the
+                // floor some of everything. Front wing damage moves the balance rearwards (understeer).
+                ref Damage dg = ref damage;
+                double dF = down * aeroF * (1 - Sat(c.dmgFrontWing * (dg.wingFL + dg.wingFR))), dR = down * (1 - aeroF) * (1 - Sat(c.dmgRearWing * dg.wingRear));
+                double kFl = 1 - Sat(c.dmgFloor * dg.floor);
+                dF *= kFl; dR *= kFl;
+                down = dF + dR; aeroF = down > 1 ? dF / down : aeroF;
+                drag *= 1 - c.dmgRearDrag * dg.wingRear + c.dmgFrontDrag * (dg.wingFL + dg.wingFR);
+                // bent toe scrubs the tyres
+                double tf2 = FrontToe(), tr3 = RearToe();
+                drag += (tf2 * tf2 + tr3 * tr3) * 2 * 250e3 * (vx > 1 ? 1 : 0);
+            }
             aeroBalance = aeroF; downforce = down; dragForce = drag; gripF = tempKF; gripR = tempKR;
             double transfer = m * axLong * hcg / L;
             double fz0F = m * G * b / L, fz0R = m * G * a / L;
@@ -585,6 +758,12 @@ namespace FormulaSim
                 // suspension: each axle sinks under load (downforce, braking, acceleration) and settles with a short lag
                 double k = Math.Min(1, dt * c.heaveRate);
                 double tgF = c.rideF0 - (fzF - nF0) / c.springF, tgR = c.rideR0 - (fzR - nR0) / c.springR;
+                if (c.damage && damage.Punctured)
+                {
+                    // a flat tyre: that corner sits on the rim, the floor drops (and strikes the road sooner)
+                    tgF -= c.punctDrop * 0.5 * (Math.Min(1, damage.punctFL) + Math.Min(1, damage.punctFR));
+                    tgR -= c.punctDrop * 0.5 * (Math.Min(1, damage.punctRL) + Math.Min(1, damage.punctRR));
+                }
                 bottoming = tgF < 0.003 || tgR < 0.003;
                 // how hard: 0.3 at a touch, 1 at 4 mm or more below the plank's limit; follows within ~0.05 s
                 double hit = bottoming ? Clamp((0.003 - Math.Min(tgF, tgR)) / 0.004, 0.3, 1) : 0;
@@ -598,7 +777,7 @@ namespace FormulaSim
             vib = 0;
             for (int w = 0; w < 4; w++) vib = Math.Max(vib, wBump[w] / 0.012 * vk);
             vib = Math.Min(1, vib);
-            double Wm(int w) => wMu[w] * (1 - Math.Min(0.3, wBump[w] * 4.5 * vk));
+            double Wm(int w) => (c.damage ? wMu[w] * dmgMu[w] : wMu[w]) * (1 - Math.Min(0.3, wBump[w] * 4.5 * vk));
             // in a left turn (ayF > 0) the right-hand tyres are the outer, loaded ones
             bool rightOuter = ayF >= 0;
             // kerb on one side: the tyres there ride higher, the roll springs push load onto them (dk = load moved to the
@@ -735,6 +914,7 @@ namespace FormulaSim
             double vxs = Math.Max(Math.Abs(vx), 4);
             alphaF = Math.Atan2(vy + a * r, vxs) - delta * (vx >= 0 ? 1 : -1);
             alphaR = Math.Atan2(vy - b * r, vxs);
+            if (c.damage) alphaR -= RearToe() * (vx >= 0 ? 1 : -1);   // bent rear toe steers the rear axle
             if (c.relaxLen > 0)
             {
                 if (double.IsNaN(relF)) { relF = alphaF; relR = alphaR; }
@@ -826,6 +1006,13 @@ namespace FormulaSim
             double roll = (c.rollRes + surfaceDrag) * m * G;
             // drag on one side only (two wheels in the gravel) pulls the car round towards that side
             double dragL = (wRoll[0] + wRoll[2]) * m * G / 4, dragR = (wRoll[1] + wRoll[3]) * m * G / 4;
+            if (c.damage && damage.Punctured)
+            {
+                // a flat tyre drags on its side and pulls the car that way
+                double pl = (Math.Min(1, damage.punctFL) + Math.Min(1, damage.punctRL)) * c.punctRoll * m * G / 4;
+                double pr = (Math.Min(1, damage.punctFR) + Math.Min(1, damage.punctRR)) * c.punctRoll * m * G / 4;
+                dragL += pl; dragR += pr; roll += pl + pr;
+            }
             double resist = (drag + roll) * dir;
 
             // ---------- integrate ----------

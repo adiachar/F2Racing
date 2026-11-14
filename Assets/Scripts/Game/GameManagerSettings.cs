@@ -53,6 +53,7 @@ public partial class GameManager
 
     // ---------------------------------------------------------------- load / save
     static float LoadF(string key, float def, float min, float max) => Mathf.Clamp(PlayerPrefs.GetFloat(key, def), min, max);
+    int damageMode = 1; // 0 off, 1 visual only, 2 full
     static int LoadI(string key, int def, int max) => Mathf.Clamp(PlayerPrefs.GetInt(key, def), 0, max);
     static float LoadOld(string key, string oldKey, float[] list, int defIdx, float min, float max) =>
         Mathf.Clamp(PlayerPrefs.HasKey(key) ? PlayerPrefs.GetFloat(key) : list[Mathf.Clamp(PlayerPrefs.GetInt(oldKey, defIdx), 0, list.Length - 1)], min, max);
@@ -78,6 +79,7 @@ public partial class GameManager
         fovChase = LoadF("fovChase", 62, 50, 80); fovCockpit = LoadF("fovCockpit", 55, 45, 80);
         seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200);
         horizonMode = LoadI("horizon", 1, 2);
+        damageMode = LoadI("damage", 1, 2);
         fpsIdx = LoadI("fps", 1, 1); resPct = LoadF("resScale", 100, 50, 100); shadowsOn = PlayerPrefs.GetInt("shadows", 1) == 1; showFps = PlayerPrefs.GetInt("showFps", 1) == 1;
         volMaster = LoadF("volMaster", 100, 0, 100); volEngine = LoadF("volEngine", 100, 0, 100); volFx = LoadF("volFx", 100, 0, 100); volTyres = LoadF("volTyres", 100, 0, 100);
         unitsIdx = LoadI("units", 0, 1); hudInfo = PlayerPrefs.GetInt("hudInfo", 1) == 1; hudMap = PlayerPrefs.GetInt("hudMap", 1) == 1;
@@ -101,6 +103,7 @@ public partial class GameManager
         PlayerPrefs.SetFloat("fovChase", fovChase); PlayerPrefs.SetFloat("fovCockpit", fovCockpit);
         PlayerPrefs.SetFloat("seatUp", seatUpCm); PlayerPrefs.SetFloat("seatFwd", seatFwdCm); PlayerPrefs.SetFloat("camShake", camShakePct);
         PlayerPrefs.SetInt("horizon", horizonMode);
+        PlayerPrefs.SetInt("damage", damageMode);
         PlayerPrefs.SetInt("fps", fpsIdx); PlayerPrefs.SetFloat("resScale", resPct); PlayerPrefs.SetInt("shadows", shadowsOn ? 1 : 0); PlayerPrefs.SetInt("showFps", showFps ? 1 : 0);
         PlayerPrefs.SetFloat("volMaster", volMaster); PlayerPrefs.SetFloat("volEngine", volEngine); PlayerPrefs.SetFloat("volFx", volFx); PlayerPrefs.SetFloat("volTyres", volTyres);
         PlayerPrefs.SetInt("units", unitsIdx); PlayerPrefs.SetInt("hudInfo", hudInfo ? 1 : 0); PlayerPrefs.SetInt("hudMap", hudMap ? 1 : 0);
@@ -112,6 +115,7 @@ public partial class GameManager
     void ApplySetup(CarConfig c)
     {
         var b = BaseCfg(cfgClass);
+        c.damage = damageMode == 2; CarModel.damageVisuals = damageMode > 0;
         c.steerSpeed = steerRate; c.steerReturn = steerRet; c.maxLockDeg = b.maxLockDeg * steerLockPct * 0.01;
         if (cfgClass == 0) c.aeroFront = aeroBal / 100.0; // the F1 car only, as before
         c.brakeBias = brakeBiasPct / 100.0; c.brakeMigration = brakeMigPct / 100.0; c.engineBrake = engBrakePct / 100.0;
@@ -285,6 +289,7 @@ public partial class GameManager
         game.Toggle("Timing tower", "Order, gaps and tyres on the left in a race. Tap it for gap / interval, the arrow for all cars.", true, () => hudTower, v => hudTower = v);
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
+        game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => damageMode, v => { damageMode = v; SetupChanged(); });
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();

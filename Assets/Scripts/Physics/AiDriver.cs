@@ -95,6 +95,10 @@ namespace FormulaSim
         public double offset;             // current sideways offset from the racing line (traffic)
         public bool recovered;
         public double target;             // the speed target of the last Think (m/s), for diagnostics
+        // pit stops for damage: a heavily damaged car boxes at the next crossing of the line for a new wing (and
+        // tyres). The time lost is taken off its race distance in progress, as for the player's stops.
+        public const double PitLoss = 22, WingChange = 8;   // s: pit lane and stop (as GameManager.PitLoss), + nose change
+        public int pitStops; public double pitLoss; public bool boxing;
 
         readonly Track track; readonly RacingLine line; readonly AiTuning tune;
         readonly double[] speed;          // this driver's own target speeds
@@ -111,7 +115,7 @@ namespace FormulaSim
             this.track = track; this.line = line; this.who = who; this.tune = tune;
             rng = new Random(seed * 7919 + 13);
             var c = cfg.Clone(); c.tc = TcMode.High; c.abs = true; c.autoShift = true; c.steerSpeed = 14; c.steerReturn = 16;
-            car = new FormulaCar(c);
+            car = new FormulaCar(c); car.SeedDamage(seed);
             double grip = tune.grip * difficulty * (0.86 + 0.14 * who.pace), brake = tune.brakeUse * difficulty * (0.84 + 0.16 * who.pace);
             // SpeedProfile stores its result in the line object; keep a private copy and leave the line as it was
             var keepS = line.speed; var keepB = line.braking; var keepP = line.phase; var keepC = line.vCorner; double keepT = line.lapTime;
@@ -153,10 +157,17 @@ namespace FormulaSim
             {
                 if (!double.IsNaN(lapStart)) { lastLap = simTime - lapStart; if (double.IsNaN(bestLap) || lastLap < bestLap) bestLap = lastLap; }
                 lapStart = simTime; lap++; car.NewLap();
+                if (boxing)
+                {
+                    boxing = false; pitStops++; pitLoss += PitLoss + (car.damage.WingsDamaged ? WingChange : 0);
+                    car.RepairWings(); car.FixPunctures();
+                    car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0; car.tyreTF = car.tyreTR = car.cfg.tyreStart; car.tyreSF = car.tyreSR = double.NaN;
+                }
                 lapPace = 1 + (rng.NextDouble() - 0.5) * 0.02 * (1 - who.consistency); // good laps and bad laps
             }
             else if (prevIdx < N * 0.2 && idx > N * 0.8) lap--;
-            progress = lap + (double)idx / N;
+            if (car.cfg.damage && car.damage.NeedsPit) boxing = true;
+            progress = lap + (double)idx / N - pitLoss / RefLap;
             if (deploy != null) car.deployMap = deploy[idx];   // the same energy rule as the player's car, with its own map
 
             // ---- traffic: look for a car close ahead or alongside ----
@@ -212,6 +223,7 @@ namespace FormulaSim
             double steer = Clamp(-delta / lockNow, -1, 1);
 
             // ---- speed: follow this driver's own speed profile ----
+            double dmgScale = 1;   // damage: share of the profile's speed the car can carry now (below)
             int ip = (idx + (int)Math.Round(tune.preview * v / track.ds)) % N;
             double V(int i) => speedFull == null ? speed[i] : speed[i] + (speedFull[i] - speed[i]) * (double.IsNaN(car.fuel) ? 1 : Clamp(car.fuel / car.cfg.fuelStart, 0, 1));
             bool brakingZone = V((ip + 1) % N) < V(ip) - 0.05;
@@ -227,6 +239,8 @@ namespace FormulaSim
             {
                 double down = 0.5 * 1.225 * car.cfg.clA * vt * vt, share = down / (down + car.cfg.mass * 9.81);
                 vt *= Math.Pow(Clamp(Math.Min(car.gripF, car.gripR), 0.8, 1.0), 1 / (2 - 2 * car.cfg.loadExp * share));
+                // damage (lost downforce, bent suspension, a flat tyre): the same rule, from the grip the damage leaves
+                if (car.cfg.damage && car.damage.Any) { dmgScale = Math.Pow(Clamp(car.DamageGrip(vt), 0.3, 1.0), 1 / (2 - 2 * car.cfg.loadExp * share)); vt *= dmgScale; }
             }
             vt = Math.Min(vt, speedCap);
             target = vt;
@@ -237,7 +251,7 @@ namespace FormulaSim
                 // feed-forward: the pedal the profile's deceleration needs (less drag), corrected by the speed error, so
                 // the car brakes as hard as its profile says (5 g and more at speed) instead of only on an error
                 int iq = (ip + 1) % N; double dsq = Math.Max(0.1, track.ds);
-                double aReq = Math.Max(0, (V(ip) * V(ip) - V(iq) * V(iq)) / (2 * dsq)) * lapPace * lapPace * (mistakeT > 0 ? 0.85 : 1);
+                double aReq = Math.Max(0, (V(ip) * V(ip) - V(iq) * V(iq)) / (2 * dsq)) * lapPace * lapPace * (mistakeT > 0 ? 0.85 : 1) * dmgScale * dmgScale;
                 double ff = (car.massNow > 0 ? car.massNow : car.cfg.mass) * aReq - 0.5 * 1.225 * car.cfg.cdA * v * v;
                 brk = Clamp(ff / car.cfg.brakeForce - err * tune.kBrk, 0, 1);
             }
@@ -295,7 +309,16 @@ namespace FormulaSim
             if (stuckT > 2.0 || offT > 1.2)
             {
                 double keep = Math.Min(V(idx) * 0.6, 30);
-                int keepLap = lap; Place(idx, line.off[idx], keep); lap = keepLap; progress = lap + (double)idx / N; // a reset is not a new grid slot: the lap count stays
+                // a damaged car is put back slower, and well inside the track (never against the barrier); a bent car
+                // pulls to one side, so it gets room on the side it pulls to
+                double offR = line.off[idx];
+                if (car.cfg.damage && car.damage.Any)
+                {
+                    keep *= Math.Sqrt(Clamp(car.DamageGrip(keep), 0.3, 1));
+                    double roomR = Math.Max(0, track.HalfWidth(idx) - 2.0);
+                    offR = Clamp(offR - Math.Sign(car.SteerOffsetDeg) * 0.5, -roomR, roomR);
+                }
+                int keepLap = lap; Place(idx, offR, keep); lap = keepLap; progress = lap + (double)idx / N - pitLoss / RefLap; // a reset is not a new grid slot: the lap count stays
                 int g = 1; while (g < car.cfg.gearTopSpeeds.Length && keep * 3.6 > car.cfg.gearTopSpeeds[g - 1] * 0.8) g++;
                 car.gear = g; stuckT = offT = 0; offset = offsetTarget = 0; recovered = true;
             }
@@ -304,6 +327,7 @@ namespace FormulaSim
         }
 
         public CarInput LastInput => input;
+        double RefLap => line.lapTime > 0 ? line.lapTime : 90;
         static double Clamp(double v, double a, double b) => v < a ? a : v > b ? b : v;
     }
 
@@ -330,6 +354,13 @@ namespace FormulaSim
             if (vn <= 0) return true;
             double tx = -ny, ty = nx, vt = wx * tx + wy * ty;
             double J = (1 + Bounce) * vn;                         // impulse per unit mass
+            // damage: the closing speed into the wall, landing on the side that faces it (the front corner when the
+            // car is moving forwards into it, the rear corner when going backwards or hit tail first)
+            {
+                double ly = -sh * nx + ch * ny, lxn = ch * nx + sh * ny;
+                double lx = c.vx >= 0 && lxn > -0.3 ? c.cfg.wheelbase * (1 - c.cfg.frontWeight) * (lxn > 0.7 ? 1.3 : 0.6) : -c.cfg.wheelbase * c.cfg.frontWeight * (lxn < -0.7 ? 1.3 : 0.6);
+                c.ApplyImpact(vn, lx, ly > 0 ? 0.9 : -0.9, true);
+            }
             double vt2 = vt - Math.Sign(vt) * Math.Min(Math.Abs(vt), Scrape * J);
             double vn2 = -Bounce * vn;
             wx = nx * vn2 + tx * vt2; wy = ny * vn2 + ty * vt2;
@@ -364,6 +395,10 @@ namespace FormulaSim
                 if (rel < 0)
                 {
                     double jimp = -(1 + 0.15) * rel / 2; // equal masses
+                    // damage: each car at its contact point (car frame), from the closing speed
+                    double cxw = nx * R, cyw = ny * R;   // from a's circle centre towards b
+                    a.ApplyImpact(-rel, oa + ca * cxw + sa * cyw, -sa * cxw + ca * cyw);
+                    b.ApplyImpact(-rel, ob - (cb * cxw + sb * cyw), -(-sb * cxw + cb * cyw));
                     avx -= jimp * nx; avy -= jimp * ny; bvx += jimp * nx; bvy += jimp * ny;
                     a.vx = avx * ca + avy * sa; a.vy = -avx * sa + avy * ca; b.vx = bvx * cb + bvy * sb; b.vy = -bvx * sb + bvy * cb;
                     // a nudge off-centre also turns the cars a little

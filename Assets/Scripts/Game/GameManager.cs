@@ -271,7 +271,7 @@ public partial class GameManager : MonoBehaviour
             // spread the picks over the whole field: stars, midfield and backmarkers
             var who = field != null ? field[k] : grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
             var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel();
-            rc.compound = Weather.PhysicsCompound(rivalSet);
+            rc.compound = Weather.PhysicsCompound(rivalSet); rc.damage = damageMode == 2;
             // the speed profile's grip share multiplies the tyre mu directly (RacingLine.SpeedProfile), so the wet
             // factor of their tyres on the racing line slows corners and braking just as the grip loss does
             var tune = AiTuning.For(builtFor); tune.grip *= Weather.TrackFactor(rivalSet, 1);
@@ -346,7 +346,9 @@ public partial class GameManager : MonoBehaviour
         double keep = System.Math.Max(System.Math.Min(System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), 40), 22);
         var cfg = car.cfg; int gear = 1;
         while (gear < cfg.gearTopSpeeds.Length && keep * 3.6 > cfg.gearTopSpeeds[gear - 1] * 0.8) gear++;
+        var dmg = car.damage;
         car = new FormulaCar(cfg) { x = p.x, y = p.y, heading = System.Math.Atan2(p.ty, p.tx), vx = keep, gear = gear };
+        car.damage = dmg; // damage survives a recovery
         offTime = wrongTime = 0; cut = true; Flash("Back on track");
     }
 
@@ -692,8 +694,9 @@ public partial class GameManager : MonoBehaviour
         car.tyreTF = car.tyreTR = car.cfg.tyreStart;       // straight off the blankets
         car.tyreSF = car.tyreSR = double.NaN;               // the surface temperature re-starts from the carcass
         if (model != null) model.SetStripe(Weather.Stripe(carSet));
-        pitLoss += PitLoss; pitStops++;
-        Flash($"Pit stop: {Weather.TyreName(carSet)}  +{PitLoss:0}s");
+        double wing = car.damage.WingsDamaged ? AiDriver.WingChange : 0; car.RepairWings(); car.FixPunctures();
+        pitLoss += PitLoss + wing; pitStops++;
+        Flash($"Pit stop: {Weather.TyreName(carSet)}  +{PitLoss + wing:0}s");
     }
     // the next tyre set: the one for the weather first (a wet race boxes for wets), then round the rest
     int NextSet => Weather.BestSet() != carSet ? Weather.BestSet() : (carSet + 1) % Weather.Sets;

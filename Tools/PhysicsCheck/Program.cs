@@ -11,6 +11,50 @@ if (Environment.GetEnvironmentVariable("MAPMAX") != null) RacingLine.MapMax = do
 Track[] Circuits() => FormulaSim.Circuits.All.Select(d => d.Build()).ToArray();
 string[] CircuitNames = FormulaSim.Circuits.All.Select(c => c.name).ToArray();
 
+// ---- damage check: dotnet run -- damage ----
+// Steady corner at fixed steer and speed with and without damage: lateral g, yaw rate, aero balance (front wing
+// damage must understeer = less yaw for the same steer); then a straight line with hands off to show the pull.
+if (args.Length > 0 && args[0] == "damage")
+{
+    (double g, double yaw, double bal, double down, double drag) Corner(Action<FormulaCar> hurt, double kmh, double steer)
+    {
+        var car = new FormulaCar(new CarConfig { damage = true, fuel = false }) { vx = kmh / 3.6, gear = 6 };
+        hurt(car);
+        double v0 = kmh / 3.6, gs = 0, ys = 0; int n = 0;
+        for (int i = 0; i < 240 * 6; i++)
+        {
+            double v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+            car.Step(new CarInput(steer, Math.Clamp(0.5 + (v0 - v) * 0.5, 0, 1), Math.Clamp((v - v0) * 0.3, 0, 1)), H);
+            if (i > 240 * 4) { gs += Math.Abs(car.ay) / 9.81; ys += Math.Abs(car.r); n++; }
+        }
+        return (gs / n, ys / n * 180 / Math.PI, car.aeroBalance, car.downforce, car.dragForce);
+    }
+    void Row(string name, Action<FormulaCar> hurt)
+    {
+        var c = Corner(hurt, 200, 0.10);
+        // hands-off straight line at 250 km/h for 2 s: sideways drift
+        var car = new FormulaCar(new CarConfig { damage = true, fuel = false }) { vx = 250 / 3.6, gear = 7 }; hurt(car);
+        double y0 = car.y;
+        for (int i = 0; i < 480; i++) car.Step(new CarInput(0, 0.8, 0), H);
+        Console.WriteLine($"  {name,-30} 200 km/h, fixed steer: {c.g:F2} g, yaw {c.yaw:F2} deg/s, balance {c.bal * 100:F1}% front, downforce {c.down / 1000:F1} kN, drag {c.drag / 1000:F2} kN | hands off 2 s at 250: drift {car.y - y0:+0.00;-0.00} m (+ = left), grip left {car.DamageGrip(200 / 3.6) * 100:F0}%");
+    }
+    Console.WriteLine("Damage (cfg.damage = true):");
+    Row("none", c => { });
+    Row("front wing left endplate (0.4)", c => c.damage.wingFL = 0.4);
+    Row("front wing both sides gone", c => { c.damage.wingFL = 1; c.damage.wingFR = 1; });
+    Row("rear wing (1.0)", c => c.damage.wingRear = 1);
+    Row("floor (0.5, ~50 points)", c => c.damage.floor = 0.5);
+    Row("front-left suspension (1.0)", c => c.damage.suspFL = 1);
+    Row("rear-right suspension (1.0)", c => c.damage.suspRR = 1);
+    Row("puncture front-right", c => c.damage.punctFR = 1);
+    // impacts: what a hit does
+    var t = new FormulaCar(new CarConfig { damage = true });
+    t.ApplyImpact(6, 2.6, 0.2); Console.WriteLine($"  impact 6 m/s nose (22 km/h): wing L {t.damage.wingFL:F2} R {t.damage.wingFR:F2}");
+    t = new FormulaCar(new CarConfig { damage = true }); t.ApplyImpact(12, 1.0, 0.9, true);
+    Console.WriteLine($"  wall 12 m/s front-left: wing L {t.damage.wingFL:F2}, susp FL {t.damage.suspFL:F2}, floor {t.damage.floor:F2}, flat {t.damage.Punctured}");
+    return;
+}
+
 // ---- AI trainer: dotnet run -- train ----
 // Evolution search (cross-entropy method) over the controller gains. Every candidate drives full laps in the
 // real physics; the score is the flying-lap time, and leaving the track disqualifies it.
@@ -487,13 +531,17 @@ if (args.Length > 0 && args[0] == "race")
 {
     var tracks = Circuits(); double raceFuel = args.Length > 1 && args[1] == "fuel" ? 70 : new CarConfig().fuelStart;
     var only = Environment.GetEnvironmentVariable("RACEONLY")?.Split(',');   // RACEONLY=monaco,monza: just these circuits
+    // DAMAGE=full: damage physics on (CarConfig.damage), as the game's "Damage: Full". Default off (the legacy race test).
+    bool dmgFull = (Environment.GetEnvironmentVariable("DAMAGE") ?? "").ToLowerInvariant() == "full";
+    Console.WriteLine($"race test, damage {(dmgFull ? "FULL" : "off")}");
+    int totalResets = 0, totalStops = 0, totalHits = 0;
     for (int ti = 0; ti < tracks.Length; ti++)
     {
         if (only != null && !only.Contains(FormulaSim.Circuits.All[ti].id)) continue;
         var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
         var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
         var hf = t.h != null ? new HeightField(t) : null;
-        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = raceFuel }, DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); } // the game's grid (CircuitDef.gridOffset)
+        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = raceFuel, damage = dmgFull }, DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); } // the game's grid (CircuitDef.gridOffset)
         double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n]; var where = new List<string>();
         double tMin = 999, tMaxF = 0, tMaxR = 0, tSumF = 0, tSumR = 0; int tN = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -501,7 +549,7 @@ if (args.Length > 0 && args[0] == "race")
         {
             if (steps++ % 4 == 0)
             {
-                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap <= 1 ? "*" : "")}"); } }
+                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; var dm = ds[k].car.damage; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap <= 1 ? "*" : "")}{(dm.Any ? $"[d fw {dm.wingFL:F1}/{dm.wingFR:F1} rw {dm.wingRear:F1} su {dm.suspFL:F1}/{dm.suspFR:F1}/{dm.suspRL:F1}/{dm.suspRR:F1} fl {dm.floor:F1}{(dm.Punctured ? " flat" : "")}]" : "")}"); } }
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
             }
             if (steps % 240 == 0) { var c0 = ds[0].car; tMin = Math.Min(tMin, Math.Min(c0.tyreTF, c0.tyreTR)); tMaxF = Math.Max(tMaxF, c0.tyreTF); tMaxR = Math.Max(tMaxR, c0.tyreTR); if (time > 60) { tSumF += c0.tyreTF; tSumR += c0.tyreTR; tN++; } }
@@ -511,10 +559,17 @@ if (args.Length > 0 && args[0] == "race")
         Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}; wear after {ds[0].lap} laps F {ds[0].car.wearF * 100:F1}% R {ds[0].car.wearR * 100:F1}%; fuel {ds[0].car.fuel:F1} kg left, {ds[0].car.fuelLastLap:F2} kg last lap");
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
         Console.WriteLine($"  resets at (m from the line, * = first racing lap): {string.Join(" ", where)}");
+        {
+            int dmgCars = ds.Count(d => d.car.damage.Any), stops = ds.Sum(d => d.pitStops), imp = ds.Sum(d => d.car.damage.hits);
+            double fw = ds.Max(d => Math.Max(d.car.damage.wingFL, d.car.damage.wingFR)), su = ds.Max(d => Math.Max(Math.Max(d.car.damage.suspFL, d.car.damage.suspFR), Math.Max(d.car.damage.suspRL, d.car.damage.suspRR)));
+            Console.WriteLine($"  damage: {imp} impacts, {dmgCars} cars damaged at the end, worst front wing {fw:F2}, worst suspension {su:F2}, floor {ds.Max(d => d.car.damage.floor):F2}, {ds.Count(d => d.car.damage.Punctured)} flat tyres now, {stops} pit stops, {ds.Sum(d => d.car.damage.punctures)} punctures ({ds.Sum(d => d.car.damage.kerbPunctures)} from kerbs)");
+            totalResets += recov; totalStops += stops; totalHits += imp;
+        }
         int pos = 1;
         foreach (var d in ds.OrderByDescending(d => d.progress))
             Console.WriteLine($"  P{pos++,-2} {d.who.name,-13} pace {d.who.pace:F2} best {d.bestLap:F2} resets {rec[ds.IndexOf(d)]}");
     }
+    Console.WriteLine($"TOTAL (damage {(dmgFull ? "full" : "off")}): {totalResets} resets, {totalHits} damaging impacts, {totalStops} pit stops");
     return;
 }
 

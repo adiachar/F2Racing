@@ -213,6 +213,7 @@ public class CarModel : MonoBehaviour
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = m;
             r.shadowCastingMode = shadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
         }
+        cm.debrisSrc = carbon;
         cm.liveryBody = paint; cm.liverySecond = accent; // the code-built car: body = primary, accent parts = secondary
         Part(P, paint, "Paint"); Part(A, accent, "Accent"); Part(C, carbon, "Carbon"); Part(D, dark, "Dark");
 
@@ -494,6 +495,9 @@ public class CarModel : MonoBehaviour
             // 2026-style wheel cover + spin-blur face over the rim (player car only: 4 quads)
             if (name.EndsWith("_hub") && !rival) cm.WheelFace(go.transform.parent, pos, nv, piv.x, front);
             if (rival) r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; // rivals keep only the soft blob shadow
+            // damage: the wings come off this part as separate pieces (front wing sides, endplates, rear wing)
+            if (name == "carbon" || name == "white" || name == "paint_red") cm.SplitWings(go, res + "|" + name, mat, rival);
+            if (mid == 2 && cm.debrisSrc == null) cm.debrisSrc = mat;
         }
         if (made != null) meshCache[res] = made;
         cm.lightMat = mats[6]; cm.stripeMat = mats[7]; cm.liveryBody = mats[0]; cm.liverySecond = mats[1];
@@ -590,6 +594,7 @@ public class CarModel : MonoBehaviour
         float speed = Mathf.Sqrt((float)(car.vx * car.vx + car.vy * car.vy));
         harvesting = !double.IsNaN(car.ersKw) && car.ersKw < -5 && speed > 10f;
         UpdateLights();
+        if (car.damage.Any || dmgShown || seenHits != car.damage.hits || dLifeAny) ShowDamage(car, dt, speed);
         if (rival || dt <= 0) return;
         // sparks from the plank: titanium skid blocks scraping the road at speed
         if (car.bottoming && speed > 40f) Sparks(dt, speed);
@@ -722,6 +727,213 @@ public class CarModel : MonoBehaviour
         }
     }
 
+    // ------------------------------------------------------------------ damage (FormulaSim.Damage, see Feed)
+    // The game sets this from the Damage setting: false = "Off" (nothing shown). "Visual only" and "Full" show it.
+    public static bool damageVisuals = true;
+    // wing pieces, split off the imported model's carbon / white / paint parts: 0 front wing left, 1 right,
+    // 2 left endplate, 3 right endplate (children of the sides), 4 rear wing. Car frame: model -x = the car's left.
+    readonly Transform[] dmgPiv = new Transform[5];
+    static readonly Vector3[] DmgPivPos = { new Vector3(-0.14f, 0.24f, 2.08f), new Vector3(0.14f, 0.24f, 2.08f), new Vector3(-0.68f, 0.2f, 2.35f), new Vector3(0.68f, 0.2f, 2.35f), new Vector3(0f, 0.72f, -1.8f) };
+    static readonly Dictionary<string, Mesh[]> splitCache = new Dictionary<string, Mesh[]>();
+    Material debrisSrc;
+    // wheels by physics index (0 FL, 1 FR, 2 RL, 3 RR), their rest positions and tyres; toe / camber shown (deg)
+    readonly Transform[] wPiv = new Transform[4], wTyre = new Transform[4]; readonly Vector3[] wBase = new Vector3[4];
+    readonly float[] wToe = new float[4], wCamber = new float[4];
+    bool dmgRefs, wheelDmg, dmgShown; int seenHits = -1; float dmgSmokeAcc;
+
+    static int WingRegion(Vector3 c)
+    {
+        if (c.z > 2.05f && c.y < 0.5f && Mathf.Abs(c.x) > 0.14f) return Mathf.Abs(c.x) > 0.68f ? (c.x < 0 ? 3 : 4) : (c.x < 0 ? 1 : 2);
+        if (c.z < -1.75f && c.y > 0.5f) return 5;
+        return 0;
+    }
+    static Mesh SubMesh(Vector3[] v, Vector3[] n, Color32[] col, int[] tri, List<int> tris)
+    {
+        var map = new int[v.Length]; for (int i = 0; i < map.Length; i++) map[i] = -1;
+        var pv = new List<Vector3>(); var pn = new List<Vector3>(); var pc = col != null && col.Length == v.Length ? new List<Color32>() : null; var pt = new List<int>(tris.Count * 3);
+        foreach (int t in tris)
+            for (int k = 0; k < 3; k++)
+            {
+                int a = tri[t + k];
+                if (map[a] < 0) { map[a] = pv.Count; pv.Add(v[a]); pn.Add(n[a]); if (pc != null) pc.Add(col[a]); }
+                pt.Add(map[a]);
+            }
+        var m = new Mesh { indexFormat = pv.Count > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
+        m.SetVertices(pv); m.SetNormals(pn); if (pc != null) m.SetColors(pc); m.SetTriangles(pt, 0); m.RecalculateBounds();
+        return m;
+    }
+    // split a part into the rest of the car + up to five wing pieces (made once per model and part, then cached)
+    void SplitWings(GameObject go, string key, Material mat, bool isRival)
+    {
+        var mf = go.GetComponent<MeshFilter>(); if (mf == null || mf.sharedMesh == null) return;
+        if (!splitCache.TryGetValue(key, out var parts))
+        {
+            var src = mf.sharedMesh; var v = src.vertices; var n = src.normals; var col = src.colors32; var tri = src.triangles;
+            var lists = new List<int>[6]; for (int k = 0; k < 6; k++) lists[k] = new List<int>();
+            for (int t = 0; t < tri.Length; t += 3) lists[WingRegion((v[tri[t]] + v[tri[t + 1]] + v[tri[t + 2]]) / 3f)].Add(t);
+            parts = null;
+            if (lists[1].Count + lists[2].Count + lists[3].Count + lists[4].Count + lists[5].Count > 0)
+            {
+                parts = new Mesh[6];
+                for (int k = 0; k < 6; k++) if (lists[k].Count > 0) parts[k] = SubMesh(v, n, col, tri, lists[k]);
+            }
+            splitCache[key] = parts;
+        }
+        if (parts == null) return;
+        mf.sharedMesh = parts[0];
+        if (parts[0] == null) go.GetComponent<MeshRenderer>().enabled = false;
+        for (int k = 1; k < 6; k++)
+        {
+            if (parts[k] == null) continue;
+            var piv = DmgPivot(k - 1);
+            var pg = new GameObject(go.name + "_dmg" + k); pg.transform.SetParent(piv, false); pg.transform.localPosition = -DmgPivPos[k - 1];
+            pg.AddComponent<MeshFilter>().sharedMesh = parts[k];
+            var pr = pg.AddComponent<MeshRenderer>(); pr.sharedMaterial = mat;
+            if (isRival) pr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            pg.layer = go.layer;
+        }
+    }
+    Transform DmgPivot(int k)
+    {
+        if (dmgPiv[k] != null) return dmgPiv[k];
+        var t = new GameObject("Damage" + k).transform;
+        if (k == 2 || k == 3) { var side = DmgPivot(k - 2); t.SetParent(side, false); t.localPosition = DmgPivPos[k] - DmgPivPos[k - 2]; }
+        else { t.SetParent(body, false); t.localPosition = DmgPivPos[k]; }
+        return dmgPiv[k] = t;
+    }
+    void DamageRefs()
+    {
+        dmgRefs = true;
+        var piv = new Transform[4];
+        for (int i = 0; i < 2; i++)
+        {
+            // model -x is the car's left (physics +y)
+            var f = frontPivots[i]; if (f != null) piv[f.localPosition.x < 0 ? 0 : 1] = f;
+            var r = rearSpin[i] != null ? rearSpin[i].parent : null; if (r != null) piv[r.localPosition.x < 0 ? 2 : 3] = r;
+        }
+        for (int w = 0; w < 4; w++)
+        {
+            wPiv[w] = piv[w]; if (piv[w] == null) continue;
+            wBase[w] = piv[w].localPosition;
+            foreach (var tr in piv[w].GetComponentsInChildren<Transform>(true)) if (tr.name == "Tyre" || tr.name.EndsWith("_tyre")) { wTyre[w] = tr; break; }
+        }
+    }
+
+    // ---- debris: one small pool for all cars, simple ballistic pieces that bounce and settle (no physics engine)
+    const int DebrisMax = 18;
+    static Transform[] debris; static Vector3[] dVel = new Vector3[DebrisMax], dSpin = new Vector3[DebrisMax]; static float[] dLife = new float[DebrisMax];
+    static int dNext, dFrame = -1;
+    static bool dLifeAny { get { if (debris == null) return false; for (int i = 0; i < DebrisMax; i++) if (dLife[i] > 0) return true; return false; } }
+    static void ThrowDebris(Vector3 at, Vector3 carVel, int count, Material m)
+    {
+        if (debris == null || debris[0] == null)
+        {
+            debris = new Transform[DebrisMax];
+            for (int i = 0; i < DebrisMax; i++)
+            {
+                var g = GameObject.CreatePrimitive(PrimitiveType.Cube); Destroy(g.GetComponent<Collider>()); g.name = "Debris";
+                g.layer = LightBake.CarLayer;
+                var r = g.GetComponent<MeshRenderer>(); r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                if (m != null) r.sharedMaterial = m;
+                g.SetActive(false); debris[i] = g.transform; dLife[i] = 0;
+            }
+        }
+        for (int c = 0; c < Mathf.Min(6, count); c++)
+        {
+            int i = dNext; dNext = (dNext + 1) % DebrisMax;
+            var t = debris[i]; t.gameObject.SetActive(true);
+            t.position = at + Random.insideUnitSphere * 0.25f; t.rotation = Random.rotation;
+            t.localScale = new Vector3(Random.Range(0.08f, 0.3f), Random.Range(0.01f, 0.03f), Random.Range(0.05f, 0.18f));
+            dVel[i] = carVel * Random.Range(0.4f, 0.8f) + Random.insideUnitSphere * 4f + Vector3.up * Random.Range(1.5f, 4.5f);
+            dSpin[i] = Random.insideUnitSphere * 720f; dLife[i] = Random.Range(3f, 5f);
+        }
+    }
+    static void StepDebris(float dt)
+    {
+        if (debris == null || debris[0] == null || dFrame == Time.frameCount || dt <= 0) return;
+        dFrame = Time.frameCount;
+        for (int i = 0; i < DebrisMax; i++)
+        {
+            if (dLife[i] <= 0) continue;
+            var t = debris[i];
+            dLife[i] -= dt;
+            if (dLife[i] <= 0) { t.gameObject.SetActive(false); continue; }
+            dVel[i] += UnityEngine.Physics.gravity * dt;
+            // carbon pieces are light and flat: air slows them hard
+            dVel[i] *= 1f / (1f + dt * (0.6f + 0.02f * dVel[i].magnitude));
+            var p = t.position + dVel[i] * dt; float ground = WorldBuilder.H(p.x, p.z) + 0.01f;
+            if (p.y < ground) { p.y = ground; dVel[i] = new Vector3(dVel[i].x * 0.6f, -dVel[i].y * 0.3f, dVel[i].z * 0.6f); dSpin[i] *= 0.6f; if (dVel[i].sqrMagnitude < 0.3f) dVel[i] = Vector3.zero; }
+            t.position = p;
+            if (dSpin[i].sqrMagnitude > 1f) t.rotation = Quaternion.Euler(dSpin[i] * dt) * t.rotation;
+        }
+    }
+
+    // show the car's damage: wing pieces droop, twist and come off, bent wheels, flat tyres, debris, smoke
+    void ShowDamage(FormulaSim.FormulaCar car, float dt, float speed)
+    {
+        if (!dmgRefs) DamageRefs();
+        var d = damageVisuals ? car.damage : default(FormulaSim.Damage);
+        dmgShown = d.Any;   // once clean again (repaired, restarted, setting off) one more pass puts every piece back
+        StepDebris(dt);
+        // a new hit: debris from where it landed (model: -x = left, +z = ahead)
+        if (seenHits < 0) seenHits = car.damage.hits;
+        if (car.damage.hits != seenHits)
+        {
+            seenHits = car.damage.hits;
+            if (damageVisuals && d.lastSize > 0.12)
+                ThrowDebris(transform.TransformPoint(new Vector3(-(float)d.lastY, 0.25f, (float)d.lastX) / Mathf.Max(0.01f, transform.lossyScale.x)), vel, Mathf.Clamp(Mathf.RoundToInt((float)d.lastSize * 8f), 1, 6), debrisSrc);
+        }
+        // front wing sides (0 left, 1 right): droop at the tip, swept back; endplate gone from 0.4, the side from 0.85
+        for (int k = 0; k < 2; k++)
+        {
+            float dm = (float)(k == 0 ? d.wingFL : d.wingFR), sx = k == 0 ? -1f : 1f;
+            if (dmgPiv[k] != null)
+            {
+                dmgPiv[k].gameObject.SetActive(dm < 0.85f);
+                dmgPiv[k].localPosition = DmgPivPos[k] + new Vector3(0, -0.03f * dm, -0.06f * dm);
+                dmgPiv[k].localRotation = Quaternion.Euler(6f * dm, sx * 9f * dm, -sx * 14f * dm);
+            }
+            if (dmgPiv[k + 2] != null) { dmgPiv[k + 2].gameObject.SetActive(dm < 0.4f); dmgPiv[k + 2].localRotation = Quaternion.Euler(0, sx * 25f * dm, -sx * 20f * dm); }
+        }
+        if (dmgPiv[4] != null)
+        {
+            float dm = (float)d.wingRear;
+            dmgPiv[4].gameObject.SetActive(dm < 0.9f);
+            dmgPiv[4].localRotation = Quaternion.Euler(-12f * dm, 4f * dm, 9f * dm);
+            dmgPiv[4].localPosition = DmgPivPos[4] + new Vector3(0, -0.05f * dm, 0);
+        }
+        // bent suspension: the wheel toes out and leans; a flat tyre sits on its rim
+        wheelDmg = false;
+        for (int w = 0; w < 4; w++)
+        {
+            float su = (float)d.Susp(w), sx = (w & 1) == 0 ? -1f : 1f, fl = Mathf.Min(1f, (float)d.Punct(w));
+            wToe[w] = sx * 6f * su; wCamber[w] = sx * 7f * su;   // exaggerated against the physics' 1.5 deg so it reads
+            if (su > 0) wheelDmg = true;
+            if (wPiv[w] != null) wPiv[w].localPosition = wBase[w] + Vector3.down * (tyreR * 0.14f * fl);
+            if (wTyre[w] != null) wTyre[w].localScale = fl > 0 ? new Vector3(1.06f, 1f - 0.14f * fl, 1f - 0.14f * fl) : Vector3.one;
+        }
+        if (!wheelDmg) for (int w = 2; w < 4; w++) if (wPiv[w] != null) wPiv[w].localRotation = Quaternion.identity; // (fronts: Apply)
+        // smoke from a badly damaged car (broken floor or suspension rubbing, a shredding tyre)
+        float heavy = Mathf.Max((float)d.floor - 0.4f, Mathf.Max(Mathf.Max((float)d.suspFL, (float)d.suspFR), Mathf.Max((float)d.suspRL, (float)d.suspRR)) - 0.6f);
+        bool flat = d.Punctured;
+        if (dt > 0 && (heavy > 0 || flat) && speed > 3f)
+        {
+            if (smoke == null && (smoke = MakeFx("TyreSmoke", false, 64)) == null) return;
+            dmgSmokeAcc += dt * (flat ? 10f : 4f + 10f * heavy);
+            var ep = new ParticleSystem.EmitParams();
+            for (; dmgSmokeAcc >= 1f; dmgSmokeAcc -= 1f)
+            {
+                int w = flat ? (d.punctFL > 0 ? 0 : d.punctFR > 0 ? 1 : d.punctRL > 0 ? 2 : 3) : -1;
+                ep.position = (w >= 0 && wPiv[w] != null ? wPiv[w].position : transform.TransformPoint(0, 0.3f, -1.2f)) + Random.insideUnitSphere * 0.15f;
+                ep.velocity = vel * 0.15f + Vector3.up * Random.Range(0.4f, 1.0f) + Random.insideUnitSphere * 0.4f;
+                ep.startSize = Random.Range(0.6f, 1.0f); ep.startLifetime = Random.Range(0.9f, 1.5f);
+                float g = flat ? Random.Range(0.75f, 0.85f) : Random.Range(0.35f, 0.5f); ep.startColor = new Color(g, g, g, 0.3f);
+                ep.rotation = Random.Range(0f, 360f);
+                smoke.Emit(ep, 1);
+            }
+        }
+    }
+
     // physics -> visuals. heading: rad CCW from +x (physics); delta: + = left; spin: wheel angle (rad)
     public void Apply(double x, double y, double heading, double delta, double frontSpinRad, double rearSpinRad, double axLong, double ay)
     {
@@ -744,7 +956,10 @@ public class CarModel : MonoBehaviour
         // body pitch/roll from g-forces: nose dives under braking, rolls to the outside in corners
         body.localRotation = Quaternion.Euler(Mathf.Clamp((float)-axLong * 0.09f, -1.7f, 1.7f), 0, Mathf.Clamp((float)-ay * 0.07f, -1.7f, 1.7f));
         float steer = -(float)(delta * Mathf.Rad2Deg);
-        foreach (var p in frontPivots) p.localRotation = Quaternion.Euler(0, steer, 0);
+        if (!wheelDmg) foreach (var p in frontPivots) p.localRotation = Quaternion.Euler(0, steer, 0);
+        else
+            for (int w = 0; w < 4; w++)
+                if (wPiv[w] != null) wPiv[w].localRotation = Quaternion.Euler(0, (w < 2 ? steer : 0) + wToe[w], wCamber[w]);
         foreach (var s in frontSpin) s.localRotation = Quaternion.Euler((float)(frontSpinRad * Mathf.Rad2Deg), 0, 0);
         foreach (var s in rearSpin) s.localRotation = Quaternion.Euler((float)(rearSpinRad * Mathf.Rad2Deg), 0, 0);
         float dt = Time.deltaTime;
