@@ -26,6 +26,9 @@ namespace FormulaSim
         public static bool VariableWidth = false;
         public double[] halfW;
         public double HalfWidth(int i) => halfW == null ? width / 2 : halfW[i];
+        // track point of starting slot k (0 = pole): slots 8 m apart (4 points), pole CircuitDef.gridOffset metres before
+        // the timing line (negative: past it); without a circuit 30 m, as before
+        public int GridIndex(int k) => (((N - (int)Math.Round((def != null ? def.gridOffset : 30) / ds) - 4 * k) % N) + N) % N;
 
         // layout, filled in by CircuitDef (null for a bare track): kerb width and what lies beyond it, per side
         public const double KerbWidth = 1.4;

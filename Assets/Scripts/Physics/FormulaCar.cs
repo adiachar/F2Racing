@@ -25,7 +25,7 @@ namespace FormulaSim
         public double frontWeight = 0.45;    // static weight on front axle (est., regulation window ~44-46 %)
         public double cgHeight = 0.27;       // m (est.)
         public double wheelRadius = 0.355;   // m (Pirelli 2026 rear: 710 mm diameter)
-        public double mu = 2.2;              // tyre friction at static load (est., see calibration in Tools/PhysicsCheck)
+        public double mu = 2.10;              // tyre friction at static load (est., see calibration in Tools/PhysicsCheck)
         public double rearGrip = 1.08;       // wider rear tyres (375 mm vs 280 mm)
         public double loadExp = 0.8;         // max tyre force ~ load^0.8 (tyre load sensitivity)
         public double tireB = 14.5, tireC = 1.6, tireE = 0.3; // magic formula, peak ~6.7 deg
@@ -36,7 +36,7 @@ namespace FormulaSim
         public double track = 1.58;          // m, track width (1.9 m car, 280/375 mm tyres)
         public double latTransferFront = 0.5;
         public double cdA = 1.10;            // drag area m^2, wings closed (corner mode) (est.)
-        public double clA = 4.2;             // downforce area m^2, corner mode (est.)
+        public double clA = 3.9;             // downforce area m^2, corner mode (est.)
         public bool activeAero = true;       // 2026 active aero: wings open on straights (straight mode)
         public double cdAX = 0.70, clAX = 2.5; // drag / downforce area with wings open (est.)
         public double aeroFront = 0.45;
@@ -62,6 +62,28 @@ namespace FormulaSim
         // to ersFadeFrac of it at ersFadeTo km/h. Fitted to measured 2026 cars: 100-200 km/h in ~2.0 s but
         // 200-300 km/h in ~5 s (W17, MCL40).
         public double ersFadeFrom = 200, ersFadeTo = 300, ersFadeFrac = 0.15;
+        // energy management over the lap (2026): the same simple rule for the player and the AI, so the battery lasts
+        // the lap as on the real cars. At full throttle the MGU-K deploys while the speed is below
+        // ersDepKmh + ersDepSoc x charge (0..1), and harvests ("superclipping", ICE power turned into charge while the
+        // throttle stays flat) above ersClipKmh + ersClipSoc x charge, ramping in over ersClipRamp km/h. The lower the
+        // battery, the earlier deployment stops and clipping starts, so a full battery is spent out of the slow corners
+        // and the speed peaks in the first half of a long straight, then plateaus or falls (2026 speed traces:
+        // Monza 2026 quali top 341 km/h, ~11 km/h lost before the brake point; China 333 -> 306; FIA after Miami:
+        // superclip up to 350 kW). At part throttle the ICE keeps running harder than the driver asks and the MGU-K
+        // takes the difference (up to ersPartPower); the force at the wheels is the same as before.
+        public bool ersManage = true;
+        public double ersDepKmh = 250, ersDepSoc = 500, ersDepRamp = 25;    // km/h
+        public double ersClipKmh = 290, ersClipSoc = 300, ersClipRamp = 15; // km/h
+        public double ersClipPower = 350e3;  // W (FIA 2026 after the Miami changes; 250 kW before)
+        public double ersPartPower = 350e3;  // W harvested at part throttle (2026 cars keep the ICE near full fuel flow)
+        // where to deploy: FormulaCar.deployMap (-1..2, from RacingLine.deploy at the car's place). 0..1 scales the
+        // deploy power (short bursts between corners get little); 1 = the default map above (with the fade, as in the
+        // measured standing starts); 1..2 lifts the fade towards the FIA ramp-down where a long straight follows, so the
+        // energy goes where it buys the most lap time; below 0 is a superclip zone (the last seconds of a long
+        // straight, sized per circuit so the lap's energy balances). Below 1 the map is relaxed above ersMapSoc of
+        // charge (a full battery could not harvest any more anyway).
+        public double ersMapSoc = 0.6;
+        public double ersClipMinKmh = 250;   // a negative deployMap (superclip zone) harvests above this speed
         public double shiftTime = 0.03;
         // ---- feel: turbo lag, tyre relaxation, downshift kick (all 0 = off, as in the JS prototype) ----
         // turbo without MGU-H: boost follows the throttle with a lag (d boost/dt = (throttle - boost) / tau); off boost
@@ -82,6 +104,9 @@ namespace FormulaSim
         public double brakeStart = 300, brakeAmbient = 30;   // deg C
         public double brakeHeatCap = 2400;                    // J/K per axle (discs + pads), ~500 K rise from a 340->80 km/h stop
         public double brakeCool0 = 30, brakeCoolV = 1.2;      // W/K at rest, plus per m/s (about 20 s time constant at 300 km/h)
+        // glowing carbon discs also radiate: emissivity x area per axle (m^2; ~0.85 x the faces and rims of two
+        // 278-330 mm discs, est.). At 1000 C that is about 40 kW per axle, as much as the ducts take at 150 km/h.
+        public double brakeRadA = 0.25;
         public double maxLockDeg = 22;       // Monaco-spec steering lock
         public double speedSens = 0.5;      // steering aid: lock = full / (1 + speedSens (v/30)^2). 0 = full lock at any speed
         public double csFull = 0.07;        // slide angle (rad) at which countersteer gets full lock again
@@ -109,8 +134,13 @@ namespace FormulaSim
         public double tyreHeatCap = 22e3;                 // J/K per axle (tread and carcass that follow the surface)
         public double tyreHeatShare = 0.45;               // part of the sliding energy that goes into the tyre (rest into the road)
         public double tyreCool0 = 50, tyreCoolV = 1.85;    // W/K at rest, plus per m/s of air and road speed
+        public bool frontSlipHeat = true;                 // front braking heat from the slip ratio (see Step)
+        public double tyreFrontSize = 0.9;                // front tyres' heat capacity and cooled area against the rears' (280 vs 375 mm wide; with frontSlipHeat)
         public double diffPreload = 60, diffPower = 0.15, diffCoast = 0.25; // differential: Nm preload, locking per unit of drive / overrun torque
         public double towDrag = 0.30, towDown = 0.10;     // slipstream right behind another car: drag and downforce lost
+        // floor strikes: with the plank on the road the ground, not the tyres, carries part of the downforce (and the
+        // floor's seal is upset), and the skid block rubs: tyre load lost at a hard strike, plank friction (est.)
+        public double floorLoss = 0.05, plankMu = 0.3;
         public TcMode tc = TcMode.Low;       // driver aids (not allowed in real F1; kept for touch controls)
         public bool abs = true, autoShift = true;
         // ---- race detail: fuel, tyre surface heat, brake setting, wind, kerbs ----
@@ -136,6 +166,16 @@ namespace FormulaSim
         // (1 - pedal)); engineBrake scales the overrun engine braking on the rear axle (steering-wheel "EB" map)
         public double brakeMigration = 0;    // 0 = off; real cars use about 0.02-0.05
         public double engineBrake = 1;       // 1 = as calibrated; more = more rear braking on entry (less stable)
+        // brake-by-wire (F1 since 2014): the rear brakes are electronically controlled, so the rear hydraulic torque is
+        // what is left of the rear's share after engine braking (the MGU-K's harvest is already inside that share), and
+        // the teams' BBW maps move the balance forward as the speed and the downforce fall through a braking zone
+        // (bbwShift at a standstill, none from bbwShiftKmh up). Without it the rears locked first at a 57 % balance;
+        // real cars lock the fronts first.
+        public bool bbw = true;
+        // speed profile (RacingLine): brake at brakeUse of the full tyre grip, not brakeUse x the cornering safety
+        // margin as well (that left the AI braking at 3.4-3.9 g against 5.6 g available)
+        public bool brakeFullGrip = true;
+        public double bbwShift = 0.04, bbwShiftKmh = 250;
         // wind (the game sets car.windX / windY): side force and its yaw moment act at the centre of pressure
         public double sideCyA = 4.5;         // m^2 per radian of aero yaw (est.: side force slope x frontal area)
         public double sideCp = -0.3;         // m, centre of pressure ahead (+) of the CG (est.: behind, so the car weathervanes)
@@ -172,14 +212,17 @@ namespace FormulaSim
             // grip (mu) and downforce (clA) of F2 and F3 are fitted so that their gap to the F1 car at Monaco and Spa
             // matches the real gap between 2025 F2 / F3 poles and 2026 F1 poles (fit error 0.1 %)
             // F2 / F3 fuel flow: no flow limit; estimated from power at ~30 % efficiency (est.)
-            if (k == 1) { var c = LegacyF2(); c.chassis = true; c.brakeTemps = true; c.speedSens = 0.5; c.mu = 1.70; c.clA = 4.0; c.clAX = 4.0; c.fuel = true; c.fuelFlow = 120; c.tyreSurface = true; c.kerbTransfer = true; c.relaxLen = 0.33; c.downshiftKick = 0.3; return c; }
+            // top speed: F2 620 hp (Mecachrome 3.4 V6 turbo), F3 380 hp (3.4 V6), both with DRS. FIA Monza 2025 maximum
+            // speeds: F2 316 km/h in qualifying, 331 in the feature race (tow + DRS); F3 288 / 306. DRS (activeAero)
+            // with these drag areas and a longer top gear gives ~325 / ~295 km/h flat out in still air.
+            if (k == 1) { var c = LegacyF2(); c.activeAero = true; c.cdAX = 0.80; c.gearTopSpeeds = new double[] { 128, 168, 207, 245, 285, 335 }; c.chassis = true; c.brakeTemps = true; c.speedSens = 0.5; c.mu = 1.70; c.clA = 4.0; c.clAX = 3.4; c.fuel = true; c.fuelFlow = 120; c.tyreSurface = true; c.kerbTransfer = true; c.relaxLen = 0.33; c.downshiftKick = 0.3; return c; }
             if (k == 2) return new CarConfig
             {
                 mass = 673, inertiaZ = 720, wheelbase = 2.95, frontWeight = 0.44, cgHeight = 0.29, wheelRadius = 0.30,
-                mu = 1.65, wheelInertia = 1.2, track = 1.45, cdA = 0.95, clA = 2.8, activeAero = false, cdAX = 0.95, clAX = 2.8,
+                mu = 1.65, wheelInertia = 1.2, track = 1.45, cdA = 0.90, clA = 2.8, activeAero = true, cdAX = 0.72, clAX = 2.5,
                 rideF0 = 0.035, rideR0 = 0.055, springF = 180e3, springR = 160e3,
                 peakTorque = 360, torqueRpm = new double[] { 3000, 5000, 6500, 7500, 8000, 8500 }, torqueFrac = new[] { 0.55, 0.82, 0.97, 1.0, 0.97, 0.88 },
-                redline = 8500, idleRpm = 2500, gearTopSpeeds = new double[] { 115, 150, 182, 212, 242, 275 }, driveEff = 0.88,
+                redline = 8500, idleRpm = 2500, gearTopSpeeds = new double[] { 115, 150, 182, 212, 248, 302 }, driveEff = 0.88,
                 ersPower = 0, shiftTime = 0.05, brakeForce = 17000, brakeBias = 0.58, maxLockDeg = 18, speedSens = 0.5,
                 fuelFlow = 75, sideCyA = 3.5, turboLag = 0, relaxLen = 0.30, // naturally aspirated
             };
@@ -195,7 +238,7 @@ namespace FormulaSim
             peakTorque = 600, torqueRpm = new double[] { 2000, 4000, 5500, 6500, 7500, 8750 }, torqueFrac = new[] { 0.40, 0.62, 0.88, 1.0, 0.97, 0.84 },
             redline = 8750, idleRpm = 3000, gearTopSpeeds = new double[] { 128, 168, 207, 245, 283, 320 }, driveEff = 0.80,
             ersPower = 0, shiftTime = 0.05, brakeForce = 22500, brakeBias = 0.60, maxLockDeg = 18,
-            fuel = false, tyreSurface = false, kerbTransfer = false, // the JS prototype had none of these (golden test)
+            fuel = false, tyreSurface = false, kerbTransfer = false, bbw = false, brakeFullGrip = false, frontSlipHeat = false, // the JS prototype had none of these (golden test)
             turboLag = 0, relaxLen = 0, downshiftKick = 0,
         };
     }
@@ -253,6 +296,7 @@ namespace FormulaSim
         public double tyreTF = double.NaN, tyreTR;                 // deg C, front and rear tyres
         public double aeroBalance, downforce, dragForce;           // front share now, N, N
         public bool bottoming;
+        public double floorHit;             // 0..1 how hard the plank is on the road now (downforce lost, see CarConfig.floorLoss)
         public double grade;                // slope of the road in the direction the car points (rise per metre, + = uphill)
         public double bank;                 // rad, road banking across the car (+ = the road rises to the car's right)
         public double wheelSpin;
@@ -270,6 +314,7 @@ namespace FormulaSim
         public double boost = double.NaN;   // 0..1 turbo boost now
         double relF = double.NaN, relR, kick; // relaxed slip angles (rad), downshift impulse left (N s)
         public bool standingStart;          // pulling away from rest: no MGU-K drive until ersStartKmh (FIA 2026)
+        public double deployMap = 1;        // -1..2 deploy map here (set by the game / AI from RacingLine.deploy; see CarConfig.ersMapSoc)
         public void NewLap() { ersHarvested = 0; fuelLastLap = fuelThisLap; fuelThisLap = 0; }
 
         // combustion engine's peak power from the torque curve (cached), for the fuel flow
@@ -311,11 +356,32 @@ namespace FormulaSim
 
         // MGU-K power allowed at this road speed (FIA 2026 ramp-down): full to 290 km/h,
         // 1800 - 5 v [kW] to 340 km/h (100 kW), then down to zero at 345 km/h
-        public static double ErsPowerAt(CarConfig c, double v)
+        public static double ErsPowerAt(CarConfig c, double v, bool fade = true)
         {
             double kmh = Math.Abs(v) * 3.6, f = kmh <= 290 ? 1 : kmh <= 340 ? (1800 - 5 * kmh) / 350 : kmh < 345 ? (345 - kmh) / 5 * (100.0 / 350) : 0;
-            if (kmh > c.ersFadeFrom) f = Math.Min(f, 1 - (1 - c.ersFadeFrac) * Math.Min(1, (kmh - c.ersFadeFrom) / (c.ersFadeTo - c.ersFadeFrom)));
+            if (fade && kmh > c.ersFadeFrom) f = Math.Min(f, 1 - (1 - c.ersFadeFrac) * Math.Min(1, (kmh - c.ersFadeFrom) / (c.ersFadeTo - c.ersFadeFrom)));
             return c.ersPower * f;
+        }
+
+        // full-throttle MGU-K power for this speed and state of charge (0..1): + = deploy, - = superclip harvest (W)
+        public static double ErsFull(CarConfig c, double v, double soc, double map = 1)
+        {
+            if (!c.ersManage) return ErsPowerAt(c, v);
+            double kmh = Math.Abs(v) * 3.6, vClip = c.ersClipKmh + c.ersClipSoc * soc;
+            // the map's superclip zone (the last seconds of a long straight), unless the battery is nearly full
+            // (full below 30 % charge, none above 60 %: a car with charge to spare keeps its speed)
+            if (map < 0 && kmh > c.ersClipMinKmh) return -c.ersClipPower * Math.Min(1, -map) * Clamp((0.6 - soc) / 0.3, 0, 1);
+            if (kmh > vClip) return -c.ersClipPower * Math.Min(1, (kmh - vClip) / c.ersClipRamp);
+            if (map < 0) map = 0;
+            double gate = Clamp((c.ersDepKmh + c.ersDepSoc * soc - kmh) / c.ersDepRamp, 0, 1);
+            if (map > 1)
+            {
+                // a long straight ahead: lift the fade towards the FIA ramp-down (full 350 kW to 290 km/h)
+                double fia = ErsPowerAt(c, v, false), fade = ErsPowerAt(c, v);
+                return (fade + (fia - fade) * Math.Min(1, map - 1)) * gate;
+            }
+            map += (1 - map) * Clamp((soc - c.ersMapSoc) / (1 - c.ersMapSoc), 0, 1);
+            return ErsPowerAt(c, v) * map * gate;
         }
 
         // slip (in B*alpha units) where the magic formula peaks, for this C/E shape (cached)
@@ -432,6 +498,7 @@ namespace FormulaSim
             double thr = throttle, brk = brake;
             // brake balance (front share); migration moves it rearwards as the pedal is eased
             double bias = c.brakeMigration != 0 ? Clamp(c.brakeBias - c.brakeMigration * (1 - brk), 0.3, 0.8) : c.brakeBias;
+            if (c.bbw) bias = Math.Min(0.8, bias + c.bbwShift * Clamp(1 - Math.Abs(vx) * 3.6 / c.bbwShiftKmh, 0, 1));
 
             // ---------- reverse: hold brake when stopped ----------
             if (!reverse)
@@ -473,6 +540,7 @@ namespace FormulaSim
                 downK *= 1 - Math.Min(0.15, c.yawSens * Math.Abs(betaAero)); // sliding sideways (or a crosswind) spoils the airflow
                 downK *= 1 - c.towDown * tow;                               // dirty air behind another car
                 down *= downK; drag *= 1 - c.towDrag * tow;
+                if (floorHit > 0) { double lost = down * c.floorLoss * floorHit; down -= lost; drag += c.plankMu * lost * (vx > 1 ? 1 : 0); }
                 // nose down (braking) moves the aero balance forward; squatting (acceleration) moves it back
                 aeroF = c.aeroFront + Clamp(c.rakeGain * ((rideR - rideF) - (c.rideR0 - c.rideF0)), -0.06, 0.06);
                 // tyres give their best grip in a temperature window
@@ -518,6 +586,9 @@ namespace FormulaSim
                 double k = Math.Min(1, dt * c.heaveRate);
                 double tgF = c.rideF0 - (fzF - nF0) / c.springF, tgR = c.rideR0 - (fzR - nR0) / c.springR;
                 bottoming = tgF < 0.003 || tgR < 0.003;
+                // how hard: 0.3 at a touch, 1 at 4 mm or more below the plank's limit; follows within ~0.05 s
+                double hit = bottoming ? Clamp((0.003 - Math.Min(tgF, tgR)) / 0.004, 0.3, 1) : 0;
+                floorHit += (hit - floorHit) * Math.Min(1, dt * 20);
                 rideF += (Math.Max(0.003, tgF) - rideF) * k; rideR += (Math.Max(0.003, tgR) - rideR) * k;
                 bodyRoll = m * ayF * hcg / c.rollStiff; pitch = ((rideR - rideF) - (c.rideR0 - c.rideF0)) / L;
             }
@@ -588,7 +659,7 @@ namespace FormulaSim
             }
             shiftTimer = Math.Max(0, shiftTimer - dt);
 
-            double fdrive = 0, pIce = 0;
+            double fdrive = 0, pIce = 0, ebF = 0;
             bool dry = c.fuel && fuel <= 0;   // out of fuel: the combustion engine stops pushing
             if (reverse)
             {
@@ -606,7 +677,7 @@ namespace FormulaSim
                     kBoost = c.turboNa + (1 - c.turboNa) * boost;
                 }
                 if (rpm < c.redline && !dry) { double te = TorqueAt(c, rpm) * thr * kBoost; fdrive = te * ratio * c.driveEff / c.wheelRadius; pIce = te * rpm * Math.PI / 30; }
-                if (thr < 0.05 && vx > 1) fdrive -= (rpm / c.redline) * 1200 * c.engineBrake; // engine braking (EB map)
+                if (thr < 0.05 && vx > 1) { ebF = (rpm / c.redline) * 1200 * c.engineBrake; fdrive -= ebF; } // engine braking (EB map)
             }
             if (kick > 0) { double fk = Math.Min(kick / 0.06, kick / dt); kick -= fk * dt; if (vx > 1) fdrive -= fk; else kick = 0; }
             // ---------- hybrid (MGU-K + battery) ----------
@@ -616,9 +687,33 @@ namespace FormulaSim
                 if (double.IsNaN(ersEnergy)) ersEnergy = c.ersCapacity;
                 double room = Math.Min(c.ersCapacity - ersEnergy, c.ersHarvestLap - ersHarvested);
                 if (Math.Abs(vx) < 0.5) standingStart = true; else if (Math.Abs(vx) * 3.6 >= c.ersStartKmh) standingStart = false;
-                if (!standingStart && !reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && ersEnergy > 0)
+                bool managed = c.ersManage && !standingStart && !reverse && shiftTimer <= 0 && thr > 0.05 && rpm < c.redline && vx > 5 && !dry;
+                double pK = managed ? ErsFull(c, vx, ersEnergy / c.ersCapacity, deployMap) : 0, vK = Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
+                double pMax = managed ? pIce / thr : 0;     // ICE crank power available now (with the boost there is)
+                if (managed && thr >= 0.9 && pK < 0)
                 {
-                    fK = thr * c.driveEff * ErsPowerAt(c, vx) / Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
+                    // superclipping: flat out, but the MGU-K turns part of the ICE's power into charge
+                    if (room > 0) { harvestW = Math.Min(-pK, room / dt); fdrive -= harvestW * c.driveEff / vK; }
+                }
+                else if (managed && thr < 0.9 && thr * (pMax + Math.Max(0, pK)) <= pMax)
+                {
+                    // part throttle: the pedal asks for a share of ICE + MGU-K; the ICE alone covers it, running harder
+                    // than the pedal, and the MGU-K harvests from what it has left over (same force at the wheels)
+                    double extra = thr * Math.Max(0, pK);
+                    fdrive += extra * c.driveEff / vK; pIce += extra;
+                    if (room > 0) { harvestW = Math.Min(Math.Min(c.ersPartPower, pMax - pIce), room / dt); harvestW = Math.Max(0, harvestW); pIce += harvestW; }
+                }
+                else if (managed && thr < 0.9)
+                {
+                    // part throttle above what the ICE can give: ICE flat, the MGU-K adds the rest
+                    double pE = thr * (pMax + pK) - pMax;
+                    if (ersEnergy > 0) { fK = c.driveEff * pE / vK; fdrive += fK; }
+                    double more = (1 - thr) * pMax; fdrive += more * c.driveEff / vK; pIce += more;
+                }
+                else if (managed && thr >= 0.9 && pK <= 0) { }
+                else if (!standingStart && !reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && ersEnergy > 0)
+                {
+                    fK = thr * c.driveEff * (managed ? pK : ErsPowerAt(c, vx)) / Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
                     fdrive += fK;
                 }
                 else if (!reverse && vx > 5 && room > 0)
@@ -677,6 +772,13 @@ namespace FormulaSim
             }
             double Iw = c.wheelInertia + c.engineInertia * ratio * ratio;
             double brakeT = Bd * (1 - bias) * rw * kBR;
+            if (c.bbw && brakeT > 0)
+            {
+                // BBW: the MGU-K's harvest torque is part of the rear's share and does not depend on the disc
+                // temperature (only the hydraulic rest does); engine braking counts towards the share too
+                double shareT = Bd * (1 - bias) * rw, kT = brk > 0 ? Math.Min(shareT, harvestW / Math.Max(Math.Abs(vx), 5) * rw) : 0;
+                brakeT = Math.Max(0, kT + (shareT - kT) * kBR - ebF * rw);
+            }
             double wv = wR;
             {
                 var t0 = RearTyre(wv); double eps = 0.05;
@@ -743,23 +845,27 @@ namespace FormulaSim
                 // tyre heat: sliding and flexing heat the tyres, air and road cool them
                 if (speed > 1)
                 {
-                    double pF = Math.Abs(FyF * vxs * Math.Tan(alphaF)) + Math.Abs(FxF) * Math.Abs(vx) * (lockF ? 0.6 : 0.04) + 0.6 * c.rollRes * fzF * speed;
+                    // front braking: the tyre slides at its slip ratio, which grows towards peakRatio as the force nears
+                    // the grip (the rear's comes from its wheel speed); a flat 4 % of the braking power left the
+                    // fronts 15-20 C below their window while the rears were in it
+                    double kapF = c.frontSlipHeat ? Math.Max(0.04, c.peakRatio * Math.Min(1, Math.Abs(FxF) / Math.Max(1, DF))) : 0.04;
+                    double pF = Math.Abs(FyF * vxs * Math.Tan(alphaF)) + Math.Abs(FxF) * Math.Abs(vx) * (lockF ? 0.6 : kapF) + 0.6 * c.rollRes * fzF * speed;
                     double pR = Math.Abs(FyR * vxs * Math.Tan(alphaR)) + Math.Abs(FxRl * (wR * rw - vx)) + 0.6 * c.rollRes * fzR * speed;
-                    double cool = c.tyreCool0 + c.tyreCoolV * speed;
+                    double cool = c.tyreCool0 + c.tyreCoolV * speed, fs = c.frontSlipHeat ? c.tyreFrontSize : 1;
                     if (c.tyreSurface)
                     {
                         // two nodes: sliding heats the thin surface layer, which passes the heat to the carcass;
                         // air and road cool the carcass as before
-                        double qF = c.tyreSurfLink * (tyreSF - tyreTF), qR = c.tyreSurfLink * (tyreSR - tyreTR);
-                        tyreSF += dt * (c.tyreHeatShare * pF - qF) / c.tyreSurfCap;
+                        double qF = c.tyreSurfLink * fs * (tyreSF - tyreTF), qR = c.tyreSurfLink * (tyreSR - tyreTR);
+                        tyreSF += dt * (c.tyreHeatShare * pF - qF) / (c.tyreSurfCap * fs);
                         tyreSR += dt * (c.tyreHeatShare * pR - qR) / c.tyreSurfCap;
-                        tyreTF += dt * (qF - cool * (tyreTF - c.trackTemp)) / c.tyreHeatCap;
+                        tyreTF += dt * (qF - fs * cool * (tyreTF - c.trackTemp)) / (c.tyreHeatCap * fs);
                         tyreTR += dt * (qR - cool * (tyreTR - c.trackTemp)) / c.tyreHeatCap;
                         tyreSF = Clamp(tyreSF, 20, 250); tyreSR = Clamp(tyreSR, 20, 250);
                     }
                     else
                     {
-                        tyreTF += dt * (c.tyreHeatShare * pF - cool * (tyreTF - c.trackTemp)) / c.tyreHeatCap;
+                        tyreTF += dt * (c.tyreHeatShare * pF - fs * cool * (tyreTF - c.trackTemp)) / (c.tyreHeatCap * fs);
                         tyreTR += dt * (c.tyreHeatShare * pR - cool * (tyreTR - c.trackTemp)) / c.tyreHeatCap;
                     }
                     tyreTF = Clamp(tyreTF, 20, 200); tyreTR = Clamp(tyreTR, 20, 200);
@@ -778,9 +884,13 @@ namespace FormulaSim
             {
                 // the brakes take the braking work; the MGU-K takes part of the rear's while it is charging
                 double pFb = Math.Abs(FxF) * Math.Abs(vx), pRb = Math.Max(0, Math.Abs(brakeT / rw) * Math.Abs(vx) - harvestW);
+                // the rear discs only take the braking the tyres pass to the road (a wheel held at the limit by ABS
+                // does not turn the rest into heat), less what the engine braking and the MGU-K take
+                if (c.bbw) pRb = Math.Max(0, Math.Min(Math.Abs(brakeT / rw), Math.Max(0, -FxRl * dir)) * Math.Abs(vx) - harvestW);
                 double coolB = c.brakeCool0 + c.brakeCoolV * speed;
-                brakeTF += dt * (pFb - coolB * (brakeTF - c.brakeAmbient)) / c.brakeHeatCap;
-                brakeTR += dt * (pRb - coolB * (brakeTR - c.brakeAmbient)) / c.brakeHeatCap;
+                double Rad(double tc) => c.brakeRadA * 5.67e-8 * (Math.Pow(tc + 273.15, 4) - Math.Pow(c.brakeAmbient + 273.15, 4));
+                brakeTF += dt * (pFb - coolB * (brakeTF - c.brakeAmbient) - Rad(brakeTF)) / c.brakeHeatCap;
+                brakeTR += dt * (pRb - coolB * (brakeTR - c.brakeAmbient) - Rad(brakeTR)) / c.brakeHeatCap;
             }
             ax = Fx / m; ay = Fy / m;
 

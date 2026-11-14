@@ -23,6 +23,12 @@ namespace FormulaSim
         public double lapTime;   // s, integrated over the speed profile
         public double[] grade;   // road slope at each point (rise per metre, + = uphill); null on a flat circuit
         public double[] bank;    // road banking at each point (rad, see Track.bank); null = none
+        public double[] soc;     // planned battery state of charge (0..1) at each point, hybrid cars only (HUD: target charge)
+        public double[] deploy;  // MGU-K deploy map 0..2 (FormulaCar.deployMap): 0 on short bursts, 2 out of corners onto long straights
+
+        public static double RunMin = 4;   // s of flat-out running below which a corner exit gets no MGU-K deploy
+        public static double MapMax = 2;
+        public static double ClipMax = 1.5, ClipReserve = 0.1; // s: longest superclip zone; share of charge kept at the lap's low point
 
         public static RacingLine Compute(Track t, CarConfig cfg, double margin = 1.3, double safety = 0.82, double brakeUse = 0.8)
         {
@@ -144,9 +150,12 @@ namespace FormulaSim
             vCorner = vc;
             // hybrid: where on the lap the battery still has charge (found by iterating profile <-> energy)
             bool ers = c.ersPower > 0;
-            var charge = new bool[N]; for (int i = 0; i < N; i++) charge[i] = true;
+            // state of charge (0..1) at each point; with CarConfig.ersManage the car deploys and superclips by it
+            var soc = new double[N]; for (int i = 0; i < N; i++) soc[i] = 1;
+            var dep = new double[N]; for (int i = 0; i < N; i++) dep[i] = 1;
             double[] v = null;
-            for (int iter = 0; iter < (ers ? 6 : 1); iter++)
+            double clipWin = 0;
+            for (int iter = 0; iter < (ers ? 12 : 1); iter++)
             {
                 v = (double[])vc.Clone();
                 // 2) acceleration limit (forward, two passes so it wraps) and 3) braking limit (backward)
@@ -157,7 +166,8 @@ namespace FormulaSim
                     double total = bank == null ? grip(vi) : Grip(i, vi), lat = bank == null ? m * vi * vi * Math.Abs(curv[i]) : Lat(i, vi);
                     double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat)) * (1 - c.frontWeight);
                     double push = pMax / Math.Max(vi, 5);
-                    if (ers && charge[i]) push += c.driveEff * FormulaCar.ErsPowerAt(c, vi) / Math.Max(vi, 15);
+                    if (ers && c.ersManage) push += c.driveEff * Math.Min(soc[i] > 0 ? 1e9 : 0, FormulaCar.ErsFull(c, vi, soc[i], dep[i])) / Math.Max(vi, 15);
+                    else if (ers && soc[i] > 0) push += c.driveEff * FormulaCar.ErsPowerAt(c, vi) / Math.Max(vi, 15);
                     double cdA = c.activeAero && vi > 30 && lat / m < 6 ? c.cdAX : c.cdA; // wings open on straights
                     double a = (Math.Min(spare, push) - q * cdA) / m - (grade != null ? G * grade[i] : 0);
                     v[j] = Math.Min(v[j], Math.Sqrt(Math.Max(0, vi * vi + 2 * Math.Max(a, 0) * ds[i])));
@@ -166,37 +176,82 @@ namespace FormulaSim
                 {
                     int j = (i + 1) % N; double vj = v[j], q = kq * vj * vj;
                     double total = bank == null ? grip(vj) : Grip(j, vj), lat = bank == null ? m * vj * vj * Math.Abs(curv[j]) : Lat(j, vj);
-                    double spare = Math.Sqrt(Math.Max(0, total * total - lat * lat));
+                    // braking in a straight line is not held back by the cornering margin (safety) as well as by brakeUse:
+                    // only the cornering force is, so a driver brakes at brakeUse of the tyres' full grip. The margin
+                    // still holds on the cornering force: the grip ellipse is the full grip lengthwise and safety x it
+                    // sideways, so at the cornering limit nothing is left for the brakes (a full circle left 57 % of the
+                    // grip for braking there: trail braking into the apex at 94 % of the tyres, and the unloaded rear let go)
+                    double latM = lat;
+                    if (c.brakeFullGrip) { total /= safety; latM = lat / safety; }
+                    double spare = Math.Sqrt(Math.Max(0, total * total - latM * latM));
                     double a = Math.Max(0.5, (Math.Min(spare, c.brakeForce) + q * c.cdA) / m * brakeUse + (grade != null ? G * grade[i] : 0)); // some braking in reserve; downhill it takes longer
                     v[i] = Math.Min(v[i], Math.Sqrt(vj * vj + 2 * a * ds[i]));
                 }
                 if (!ers) break;
+                if (c.ersManage)
+                {
+                    // deploy map: energy spent at speed v gains about dE / (m v^2) x (time left before the next brake
+                    // point), so deploy where a long flat-out run follows: none for under RunMin s, the default map at
+                    // twice that, and full FIA power (no fade) from three times that. The last clipWin seconds of a
+                    // straight at least 3 x RunMin long are a superclip zone (-1).
+                    var run = new double[N]; var since = new double[N]; double tr = 0;
+                    for (int pass = 0; pass < 2; pass++) for (int i = N - 1; i >= 0; i--)
+                    {
+                        int j = (i + 1) % N;
+                        tr = v[j] < v[i] - 0.05 ? 0 : tr + ds[i] / Math.Max(1, (v[i] + v[j]) / 2); run[i] = tr;
+                    }
+                    tr = 0;
+                    for (int pass = 0; pass < 2; pass++) for (int i = 0; i < N; i++)
+                    {
+                        int j = (i + 1) % N;
+                        since[i] = tr; tr = v[j] < v[i] - 0.05 ? 0 : tr + ds[i] / Math.Max(1, (v[i] + v[j]) / 2);
+                    }
+                    for (int i = 0; i < N; i++)
+                    {
+                        dep[i] = Math.Max(0, Math.Min(MapMax, (run[i] - RunMin) / RunMin));
+                        if (since[i] + run[i] >= 3 * RunMin && run[i] < clipWin && v[i] * 3.6 > c.ersClipMinKmh) dep[i] = -1;
+                    }
+                }
                 // battery over two laps (the second one is the settled state)
-                double E = c.ersCapacity, harvested = 0; var next = new bool[N];
+                double E = c.ersCapacity, harvested = 0; var next = new double[N];
                 for (int lap = 0; lap < 2; lap++)
                 {
                     harvested = 0;
                     for (int i = 0; i < N; i++)
                     {
                         int j = (i + 1) % N; double vm = Math.Max(1, (v[i] + v[j]) / 2), dt = ds[i] / vm;
-                        next[i] = E > 0;
+                        next[i] = E / c.ersCapacity;
                         if (v[j] < v[i] - 0.05)
                         {
-                            double got = Math.Min(Math.Min(c.ersPower, c.brakeForce * (1 - c.brakeBias) * vm) * dt, Math.Min(c.ersCapacity - E, c.ersHarvestLap - harvested));
+                            // the MGU-K takes the rear brakes' share of the braking force actually used (up to its power)
+                            double fB = c.ersManage ? Math.Max(0, m * (v[i] * v[i] - v[j] * v[j]) / (2 * ds[i]) - kq * vm * vm * c.cdA) : c.brakeForce;
+                            double got = Math.Min(Math.Min(c.ersPower, fB * (1 - c.brakeBias) * vm) * dt, Math.Min(c.ersCapacity - E, c.ersHarvestLap - harvested));
                             got = Math.Max(0, got); E += got; harvested += got;
                         }
-                        else if (E > 0)
+                        else
                         {
                             bool flatOut = v[j] > v[i] + 1e-9 || v[i] >= vTop - 0.5 || v[i] < vc[i] * 0.97;
-                            E = Math.Max(0, E - FormulaCar.ErsPowerAt(c, vm) * (flatOut ? 1 : 0.3) * dt);
+                            double room = Math.Max(0, Math.Min(c.ersCapacity - E, c.ersHarvestLap - harvested));
+                            if (c.ersManage)
+                            {
+                                // flat out: deploy or superclip by the state of charge; at the cornering limit: part throttle harvest
+                                // part throttle: what the ICE has left over after holding the speed against drag and slope
+                                double hold = (kq * vm * vm * c.cdA + c.rollRes * m * G + (grade != null ? m * G * grade[i] : 0)) * vm / c.driveEff;
+                                double p = flatOut ? FormulaCar.ErsFull(c, vm, E / c.ersCapacity, dep[i]) : -Math.Min(c.ersPartPower, Math.Max(0, pMax / c.driveEff - hold));
+                                if (p > 0) E = Math.Max(0, E - p * dt);
+                                else { double got = Math.Min(-p * dt, room); E += got; harvested += got; }
+                            }
+                            else if (E > 0) E = Math.Max(0, E - FormulaCar.ErsPowerAt(c, vm) * (flatOut ? 1 : 0.3) * dt);
                         }
                     }
                 }
                 // blend so the iteration settles instead of flipping
-                bool same = true; for (int i = 0; i < N; i++) if (next[i] != charge[i]) { same = false; break; }
-                charge = next; if (same) break;
+                double diff = 0, low = 1; for (int i = 0; i < N; i++) { diff = Math.Max(diff, Math.Abs(next[i] - soc[i])); low = Math.Min(low, next[i]); soc[i] = iter < 3 ? next[i] : 0.5 * (soc[i] + next[i]); }
+                // size the superclip zones so the battery lasts the lap (keeps clipReserve of charge at its lowest)
+                if (c.ersManage && iter < 9) { double was = clipWin; clipWin = Math.Max(0, Math.Min(ClipMax, clipWin + (low < ClipReserve ? 0.5 : low > 2 * ClipReserve ? -0.5 : 0))); if (was != clipWin) diff = 1; }
+                if (diff < 0.01) break;
             }
-            speed = v;
+            speed = v; this.soc = ers ? soc : null; deploy = ers ? dep : null;
 
             // per-point phase for the static overlay (not in the JS, which colours against the live speed):
             // red = speed falls to the next point, yellow = running at the cornering limit, green = speeding up / flat out

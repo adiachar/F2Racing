@@ -496,6 +496,7 @@ public partial class GameManager : MonoBehaviour
             SetSurface();
             px = car.x; py = car.y; ph = car.heading; pd = car.delta;
             if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
+            car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
             car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
             StartAfterStep();
             double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one

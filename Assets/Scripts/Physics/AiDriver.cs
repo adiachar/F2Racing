@@ -31,17 +31,17 @@ namespace FormulaSim
         public static readonly double[][] Trained =
         {
             /*TRAINED*/
-            new[] { 4.823, 0.082, 0.199, 0.544, 0.146, 0.989, 0.800 },
-            new[] { 9.612, 0.114, 0.171, 0.867, 0.242, 0.935, 0.907 },
-            new[] { 6.177, 0.160, 0.122, 0.683, 0.101, 0.905, 0.774 },
-            new[] { 5.175, 0.142, 0.113, 0.501, 0.313, 0.970, 0.784 },
-            new[] { 5.142, 0.166, 0.149, 0.670, 0.125, 0.918, 0.813 },
-            new[] { 4.741, 0.132, 0.106, 0.669, 0.369, 0.913, 0.787 },
-            new[] { 5.478, 0.105, 0.131, 0.757, 0.263, 0.957, 0.719 },
-            new[] { 5.294, 0.128, 0.195, 0.618, 0.103, 0.911, 0.912 },
-            new[] { 3.399, 0.224, 0.173, 0.565, 0.127, 0.918, 0.788 },
-            new[] { 4.640, 0.061, 0.163, 0.809, 0.206, 0.942, 0.818 },
-            new[] { 3.610, 0.141, 0.095, 0.820, 0.237, 0.913, 0.769 },
+            new[] { 4.480, 0.135, 0.112, 0.385, 0.144, 0.984, 0.789 },
+            new[] { 6.888, 0.166, 0.109, 0.723, 0.485, 0.931, 0.891 },
+            new[] { 4.286, 0.161, 0.082, 0.560, 0.180, 0.923, 0.882 },
+            new[] { 4.882, 0.175, 0.106, 0.601, 0.321, 0.966, 0.838 },
+            new[] { 5.651, 0.193, 0.053, 0.669, 0.160, 0.924, 0.873 },
+            new[] { 5.958, 0.165, 0.112, 0.614, 0.242, 0.931, 0.874 },
+            new[] { 5.879, 0.158, 0.103, 0.884, 0.238, 0.948, 0.880 },
+            new[] { 7.495, 0.217, 0.040, 0.695, 0.302, 0.899, 0.931 },
+            new[] { 3.257, 0.195, 0.082, 0.507, 0.321, 0.927, 0.795 },
+            new[] { 6.208, 0.156, 0.130, 0.753, 0.156, 0.951, 0.936 },
+            new[] { 2.384, 0.128, 0.091, 0.599, 0.146, 0.902, 0.896 },
             /*END*/
         };
     }
@@ -99,6 +99,7 @@ namespace FormulaSim
         readonly Track track; readonly RacingLine line; readonly AiTuning tune;
         readonly double[] speed;          // this driver's own target speeds
         readonly double[] speedFull;      // the same on a full tank (null when the car starts in qualifying trim)
+        readonly double[] deploy;         // this driver's MGU-K deploy map (RacingLine.deploy for his own profile), or null
         readonly Random rng;
         double offsetTarget, lapPace = 1, mistakeT, stuckT, offT, speedCap = double.MaxValue;
         bool wasBraking; int prevIdx = -1;
@@ -114,6 +115,7 @@ namespace FormulaSim
             double grip = tune.grip * difficulty * (0.86 + 0.14 * who.pace), brake = tune.brakeUse * difficulty * (0.84 + 0.16 * who.pace);
             // SpeedProfile stores its result in the line object; keep a private copy and leave the line as it was
             var keepS = line.speed; var keepB = line.braking; var keepP = line.phase; var keepC = line.vCorner; double keepT = line.lapTime;
+            var keepD = line.deploy; var keepE = line.soc;
             if (c.fuel && c.fuelStart != c.fuelRef)
             {
                 // a race start with more fuel than the reference trim: one profile for the full tank, one for empty,
@@ -122,7 +124,8 @@ namespace FormulaSim
                 speed = (double[])line.SpeedProfile(c.WithFuel(0), grip, brake).Clone();
             }
             else speed = (double[])line.SpeedProfile(c, grip, brake).Clone();
-            line.speed = keepS; line.braking = keepB; line.phase = keepP; line.vCorner = keepC; line.lapTime = keepT;
+            deploy = line.deploy != null ? (double[])line.deploy.Clone() : null;
+            line.speed = keepS; line.braking = keepB; line.phase = keepP; line.vCorner = keepC; line.lapTime = keepT; line.deploy = keepD; line.soc = keepE;
         }
 
         public void Place(int trackIdx, double lateralOffset, double v = 0)
@@ -132,6 +135,9 @@ namespace FormulaSim
             car.x = p.x + p.nx * lateralOffset; car.y = p.y + p.ny * lateralOffset; car.heading = Math.Atan2(p.ty, p.tx);
             car.vx = v; car.vy = 0; car.r = 0; car.gear = 1; car.wR = double.NaN;
             idx = prevIdx = trackIdx; offset = offsetTarget = lateralOffset - line.off[trackIdx];
+            // a grid slot past the timing line (CircuitDef.gridOffset < 0) is already on lap 1: the car will not cross
+            // the line at the start, so it counts as if it had (keeps race positions right across a grid that spans the line)
+            lap = trackIdx < N / 2 ? 1 : 0; progress = lap + (double)trackIdx / N;
         }
 
         // Decide pedals and steering. Call about 60 times a second; then step the car with Input.
@@ -151,6 +157,7 @@ namespace FormulaSim
             }
             else if (prevIdx < N * 0.2 && idx > N * 0.8) lap--;
             progress = lap + (double)idx / N;
+            if (deploy != null) car.deployMap = deploy[idx];   // the same energy rule as the player's car, with its own map
 
             // ---- traffic: look for a car close ahead or alongside ----
             speedCap = double.MaxValue; bool alongside = false; double want = 0; bool blocked = false;
@@ -225,7 +232,26 @@ namespace FormulaSim
             target = vt;
             double err = vt - v;
             double thr = Clamp(err * tune.kThr, 0, 1), brk = Clamp(-err * tune.kBrk, 0, 1);
+            if (brakingZone && car.cfg.brakeFullGrip && car.cfg.brakeForce > 0)
+            {
+                // feed-forward: the pedal the profile's deceleration needs (less drag), corrected by the speed error, so
+                // the car brakes as hard as its profile says (5 g and more at speed) instead of only on an error
+                int iq = (ip + 1) % N; double dsq = Math.Max(0.1, track.ds);
+                double aReq = Math.Max(0, (V(ip) * V(ip) - V(iq) * V(iq)) / (2 * dsq)) * lapPace * lapPace * (mistakeT > 0 ? 0.85 : 1);
+                double ff = (car.massNow > 0 ? car.massNow : car.cfg.mass) * aReq - 0.5 * 1.225 * car.cfg.cdA * v * v;
+                brk = Clamp(ff / car.cfg.brakeForce - err * tune.kBrk, 0, 1);
+            }
             if (brk > 0.02) thr = 0;
+            // on a straight, below target, with the line accelerating here and ahead: flat out (a feathered 90-97 %
+            // throttle keeps the 2026 wings half shut and spends the battery at part throttle)
+            if (err > -1.5 && brk <= 0.02 && v > 40 && Math.Abs(car.r * v) < 6 && line.phase[idx] > 0)
+            {
+                bool flat = true; int nF = (int)Math.Round(v / track.ds);   // the next second: a straight being accelerated on
+                for (int k = 0; k <= nF && flat; k += 4) { int j = (idx + k) % N; flat = line.phase[j] > 0 && v * v * Math.Abs(line.curv[j]) < 6; }
+                if (flat) thr = 1;
+            }
+            // superclip zone: stay flat while the MGU-K slows the car (the profile already has the speed it loses)
+            if (deploy != null && deploy[idx] < 0 && err > -5 && Math.Abs(car.r * v) < 6) { thr = 1; brk = 0; }
             // trail-braking stability: braking or lifting deep in a long bend shifts load off the rear, and the hot,
             // fully loaded rear tyres step out (the car yaws faster than the line turns). Ease off the brake and hold
             // a whiff of throttle (cancels engine braking and the MGU-K's lift drag) until the rear grips again.
@@ -243,6 +269,23 @@ namespace FormulaSim
                 }
             }
 
+            // ---- slide catch: with the tail stepping out, steer into the slide and damp the yaw ----
+            // body slip angle bet (+ = the car moves to the left of where it points); tail out = moving towards the
+            // outside of the way it yaws. A driver points the front wheels along the way the car is going and takes
+            // off the lock the excess yaw needs; pure pursuit alone keeps steering into the bend as the tail swings.
+            if (v > 12)
+            {
+                double bet = Math.Atan2(car.vy, Math.Max(5, car.vx)), sr = Math.Sign(car.r);
+                double tailOut = -bet * sr, yawEx = Math.Abs(car.r) - Math.Abs(v * line.curv[idx]);
+                double catchK = Clamp((tailOut - 0.05) / 0.05, 0, 1);   // from 3 deg, full at 6 deg
+                if (catchK > 0 && yawEx > 0)
+                {
+                    double dCatch = bet - 0.08 * sr * yawEx;           // along the velocity, less the excess yaw
+                    double dNow = -steer * lockNow;
+                    if (dCatch * sr < dNow * sr) steer = Clamp(-(dNow + (dCatch - dNow) * catchK) / lockNow, -1, 1);
+                }
+            }
+
             // ---- stuck, spun or far off the track: put the car back on the line ----
             var pt = track.pts[idx];
             double hd = Math.Atan2(Math.Sin(car.heading - Math.Atan2(pt.ty, pt.tx)), Math.Cos(car.heading - Math.Atan2(pt.ty, pt.tx)));
@@ -252,7 +295,7 @@ namespace FormulaSim
             if (stuckT > 2.0 || offT > 1.2)
             {
                 double keep = Math.Min(V(idx) * 0.6, 30);
-                Place(idx, line.off[idx], keep);
+                int keepLap = lap; Place(idx, line.off[idx], keep); lap = keepLap; progress = lap + (double)idx / N; // a reset is not a new grid slot: the lap count stays
                 int g = 1; while (g < car.cfg.gearTopSpeeds.Length && keep * 3.6 > car.cfg.gearTopSpeeds[g - 1] * 0.8) g++;
                 car.gear = g; stuckT = offT = 0; offset = offsetTarget = 0; recovered = true;
             }

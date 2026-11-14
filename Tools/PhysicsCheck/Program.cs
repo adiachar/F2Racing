@@ -7,6 +7,7 @@ using FormulaSim;
 const double H = 1.0 / 240;
 // VARWIDTH=1: build the measured circuits with their per-point widths (Track.VariableWidth)
 if (Environment.GetEnvironmentVariable("VARWIDTH") == "1") Track.VariableWidth = true;
+if (Environment.GetEnvironmentVariable("MAPMAX") != null) RacingLine.MapMax = double.Parse(Environment.GetEnvironmentVariable("MAPMAX"), CultureInfo.InvariantCulture);
 Track[] Circuits() => FormulaSim.Circuits.All.Select(d => d.Build()).ToArray();
 string[] CircuitNames = FormulaSim.Circuits.All.Select(c => c.name).ToArray();
 
@@ -213,10 +214,10 @@ if (args.Length > 0 && args[0] == "fitgeo")
         for (int c = 0; c < nc; c++) { f[c, 0] = real[c, 0]; f[c, 1] = sig[c]; if (hasReach) f[c, 2] = real[c, 2]; }
         return f;
     }
-    Track Make() => def.metric != null ? Track.LocalFit(Track.Build(TrackDataTum.Centre(def.metric), TrackDataTum.MeanWidth(def.metric)), Table())
+    Track Make() => def.metric != null ? Track.LocalFit(Track.Build(TrackDataTum.Centre(def.metric), def.width), Table())
                                        : Track.FromLonLat(def.lonlat, def.width, def.startAt, def.elev, def.curveSigma, Table());
     double maxMove = args.Length > 2 ? double.Parse(args[2], CultureInfo.InvariantCulture) : 5;   // m, how far a corner may move
-    var rawT = def.metric != null ? Track.Build(TrackDataTum.Centre(def.metric), TrackDataTum.MeanWidth(def.metric)) : null;
+    var rawT = def.metric != null ? Track.Build(TrackDataTum.Centre(def.metric), def.width) : null;
     double[] moved = new double[nc]; Track loose = null;
     double[] Ratios()
     {
@@ -402,7 +403,7 @@ if (args.Length > 1 && args[0] == "trace")
     int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == args[1]);
     var t = FormulaSim.Circuits.All[ti].Build(); var line = RacingLine.Compute(t, new CarConfig());
     var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length; var hf = t.h != null ? new HeightField(t) : null;
-    for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
+    for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); } // the game's grid (CircuitDef.gridOffset)
     var hist = new List<string>[n]; for (int k = 0; k < n; k++) hist[k] = new List<string>();
     double time = 0; int steps = 0;
     while (time < 6 * 130 && ds.Min(d => d.lap) < 5)
@@ -423,16 +424,76 @@ if (args.Length > 1 && args[0] == "trace")
     return;
 }
 
+// ---- energy / brakes / tyres audit of the trained AI's flying lap: dotnet run -- audit [circuit ids] ----
+// ERS deployed and harvested (by source), seconds flat out on an empty battery, end-of-straight speeds (peak on the
+// straight / speed at the brake point), peak braking g, peak brake temperatures, average tyre temperatures.
+if (args.Length > 0 && args[0] == "audit")
+{
+    var ids = args.Length > 1 ? args.Skip(1).ToArray() : new[] { "monaco", "spa", "monza" };
+    {   // no ABS from 200 km/h: which axle locks first as the brake balance moves forward
+        var outp = new List<string>();
+        for (double bb = 0.50; bb <= 0.645; bb += 0.02)
+        {
+            string first = "none"; double atV = 0;
+            for (double pedal = 0.2; pedal <= 1.001 && first == "none"; pedal += 0.02)
+            {
+                var b2 = new FormulaCar(new CarConfig { tc = TcMode.High, abs = false, brakeBias = bb }) { vx = 200 / 3.6, gear = 6 }; int n = 0;
+                while (b2.vx > 15 && n++ < 240 * 6) { b2.Step(new CarInput(0, 0, pedal), H); if (b2.lockR) { first = "R"; atV = b2.vx * 3.6; break; } if (b2.lockF) { first = "F"; atV = b2.vx * 3.6; break; } }
+            }
+            outp.Add($"{bb * 100:F0}%:{first}@{atV:F0}");
+        }
+        Console.WriteLine("  first lock (no ABS, 200 km/h, pedal raised): " + string.Join(" ", outp));
+    }
+    foreach (var e0 in new[] { 4e6, 2e6, 1e6, 0 })
+    {   // flat out from 250 km/h on a straight: distance to 300 / 320 / 330 / 340 km/h with this much in the battery
+        var c = new FormulaCar(new CarConfig { tc = TcMode.High }) { vx = 250 / 3.6, gear = 6, ersEnergy = e0, deployMap = 2 }; double x0 = c.x, tt = 0; var marks = new List<string>(); double nx = 300;
+        while (tt < 40 && nx <= 340) { c.Step(new CarInput(0, 1, 0), H); tt += H; if (c.vx * 3.6 >= nx) { marks.Add($"{nx:F0}:{c.x - x0:F0}m"); nx += nx < 320 ? 20 : 10; } }
+        Console.WriteLine($"  from 250 km/h with {e0 / 1e6:F0} MJ: {string.Join(" ", marks)}; after {tt:F0} s {c.vx * 3.6:F0} km/h, {c.x - x0:F0} m, battery {c.ersEnergy / 1e6:F2} MJ");
+    }
+    foreach (var id in ids)
+    {
+        int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == id); if (ti < 0) continue;
+        var t = FormulaSim.Circuits.All[ti].Build(); var line = RacingLine.Compute(t, new CarConfig());
+        var ace = new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 };
+        var tuA = AiTuning.For(ti); if (Environment.GetEnvironmentVariable("AUDITBRAKE") != null) tuA.brakeUse = double.Parse(Environment.GetEnvironmentVariable("AUDITBRAKE"), CultureInfo.InvariantCulture);
+        var d = new AiDriver(t, line, new CarConfig(), ace, tuA); var hf = t.h != null ? new HeightField(t) : null;
+        d.Place(t.N - 30, line.off[t.N - 30]);
+        double time = 0; int steps = 0; double dep = 0, hB = 0, hC = 0, hL = 0, hP = 0, flat = 0, empty = 0, peakG = 0, bF = 0, bR = 0, tF = 0, tR = 0, nT = 0, bot = 0, eMin = 9e9;
+        var ends = new List<string>(); double vPk = 0; bool onStraight = false; double flatT = 0;
+        while (d.lap < 3 && time < 600)
+        {
+            if (steps++ % 4 == 0) { d.Think(4 * H, time, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); }
+            var c = d.car; c.Step(d.LastInput, H); time += H;
+            if (d.lap != 2) continue;
+            double v = Math.Sqrt(c.vx * c.vx + c.vy * c.vy) * 3.6, kw = c.ersKw;
+            if (Environment.GetEnvironmentVariable("AUDITTRACE") == "1" && steps % (c.brake > 0 ? 12 : 60) == 0) Console.WriteLine($"   {t.pts[Math.Max(0, d.idx)].s,5:F0} m {v,4:F0} km/h tgt {d.target * 3.6,4:F0} thr {c.throttle:F2} brk {c.brake:F2} g{c.gear} rpm {c.rpm,6:F0} aero {c.aeroX:F1} ers {kw,5:F0} kW batt {c.ersEnergy / 1e6:F2} map {c.deployMap:F2} ax {c.ax / 9.81,5:F2}");
+            if (kw > 0) dep += kw * 1000 * H; else if (kw < 0) { double j = -kw * 1000 * H; if (c.brake > 0) hB += j; else if (c.throttle > 0.9) hC += j; else if (c.throttle < 0.05) hL += j; else hP += j; }
+            if (c.throttle > 0.95) { flat += H; if (c.ersEnergy <= 1) empty += H; flatT += H; }
+            if (c.brake < 0.3) { vPk = Math.Max(vPk, v); if (c.throttle > 0.95) onStraight = flatT > 4; }
+            else if (c.brake > 0.05 && onStraight) { ends.Add($"{vPk:F0}/{v:F0}"); onStraight = false; vPk = 0; flatT = 0; }
+            else if (c.brake > 0.05) { vPk = 0; flatT = 0; }
+            if (c.brake > 0.3) peakG = Math.Max(peakG, -c.ax / 9.81);
+            bF = Math.Max(bF, c.brakeTF); bR = Math.Max(bR, c.brakeTR); tF += c.tyreTF; tR += c.tyreTR; nT++; if (c.bottoming) bot += H; eMin = Math.Min(eMin, c.ersEnergy);
+        }
+        if (Environment.GetEnvironmentVariable("AUDITTRACE") == "2") { var pl = RacingLine.Compute(t, new CarConfig(), 1.3, 0.97, 0.95); for (int i = 0; i < t.N; i += 25) Console.WriteLine($"   plan {t.pts[i].s,5:F0} m {pl.speed[i] * 3.6,4:F0} km/h soc {pl.soc[i]:F2} map {pl.deploy[i]:F1} phase {pl.phase[i]}"); }
+        Console.WriteLine($"{id}: lap {d.lastLap:F2} s; ERS deployed {dep / 1e6:F2} MJ, harvested {(hB + hC + hL + hP) / 1e6:F2} MJ (brakes {hB / 1e6:F2}, superclip {hC / 1e6:F2}, partial {hP / 1e6:F2}, lift {hL / 1e6:F2}); battery low {eMin / 1e6:F2} MJ, empty {empty:F1} of {flat:F1} s flat out");
+        Console.WriteLine($"   straights peak/brake-point km/h: {string.Join(" ", ends)}; peak braking {peakG:F2} g; brakes peak F {bF:F0} R {bR:F0} C; tyres average F {tF / nT:F0} R {tR / nT:F0} C; bottoming {bot:F1} s");
+    }
+    return;
+}
+
 // ---- race test: dotnet run -- race [fuel] ("fuel": start on a 70 kg race fuel load instead of qualifying trim) ----
 if (args.Length > 0 && args[0] == "race")
 {
     var tracks = Circuits(); double raceFuel = args.Length > 1 && args[1] == "fuel" ? 70 : new CarConfig().fuelStart;
+    var only = Environment.GetEnvironmentVariable("RACEONLY")?.Split(',');   // RACEONLY=monaco,monza: just these circuits
     for (int ti = 0; ti < tracks.Length; ti++)
     {
+        if (only != null && !only.Contains(FormulaSim.Circuits.All[ti].id)) continue;
         var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
         var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
         var hf = t.h != null ? new HeightField(t) : null;
-        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = raceFuel }, DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.N - 15 - k * 4, (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
+        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = raceFuel }, DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); } // the game's grid (CircuitDef.gridOffset)
         double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n]; var where = new List<string>();
         double tMin = 999, tMaxF = 0, tMaxR = 0, tSumF = 0, tSumR = 0; int tN = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -440,7 +501,7 @@ if (args.Length > 0 && args[0] == "race")
         {
             if (steps++ % 4 == 0)
             {
-                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap < 1 ? "*" : "")}"); } }
+                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap <= 1 ? "*" : "")}"); } }
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
             }
             if (steps % 240 == 0) { var c0 = ds[0].car; tMin = Math.Min(tMin, Math.Min(c0.tyreTF, c0.tyreTR)); tMaxF = Math.Max(tMaxF, c0.tyreTF); tMaxR = Math.Max(tMaxR, c0.tyreTR); if (time > 60) { tSumF += c0.tyreTF; tSumR += c0.tyreTR; tN++; } }
@@ -449,7 +510,7 @@ if (args.Length > 0 && args[0] == "race")
         }
         Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}; wear after {ds[0].lap} laps F {ds[0].car.wearF * 100:F1}% R {ds[0].car.wearR * 100:F1}%; fuel {ds[0].car.fuel:F1} kg left, {ds[0].car.fuelLastLap:F2} kg last lap");
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
-        Console.WriteLine($"  resets at (m from the start, * = first lap): {string.Join(" ", where)}");
+        Console.WriteLine($"  resets at (m from the line, * = first racing lap): {string.Join(" ", where)}");
         int pos = 1;
         foreach (var d in ds.OrderByDescending(d => d.progress))
             Console.WriteLine($"  P{pos++,-2} {d.who.name,-13} pace {d.who.pace:F2} best {d.bestLap:F2} resets {rec[ds.IndexOf(d)]}");
