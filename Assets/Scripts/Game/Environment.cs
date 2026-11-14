@@ -9,7 +9,7 @@
 //     building, casino, old banking bridge, hillside apartment blocks, yachts), placed by distance along the lap
 // The existing CircuitDef fields still drive what they did: style (street -> town rows), forest (tree count),
 // water* (harbour). Nothing here carries a real brand or logo.
-// Cost: trees 2 draw calls (as before), backdrop 1 (was 2 hill rings), props 1, blocks 1 (shares the town material).
+// Cost: trees 1 draw call (alpha-tested cards, trunks painted in), backdrop 1 (was 2 hill rings), props 1, blocks 1 (shares the town material).
 // Everything is lit by LightBake like the rest of the world; colours ride in the vertex tint (BakeTint).
 using System.Collections.Generic;
 using FormulaSim;
@@ -467,10 +467,12 @@ public static class Environment
                 var g = e.rings[r]; int seed = 3 + r * 8;
                 float radius = ext * 0.5f + g.dist;
                 // aerial perspective: further rings lean more towards the haze colour, so they separate and melt into the horizon
-                float hz = Mathf.Lerp(0.12f, 0.34f, Mathf.Clamp01((g.dist - 450f) / 500f));
-                // (the sunlit bake brightens colours about 1.4 times: the haze target is scaled down so far ridges end up at the
-                // fog colour on screen, not above it)
-                Color low = Color.Lerp(g.low, haze / 1.4f, hz), top = Color.Lerp(g.top, haze / 1.4f, hz);
+                // (strong, bright aerial perspective: distant land is a soft, light blue-grey that melts into the sky, never a
+                // dark wall. The tint is a linear multiplier of the baked light, which is about 1.6 on these up-turned faces,
+                // so the haze target is the fog colour in linear space over 1.6: far crests end up at the fog colour on screen)
+                float hz = Mathf.Lerp(0.30f, 0.56f, Mathf.Clamp01((g.dist - 450f) / 500f));
+                Color hazeL = haze.linear / 1.6f;
+                Color low = Color.Lerp(g.low, hazeL, hz), top = Color.Lerp(g.top, hazeL, Mathf.Min(1f, hz + 0.2f));
                 float Crest(int i)
                 {
                     float a = i * Mathf.PI * 2 / Seg;
@@ -521,7 +523,15 @@ public static class Environment
         }
         // not baked (old phones): vertex colours are not drawn, so the material carries an average colour
         Color avg = e.rings != null && e.rings.Length > 0 ? Color.Lerp(e.rings[0].low, haze, 0.15f) : new Color(0.3f, 0.4f, 0.33f);
-        Emit("EnvBackdrop", b, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : avg, null, 0f), parent);
+        var bgo = Emit("EnvBackdrop", b, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : avg, null, 0f), parent);
+        if (bgo != null)
+        {
+            // normals turned mostly skywards: distant slopes are lit almost evenly (the haze washes out their shading),
+            // so the side of the ring away from the sun is not a dark band
+            var bm = bgo.GetComponent<MeshFilter>().sharedMesh; var bn = bm.normals;
+            for (int i = 0; i < bn.Length; i++) bn[i] = (bn[i] + Vector3.up * 1.6f).normalized;
+            bm.normals = bn;
+        }
     }
     // quad with a colour per corner
     static void Band(Buf b, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 outward, Color c0, Color c1, Color c2, Color c3)
@@ -537,31 +547,47 @@ public static class Environment
         b.tri.Add(i); b.tri.Add(i + 1); b.tri.Add(i + 2); b.tri.Add(i); b.tri.Add(i + 2); b.tri.Add(i + 3);
     }
 
-    // ================================================================ trees: two combined meshes (crowns, trunks)
+    // ================================================================ trees: one mesh of alpha-tested cards
+    // Every tree is two (Low) or three crossed upright cards cut from one atlas (EnvTex.Foliage: spruce, broad-leaf,
+    // umbrella pine, palm; scrub is the broad-leaf crown alone, squat). The trunk is painted into the card, so the
+    // trunk mesh is gone: thousands of trees are one draw call. The normals are bent outwards from the tree's axis
+    // and upwards, so the bake lights the crowns like rounded volumes (sun side bright, the far side and the foot in
+    // shade). uv2 = (sway weight, phase) for the breeze in Foliage.shader (Medium/High).
     public static void Trees(Track t, Transform root, float ext)
     {
         var e = Cur; var bb = t.Bounds();
         if (e.tree == TreeKind.None) return;
         float dens = t.def != null ? (float)t.def.forest : 0.3f;
-        var crown = new Buf(); var trunk = new Buf();
         var rnd = new System.Random(7); int placed = 0, tries = 0;
         int want = Mathf.Clamp((int)((t.length * 0.4f * dens + ext / 6) * e.treeMul), 120, 2500);
-        if (WorldBuilder.Gfx <= 1) want = want * 3 / 5; // Low: fewer trees
+        bool low = WorldBuilder.Gfx <= 1;
+        if (low) want = want * 3 / 5; // Low: fewer trees
         float near = e.treeNear + (t.def != null ? (float)t.def.barrier : 0), far = e.treeFar;
-        var white = Color.white;
-        void Ring(float x, float z, float y, float r, int n, float rot)
-        { for (int k = 0; k < n; k++) { float a2 = rot + k * Mathf.PI * 2 / n; crown.v.Add(new Vector3(x + Mathf.Cos(a2) * r, y, z + Mathf.Sin(a2) * r)); } }
-        void Cone(float x, float z, float y0, float y1, float r, int n, float rot)
+        var atlas = EnvTex.Foliage();
+        var v = new List<Vector3>(); var nrm = new List<Vector3>(); var uv = new List<Vector2>(); var uv2 = new List<Vector2>();
+        var tri = new List<int>(); var col = new List<Color>();
+        int cards = low ? 2 : 3;
+        // card (width, height) per unit size, the atlas cell, the share of the cell used (scrub: the crown only), sway
+        void Card(Vector3 foot, float w, float h, Vector4 r, float vFrom, float rot, float sway, float phase, Color tint)
         {
-            int b0 = crown.v.Count; Ring(x, z, y0, r, n, rot); int tip = crown.v.Count; crown.v.Add(new Vector3(x, y1, z));
-            for (int k = 0; k < n; k++) { crown.tri.Add(b0 + k); crown.tri.Add(tip); crown.tri.Add(b0 + (k + 1) % n); }
-        }
-        // squashed double cone: a round crown from 2 x n faces
-        void Blob(float x, float z, float y, float r, float up, float down, int n, float rot)
-        {
-            int b0 = crown.v.Count; Ring(x, z, y, r, n, rot);
-            crown.v.Add(new Vector3(x, y + up, z)); crown.v.Add(new Vector3(x, y - down, z));
-            for (int k = 0; k < n; k++) { int a1 = b0 + k, a2 = b0 + (k + 1) % n; crown.tri.Add(a1); crown.tri.Add(b0 + n); crown.tri.Add(a2); crown.tri.Add(a1); crown.tri.Add(a2); crown.tri.Add(b0 + n + 1); }
+            float v0 = Mathf.Lerp(r.y, r.w, vFrom);
+            for (int c = 0; c < cards; c++)
+            {
+                float a = rot + c * Mathf.PI / cards;
+                var d = new Vector3(Mathf.Cos(a), 0, Mathf.Sin(a)) * (w * 0.5f);
+                int k = v.Count;
+                Vector3 b0 = foot - d, b1 = foot + d, t1 = b1 + Vector3.up * h, t0 = b0 + Vector3.up * h;
+                v.Add(b0); v.Add(b1); v.Add(t1); v.Add(t0);
+                uv.Add(new Vector2(r.x, v0)); uv.Add(new Vector2(r.z, v0)); uv.Add(new Vector2(r.z, r.w)); uv.Add(new Vector2(r.x, r.w));
+                var side = d.normalized;
+                nrm.Add((-side * 0.75f + Vector3.up * 0.1f).normalized); nrm.Add((side * 0.75f + Vector3.up * 0.1f).normalized);
+                nrm.Add((side * 0.5f + Vector3.up * 0.85f).normalized); nrm.Add((-side * 0.5f + Vector3.up * 0.85f).normalized);
+                uv2.Add(new Vector2(0, phase)); uv2.Add(new Vector2(0, phase)); uv2.Add(new Vector2(sway, phase)); uv2.Add(new Vector2(sway, phase));
+                // the foot a little darker (grass round the trunk, the crown's own shade)
+                Color foot2 = tint * 0.85f; foot2.a = 1;
+                col.Add(foot2); col.Add(foot2); col.Add(tint); col.Add(tint);
+                tri.Add(k); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k); tri.Add(k + 3); tri.Add(k + 2);
+            }
         }
         while (placed < want && tries++ < want * 40)
         {
@@ -581,69 +607,34 @@ public static class Environment
             var kind = second ? e.tree2 : e.tree;
             float sz = (0.7f + (float)rnd.NextDouble() * 0.8f) * e.treeSize, rot = (float)rnd.NextDouble() * 6.28f;
             if (kind != TreeKind.Scrub && dist2 < near + 14) sz = Mathf.Min(sz, 1.25f * Mathf.Max(1f, e.treeSize * 0.75f)); // no giant right at the fence
-            float g = Lift(fx, fz) - 0.5f; // foot a little in the ground: the terrain mesh is coarser than the lift
-            float trunkH = 0, trunkR = 0.25f * sz;
+            // (heights relative to the circuit's height field: WorldBuilder.Drape lifts the mesh onto it)
+            var foot = new Vector3(fx, Lift(fx, fz) - 0.35f, fz);
+            float phase = (float)rnd.NextDouble() * 6.28f;
+            // per-tree shade variety; the species colour rides in the tint, relative to the colour painted in the card
+            float sh = 0.86f + (float)rnd.NextDouble() * 0.28f, warm = (float)rnd.NextDouble() * 0.12f;
+            var lc = (second ? e.leaf2 : e.leaf).linear;
+            EnvTex.Card card = kind == TreeKind.Spruce ? EnvTex.Card.Spruce : kind == TreeKind.Pine ? EnvTex.Card.Pine : kind == TreeKind.Palm ? EnvTex.Card.Palm : EnvTex.Card.Broadleaf;
+            var painted = EnvTex.CardLeaf[(int)card];
+            Color tint = new Color(Mathf.Clamp(lc.r / painted.r, 0.55f, 1.8f) * sh * (1f + warm), Mathf.Clamp(lc.g / painted.g, 0.55f, 1.8f) * sh,
+                                   Mathf.Clamp(lc.b / painted.b, 0.55f, 1.8f) * sh * (1f - warm * 0.5f), 1f);
+            var r = EnvTex.CardRect(card);
             switch (kind)
             {
-                case TreeKind.Spruce:
-                    {
-                        // three stacked cones
-                        float hgt = 14f * sz, r0 = 3.2f * sz;
-                        Cone(fx, fz, g + 1.5f * sz, g + hgt * 0.55f, r0, 7, rot);
-                        Cone(fx, fz, g + hgt * 0.35f, g + hgt * 0.8f, r0 * 0.75f, 7, rot + 0.4f);
-                        Cone(fx, fz, g + hgt * 0.6f, g + hgt, r0 * 0.5f, 6, rot + 0.8f);
-                        trunkH = 2f * sz; break;
-                    }
-                case TreeKind.Pine:
-                    // umbrella pine: a wide flat crown on a tall bare trunk
-                    Blob(fx, fz, g + 5.6f * sz, 3.2f * sz, 2.3f * sz, 1.3f * sz, 7, rot);
-                    trunkH = 5f * sz; trunkR = 0.24f * sz; break;
-                case TreeKind.Palm:
-                    {
-                        // six drooping fronds from the top of a thin trunk (each seen from both sides)
-                        float th = 7.5f * sz; var top = new Vector3(fx, g + th, fz);
-                        for (int k = 0; k < 6; k++)
-                        {
-                            float a2 = rot + k * 1.047f; var o = new Vector3(Mathf.Cos(a2), 0, Mathf.Sin(a2)); var w = new Vector3(-o.z, 0, o.x);
-                            Vector3 m1 = top + o * (1.6f * sz) + w * (0.55f * sz) + Vector3.up * (0.5f * sz), m2 = top + o * (1.6f * sz) - w * (0.55f * sz) + Vector3.up * (0.5f * sz), tip = top + o * (3.3f * sz) - Vector3.up * (0.9f * sz);
-                            int b0 = crown.v.Count; crown.v.Add(top); crown.v.Add(m1); crown.v.Add(m2); crown.v.Add(tip);
-                            int[] f = { 0, 1, 2, 0, 2, 1, 1, 3, 2, 1, 2, 3 };
-                            for (int q = 0; q < f.Length; q++) crown.tri.Add(b0 + f[q]);
-                        }
-                        trunkH = th; trunkR = 0.2f * sz; break;
-                    }
-                case TreeKind.Scrub:
-                    // a low bush / tuft, no trunk
-                    Blob(fx, fz, g + 0.8f * sz, 1.9f * sz, 1.0f * sz, 0.9f * sz, 5, rot);
-                    break;
-                default:
-                    // broad-leaf: a squashed double cone on a trunk
-                    Blob(fx, fz, g + 4.7f * sz, 2.8f * sz, 2.7f * sz, 2.0f * sz, 6, rot);
-                    trunkH = 3f * sz; break;
-            }
-            {
-                // per-tree shade variety; the species colour rides in the tint, relative to the material's (the first species')
-                float sh = 0.82f + (float)rnd.NextDouble() * 0.3f, warm = (float)rnd.NextDouble() * 0.12f;
-                var lc = second ? e.leaf2 : e.leaf;
-                var tc = new Color(sh * (1f + warm) * lc.r / e.leaf.r, sh * lc.g / e.leaf.g, sh * (1f - warm * 0.5f) * lc.b / e.leaf.b, 1f);
-                while (crown.col.Count < crown.v.Count) { crown.col.Add(tc); crown.uv.Add(Vector2.zero); }
-            }
-            if (trunkH > 0)
-            {
-                // trunk: a thin three-sided post
-                int tb = trunk.v.Count;
-                for (int k = 0; k < 3; k++) { float a2 = rot + k * 2.094f; trunk.v.Add(new Vector3(fx + Mathf.Cos(a2) * trunkR, g - 1f, fz + Mathf.Sin(a2) * trunkR)); trunk.v.Add(new Vector3(fx + Mathf.Cos(a2) * trunkR, g + trunkH, fz + Mathf.Sin(a2) * trunkR)); trunk.uv.Add(Vector2.zero); trunk.uv.Add(Vector2.zero); }
-                for (int k = 0; k < 3; k++) { int a1 = tb + k * 2, a2 = tb + ((k + 1) % 3) * 2; trunk.tri.Add(a1); trunk.tri.Add(a1 + 1); trunk.tri.Add(a2); trunk.tri.Add(a2); trunk.tri.Add(a1 + 1); trunk.tri.Add(a2 + 1); }
+                case TreeKind.Spruce: Card(foot, 7.2f * sz, 15f * sz, r, 0f, rot, 0.45f, phase, tint); break;
+                case TreeKind.Pine: Card(foot, 9.5f * sz, 9.6f * sz, r, 0f, rot, 0.6f, phase, tint); break;
+                case TreeKind.Palm: Card(foot, 8.4f * sz, 9.4f * sz, r, 0f, rot, 1.2f, phase, tint); break;
+                case TreeKind.Scrub: Card(foot + Vector3.down * 0.2f, 3.8f * sz, 2.2f * sz, r, 0.42f, rot, 0.25f, phase, tint); break;
+                default: Card(foot, 8.6f * sz, 10f * sz, r, 0f, rot, 0.8f, phase, tint); break;
             }
             placed++;
         }
-        // (named as before: WorldBuilder.Drape then lays them onto the circuit's height field)
-        if (crown.tri.Count > 0)
-        {
-            var treesGo = WorldBuilder.MeshObj("Trees", crown.v, crown.uv, crown.tri, WorldBuilder.Mat(e.leaf)); treesGo.transform.SetParent(root);
-            BakeTint.Add(treesGo.GetComponent<MeshFilter>().sharedMesh, crown.col.ToArray());
-        }
-        if (trunk.tri.Count > 0) WorldBuilder.MeshObj("Trunks", trunk.v, trunk.uv, trunk.tri, WorldBuilder.Mat(e.trunk)).transform.SetParent(root);
+        if (tri.Count == 0) return;
+        // (named "Trees" as before: WorldBuilder.Drape lays them onto the circuit's height field and keeps these normals)
+        var fm = WorldBuilder.FoliageShader != null ? new Material(WorldBuilder.FoliageShader) { mainTexture = atlas } : WorldBuilder.Mat(Color.white, atlas);
+        if (WorldBuilder.FoliageShader != null) fm.SetFloat("_Cutoff", 0.5f);
+        var treesGo = WorldBuilder.MeshObj("Trees", v, uv, tri, fm, true, uv2); treesGo.transform.SetParent(root);
+        var mesh = treesGo.GetComponent<MeshFilter>().sharedMesh; mesh.SetNormals(nrm);
+        BakeTint.Add(mesh, col.ToArray());
     }
 
     // ground a landmark will stand on (known before the town rows are built, so they leave room)
@@ -835,6 +826,13 @@ public static class Environment
             Vector3 a0 = k[q], a1 = k[(q + 1) % 4];
             float uu = Mathf.Max(1, Mathf.Round((a1 - a0).magnitude / 3.1f)), vv = Mathf.Round(h / 3.2f);
             Quad(walls, a0 + dn, a1 + dn, a1 + up, a0 + up, (a0 + a1) * 0.5f - c, foot, col, uu, vv + 4);
+            // roof edge: a pale cornice 0.3 m proud with a shaded underside (uv 0 of the facade is plain plaster)
+            Vector3 o = ((a0 + a1) * 0.5f - c); o.y = 0; o = o.normalized * 0.3f; var ed = (a1 - a0).normalized * 0.3f;
+            var cc = Color.Lerp(col, Color.white, 0.45f); cc.a = 1;
+            Vector3 c0 = a0 - ed + up + Vector3.down * 0.45f, c1 = a1 + ed + up + Vector3.down * 0.45f, k0 = a0 - ed + up + Vector3.up * 0.2f, k1 = a1 + ed + up + Vector3.up * 0.2f;
+            Quad(walls, c0 + o, c1 + o, k1 + o, k0 + o, o, cc);
+            Quad(walls, c0, c1, c1 + o, c0 + o, Vector3.down, cc);
+            Quad(walls, k0, k1, k1 + o, k0 + o, Vector3.up, cc);
         }
         Quad(props, k[0] + up, k[1] + up, k[2] + up, k[3] + up, Vector3.up, roof);
     }

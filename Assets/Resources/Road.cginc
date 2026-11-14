@@ -52,8 +52,8 @@ v2f vert (appdata v)
     o.misc.z = saturate((95.0 - dist) / 70.0); // full grain up to 25 m, gone by 95 m (the mips have averaged it anyway)
     half3 lit = v.color.rgb * 2.0;             // stored light 0.5 = full brightness (LightBake)
     o.color = lit;
-    // baked light is ~0.7 in shade and ~1.6 in the sun: how much sun reaches this vertex
-    o.misc.w = saturate((dot(lit, half3(0.3, 0.59, 0.11)) - 0.85) * 1.6);
+    // baked light is ~0.9 in shade and ~1.75 in the sun: how much sun reaches this vertex
+    o.misc.w = saturate((dot(lit, half3(0.3, 0.59, 0.11)) - 1.0) * 1.5);
     UNITY_TRANSFER_FOG(o, o.pos);
 #ifdef ROAD_HQ
     o.view = toCam;
@@ -97,7 +97,7 @@ fixed4 frag (v2f i) : SV_Target
     half broad = saturate(1.0 - x * x * 0.32);                 // ~1.8 m half width
     half tracks = saturate(1.0 - abs(abs(x) - 0.8) * 2.2);     // wheels ~1.6 m apart
     half rub = kerb ? 0.0 : saturate(i.misc.y) * broad * (0.55 + 0.45 * tracks) * (0.7 + 0.6 * blotch);
-    col *= 1.0 - 0.42 * rub;
+    col *= 1.0 - 0.32 * rub; // rubbered, not black: in the sun the line reads as a darker grey
 
     // ---- dust off-line: lighter towards the edges where nobody drives
     half edge = smoothstep(_HalfWidth - 3.2, _HalfWidth - 0.3, abs(lat));
@@ -165,7 +165,7 @@ fixed4 frag (v2f i) : SV_Target
     half lobe = saturate(s * 1.6 - 0.6); lobe *= lobe;
     half s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s32 = s8 * s8; s32 *= s32;
     half gloss = 0.35 + 0.55 * rub + 0.4 * paint + (kerb ? 0.5 : 0.0) + 0.5 * d.a * fade; // stones sparkle near
-    half3 spec = _SunCol.rgb * (lobe * 0.45 + s32 * 0.6) * gloss * i.misc.w;
+    half3 spec = _SunCol.rgb * (lobe * 0.55 + s32 * 0.7) * gloss * i.misc.w;
     half f = 1.0 - saturate(dot(V, N)); half f2 = f * f; half fres = f2 * f2 * f;
     // wet: a water film mirrors the sky (Schlick, F0 = 0.02 for water) and the sun in a sharp, bright glint
     // (s^128), dimmed by the overcast; rubber and puddles are the smoothest, so they shine most

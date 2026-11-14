@@ -28,7 +28,7 @@ public static class Scenery
         if (b.col == null) return;
         for (int k = b.v.Count - 4; k < b.v.Count; k++)
         {
-            float y = b.v[k].y, ao = Mathf.Lerp(0.55f, 1f, Mathf.Clamp01(y / 1.6f));
+            float y = b.v[k].y, ao = Mathf.Lerp(0.66f, 1f, Mathf.Clamp01(y / 1.6f));
             b.col[k] = new Color(c.r * ao, c.g * ao, c.b * ao, 1f);
         }
     }
@@ -62,21 +62,7 @@ public static class Scenery
 
     // the town's wall material and window texture, shared with the environment's apartment blocks (one draw call)
     public static Material TownMat;
-    static Texture2D winTex;
-    public static Texture2D WindowTex()
-    {
-        if (winTex != null) return winTex;
-        winTex = WorldBuilder.Tex(64, 64, (u, v, x, y) =>
-        {
-            bool glass = u > 0.22f && u < 0.78f && v > 0.25f && v < 0.80f;
-            bool frame = u > 0.18f && u < 0.82f && v > 0.21f && v < 0.84f;
-            if (glass) return new Color32(70, 95, 120, 255);
-            if (frame) return new Color32(225, 225, 220, 255);
-            byte w = (byte)(236 + (int)(Rand(x / 8, y / 8) * 14));
-            return new Color32(w, w, w, 255);
-        });
-        return winTex;
-    }
+    public static Texture2D WindowTex() => EnvTex.Facade(); // one bay of a town house (EnvTex): frame, glass, sill, shutters
 
     // rows of town houses behind the walls of a street circuit
     static void Town(Track t, Transform parent)
@@ -130,6 +116,12 @@ public static class Scenery
                         if (below > 0) { Quad(b, a0 + dn, a1 + dn, a1, a0, outw, new Vector2(0, vb), new Vector2(uu, vb), new Vector2(uu, 0), new Vector2(0, 0)); TintLast(b, tc); }
                         Quad(b, a0, a1, a1 + u2, a0 + u2, outw, new Vector2(0, 0), new Vector2(uu, 0), new Vector2(uu, v2), new Vector2(0, v2)); TintLast(b, tc);
                         Quad(b, a0 + u2, a1 + u2, a1 + up, a0 + up, outw, new Vector2(0, v2), new Vector2(uu, v2), new Vector2(uu, vv), new Vector2(0, vv)); TintLast(b, tc);
+                        // the roof edge: a pale stone cornice standing 0.35 m proud, with its underside in shade (uv 0 = plaster)
+                        var o = outw.normalized * 0.35f; var ed = (a1 - a0).normalized * 0.35f; var cc = Color.Lerp(tc, Color.white, 0.45f);
+                        Vector3 c0 = a0 - ed + up + Vector3.down * 0.5f, c1 = a1 + ed + up + Vector3.down * 0.5f, k0 = a0 - ed + up + Vector3.up * 0.25f, k1 = a1 + ed + up + Vector3.up * 0.25f;
+                        Quad(b, c0 + o, c1 + o, k1 + o, k0 + o, outw, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero); TintLast(b, cc);
+                        Quad(b, c0, c1, c1 + o, c0 + o, Vector3.down, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero); TintLast(b, cc);
+                        Quad(b, k0, k1, k1 + o, k0 + o, Vector3.up, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero); TintLast(b, cc);
                     }
                 }
                 Quad(roofs, corner[0] + up, corner[1] + up, corner[2] + up, corner[3] + up, Vector3.up, Vector2.zero, Vector2.right, Vector2.one, Vector2.up);

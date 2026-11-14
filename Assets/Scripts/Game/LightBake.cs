@@ -31,6 +31,9 @@ public static class LightBake
     static Color SunCol = new Color(1f, 0.95f, 0.86f) * 1.25f, Sky = new Color(0.56f, 0.68f, 0.90f), Bounce;
     static readonly Color GroundAlbedo = new Color(0.36f, 0.31f, 0.24f) * 0.75f; // warm: asphalt, dry grass, sand
     static bool night;
+    // the open sky on a clear day is a big, bright light: shade is blue-ish and about half as bright as the sun side
+    // (Real Racing look), not the near-black of a single sun lamp. 1 at night (the floodlights do the work).
+    static float AmbGain => night ? 1f : 1.32f;
     static Track track;
 
     public static void SetLight(Color sunTimesIntensity, Color sky, bool isNight) { SunCol = sunTimesIntensity; Sky = sky; night = isNight; }
@@ -90,6 +93,7 @@ public static class LightBake
                 }
                 continue;
             }
+            if (mf.name == "Trees") { TreeCards(mesh.vertices); continue; }
             var v = mesh.vertices; var t = mesh.triangles;
             for (int k = 0; k + 2 < t.Length; k += 3)
             {
@@ -110,6 +114,19 @@ public static class LightBake
                     if (y > roof[q]) { roof[q] = y; if (y > maxH) maxH = y; }
                 }
             }
+        }
+    }
+    // tree cards (Environment.Trees: quads of foot-left, foot-right, top-right, top-left): the upright cards would only
+    // mark thin lines in the map, so each card stands for a round crown instead, a third of its width across, at
+    // four fifths of its height
+    static void TreeCards(Vector3[] v)
+    {
+        for (int k = 0; k + 3 < v.Length; k += 4)
+        {
+            Vector3 b0 = v[k], b1 = v[k + 1]; float top = v[k + 2].y, foot = Mathf.Min(b0.y, b1.y);
+            float cx = (b0.x + b1.x) * 0.5f, cz = (b0.z + b1.z) * 0.5f, rad = Vector3.Distance(b0, b1) * 0.33f, h = foot + (top - foot) * 0.8f;
+            for (float z = cz - rad; z <= cz + rad; z += cell * 0.5f) for (float x = cx - rad; x <= cx + rad; x += cell * 0.5f)
+                if ((x - cx) * (x - cx) + (z - cz) * (z - cz) <= rad * rad) Put(x, z, h);
         }
     }
     static void Edge(Vector3 a, Vector3 b)
@@ -160,7 +177,8 @@ public static class LightBake
         float cover = hc > 2f && hc < 30f ? Mathf.Clamp01((hc - 2f) / 2f) * all : 0f;
         // under a roof every sample is high: that says nothing about a wall close by
         contact = near / 8f * Mathf.Clamp01(1f - (y - low - 0.2f) / 1.2f) * (1f - all);
-        return Mathf.Max(0.15f, (1f - 0.5f * contact) * (1f - 0.45f * far / 8f) * (1f - 0.6f * cover));
+        // (kept gentle: sunny-day shade is open to a bright sky, so corners and wall feet darken, never go black)
+        return Mathf.Max(0.3f, (1f - 0.4f * contact) * (1f - 0.3f * far / 8f) * (1f - 0.55f * cover));
     }
 
     // light every mesh under root and hand it to the baked shader
@@ -174,7 +192,8 @@ public static class LightBake
             if (mesh == null || r == null || r.sharedMaterial == null || !mf.transform.localToWorldMatrix.isIdentity) continue;
             var sh = r.sharedMaterial.shader; if (sh == null) continue;
             string sn = sh.name;
-            if (sn != "Legacy Shaders/Diffuse" && sn != "Standard" && sn != "F2/Baked") continue; // not the see-through or glowing ones
+            bool own = sn == "F2/Baked" || sn == "F2/Ground" || sn == "F2/Foliage"; // baked-light shaders already
+            if (sn != "Legacy Shaders/Diffuse" && sn != "Standard" && !own) continue; // not the see-through or glowing ones
             if (r.sharedMaterial.IsKeywordEnabled("_EMISSION")) continue;                               // lamps keep their glow
             var v = mesh.vertices; var n = mesh.normals; var col = new Color[v.Length];
             bool hasN = n != null && n.Length == v.Length; int hint = -1;
@@ -185,7 +204,7 @@ public static class LightBake
                 float sun = ndl > 0.01f ? SunSoft(p.x + nn.x * 0.2f, p.z + nn.z * 0.2f, p.y + 0.05f) : 0;
                 float ao = Open(p.x + nn.x * 0.3f, p.z + nn.z * 0.3f, p.y, nn, out float contact);
                 // hemisphere: sky from above, warm bounce from the ground below, half of each on a wall
-                Color amb = Color.Lerp(Bounce, Sky, 0.5f + 0.5f * nn.y);
+                Color amb = Color.Lerp(Bounce, Sky, 0.5f + 0.5f * nn.y) * AmbGain;
                 Color c = SunCol * (ndl * sun) + amb * ao;
                 if (night && lamps != null) c += Flood(p, nn) * (1f - 0.35f * contact);
                 // inside a tunnel: no sky, warm lamp light instead (darker into the corners)
@@ -193,7 +212,7 @@ public static class LightBake
                 col[i] = new Color(c.r * 0.5f, c.g * 0.5f, c.b * 0.5f, 1); // the shader doubles it
             }
             mesh.colors = col;
-            if (sn != "F2/Baked") r.sharedMaterial.shader = shader;
+            if (!own) r.sharedMaterial.shader = shader;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
         }
         if (night && lamps != null) BuildPosts(root.transform);

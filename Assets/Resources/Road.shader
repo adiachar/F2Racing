@@ -15,8 +15,8 @@ Shader "F2/Road"
     Properties
     {
         _MainTex ("Asphalt (R grain, G blotches, B patches, A stones)", 2D) = "gray" {}
-        _Asphalt ("Asphalt colour", Color) = (0.27, 0.27, 0.28, 1)
-        _Dust ("Dusty edge colour", Color) = (0.43, 0.41, 0.38, 1)
+        _Asphalt ("Asphalt colour", Color) = (0.34, 0.34, 0.35, 1)
+        _Dust ("Dusty edge colour", Color) = (0.50, 0.48, 0.45, 1)
         _Paint ("Paint", Color) = (0.93, 0.93, 0.90, 1)
         _KerbRed ("Kerb red", Color) = (0.80, 0.11, 0.13, 1)
         _HalfWidth ("Half track width (m)", Float) = 6

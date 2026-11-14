@@ -38,7 +38,7 @@ public static class WorldBuilder
                 var mesh = mf.sharedMesh; if (mesh == null) continue;
                 var v = mesh.vertices;
                 for (int i = 0; i < v.Length; i++) v[i].y += H(v[i].x, v[i].z);
-                mesh.vertices = v; mesh.RecalculateNormals(); mesh.RecalculateBounds();
+                mesh.vertices = v; if (mf.name != "Trees") mesh.RecalculateNormals(); mesh.RecalculateBounds(); // (tree cards carry hand-made normals)
             }
             else { var p = tr.position; p.y += H(p.x, p.z); tr.position = p; }
         }
@@ -162,20 +162,7 @@ public static class WorldBuilder
         float k = 0.75f + Fbm(u, v, 6, 4, 9) * 0.35f + Fbm(u, v, 64, 2, 13) * 0.2f + (r > 0.9f ? 0.12f : r < 0.08f ? -0.12f : 0);
         return new Color32(B(c.r * 255 * k), B(c.g * 255 * k), B(c.b * 255 * k), 255);
     });
-    // astroturf: green with the darker painted stripes run-off areas have
-    static Texture2D TurfTex() => Tex(64, 64, (u, v, x, y) =>
-    {
-        bool stripe = ((int)(v * 4)) % 2 == 0;
-        float k = (stripe ? 0.82f : 1f) * (0.9f + Fbm(u, v, 16, 2, 41) * 0.15f) * (0.95f + Hash(x, y, 43) * 0.08f);
-        return new Color32(B(58 * k), B(128 * k), B(70 * k), 255);
-    });
-    // gravel trap: pale stones of mixed size
-    static Texture2D GravelTex() => Tex(128, 128, (u, v, x, y) =>
-    {
-        float r = Hash(x, y, 59), stones = Fbm(u, v, 32, 3, 61);
-        float c = 150 + stones * 60 + (r > 0.85f ? 28 : r < 0.12f ? -34 : 0);
-        return new Color32(B(c * 1.02f), B(c * 0.95f), B(c * 0.84f), 255);
-    });
+    // (astroturf, gravel and the other scenery surfaces: EnvTex.cs)
     static Texture2D KerbTex() => Tex(32, 64, (u, v, x, y) =>
     {
         bool red = v < 0.5f; float edge = Mathf.Min(u, 1 - u), lip = Mathf.Clamp(edge * 9, 0.55f, 1);
@@ -220,6 +207,63 @@ public static class WorldBuilder
     }
 
     const float SeaBed = -4f;
+    // Ground.shader / Foliage.shader draw the land and the trees (need the baked lighting, like Road.shader)
+    public static bool GroundShaded; public static Shader FoliageShader;
+
+    // The verges: a band of ground each side of the track, from behind the kerb / astroturf / gravel out past the
+    // barrier, on the ground material (so it meets the terrain without a seam) but with uv2 = (metres from the
+    // centreline, metres along) for the mowing stripes and the worn strip at the barrier. Columns at the barrier line
+    // let the bake shade its foot. Cut back wherever it would reach another part of the circuit or fold inside a bend.
+    static void BuildVerge(Track t, Material grass, float wallLat, Transform root)
+    {
+        float Wd = (float)t.width; var env = Environment.Cur;
+        bool park = t.def != null && t.def.style == CircuitStyle.Parkland;
+        float gOut = park ? Wd / 2 + (float)t.def.barrier - 0.4f : 0f;
+        float outerMax = Mathf.Min(wallLat + 16f, Wd / 2 + Mathf.Max(env.flatTo - 2f, 12f));
+        var v = new List<Vector3>(); var uv = new List<Vector2>(); var uv2 = new List<Vector2>(); var tri = new List<int>(); var tint = new List<Color>();
+        const int K = 5; var lat = new float[K];
+        int step = Mathf.Max(1, Mathf.RoundToInt(4f / (float)t.ds)), rows = (t.N + step - 1) / step; // a row every ~4 m
+        for (int side = 1; side >= -1; side -= 2)
+        {
+            int start = v.Count;
+            for (int r = 0; r <= rows; r++)
+            {
+                int i = r == rows ? t.N : r * step;
+                int ii = i % t.N; var p = t.pts[ii];
+                float inner = Wd / 2 + (side > 0 ? t.kerbL[ii] : t.kerbR[ii]) + (park ? 2f : 0f);
+                if (park && (side > 0 ? t.runL[ii] : t.runR[ii]) == SurfaceType.Gravel) inner = Mathf.Max(inner, gOut);
+                inner -= 0.05f; // tucked under the strip in front
+                float outer = outerMax;
+                for (int k = 0; k < 5; k++)
+                {
+                    double ox = p.x + p.nx * outer * side, oy = p.y + p.ny * outer * side;
+                    double mx = p.x + p.nx * (inner + outer) * 0.5 * side, my = p.y + p.ny * (inner + outer) * 0.5 * side;
+                    if (t.Nearest(ox, oy).dist > outer - 0.6 && t.Nearest(mx, my).dist > (inner + outer) * 0.5 - 0.6) break;
+                    outer = inner + (outer - inner) * 0.55f;
+                }
+                outer = Mathf.Max(outer, inner + 0.3f);
+                lat[0] = inner; lat[1] = (inner + wallLat - 1.2f) * 0.5f; lat[2] = wallLat - 1.2f; lat[3] = wallLat + 0.9f; lat[4] = outer;
+                for (int c = 1; c < K; c++) lat[c] = Mathf.Clamp(lat[c], lat[c - 1] + 0.02f, Mathf.Max(outer, lat[c - 1] + 0.02f));
+                float along = (float)(i * t.ds);
+                for (int c = 0; c < K; c++)
+                {
+                    float x = (float)(p.x + p.nx * lat[c] * side), z = (float)(p.y + p.ny * lat[c] * side);
+                    v.Add(new Vector3(x, 0.012f, z)); uv.Add(new Vector2(x, z)); uv2.Add(new Vector2(lat[c], along));
+                    tint.Add(Environment.GroundTint(x, z, Environment.Lift(x, z)));
+                }
+                if (r < rows)
+                    for (int c = 0; c < K - 1; c++)
+                    {
+                        int a = start + r * K + c, b = a + K; // a: this row, b: next row; a + 1 lies further out
+                        // keep the faces pointing up whichever side of the track this is (the left normal is +lateral)
+                        if (side > 0) { tri.Add(a + 1); tri.Add(b + 1); tri.Add(a); tri.Add(b + 1); tri.Add(b); tri.Add(a); }
+                        else { tri.Add(a); tri.Add(b); tri.Add(a + 1); tri.Add(b); tri.Add(b + 1); tri.Add(a + 1); }
+                    }
+            }
+        }
+        var go = MeshObj("Verge", v, uv, tri, grass, true, uv2); go.transform.SetParent(root);
+        BakeTint.Add(go.GetComponent<MeshFilter>().sharedMesh, tint.ToArray());
+    }
     static bool Street(Track t) => t.def != null ? t.def.style == CircuitStyle.Street : t.width < 10.0;
 
     public static GameObject Build(Track t)
@@ -248,11 +292,28 @@ public static class WorldBuilder
         sunGo.transform.rotation = Quaternion.Euler(48, -35, 0);
         var skyLook = Sky.Setup(t, Street(t), sun);
 
-        // ground
-        var grassTex = GrassTex(env.grass);
-        var grass = Mat(Color.white, grassTex);
+        // ground: Ground.shader (world-space detail + a macro layer, mowing stripes, barrier wear, gravel ruts) on the
+        // baked light; uv0 is the world position in metres everywhere, so the open land, the verges and the far sheet
+        // share one material and meet without a seam. Without the baked shaders: the plain diffuse look as before.
+        var groundSh = Resources.Load<Shader>("Ground"); var foliageSh = Resources.Load<Shader>("Foliage");
+        GroundShaded = BakeReady && groundSh != null && groundSh.isSupported;
+        FoliageShader = BakeReady && foliageSh != null && foliageSh.isSupported ? foliageSh : null;
+        float wallLat = (float)Traffic.WallOffset(t);
+        bool green = EnvTex.IsGreen(env.grass);
+        // (a touch brighter and warmer than the palette: lawns in full sun read light and yellow-green, Real Racing style)
+        var grassTex = EnvTex.GroundDetail(green ? new Color(env.grass.r * 1.12f, env.grass.g * 1.08f, env.grass.b * 0.95f).linear : env.grass.linear);
+        var grass = GroundShaded ? new Material(groundSh) { mainTexture = grassTex } : Mat(Color.white, grassTex);
         float gsize = Mathf.Max(4400, ext + 3000);
-        grass.mainTextureScale = new Vector2(gsize / 10, gsize / 10);
+        grass.mainTextureScale = new Vector2(1f / 4.5f, 1f / 4.5f);
+        if (GroundShaded)
+        {
+            grass.SetTexture("_MacroTex", EnvTex.Macro());
+            // (vectors, not colours: multipliers above 1 must not go through the sRGB -> linear conversion)
+            grass.SetVector("_DryTint", green ? new Vector4(1.22f, 1.10f, 0.70f, 0.38f) : new Vector4(1.08f, 1.04f, 0.95f, 0.25f));
+            float stripeFrom = Wd / 2 + Kerb + (t.def != null && t.def.style == CircuitStyle.Parkland ? 2f : 0f);
+            grass.SetVector("_Stripe", new Vector4(stripeFrom, wallLat + 7f, 3.2f, green && !Street(t) ? 0.16f : 0f));
+            grass.SetVector("_Wall", new Vector4(wallLat, 0.16f, 0, 0));
+        }
         Height = t.h != null || t.bank != null ? new HeightField(t) : null; // banked corners tilt the road (HeightField)
         Waterfront.Prepare(t);
         {
@@ -263,7 +324,7 @@ public static class WorldBuilder
             for (int j = 0; j <= 1; j++) for (int i = 0; i <= 1; i++)
             {
                 float px = gx0 + gsize * i, py = gy0 + gsize * j;
-                v.Add(new Vector3(px, yy, py)); uv.Add(new Vector2(px / gsize, py / gsize));
+                v.Add(new Vector3(px, yy, py)); uv.Add(new Vector2(px, py));
             }
             tri.Add(0); tri.Add(2); tri.Add(1); tri.Add(1); tri.Add(2); tri.Add(3);
             MeshObj("Ground", v, uv, tri, grass).transform.SetParent(root);
@@ -286,7 +347,7 @@ public static class WorldBuilder
                 float hy = (float)Height.Lowest(px, py, w / nx * 1.1f + 2f) - 0.12f + Environment.Surface(px, py, lift);
                 // the harbour: the ground drops to the sea bed beyond the quay
                 if (Waterfront.InWater(px, py)) hy = SeaBed;
-                v.Add(new Vector3(px, hy, py)); uv.Add(new Vector2(px / gsize, py / gsize)); tint.Add(Environment.GroundTint(px, py, lift));
+                v.Add(new Vector3(px, hy, py)); uv.Add(new Vector2(px, py)); tint.Add(Environment.GroundTint(px, py, lift));
                 if (i < nx && j < ny) { int k = j * (nx + 1) + i; tri.Add(k); tri.Add(k + nx + 1); tri.Add(k + 1); tri.Add(k + 1); tri.Add(k + nx + 1); tri.Add(k + nx + 2); }
             }
             var go = MeshObj("Terrain", v, uv, tri, grass); go.transform.SetParent(root);
@@ -372,7 +433,9 @@ public static class WorldBuilder
             roadMat.SetVector("_Grid", new Vector4((float)((t.N - 14) * t.ds), (float)(4 * t.ds), 22, 1.8f));
             roadMat.SetVector("_SunDir", -sunGo.transform.forward);
             roadMat.SetColor("_SunCol", sun.color * sun.intensity);
-            if (Street(t)) roadMat.SetColor("_Asphalt", new Color(0.30f, 0.30f, 0.31f)); // town streets: older, greyer surface
+            // sunlit asphalt is a clean mid grey, not black (sRGB 0.38 -> about 0.5 on screen in the sun after the bake)
+            roadMat.SetColor("_Asphalt", Street(t) ? new Color(0.40f, 0.40f, 0.41f) : new Color(0.38f, 0.38f, 0.39f)); // town streets: older, paler surface
+            roadMat.SetColor("_Dust", new Color(0.52f, 0.50f, 0.47f));
             RoadSurface.Attach(root.gameObject, roadSh);
         }
         else
@@ -440,14 +503,37 @@ public static class WorldBuilder
                         Strip(t, i, i + 1, -(Wd / 2 + kr), -(Wd / 2 + kr + 2f), 0.035f, 4, v, uv, tri);
                     }
                 });
-                MeshObj("Astroturf", v, uv, tri, Mat(Color.white, TurfTex())).transform.SetParent(root);
-                // gravel traps out to the barrier
-                v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>();
-                float gOut = Wd / 2 + (float)t.def.barrier - 0.4f;
-                Runs(i => t.runL[i] == SurfaceType.Gravel, (k, j) => Strip(t, k, System.Math.Min(j, t.N), Wd / 2 + Kerb + 2f, gOut, 0.025f, 6, v, uv, tri));
-                Runs(i => t.runR[i] == SurfaceType.Gravel, (k, j) => Strip(t, k, System.Math.Min(j, t.N), -(Wd / 2 + Kerb + 2f), -gOut, 0.025f, 6, v, uv, tri));
-                for (int i = 0; i < uv.Count; i++) uv[i] = new Vector2(uv[i].x * (gOut - Wd / 2 - Kerb - 2f) / 6f, uv[i].y);
-                MeshObj("Gravel", v, uv, tri, Mat(Color.white, GravelTex())).transform.SetParent(root);
+                MeshObj("Astroturf", v, uv, tri, Mat(Color.white, EnvTex.Turf())).transform.SetParent(root);
+                // gravel traps out to the barrier: Ground.shader with the stone texture in world space; uv2 = (metres from
+                // the centreline, metres along) for the churned inner edge and the ruts of cars that went off
+                v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>(); var uv2g = new List<Vector2>();
+                float gIn = Wd / 2 + Kerb + 2f, gOut = Wd / 2 + (float)t.def.barrier - 0.4f;
+                void GStrip(int k, int j, float side)
+                {
+                    int first = v.Count;
+                    Strip(t, k, j, side * gIn, side * gOut, 0.025f, 6, v, uv, tri);
+                    for (int q = first; q < v.Count; q++)
+                    {
+                        bool leftVert = (q - first) % 2 == 0; // Strip adds (left, right) per point; left = larger lateral
+                        float lat = side > 0 ? (leftVert ? gOut : gIn) : (leftVert ? gIn : gOut);
+                        uv2g.Add(new Vector2(lat, (float)((k + (q - first) / 2) * t.ds)));
+                        uv[q] = new Vector2(v[q].x, v[q].z);
+                    }
+                }
+                Runs(i => t.runL[i] == SurfaceType.Gravel, (k, j) => GStrip(k, System.Math.Min(j, t.N), 1));
+                Runs(i => t.runR[i] == SurfaceType.Gravel, (k, j) => GStrip(k, System.Math.Min(j, t.N), -1));
+                Material gm;
+                if (GroundShaded)
+                {
+                    gm = new Material(groundSh) { mainTexture = EnvTex.Gravel() };
+                    gm.SetTexture("_MacroTex", EnvTex.Macro());
+                    gm.SetVector("_DryTint", new Vector4(1, 1, 1, 0));
+                    gm.SetVector("_Wall", new Vector4(wallLat, 0.1f, 0, 0));
+                    gm.SetVector("_Ruts", new Vector4(gIn, 1f, 0, 0));
+                }
+                else gm = Mat(Color.white, EnvTex.Gravel());
+                gm.mainTextureScale = new Vector2(1f / 2.5f, 1f / 2.5f);
+                MeshObj("Gravel", v, uv, tri, gm, true, uv2g).transform.SetParent(root);
             }
         }
         if (Street(t))
@@ -457,7 +543,7 @@ public static class WorldBuilder
             float edge = Wd / 2 + 3.3f;
             Strip(t, 0, t.N, Wd / 2, edge, 0.028f, 6, v, uv, tri);
             Strip(t, 0, t.N, -Wd / 2, -edge, 0.028f, 6, v, uv, tri);
-            MeshObj("Pavement", v, uv, tri, Mat(new Color(0.62f, 0.62f, 0.64f), AsphaltTex(), 0.1f)).transform.SetParent(root);
+            MeshObj("Pavement", v, uv, tri, Mat(Color.white, EnvTex.Paving(), 0.1f)).transform.SetParent(root);
             if (t.h != null)
             {
                 v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>();
@@ -478,12 +564,13 @@ public static class WorldBuilder
                         }
                     }
                 }
-                MeshObj("RetainingWalls", v, uv, tri, Mat(new Color(0.72f, 0.69f, 0.63f), AsphaltTex(), 0.1f)).transform.SetParent(root);
+                MeshObj("RetainingWalls", v, uv, tri, Mat(new Color(0.96f, 0.94f, 0.90f), EnvTex.Stone(), 0.1f)).transform.SetParent(root);
             }
         }
         Waterfront.BuildTunnel(t, root);
         Trackside.Build(t, root, Street(t));
         BuildTerrain();
+        if (GroundShaded && !Street(t)) BuildVerge(t, grass, wallLat, root);
         Scenery.Build(t, root, Street(t)); // street circuit (Monaco, 9 m wide) -> walls; others -> guardrails
         // landmarks, hillside blocks, yachts (Environment.cs); the blocks go with the fences, out of the baked shadow map
         if (Trackside.Late == null) Trackside.Late = new GameObject("TracksideLate");
@@ -512,7 +599,7 @@ public static class WorldBuilder
             }
         }
 
-        // trees: two combined meshes (crowns, trunks), so thousands cost two draw calls. Kind, mix and density come
+        // trees: one mesh of crossed, alpha-tested cards (Foliage.shader), so thousands cost one draw call. Kind, mix and density come
         // from the circuit's environment: spruce belts at Spa, tall park trees at Monza, palms and pines at Monaco...
         Environment.Trees(t, root, ext);
         Drape(root.gameObject);
@@ -538,6 +625,7 @@ public static class WorldBuilder
         Trackside.AfterBake(root.gameObject);
         // the road is lit now (vertex colours): hand it to Road.shader
         if (roadR != null) { if (LightBake.Active) roadR.sharedMaterial = roadMat; else RoadShaded = false; }
+        EnvSurface.Attach(root.gameObject, GroundShaded ? groundSh : null, FoliageShader); // Low: LOD 150 (mip bias, no sway)
         StaticBatchingUtility.Combine(root.gameObject);
 
         // one reflection capture of sky + ground, rendered once: cheap, and makes the paint look real
