@@ -34,6 +34,7 @@ Shader "F2/Clouds"
             #pragma vertex vert
             #pragma fragment frag
             #include "UnityCG.cginc"
+            #include "Grade.cginc"
 
             sampler2D _MainTex;
             float _Scale;
@@ -85,7 +86,10 @@ Shader "F2/Clouds"
                 hz = max(hz * hz * _Haze, saturate(-h * 25.0));
 
                 half k = ca * (1.0 - hz);
-                return fixed4(col * k + unity_FogColor.rgb * hz, k + hz);
+                // graded like the world (after the haze, so the horizon meets the graded fog of the hills)
+                half aOut = k + hz;
+                half3 rgb = (col * k + unity_FogColor.rgb * hz) / max(aOut, 0.001);
+                return fixed4(F2Grade(rgb) * aOut, aOut);
             }
             ENDCG
         }

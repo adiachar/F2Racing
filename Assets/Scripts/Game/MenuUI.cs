@@ -160,12 +160,12 @@ public sealed class MenuUI
         // right: session
         float rx = panel.x + leftW + pad, rw = panel.xMax - pad - rx, ry = ly + S(20);
         GUI.Label(new Rect(rx, ly, rw, S(16)), "SESSION", caption);
-        float rowH = S(34), rowGap = S(3), labW = rw * 0.36f;
-        string[] labels = { "Car", "Rivals", "Rival level", "Race length", "Grid position", "Weather" };
+        float rowH = S(30), rowGap = S(2), labW = rw * 0.36f; // 7 rows fit above the buttons
+        string[] labels = { "Car", "Rivals", "Rival level", "Race length", "Grid position", "Weather", "Time of day" };
         for (int i = 0; i < labels.Length; i++)
         {
             float y = ry + i * (rowH + rowGap);
-            GUI.enabled = i == 0 || i == 5 || !pg; // the playground has no race
+            GUI.enabled = i == 0 || i >= 5 || !pg; // the playground has no race
             GUI.Label(new Rect(rx, y, labW, rowH), labels[i], label);
             var sr = new Rect(rx + labW, y, rw - labW, rowH);
             if (i == 0) cls = Stepper(sr, cls, CarConfig.ClassNames.Length, CarConfig.ClassNames[cls]);
@@ -178,6 +178,13 @@ public sealed class MenuUI
             }
             if (i == 4) { int n = Stepper(sr, gridIdx, GridNames.Length, GridNames[gridIdx]); if (n != gridIdx) SetGrid(n); }
             if (i == 5) Weather.Index = Stepper(sr, Weather.Index, Weather.Names.Length, Weather.Names[Weather.Index]); // applied and saved at the start of the session
+            if (i == 6)
+            {
+                // Night on street circuits only (elsewhere it shows and uses Evening); saved at once, used by the next build
+                bool street = !pg && map < Circuits.All.Length && Circuits.All[map].style == CircuitStyle.Street;
+                int cur = (int)TimeOfDay.For(street), n = Stepper(sr, cur, TimeOfDay.Count(street), TimeOfDay.Names[cur]);
+                if (n != cur) TimeOfDay.Set(n, false);
+            }
         }
         GUI.enabled = true;
         float by = panel.yMax - pad - S(54), bw = (rw - S(10)) / 2;

@@ -48,6 +48,7 @@ Shader "F2/CarPaint"
             #pragma multi_compile_fog
             #pragma multi_compile_local __ _CARBON _TYRE _WHEEL _HELMET
             #include "UnityCG.cginc"
+            #include "Grade.cginc"
             #include "Lighting.cginc"
 
             fixed4 _Color, _Color2, _Color3;
@@ -184,6 +185,7 @@ Shader "F2/CarPaint"
                 half3 col = diff * (1.0 - coat) + env * (coat + metal * base) + spec * _LightColor0.rgb * (coatK + metal) + emis;
                 fixed4 c = fixed4(col, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);
+                c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
                 return c;
             }
             ENDCG

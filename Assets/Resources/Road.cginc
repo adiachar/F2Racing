@@ -5,6 +5,7 @@
 #ifndef F2_ROAD_INCLUDED
 #define F2_ROAD_INCLUDED
 #include "UnityCG.cginc"
+#include "Grade.cginc"
 
 struct appdata
 {
@@ -180,6 +181,7 @@ fixed4 frag (v2f i) : SV_Target
 
     fixed4 c = fixed4(col, 1);
     UNITY_APPLY_FOG(i.fogCoord, c);
+    c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
     return c;
 }
 #endif

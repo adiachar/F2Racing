@@ -8,6 +8,8 @@
 // Cost: +2 draw calls (+1 when the sun is off-screen), no per-frame allocations. The cloud sphere sits on its own
 // layer so the one-off sky reflection probe (cars' paint) captures it too: Create renders the probe and keeps the
 // sphere round the probe until that render has finished.
+// Time of day (TimeOfDay.cs, AtTime / SunAt): sun angle and colour, sky, fog, cloud light and the bake's light.
+// Colour grade (Grade.cs / Grade.cginc): per circuit + time of day + weather, pushed as shader globals here.
 using FormulaSim;
 using UnityEngine;
 
@@ -89,7 +91,7 @@ public class Sky : MonoBehaviour
     public static Look Wetted(Look k, float w)
     {
         if (w <= 0f) return k;
-        var grey = new Color(0.50f, 0.53f, 0.57f);
+        var grey = new Color(0.50f, 0.53f, 0.57f) * wetGrey; // darker at dusk and night
         k.cover = Mathf.Lerp(k.cover, 0.98f, Mathf.Clamp01(w * 1.4f));
         k.haze = Mathf.Lerp(k.haze, 1f, w);
         k.deck = Mathf.Lerp(k.deck, 0.15f, w);                       // a low, even deck
@@ -102,13 +104,75 @@ public class Sky : MonoBehaviour
         k.fogEnd *= 1f - 0.55f * w;                                    // and gone by ~45 % of the dry distance
         return k;
     }
-    static float GlareMax(Look k, float w) => 0.5f * (1f - 0.65f * k.cover) * Mathf.Clamp01(1f - 1.6f * w); // none in the rain
+    static float GlareMax(Look k, float w) => 0.5f * todGlare * (1f - 0.65f * k.cover) * Mathf.Clamp01(1f - 1.6f * w); // none in the rain
+
+    // ---------------------------------------------------------------- time of day (TimeOfDay.cs)
+    // Afternoon is the original light. The others move and colour the sun, change the sky, fog and cloud light,
+    // the cars' ambient and the colours LightBake bakes with, and add their grade on top of the circuit's.
+    static TimeOfDay.Kind tod = TimeOfDay.Kind.Afternoon;
+    static float todSun = 1f, todGlare = 1f, wetGrey = 1f;
+    static Color cloudLit = Color.white, cloudShade = Color.white, cloudSun = Color.white;
+    static GradeLook dryGrade = Grade.Neutral;
+
+    static Look AtTime(Look k, TimeOfDay.Kind t)
+    {
+        cloudLit = cloudShade = cloudSun = Color.white; todGlare = 1f; wetGrey = 1f;
+        switch (t)
+        {
+            case TimeOfDay.Kind.Morning: // low, cool-gold sun, fresh haze
+                k.atmosphere *= 1.15f; k.exposure *= 0.95f; k.haze = Mathf.Min(1f, k.haze + 0.1f);
+                k.fog = Color.Lerp(k.fog, new Color(0.80f, 0.84f, 0.90f), 0.3f); k.fogStart *= 0.8f; k.fogEnd *= 0.9f;
+                cloudLit = new Color(1f, 0.97f, 0.93f); cloudSun = new Color(1f, 0.9f, 0.75f);
+                break;
+            case TimeOfDay.Kind.Evening: // golden hour: orange sun low in the west, warm haze, long shadows
+                k.atmosphere = Mathf.Max(k.atmosphere, 1.2f); k.exposure *= 0.85f;
+                k.fog = Color.Lerp(k.fog, new Color(0.86f, 0.70f, 0.56f), 0.45f);
+                cloudLit = new Color(1f, 0.82f, 0.66f) * 0.92f; cloudShade = new Color(0.85f, 0.78f, 0.80f); cloudSun = new Color(1.4f, 0.85f, 0.42f);
+                todGlare = 1.25f; wetGrey = 0.75f;
+                break;
+            case TimeOfDay.Kind.Night:   // a dark sky with a small moon, dark fog, floodlights (LightBake)
+                k.exposure = 0.08f; k.atmosphere = 0.5f; k.tint = new Color(0.30f, 0.35f, 0.50f);
+                k.fog = new Color(0.06f, 0.06f, 0.075f); k.fogStart *= 0.8f; k.fogEnd *= 0.9f;
+                cloudLit = new Color(0.07f, 0.075f, 0.095f); cloudShade = new Color(0.12f, 0.12f, 0.15f); cloudSun = new Color(0.2f, 0.22f, 0.3f);
+                todGlare = 0f; wetGrey = 0.12f;
+                break;
+        }
+        return k;
+    }
+
+    // sun angle / colour / intensity, the cars' ambient and the bake's light for the time of day
+    static void SunAt(Light sun, TimeOfDay.Kind t)
+    {
+        Color sky = new Color(0.56f, 0.68f, 0.90f); // what the bake uses for the sky light (blue from above)
+        switch (t)
+        {
+            case TimeOfDay.Kind.Morning:
+                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.91f, 0.78f); sun.intensity = 1.15f;
+                sky = new Color(0.50f, 0.62f, 0.88f);
+                RenderSettings.ambientSkyColor = new Color(0.58f, 0.68f, 0.85f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.58f, 0.62f);
+                break;
+            case TimeOfDay.Kind.Evening:
+                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.70f, 0.42f); sun.intensity = 1.1f;
+                sky = new Color(0.36f, 0.42f, 0.62f);
+                RenderSettings.ambientSkyColor = new Color(0.45f, 0.50f, 0.65f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.48f, 0.42f);
+                RenderSettings.ambientGroundColor *= new Color(1f, 0.85f, 0.7f);
+                break;
+            case TimeOfDay.Kind.Night:   // the "sun" is the moon; the cars get the floodlights (Create)
+                sun.transform.rotation = Quaternion.Euler(42, 20, 0); sun.color = new Color(0.62f, 0.72f, 1f); sun.intensity = 0.16f;
+                sky = new Color(0.025f, 0.032f, 0.06f);
+                RenderSettings.ambientSkyColor = new Color(0.06f, 0.07f, 0.11f); RenderSettings.ambientEquatorColor = new Color(0.16f, 0.15f, 0.14f);
+                RenderSettings.ambientGroundColor = new Color(0.10f, 0.09f, 0.08f);
+                break;
+        }
+        todSun = t == TimeOfDay.Kind.Night ? 0.5f : sun.intensity / 1.25f;
+        LightBake.SetLight(sun.color * sun.intensity, sky, t == TimeOfDay.Kind.Night);
+    }
 
     static Look dryLook; static bool haveLook;
     static Material skyInst; static Light sunLight; static float sunBase = -1f, shadowBase = 1f;
     public static Sky Current;                                         // the live sky (null before the first build)
     // 0..1: how much of the sun reaches the ground through the cloud (the cars' sun light follows this)
-    public static float SunShare => 1f - 0.55f * Weather.Wetness;
+    public static float SunShare => (1f - 0.55f * Weather.Wetness) * todSun;
 
     // Re-applies the sky, fog, clouds, sun and glare for a new weather without rebuilding the world, and re-renders
     // the cars' sky reflection once (a one-off, like at the build).
@@ -116,6 +180,7 @@ public class Sky : MonoBehaviour
     {
         if (!haveLook) return;
         var k = Wetted(dryLook, w);
+        Grade.Push(Grade.Wetted(dryGrade, w));
         SkyAndFog(k);
         if (cloudMat != null) CloudParams(k);
         SunFor(w);
@@ -139,7 +204,7 @@ public class Sky : MonoBehaviour
         }
         RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = k.fog;
         RenderSettings.fogStartDistance = k.fogStart; RenderSettings.fogEndDistance = k.fogEnd;
-        var cam = Camera.main; if (cam != null && cam.clearFlags == CameraClearFlags.SolidColor) cam.backgroundColor = k.fog;
+        var cam = Camera.main; if (cam != null && cam.clearFlags == CameraClearFlags.SolidColor) cam.backgroundColor = Grade.Apply(k.fog); // no shader grades it
     }
 
     static void SunFor(float w)
@@ -157,9 +222,9 @@ public class Sky : MonoBehaviour
         cloudMat.SetFloat("_Scale", k.deck);
         cloudMat.SetFloat("_Haze", k.haze);
         cloudMat.SetFloat("_HazeHeight", 0.12f);
-        cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c) * (1f - 0.3f * Weather.Wetness));
-        cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.62f, 0.65f, 0.71f), new Color(0.42f, 0.45f, 0.50f), c) * (1f - 0.2f * Weather.Wetness));
-        cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * (1f - 0.5f * c));
+        cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c) * cloudLit * (1f - 0.3f * Weather.Wetness));
+        cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.62f, 0.65f, 0.71f), new Color(0.42f, 0.45f, 0.50f), c) * cloudShade * (1f - 0.2f * Weather.Wetness));
+        cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * cloudSun * (1f - 0.5f * c));
         cloudMat.SetVector("_Wind", new Vector4(0.030f, 0.012f, 0.050f, 0.020f) * ((0.7f + 0.6f * c) * k.wind));
     }
 
@@ -172,14 +237,18 @@ public class Sky : MonoBehaviour
     // Skybox, fog and the sun (call at the top of the world build, before anything is fogged or baked).
     public static Look Setup(Track t, bool street, Light sun)
     {
-        dryLook = For(t, street); haveLook = true;
+        tod = TimeOfDay.For(street); TimeOfDay.Current = tod; TimeOfDay.BuiltStreet = street;
+        dryLook = AtTime(For(t, street), tod); haveLook = true;
+        if (sun != null) SunAt(sun, tod); // before the road reads the sun colour and the bake reads its direction
+        dryGrade = Grade.At(Grade.For(t.def != null ? t.def.id : ""), tod);
+        Grade.Push(Grade.Wetted(dryGrade, Weather.Wetness));
         var k = Wetted(dryLook, Weather.Wetness);
         sunLight = sun; sunBase = -1f; // dimmed in Create, after the road has read the dry sun colour and the bake is done
         var skyMat = Resources.Load<Material>("Sky");
         if (skyMat != null)
         {
             skyMat = new Material(skyMat);
-            skyMat.SetFloat("_SunSize", 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f);
+            skyMat.SetFloat("_SunSize", tod == TimeOfDay.Kind.Night ? 0.018f : 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f); // night: a small moon
             skyMat.SetFloat("_AtmosphereThickness", k.atmosphere); skyMat.SetFloat("_Exposure", k.exposure);
             skyMat.SetColor("_SkyTint", k.tint); skyMat.SetColor("_GroundColor", new Color(0.38f, 0.42f, 0.36f));
             RenderSettings.skybox = skyMat; skyInst = skyMat;
@@ -227,6 +296,14 @@ public class Sky : MonoBehaviour
             sky.glare.enabled = false;
         }
         sky.probe = probe; sky.probeRef = probe; Current = sky;
+        TimeOfDay.BuiltRoot = root.gameObject;
+        if (tod == TimeOfDay.Kind.Night)
+        {
+            // the cars are lit by the floodlights (white, from above), not by the moon
+            if (LightBake.CarSun != null) LightBake.CarSun.color = new Color(1f, 0.95f, 0.88f);
+            // no baked floodlights on this phone: lift the ambient so the circuit can still be seen
+            if (!LightBake.Active) { RenderSettings.ambientSkyColor = new Color(0.25f, 0.26f, 0.3f); RenderSettings.ambientEquatorColor = new Color(0.3f, 0.29f, 0.27f); }
+        }
         SunFor(Weather.Wetness);
         if (probe != null)
         {

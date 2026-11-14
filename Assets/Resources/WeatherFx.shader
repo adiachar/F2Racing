@@ -19,6 +19,7 @@ Shader "F2/WeatherFx"
             #pragma fragment frag
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
+            #include "Grade.cginc"
             sampler2D _MainTex; float4 _MainTex_ST;
             struct appdata { float4 vertex : POSITION; float2 uv : TEXCOORD0; fixed4 color : COLOR; };
             struct v2f { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; fixed4 color : COLOR; UNITY_FOG_COORDS(1) };
@@ -36,6 +37,7 @@ Shader "F2/WeatherFx"
                 fixed4 c = i.color;
                 c.a *= tex2D(_MainTex, i.uv).a;
                 UNITY_APPLY_FOG(i.fogCoord, c);
+                c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
                 return c;
             }
             ENDCG

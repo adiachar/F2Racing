@@ -6,6 +6,14 @@
 // The world is then drawn by a shader that only reads a texture and that colour (Baked.shader): building shadows
 // across the street, dark wall bases and soft shading at almost no cost per frame, with no shadow maps.
 // Cars are lit by their own light, which dims when the player's car drives into a baked shadow.
+// Light model (load time only):
+//  * sun: one march over the roof map per vertex; the closest the ray passes over an obstacle, against a penumbra
+//    that widens with distance, gives soft shadow edges (no extra rays);
+//  * sky light: blue from above, warm bounce from the sunlit ground below (from the sun's colour and height);
+//  * ambient occlusion: a near ring (contact shadow at wall bases, kerb walls, barriers), a far ring (streets,
+//    stands), and "cover" (a roof above: under grandstands, bridges and in the tunnel) - all on the ambient only;
+//  * night (TimeOfDay, street circuits): floodlights on posts along the track baked in like the tunnel lamps,
+//    with a cheap 3-sample occlusion test each, and the posts themselves (one mesh, glowing heads).
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
@@ -19,7 +27,13 @@ public static class LightBake
     static Vector3 toSun; static Vector2 sunDir; static float sunSlope;
     static Shader shader;
     static readonly Color LampCol = new Color(0.55f, 0.45f, 0.3f);
-    static readonly Color SunCol = new Color(1f, 0.95f, 0.86f) * 1.25f, Sky = new Color(0.62f, 0.72f, 0.85f), Side = new Color(0.55f, 0.6f, 0.6f), Below = new Color(0.3f, 0.35f, 0.25f);
+    // set per time of day by Sky.Setup (SetLight); these defaults are the afternoon
+    static Color SunCol = new Color(1f, 0.95f, 0.86f) * 1.25f, Sky = new Color(0.56f, 0.68f, 0.90f), Bounce;
+    static readonly Color GroundAlbedo = new Color(0.36f, 0.31f, 0.24f) * 0.75f; // warm: asphalt, dry grass, sand
+    static bool night;
+    static Track track;
+
+    public static void SetLight(Color sunTimesIntensity, Color sky, bool isNight) { SunCol = sunTimesIntensity; Sky = sky; night = isNight; }
 
     public static bool Begin(Track t, Vector3 towardsSun)
     {
@@ -36,6 +50,9 @@ public static class LightBake
         toSun = towardsSun.normalized;
         float hl = Mathf.Sqrt(toSun.x * toSun.x + toSun.z * toSun.z);
         sunDir = new Vector2(toSun.x, toSun.z) / Mathf.Max(hl, 1e-4f); sunSlope = toSun.y / Mathf.Max(hl, 1e-4f);
+        // light bounced off the ground: the sun on it (by its height) plus the sky, times a warm ground colour
+        Bounce = GroundAlbedo * (SunCol * Mathf.Max(0.1f, toSun.y) + Sky); Bounce.a = 1;
+        track = t;
         Active = true;
         return true;
     }
@@ -102,30 +119,55 @@ public static class LightBake
         for (int s = 0; s <= n; s++) { float u = (float)s / n; Put(a.x + (b.x - a.x) * u, a.z + (b.z - a.z) * u, a.y + (b.y - a.y) * u); }
     }
 
-    // 1 = in the sun, 0 = in shadow, for a point at height y
-    public static float Sun(float x, float z, float y)
+    // 1 = in the sun, 0 = in shadow, for a point at height y. At night the cars are floodlit almost everywhere,
+    // so the moon's shadows only dim them a little (GameManager uses this for the cars' light).
+    public static float Sun(float x, float z, float y) => night ? 0.6f + 0.4f * SunSoft(x, z, y) : SunSoft(x, z, y);
+
+    // soft edges from one march: how close the ray passes under the top of an obstacle, against a penumbra that
+    // widens with distance (0.35 m + 3.5 % of the distance, wider than the real sun so the coarse map does not show)
+    static float SunSoft(float x, float z, float y)
     {
         if (!Active) return 1;
-        float reach = Mathf.Min(90f, (maxH - y) / Mathf.Max(sunSlope, 0.05f));
-        for (float d = cell * 1.2f; d < reach; d += cell)
-            if (Roof(x + sunDir.x * d, z + sunDir.y * d) > y + sunSlope * d + 0.3f) return 0;
-        return 1;
+        float reach = Mathf.Min(90f, (maxH - y + 1f) / Mathf.Max(sunSlope, 0.05f)), lit = 1f;
+        // steps grow with distance (the penumbra does too), so a low evening sun costs little more than noon
+        for (float d = cell * 1.2f; d < reach; d += cell * (1f + d * 0.025f))
+        {
+            float over = Roof(x + sunDir.x * d, z + sunDir.y * d) - (y + sunSlope * d + 0.3f); // > 0: blocked
+            if (over < -2f) continue;
+            float f = Mathf.Clamp01(0.5f - over / (2f * (0.35f + 0.035f * d)));
+            if (f < lit) { lit = f; if (lit <= 0f) return 0; }
+        }
+        return lit * lit * (3f - 2f * lit);
     }
-    static float Open(float x, float z, float y)
+    static readonly float[] ringC = { 1, 0.7071f, 0, -0.7071f, -1, -0.7071f, 0, 0.7071f }, ringS = { 0, 0.7071f, 1, 0.7071f, 0, -0.7071f, -1, -0.7071f };
+    // sky visibility 0..1 for the ambient. contact: the near ring's occlusion, strongest at the foot of a wall
+    // (only counts while the point is close to the lowest ground round it, so wall faces higher up stay open)
+    static float Open(float x, float z, float y, Vector3 n, out float contact)
     {
-        float occ = 0;
+        float near = 0, far = 0, low = y;
         for (int k = 0; k < 8; k++)
         {
-            float a = k * Mathf.PI / 4, h = Roof(x + Mathf.Cos(a) * 2.6f, z + Mathf.Sin(a) * 2.6f);
-            occ += Mathf.Clamp01((h - (y + 0.3f)) / 3f);
+            float c = ringC[k], s = ringS[k];
+            float h1 = Roof(x + c * 1.2f, z + s * 1.2f);
+            if (h1 > -1e5f) { near += Mathf.Clamp01((h1 - (y + 0.2f)) / 1.0f); if (h1 < low) low = h1; }
+            float h2 = Roof(x + c * 3.5f, z + s * 3.5f);
+            far += Mathf.Clamp01((h2 - (y + 0.3f)) / 4f);
         }
-        return 1 - 0.55f * occ / 8f;
+        // a roof over the point (grandstand, bridge, tunnel): high cells all round (not just on one side, which is a
+        // wall), and a roof one cell out along the normal, so a wall's own top does not count for the wall's face
+        float all = Mathf.Clamp01((near / 8f - 0.6f) * 3f);
+        float hc = Roof(x + n.x * cell, z + n.z * cell) - y;
+        float cover = hc > 2f && hc < 30f ? Mathf.Clamp01((hc - 2f) / 2f) * all : 0f;
+        // under a roof every sample is high: that says nothing about a wall close by
+        contact = near / 8f * Mathf.Clamp01(1f - (y - low - 0.2f) / 1.2f) * (1f - all);
+        return Mathf.Max(0.15f, (1f - 0.5f * contact) * (1f - 0.45f * far / 8f) * (1f - 0.6f * cover));
     }
 
     // light every mesh under root and hand it to the baked shader
     public static void Apply(GameObject root)
     {
         if (!Active) return;
+        if (night) PlaceLamps(); else lamps = null;
         foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
         {
             var mesh = mf.sharedMesh; var r = mf.GetComponent<MeshRenderer>();
@@ -135,22 +177,136 @@ public static class LightBake
             if (sn != "Legacy Shaders/Diffuse" && sn != "Standard" && sn != "F2/Baked") continue; // not the see-through or glowing ones
             if (r.sharedMaterial.IsKeywordEnabled("_EMISSION")) continue;                               // lamps keep their glow
             var v = mesh.vertices; var n = mesh.normals; var col = new Color[v.Length];
-            bool hasN = n != null && n.Length == v.Length;
+            bool hasN = n != null && n.Length == v.Length; int hint = -1;
             for (int i = 0; i < v.Length; i++)
             {
                 Vector3 p = v[i], nn = hasN ? n[i] : Vector3.up;
                 float ndl = Mathf.Max(0, Vector3.Dot(nn, toSun));
-                float sun = ndl > 0.01f ? Sun(p.x + nn.x * 0.2f, p.z + nn.z * 0.2f, p.y + 0.05f) : 0;
-                float ao = Open(p.x + nn.x * 0.3f, p.z + nn.z * 0.3f, p.y);
-                Color amb = nn.y >= 0 ? Color.Lerp(Side, Sky, nn.y) : Color.Lerp(Side, Below, -nn.y);
+                float sun = ndl > 0.01f ? SunSoft(p.x + nn.x * 0.2f, p.z + nn.z * 0.2f, p.y + 0.05f) : 0;
+                float ao = Open(p.x + nn.x * 0.3f, p.z + nn.z * 0.3f, p.y, nn, out float contact);
+                // hemisphere: sky from above, warm bounce from the ground below, half of each on a wall
+                Color amb = Color.Lerp(Bounce, Sky, 0.5f + 0.5f * nn.y);
                 Color c = SunCol * (ndl * sun) + amb * ao;
-                // inside a tunnel: no sky, warm lamp light instead
-                if (sun < 0.5f && Roof(p.x, p.z) - p.y > 1f && Roof(p.x, p.z) - p.y < 9f && Waterfront.InTunnel(p.x, p.z)) c = amb * 0.15f + LampCol;
+                if (night && lamps != null) c += Flood(p, nn) * (1f - 0.35f * contact);
+                // inside a tunnel: no sky, warm lamp light instead (darker into the corners)
+                if (sun < 0.5f && Roof(p.x, p.z) - p.y > 1f && Roof(p.x, p.z) - p.y < 9f && Waterfront.InTunnel(p.x, p.z)) c = (amb * 0.15f + LampCol) * TunnelAo(p, ref hint);
                 col[i] = new Color(c.r * 0.5f, c.g * 0.5f, c.b * 0.5f, 1); // the shader doubles it
             }
             mesh.colors = col;
             if (sn != "F2/Baked") r.sharedMaterial.shader = shader;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
         }
+        if (night && lamps != null) BuildPosts(root.transform);
+    }
+
+    // the roof map cannot see a tunnel's walls (its roof covers them), so the tunnel's contact shadow comes from the
+    // track: darker towards the walls (past the track edge) and close to the floor
+    static float TunnelAo(Vector3 p, ref int hint)
+    {
+        if (track == null) return 1f;
+        var q = track.Nearest(p.x, p.z, hint); hint = q.idx;
+        float edge = Mathf.Clamp01(((float)System.Math.Abs(q.lateral) - (float)track.HalfWidth(q.idx) + 1f) / 2.5f);
+        float low = Mathf.Clamp01(1f - (p.y - WorldBuilder.H(p.x, p.z)) / 2f);
+        return 1f - 0.55f * edge * low - 0.15f * edge;
+    }
+
+    // ---------------------------------------------------------------- night: floodlights along the track
+    const float LampStep = 25f, LampH = 11f, LampR0 = 14f, LampMax = 45f, LampI = 0.9f, LampCell = 45f;
+    static readonly Color FloodCol = new Color(1f, 0.94f, 0.84f);
+    static List<Vector3> lamps; static List<Vector3> lampBase;
+    static Dictionary<long, List<int>> lampGrid;
+    static long Key(int i, int j) => ((long)i << 32) ^ (uint)j;
+
+    // one post every 25 m, sides alternating, just behind the barrier, the head 1.8 m out over the track edge
+    static void PlaceLamps()
+    {
+        lamps = new List<Vector3>(); lampBase = new List<Vector3>(); lampGrid = new Dictionary<long, List<int>>();
+        var t = track; if (t == null || t.pts == null || t.N < 2) { lamps = null; return; }
+        double barrier = t.def != null ? t.def.barrier : 3;
+        int every = Mathf.Max(1, Mathf.RoundToInt(LampStep / (float)t.ds)), side = 1;
+        for (int i = 0; i < t.N; i += every, side = -side)
+        {
+            var q = t.pts[i]; float off = (float)(t.HalfWidth(i) + System.Math.Min(barrier, 6) + 0.6);
+            float bx = (float)(q.x + q.nx * off * side), bz = (float)(q.y + q.ny * off * side);
+            if (Waterfront.InTunnel(bx, bz) || Waterfront.InTunnel((float)q.x, (float)q.y) || Waterfront.InWater(bx, bz)) continue;
+            float gy = WorldBuilder.H(q.x, q.y);
+            float hx = (float)(q.x + q.nx * (off - 1.8f) * side), hz = (float)(q.y + q.ny * (off - 1.8f) * side);
+            int k = lamps.Count;
+            lamps.Add(new Vector3(hx, gy + LampH, hz)); lampBase.Add(new Vector3(bx, gy, bz));
+            long key = Key(Mathf.FloorToInt(hx / LampCell), Mathf.FloorToInt(hz / LampCell));
+            if (!lampGrid.TryGetValue(key, out var list)) lampGrid[key] = list = new List<int>();
+            list.Add(k);
+        }
+        if (lamps.Count == 0) lamps = null;
+    }
+
+    // light from the floodlights at a point: soft inverse-square falloff cut off at 45 m, a little wrap so the
+    // ground under a lamp is lit evenly, and 3 roof-map samples on the way for buildings in between
+    static Color Flood(Vector3 p, Vector3 n)
+    {
+        float sum = 0; int ci = Mathf.FloorToInt(p.x / LampCell), cj = Mathf.FloorToInt(p.z / LampCell);
+        for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++)
+        {
+            if (!lampGrid.TryGetValue(Key(ci + di, cj + dj), out var list)) continue;
+            for (int m = 0; m < list.Count; m++)
+            {
+                var L = lamps[list[m]]; Vector3 d = L - p; float d2 = d.sqrMagnitude;
+                if (d2 > LampMax * LampMax || d2 < 1e-4f) continue;
+                float dist = Mathf.Sqrt(d2), ndl = Vector3.Dot(n, d) / dist;
+                if (ndl < -0.2f) continue;
+                float w = 1f - d2 / (LampMax * LampMax); w *= w;
+                float e = LampI / (1f + d2 / (LampR0 * LampR0)) * w * Mathf.Clamp01(ndl * 0.85f + 0.15f);
+                for (int s = 1; s <= 3; s++)
+                {
+                    float u = s * 0.25f; Vector3 a = p + d * u;
+                    if (Roof(a.x, a.z) > a.y + 0.4f) { e *= 0.15f; break; }
+                }
+                sum += e;
+            }
+        }
+        return FloodCol * sum;
+    }
+
+    // the posts: one mesh (pole, arm, lamp head with a glowing underside), lit by hand in the vertex colours
+    static void BuildPosts(Transform root)
+    {
+        var v = new List<Vector3>(); var nrm = new List<Vector3>(); var col = new List<Color>(); var tri = new List<int>();
+        Color dark = new Color(0.07f, 0.07f, 0.075f, 1), glow = new Color(1.6f, 1.5f, 1.32f, 1); // stored halved: glow = 3.2x
+        for (int i = 0; i < lamps.Count; i++)
+        {
+            Vector3 b = lampBase[i], h = lamps[i];
+            Vector3 dir = new Vector3(h.x - b.x, 0, h.z - b.z); float len = dir.magnitude; dir = len > 1e-3f ? dir / len : Vector3.forward;
+            var rot = Quaternion.LookRotation(dir, Vector3.up);
+            Box(v, nrm, col, tri, b + Vector3.up * (LampH * 0.5f + 0.3f), rot, new Vector3(0.22f, LampH + 0.6f, 0.22f), dark, dark);
+            Box(v, nrm, col, tri, new Vector3((b.x + h.x) * 0.5f, h.y + 0.25f, (b.z + h.z) * 0.5f), rot, new Vector3(0.12f, 0.12f, len), dark, dark);
+            Box(v, nrm, col, tri, h + Vector3.up * 0.1f, rot, new Vector3(1.1f, 0.22f, 0.6f), dark, glow);
+        }
+        var mesh = new Mesh { name = "Floodlights" };
+        if (v.Count > 65000) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        mesh.SetVertices(v); mesh.SetNormals(nrm); mesh.SetColors(col); mesh.SetUVs(0, new Vector2[v.Count]); mesh.SetTriangles(tri, 0);
+        mesh.RecalculateBounds();
+        var go = new GameObject("Floodlights"); go.transform.SetParent(root, false);
+        go.AddComponent<MeshFilter>().sharedMesh = mesh;
+        var r = go.AddComponent<MeshRenderer>();
+        r.sharedMaterial = new Material(shader) { mainTexture = Texture2D.whiteTexture };
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
+        lamps = null; lampBase = null; lampGrid = null;
+    }
+
+    // a box: 6 faces, 4 vertices each; the bottom face gets its own colour (the lamp's glowing glass)
+    static void Box(List<Vector3> v, List<Vector3> n, List<Color> c, List<int> t, Vector3 centre, Quaternion rot, Vector3 size, Color side, Color bottom)
+    {
+        Vector3 hx = rot * Vector3.right * (size.x * 0.5f), hy = rot * Vector3.up * (size.y * 0.5f), hz = rot * Vector3.forward * (size.z * 0.5f);
+        void Face(Vector3 normal, Vector3 a, Vector3 b, Color fc)
+        {
+            int k = v.Count; Vector3 f = centre + normal;
+            v.Add(f - a - b); v.Add(f - a + b); v.Add(f + a + b); v.Add(f + a - b);
+            Vector3 nn = normal.normalized; for (int q = 0; q < 4; q++) { n.Add(nn); c.Add(fc); }
+            // wind so the face points along its normal
+            if (Vector3.Dot(Vector3.Cross(b, a), normal) > 0) { t.Add(k); t.Add(k + 1); t.Add(k + 2); t.Add(k); t.Add(k + 2); t.Add(k + 3); }
+            else { t.Add(k); t.Add(k + 2); t.Add(k + 1); t.Add(k); t.Add(k + 3); t.Add(k + 2); }
+        }
+        Face(hx, hy, hz, side); Face(-hx, hy, hz, side); Face(hz, hx, hy, side); Face(-hz, hx, hy, side);
+        Face(hy, hx, hz, side); Face(-hy, hx, hz, bottom);
     }
 }

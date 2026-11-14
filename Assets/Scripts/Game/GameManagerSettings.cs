@@ -275,6 +275,8 @@ public partial class GameManager
         game.Choice("Grid position", "Where you start a race: last, random, pole or a set place. In a race this restarts it.", MenuUI.GridNames, 0, () => ui.gridIdx, v => { ui.SetGrid(v); if (InRace) ResetCar(); }).NoReset();
         game.Choice("Weather", "Damp: a drying line, less grip off it. Wet: rain, spray, much less grip. Rivals fit the right tyres at the next restart.", Weather.Names, 0,
             () => Weather.Index, v => { Weather.Index = v; ApplyWeather(); });
+        game.Choice("Time of day", "Sun height and colour, sky and shadows. Night is for street circuits (floodlit); elsewhere it is evening. In a session this reloads the circuit.", TimeOfDay.Names, TimeOfDay.Default,
+            () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset();
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
         game.Choice("Driver read-out", "Grip, tyres, brakes and fuel in the top-left corner.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
         game.Choice("Mini-map", "The circuit map in the top-right corner.", hideShow, 1, () => hudMap ? 1 : 0, v => hudMap = v == 1);

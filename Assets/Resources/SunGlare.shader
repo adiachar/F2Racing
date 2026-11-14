@@ -21,6 +21,7 @@ Shader "F2/SunGlare"
             #pragma vertex vert
             #pragma fragment frag
             #include "UnityCG.cginc"
+            #include "Grade.cginc"
 
             sampler2D _MainTex;
             half4 _Color;
@@ -39,7 +40,7 @@ Shader "F2/SunGlare"
             fixed4 frag (v2f i) : SV_Target
             {
                 half g = tex2D(_MainTex, i.uv).a;
-                return fixed4(_Color.rgb * (g * _Color.a), 0);
+                return fixed4(F2GradeAdd(_Color.rgb) * (g * _Color.a), 0);
             }
             ENDCG
         }

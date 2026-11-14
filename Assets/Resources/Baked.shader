@@ -18,6 +18,7 @@ Shader "F2/Baked"
             #pragma fragment frag
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
+            #include "Grade.cginc"
 
             struct appdata
             {
@@ -52,6 +53,7 @@ Shader "F2/Baked"
                 fixed4 c = tex2D(_MainTex, i.uv);
                 c.rgb *= i.color.rgb;
                 UNITY_APPLY_FOG(i.fogCoord, c);
+                c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
                 return c;
             }
             ENDCG

@@ -27,6 +27,7 @@ Shader "F2/CarWheelFace"
             #pragma fragment frag
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
+            #include "Grade.cginc"
             #include "Lighting.cginc"
 
             fixed4 _Color, _Cover; half4 _Glow; half _Blur, _Dust, _CoverR;
@@ -64,6 +65,7 @@ Shader "F2/CarWheelFace"
                 half alpha = max(cover, smearA);
                 fixed4 c = fixed4(col, alpha);
                 UNITY_APPLY_FOG(i.fogCoord, c);
+                c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
                 return c;
             }
             ENDCG

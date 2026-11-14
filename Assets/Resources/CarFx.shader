@@ -20,7 +20,8 @@ Shader "F2/CarFx"
             #pragma fragment frag
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
-            half _Soft;
+            #include "Grade.cginc"
+            half _Soft, _Dst;
             struct appdata { float4 vertex : POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; };
             struct v2f { float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; UNITY_FOG_COORDS(1) };
             v2f vert(appdata v) { v2f o; o.pos = UnityObjectToClipPos(v.vertex); o.color = v.color; o.uv = v.uv * 2 - 1; UNITY_TRANSFER_FOG(o, o.pos); return o; }
@@ -29,6 +30,7 @@ Shader "F2/CarFx"
                 half a = pow(saturate(1.0 - length(i.uv)), _Soft);
                 fixed4 c = fixed4(i.color.rgb, i.color.a * a);
                 UNITY_APPLY_FOG(i.fogCoord, c);
+                c.rgb = _Dst == 1 ? F2GradeAdd(c.rgb) : F2Grade(c.rgb); // sparks add light; smoke is graded like the world
                 return c;
             }
             ENDCG
