@@ -38,9 +38,17 @@ The target phone is a low-end Android phone (Cortex-A53/A55 CPU, Mali-G52 / Adre
 
 ### CPU: drawing
 
-- Each car is about 19 mesh parts, plus 4 tyre stripes, up to about 15 wing pieces split off for damage, a helmet and a contact shadow. That is **about 35 draw calls per car**. The player's car adds 4 wheel faces and the shift-light strip.
-- Every car has its own materials (livery, brake glow, wear), so cars do not batch.
-- A full field in view is 500+ draw calls. This is the largest render-thread cost.
+Draw calls per car (counted from the code and the `.bytes` files; contact shadow included):
+
+| Car | Before | Now | Now, GPU instancing (GLES3, Vulkan, Metal) |
+|---|---|---|---|
+| Player (car or car_lod) | 34 + 4 wheel faces + shift lights | the same (not changed) | the same |
+| Rival, car_lod (within ~30 m), safety car | 34 (19 parts, 9 wing pieces, 4 stripes, helmet, shadow) | **8** (body, 4 wheels, 2 front uprights, shadow); **13** while a wing is damaged | 7 instanced calls shared by ALL near rivals, + 1 shadow each |
+| Rival, car_far | 28 (18 parts, 8 wing pieces, helmet, shadow) | **2** (one mesh, shadow); 7 while a wing is damaged | 1 instanced call for ALL far rivals, + 1 shadow each |
+
+- Before, every car had its own materials (livery, brake glow, wear), so nothing batched, and a full field in view was 500+ draw calls.
+- Now every rival shares ONE material; what differs per car goes through a `MaterialPropertyBlock` (see "Rival cars: merged meshes" below).
+- A full field of 21 rivals in view: about **60** draw calls on GLES2 (5 near, 16 far: 5 × 8 + 16 × 2) instead of about 620; with instancing about 30 (8 instanced calls + 21 shadows).
 
 ### CPU: HUD
 
@@ -131,6 +139,21 @@ These apply on Low:
 - **Rival distance cull**: cars are not drawn beyond 450 m on Low and 800 m on Medium (`Camera.layerCullDistances` on the car layer). This is turned off in the TV camera and in replays, where a zoomed lens can show a far car big.
 - **Tyre stripes on far rivals**: `car_far` rivals have no tyre-stripe objects. That is 4 draw calls less per far rival, and the stripe is under a pixel at 30 m and beyond.
 
+### Rival cars: merged meshes, one shared material (`CarModel.CreateMergedRival`)
+
+- **What is built.** The first rival merges the parts of `car_lod` / `car_far` into a few meshes, cached for every other rival (and the safety car, which uses car_lod):
+  - `car_far`: the whole car in **one mesh**, wheels and helmet included. The wheels stand still and do not steer (the car is under about 20 px tall beyond 30 m). About 37k vertices.
+  - `car_lod`: one body mesh (bodywork, wings, halo with its pillar, mirrors, rear uprights, steering wheel at rest, helmet; about 59k vertices, 16-bit indices). Per wheel one spinning mesh (tyre, rim, compound stripe), and on the two front wheels one steering-only mesh (caliper, upright). So the wheels still spin and steer.
+  - The two-sided parts are twinned exactly as before. The part meshes are not built for rivals at all, and the `.bytes` file is unloaded after the merge.
+- **Part IDs in the vertex colour.** Alpha = part ID (0 body paint, 1 wings, 2 carbon, 3 metal, 4/5 tyre front/rear, 6/7 rim and brake front/rear, 8 rear lights, 9 tyre stripe, 10 helmet, 11 steering wheel). R = baked AO with the old per-material strength already applied; G = brake-disc mask. `CarPaint.shader` has a new keyword `_MERGED`: the part ID picks the colour, clear coat, gloss and metal the old material had, and the carbon weave, tyre sheen and wear, brake dust and disc glow (per axle), rear-light glow, livery split and helmet visor are all still done, in the full and the Low SubShader.
+- **Per car: a `MaterialPropertyBlock`.** Livery (`_LivA/B/C`), stripe colour, brake glow front/rear, brake dust, tyre wear/dirt front/rear and the rear-light colour (brake, rain light, harvest blink). The block is written only when a value changes, at most once a frame (`LateUpdate`).
+- **GPU instancing.** These properties are declared as instanced properties (`#pragma multi_compile_instancing`, `enableInstancing` on the shared material). Where instancing works (GLES3, Vulkan, Metal), the same mesh on many rivals is one draw call. On GLES2 Unity has no instancing; the same shader variant without `INSTANCING_ON` reads the properties as plain uniforms, so it is one draw call per renderer, but with no material switch between cars.
+- **Damage.** The merged body is split into the five wing pieces only when a wing of that car is damaged (+5 draw calls, cached per model), and put back together when it is repaired. Wheel triangles never go with a wing piece. Bent wheels, flat tyres, debris and smoke work as before on car_lod. A flat tyre now squashes the rim with the tyre (they are one mesh); this is small and only on a punctured rival.
+- **Not changed.** The player's car (full and car_lod, `twinPaint`) is still built part by part with its own materials and all its effects. `car.bytes`, `car_lod.bytes` and `car_far.bytes` are unchanged: the merge is done at load.
+- **Fallback.** If `CarPaint` is not supported on a phone, rivals are built part by part as before.
+- **Check.** `python3 Tools/render_car_model.py game Assets/Resources/Car/car_lod.bytes before|after out.png front34,rear34,side,chase` draws a rival the old way (24 objects) and the merged way (7 objects). The two are pixel-identical for car_lod and car_far: `Docs/car-previews/rival_lod_before.png`, `rival_lod_after.png`, `rival_far_before.png`, `rival_far_after.png`. This checks the merge logic as written again in Python, not the C# itself or the shader.
+- **Expected saving:** about 550 draw calls less with a full field in view: about **3-6 ms of render thread** on a low-end phone, more on GLES2 drivers, where each draw call costs more.
+
 ### Dynamic resolution and the 30/60 fps setting
 
 - **The problem**: `ScalableBufferManager` only works on Vulkan, Metal and D3D12. On OpenGL ES (which many low-end phones run, and Unity's fallback where Vulkan is blocked) it does nothing. `AutoQuality` waited for "resolution at minimum" before cutting effects, so on GLES it spent about 10 s lowering a resolution that never changed. The Resolution scale setting did nothing at all.
@@ -156,6 +179,7 @@ These apply on Low:
 | Fewer material writes | about 0.1 ms CPU |
 
 - On top of that, there are fewer GC spikes: the qualifying HUD alone made about 10 KB of garbage a frame.
+- **Rivals merged** (with a full field in view): about 3-6 ms render thread.
 - **On Low**, also:
   - Car paint: 1-2 ms GPU in chase view, more in the cockpit.
   - Glare and grade: about 0.5-1 ms GPU.
@@ -164,10 +188,10 @@ These apply on Low:
 
 ## Still to do (not changed: bigger or riskier)
 
-1. **One draw call per far rival.** Bake `car_far` into a single mesh with the livery in vertex colours and one shared material, so far cars batch. This takes about 35 draw calls per car down to 2. It is the largest remaining CPU item.
+1. ~~One draw call per far rival.~~ Done, also for the near rivals: see "Rival cars: merged meshes".
 2. **HUD off IMGUI.** One dynamic mesh for all the HUD panels, and text from a font atlas. IMGUI costs 80-150 draw calls and 1-2 ms.
 3. **LightBake cache.** Store the baked vertex colours per circuit, time of day and weather in `persistentDataPath`, or spread the bake over several frames behind the loading screen. Use `Color32` with a 0..2 range for the baked colours.
-4. **Make car meshes non-readable once built** (`UploadMeshData(true)`) after the damage split has been cached. This frees the CPU copies, about 10 MB with 21 rivals.
+4. **Make the player's car meshes non-readable once built** (`UploadMeshData(true)`) after the damage split has been cached. The rivals now share one set of merged meshes (about 3 MB in all, not per car); they stay readable because the wing pieces are split off lazily, on the first wing damage.
 5. **Fix the inward-facing triangles in `car_lod`** in `Tools/convert_car_model.py`. Then rivals would not show small holes either, and the player LOD would not need the two-sided paint.
 6. **Spray**: shrink `maxParticleSize` on Medium (0.35 → 0.2), or cap it at 15 particles behind the player's car in chase view.
 7. **Clouds on Low**: draw a static gradient instead of the 2-read cloud dome.
@@ -200,6 +224,15 @@ These apply on Low:
 8. **30 fps.** Set Frame rate to 30 fps. The counter should sit at about 30. Auto and the resolution scaling should not fight: the resolution may drop if it shows under 25.
 9. **GLES phone.** Set Resolution scale to 70%. The picture gets softer, the HUD stays in place and touch still works.
 10. **Thermal.** Do a 10-minute race at 60 fps. If the counter slowly falls, the phone is throttling. Recommend 30 fps on it.
-11. **Optional profiler pass.** Use a Development build with the Unity Profiler over USB. Look for:
+11. **Rival cars (merged meshes).** In a race with 20 rivals:
+    - Liveries: every rival has its team's two colours and accent line, near and far; the front wing and rear-wing flaps take the secondary colour.
+    - Tyre stripes on near rivals match their compound, and change after a pit stop.
+    - Brake discs of near rivals glow at night or in a tunnel under hard braking; rear lights light up on braking and blink in the rain.
+    - Wheels of near rivals spin and the fronts steer.
+    - Crash into a rival's front wing (Damage: Full): the wing droops or comes off; after its pit stop it is whole again.
+    - The far/near swap at about 30 m shows no colour jump.
+    - Frame Debugger (Editor) or the profiler: a far rival is 1 draw (+ shadow), a near one 7 (+ shadow). On a GLES3/Vulkan phone they show as "Draw Mesh (instanced)".
+    - On a GLES2-only phone (if you have one), rivals must look the same.
+12. **Optional profiler pass.** Use a Development build with the Unity Profiler over USB. Look for:
     - GC.Alloc in `GameManager.Update` / `OnGUI`: it should be about 0 B per frame in a race. Qualifying shows a few strings when a time changes.
     - Render-thread draw calls: below the budget above.
