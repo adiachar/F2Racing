@@ -340,6 +340,7 @@ public class Sky : MonoBehaviour
     }
 
     // ---------------------------------------------------------------- per frame
+    public static bool NoGlare; // Low graphics level (GameManagerPerf.cs): the additive glare quad is not drawn
     Transform dome; MeshRenderer glare; Vector3 sunDir; float glareMax, glareLast = -1f;
     Camera cam; ReflectionProbe probe, probeRef; int probeId, probeWait;
     const float DomeFill = 0.9f;     // sphere radius / far clip (its flat facets stay inside the far plane)
@@ -378,7 +379,7 @@ public class Sky : MonoBehaviour
             vis = Mathf.Clamp01((e + 0.35f) / 0.45f); vis = vis * vis * (3f - 2f * vis);
             vis *= 0.6f + 0.4f * Mathf.Clamp01(Vector3.Dot(ct.forward, sunDir)); // brighter looking straight at it
         }
-        bool on = vis > 0.01f && glareMax > 0.001f && (glareTinted || vis > 0.35f);
+        bool on = !NoGlare && vis > 0.01f && glareMax > 0.001f && (glareTinted || vis > 0.35f);
         if (glare.enabled != on) glare.enabled = on;
         if (!on) return;
         var gt = glare.transform;

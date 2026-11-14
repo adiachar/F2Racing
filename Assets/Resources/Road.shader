@@ -53,6 +53,7 @@ Shader "F2/Road"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
             #pragma multi_compile_fog
             #pragma target 3.0
             #include "Road.cginc"

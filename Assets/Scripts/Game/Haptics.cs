@@ -11,7 +11,7 @@ public static class Haptics
     static float lastPulse = -1f;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
-    static AndroidJavaObject vibrator;
+    static AndroidJavaObject vibrator; static AndroidJavaClass effectClass;
     static bool tried, failed;
     static int sdk;
 
@@ -49,7 +49,7 @@ public static class Haptics
             amplitude = Mathf.Clamp(amplitude, 1, 255);
             if (sdk >= 26)
             {
-                using (var effectClass = new AndroidJavaClass("android.os.VibrationEffect"))
+                if (effectClass == null) effectClass = new AndroidJavaClass("android.os.VibrationEffect"); // looked up once, not per pulse
                 using (var effect = effectClass.CallStatic<AndroidJavaObject>("createOneShot", (long)ms, amplitude))
                     vibrator.Call("vibrate", effect);
             }

@@ -271,13 +271,25 @@ public class CarModel : MonoBehaviour
     public const string Credit = "Car model based on \"2026 Ferrari SF-26\" by Tyler_Dave (Sketchfab), CC BY 4.0. Modified: logos removed, simplified, repainted.";
     static readonly System.Collections.Generic.Dictionary<string, Mesh[]> meshCache = new System.Collections.Generic.Dictionary<string, Mesh[]>();
     Material lightMat, stripeMat; bool braking;
-    public void SetStripe(Color c) { if (stripeMat != null) stripeMat.color = c; }
+    public void SetStripe(Color c) { stripeCol = c; hasStripe = true; if (stripeMat != null) stripeMat.color = c; }
+    // performance (GameManagerPerf.cs): which asset this car came from (null = code-built), the last livery and
+    // stripe set (so a swapped-in player LOD looks the same), and the Low graphics level (no wheel faces, no sparks/smoke)
+    public string Res { get; private set; }
+    public static bool LowDetail;
+    Livery lastLivery; bool hasLivery, hasStripe, facesOff; Color stripeCol;
+    public void CopyLook(CarModel from)
+    {
+        if (from == null) return;
+        if (from.hasLivery) SetLivery(from.lastLivery);
+        if (from.hasStripe) SetStripe(from.stripeCol);
+    }
 
     // two-tone livery (Livery.cs): body = primary, split into secondary + accent line by CarPaint.shader; the wing
     // elements (the model's "white" parts: front wing, rear-wing flaps) take the secondary colour
     Material liveryBody, liverySecond;
     public void SetLivery(Livery l)
     {
+        lastLivery = l; hasLivery = true;
         if (liveryBody != null)
         {
             liveryBody.color = l.primary;
@@ -374,11 +386,15 @@ public class CarModel : MonoBehaviour
     // Pirelli sidewall colours: Soft red, Medium yellow, Hard white
     public static Color StripeFor(FormulaSim.Compound c) => c == FormulaSim.Compound.Soft ? new Color(0.85f, 0.08f, 0.08f) : c == FormulaSim.Compound.Medium ? new Color(0.95f, 0.78f, 0.1f) : new Color(0.92f, 0.92f, 0.9f);
 
-    public static CarModel CreateFromAsset(string res = "Car/car", Color? paint = null, bool rival = false, Color? stripe = null)
+    // twinPaint: the body paint gets back faces too (the player's LOD: its simplified body has a few inward-facing
+    // triangles that would show as holes up close; costs ~9k triangles, still a third of the full car)
+    public static CarModel CreateFromAsset(string res = "Car/car", Color? paint = null, bool rival = false, Color? stripe = null, bool twinPaint = false)
     {
         var ta = Resources.Load<TextAsset>(res);
         if (ta == null) return null;
         var d = ta.bytes; int o = 0;
+        if (res == "Car/car") Resources.UnloadAsset(ta); // .bytes is a copy: the full car's 6 MB need not stay loaded (the rivals' LODs are reloaded every race, so they stay)
+        string cacheKey = twinPaint ? res + "|2s" : res;
         int I() { int v = System.BitConverter.ToInt32(d, o); o += 4; return v; }
         float F() { float v = System.BitConverter.ToSingle(d, o); o += 4; return v; }
         if (d.Length < 8 || d[0] != 'F' || d[1] != '2' || d[2] != 'M' || (d[3] != '1' && d[3] != '2')) return null;
@@ -406,7 +422,7 @@ public class CarModel : MonoBehaviour
         if (hasCol)
             foreach (var (mm, k) in new[] { (mats[0], 0.6f), (mats[1], 0.55f), (mats[2], 0.75f), (mats[3], 0.7f), (tyreF, 0.45f), (tyreR, 0.45f), (hubF, 0.7f), (hubR, 0.7f), (steerMat, 0.5f) })
                 if (mm.HasProperty("_AO")) mm.SetFloat("_AO", k);
-        meshCache.TryGetValue(res, out var cached); var made = cached == null ? new Mesh[n] : null;
+        meshCache.TryGetValue(cacheKey, out var cached); var made = cached == null ? new Mesh[n] : null;
         var root = new GameObject("Car");
         // the mesh was converted at Formula 2 size (3.135 m wheelbase); a 2026 F1 car is 3.40 m long between the axles and 1.9 m wide
         root.transform.localScale = Vector3.one * (3.40f / 3.135f);
@@ -418,42 +434,54 @@ public class CarModel : MonoBehaviour
             int len = I(); string name = System.Text.Encoding.UTF8.GetString(d, o, len); o += len;
             int mid = I(); var piv = new Vector3(F(), F(), F());
             int nv = I(), ni = I();
-            var pos = new Vector3[nv]; var nrm = new Vector3[nv]; var idx = new int[ni]; Color32[] col = null;
-            for (int i = 0; i < nv; i++) pos[i] = new Vector3(F(), F(), F());
-            for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
-            if (hasCol) { col = new Color32[nv]; for (int i = 0; i < nv; i++) { col[i] = new Color32(d[o], d[o + 1], d[o + 2], d[o + 3]); o += 4; } }
-            for (int i = 0; i < ni; i++) idx[i] = I();
+            Vector3[] pos = null, nrm = null; int[] idx = null; Color32[] col = null;
             Mesh mesh;
-            if (cached != null) mesh = cached[p];
+            if (cached != null && !name.StartsWith("wheel_"))
+            {
+                // meshes already made (every rival after the first): skip the arrays instead of reading them again
+                // (only the wheel parts' vertices are used below); saves ~2 MB of garbage per car at race start
+                o += nv * 24 + (hasCol ? nv * 4 : 0) + ni * 4;
+                mesh = cached[p];
+            }
             else
             {
-                // Thin parts (wings, floor, suspension, cockpit tub, mirrors) are single skins in the source model, and
-                // some face inwards: drawn one-sided they show as holes. Those get a twin of every triangle facing the
-                // other way. The painted body, tyres and rims are closed shapes and stay one-sided (half the work).
-                bool twoSided = mid == 1 || mid == 2 || mid == 3 || mid == 6 || name.StartsWith("steer_");
-                if (twoSided)
+                pos = new Vector3[nv]; nrm = new Vector3[nv]; idx = new int[ni];
+                for (int i = 0; i < nv; i++) pos[i] = new Vector3(F(), F(), F());
+                for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
+                if (hasCol) { col = new Color32[nv]; for (int i = 0; i < nv; i++) { col[i] = new Color32(d[o], d[o + 1], d[o + 2], d[o + 3]); o += 4; } }
+                for (int i = 0; i < ni; i++) idx[i] = I();
+                if (cached != null) mesh = cached[p];
+                else
                 {
-                    var pos2 = new Vector3[nv * 2]; var nrm2 = new Vector3[nv * 2]; var idx2 = new int[ni * 2];
-                    for (int i = 0; i < nv; i++) { pos2[i] = pos[i]; nrm2[i] = nrm[i]; pos2[nv + i] = pos[i]; nrm2[nv + i] = -nrm[i]; }
-                    if (col != null)
+                    // Thin parts (wings, floor, suspension, cockpit tub, mirrors) are single skins in the source model, and
+                    // some face inwards: drawn one-sided they show as holes. Those get a twin of every triangle facing the
+                    // other way. The painted body, tyres and rims are closed shapes and stay one-sided (half the work).
+                    bool twoSided = mid == 1 || mid == 2 || mid == 3 || mid == 6 || name.StartsWith("steer_") || (twinPaint && mid == 0);
+                    Compact(ref pos, ref nrm, ref col, idx); nv = pos.Length; // some parts carry a whole shared vertex list (halo_pillar: 53k for 447 triangles)
+                    if (twoSided)
                     {
-                        // the twin facing the other way takes the back face's AO (B) as its own (R)
-                        var col2 = new Color32[nv * 2];
-                        for (int i = 0; i < nv; i++) { col2[i] = col[i]; var c = col[i]; col2[nv + i] = new Color32(c.b, c.g, c.r, c.a); }
-                        col = col2;
+                        var pos2 = new Vector3[nv * 2]; var nrm2 = new Vector3[nv * 2]; var idx2 = new int[ni * 2];
+                        for (int i = 0; i < nv; i++) { pos2[i] = pos[i]; nrm2[i] = nrm[i]; pos2[nv + i] = pos[i]; nrm2[nv + i] = -nrm[i]; }
+                        if (col != null)
+                        {
+                            // the twin facing the other way takes the back face's AO (B) as its own (R)
+                            var col2 = new Color32[nv * 2];
+                            for (int i = 0; i < nv; i++) { col2[i] = col[i]; var c = col[i]; col2[nv + i] = new Color32(c.b, c.g, c.r, c.a); }
+                            col = col2;
+                        }
+                        for (int i = 0; i < ni; i += 3)
+                        {
+                            idx2[i] = idx[i]; idx2[i + 1] = idx[i + 1]; idx2[i + 2] = idx[i + 2];
+                            idx2[ni + i] = nv + idx[i]; idx2[ni + i + 1] = nv + idx[i + 2]; idx2[ni + i + 2] = nv + idx[i + 1];
+                        }
+                        pos = pos2; nrm = nrm2; idx = idx2;
                     }
-                    for (int i = 0; i < ni; i += 3)
-                    {
-                        idx2[i] = idx[i]; idx2[i + 1] = idx[i + 1]; idx2[i + 2] = idx[i + 2];
-                        idx2[ni + i] = nv + idx[i]; idx2[ni + i + 1] = nv + idx[i + 2]; idx2[ni + i + 2] = nv + idx[i + 1];
-                    }
-                    pos = pos2; nrm = nrm2; idx = idx2;
+                    mesh = new Mesh { indexFormat = pos.Length > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
+                    mesh.vertices = pos; mesh.normals = nrm; if (col != null) mesh.colors32 = col;
+                    mesh.triangles = idx;
+                    mesh.RecalculateBounds();
+                    made[p] = mesh;
                 }
-                mesh = new Mesh { indexFormat = pos.Length > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
-                mesh.vertices = pos; mesh.normals = nrm; if (col != null) mesh.colors32 = col;
-                mesh.triangles = idx;
-                mesh.RecalculateBounds();
-                made[p] = mesh;
             }
             var go = new GameObject(name);
             Transform parent = cm.body;
@@ -488,7 +516,7 @@ public class CarModel : MonoBehaviour
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mat;
             if (name.EndsWith("_tyre"))
             {
-                TyreStripes(go.transform, pos, nv, mats[7]);
+                if (res != "Car/car_far") TyreStripes(go.transform, pos, nv, mats[7]); // far rivals (30 m+): the thin ring is under a pixel; saves 4 draw calls per car
                 float tr = 0; for (int i = 0; i < nv; i++) tr = Mathf.Max(tr, new Vector2(pos[i].y, pos[i].z).magnitude);
                 mat.SetFloat("_TyreR", tr); cm.tyreR = tr;
             }
@@ -496,10 +524,11 @@ public class CarModel : MonoBehaviour
             if (name.EndsWith("_hub") && !rival) cm.WheelFace(go.transform.parent, pos, nv, piv.x, front);
             if (rival) r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; // rivals keep only the soft blob shadow
             // damage: the wings come off this part as separate pieces (front wing sides, endplates, rear wing)
-            if (name == "carbon" || name == "white" || name == "paint_red") cm.SplitWings(go, res + "|" + name, mat, rival);
+            if (name == "carbon" || name == "white" || name == "paint_red") cm.SplitWings(go, cacheKey + "|" + name, mat, rival);
             if (mid == 2 && cm.debrisSrc == null) cm.debrisSrc = mat;
         }
-        if (made != null) meshCache[res] = made;
+        if (made != null) meshCache[cacheKey] = made;
+        cm.Res = res;
         cm.lightMat = mats[6]; cm.stripeMat = mats[7]; cm.liveryBody = mats[0]; cm.liverySecond = mats[1];
         cm.tyreMat[0] = tyreF; cm.tyreMat[1] = tyreR; cm.hubMat[0] = hubF; cm.hubMat[1] = hubR; cm.rival = rival;
         // the model has no driver: add a helmet in the cockpit (hidden in cockpit view)
@@ -551,6 +580,18 @@ public class CarModel : MonoBehaviour
     }
 
     // ------------------------------------------------------------------ detail: brakes, tyres, wheel faces, effects
+    // drop vertices no triangle uses (only when it saves at least half: the shared vertex lists of the converter)
+    static void Compact(ref Vector3[] pos, ref Vector3[] nrm, ref Color32[] col, int[] idx)
+    {
+        int nv = pos.Length; var map = new int[nv]; int used = 0;
+        for (int i = 0; i < nv; i++) map[i] = -1;
+        for (int i = 0; i < idx.Length; i++) if (map[idx[i]] < 0) map[idx[i]] = used++;
+        if (used * 2 > nv) return;
+        var p2 = new Vector3[used]; var n2 = new Vector3[used]; var c2 = col != null ? new Color32[used] : null;
+        for (int i = 0; i < nv; i++) { int m = map[i]; if (m < 0) continue; p2[m] = pos[i]; n2[m] = nrm[i]; if (c2 != null) c2[m] = col[i]; }
+        for (int i = 0; i < idx.Length; i++) idx[i] = map[idx[i]];
+        pos = p2; nrm = n2; col = c2;
+    }
     static Material Kind(Material m, string kw) { if (m != null && m.HasProperty("_AO")) m.EnableKeyword(kw); return m; }
     readonly Material[] tyreMat = new Material[2], hubMat = new Material[2], faceMat = new Material[2];
     readonly List<Renderer> faces = new List<Renderer>();
@@ -568,6 +609,9 @@ public class CarModel : MonoBehaviour
         return c * Mathf.Clamp01(g * 6f);
     }
 
+    static readonly int GlowId = Shader.PropertyToID("_Glow"), DustId = Shader.PropertyToID("_Dust"), WearId = Shader.PropertyToID("_Wear"),
+        DirtId = Shader.PropertyToID("_Dirt"), BlurId = Shader.PropertyToID("_Blur");
+    readonly Color[] glowSet = { new Color(-1, 0, 0), new Color(-1, 0, 0) }; readonly float[] dustSet = { -1f, -1f }, tyreSet = { -1f, -1f, -1f, -1f };
     void UpdateBrakeLook(float dt)
     {
         for (int k = 0; k < 2; k++)
@@ -575,8 +619,11 @@ public class CarModel : MonoBehaviour
             // brake dust builds up slowly with hard (hot) braking; never quite black
             dust[k] = Mathf.Min(0.65f, dust[k] + dt * 0.004f * Mathf.Clamp01((brakeT[k] - 350f) / 650f));
             var glow = BrakeGlow(brakeT[k]);
-            if (hubMat[k] != null && hubMat[k].HasProperty("_Glow")) { hubMat[k].SetColor("_Glow", glow); hubMat[k].SetFloat("_Dust", dust[k]); }
-            if (faceMat[k] != null) { faceMat[k].SetColor("_Glow", glow); faceMat[k].SetFloat("_Dust", dust[k]); }
+            // material writes only when the value moved (a cold disc stays black for most of a lap; dust creeps)
+            if (glow == glowSet[k] && Mathf.Abs(dust[k] - dustSet[k]) < 0.002f) continue;
+            glowSet[k] = glow; dustSet[k] = dust[k];
+            if (hubMat[k] != null && hubMat[k].HasProperty(GlowId)) { hubMat[k].SetColor(GlowId, glow); hubMat[k].SetFloat(DustId, dust[k]); }
+            if (faceMat[k] != null) { faceMat[k].SetColor(GlowId, glow); faceMat[k].SetFloat(DustId, dust[k]); }
         }
     }
 
@@ -590,12 +637,16 @@ public class CarModel : MonoBehaviour
         if (!double.IsNaN(car.brakeTF)) { brakeT[0] = (float)car.brakeTF; brakeT[1] = (float)car.brakeTR; }
         if (dt > 0) UpdateBrakeLook(dt);
         float wF = (float)car.wearF, wR = (float)car.wearR, dF = double.IsNaN(car.dirtF) ? 0 : (float)car.dirtF, dR = double.IsNaN(car.dirtR) ? 0 : (float)car.dirtR;
-        if (tyreMat[0] != null && tyreMat[0].HasProperty("_Wear")) { tyreMat[0].SetFloat("_Wear", wF); tyreMat[0].SetFloat("_Dirt", dF); tyreMat[1].SetFloat("_Wear", wR); tyreMat[1].SetFloat("_Dirt", dR); }
+        if (tyreMat[0] != null && (Mathf.Abs(wF - tyreSet[0]) > 0.002f || Mathf.Abs(dF - tyreSet[1]) > 0.002f || Mathf.Abs(wR - tyreSet[2]) > 0.002f || Mathf.Abs(dR - tyreSet[3]) > 0.002f) && tyreMat[0].HasProperty(WearId))
+        {
+            tyreSet[0] = wF; tyreSet[1] = dF; tyreSet[2] = wR; tyreSet[3] = dR;
+            tyreMat[0].SetFloat(WearId, wF); tyreMat[0].SetFloat(DirtId, dF); tyreMat[1].SetFloat(WearId, wR); tyreMat[1].SetFloat(DirtId, dR);
+        }
         float speed = Mathf.Sqrt((float)(car.vx * car.vx + car.vy * car.vy));
         harvesting = !double.IsNaN(car.ersKw) && car.ersKw < -5 && speed > 10f;
         UpdateLights();
         if (car.damage.Any || dmgShown || seenHits != car.damage.hits || dLifeAny) ShowDamage(car, dt, speed);
-        if (rival || dt <= 0) return;
+        if (rival || dt <= 0 || LowDetail) return; // Low: no sparks or smoke (alpha-blended particles near the camera)
         // sparks from the plank: titanium skid blocks scraping the road at speed
         if (car.bottoming && speed > 40f) Sparks(dt, speed);
         // tyre smoke where a tyre is locked or spinning on the asphalt
@@ -970,13 +1021,15 @@ public class CarModel : MonoBehaviour
             // wheel blur from how far the wheel turns per frame (the eye sees the spokes strobe above ~0.3 rad per frame)
             if (faces.Count > 0)
             {
-                float[] ang = { (float)frontSpinRad, (float)rearSpinRad };
-                for (int k = 0; k < 2; k++)
+                // Low: the wheel faces (transparent quads over the rims) are off
+                if (facesOff != LowDetail) { facesOff = LowDetail; foreach (var fr in faces) if (fr != null) fr.enabled = !facesOff; }
+                for (int k = 0; k < 2 && !facesOff; k++)
                 {
-                    float step = float.IsNaN(lastSpin[k]) ? 0 : Mathf.Abs(Mathf.DeltaAngle(lastSpin[k] * Mathf.Rad2Deg, ang[k] * Mathf.Rad2Deg)) * Mathf.Deg2Rad;
-                    lastSpin[k] = ang[k];
+                    float ang = k == 0 ? (float)frontSpinRad : (float)rearSpinRad; // (no per-frame array)
+                    float step = float.IsNaN(lastSpin[k]) ? 0 : Mathf.Abs(Mathf.DeltaAngle(lastSpin[k] * Mathf.Rad2Deg, ang * Mathf.Rad2Deg)) * Mathf.Deg2Rad;
+                    lastSpin[k] = ang;
                     blur[k] = Mathf.Lerp(blur[k], Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.1f, 0.38f, step)), Mathf.Min(1f, dt * 8f));
-                    if (faceMat[k] != null) faceMat[k].SetFloat("_Blur", blur[k]);
+                    if (faceMat[k] != null) faceMat[k].SetFloat(BlurId, blur[k]);
                 }
             }
         }

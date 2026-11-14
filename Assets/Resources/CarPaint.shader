@@ -191,5 +191,108 @@ Shader "F2/CarPaint"
             ENDCG
         }
     }
+    // Low graphics level (GameManagerPerf.cs sets this shader's maximumLOD to 100): sun, sky, clear coat and the sun
+    // highlight are worked out per vertex (no reflection-probe read, no per-pixel pow); per pixel only the livery
+    // split, the baked AO, the helmet visor and the brake dust / disc glow. Carbon weave and tyre sheen are left out.
+    SubShader
+    {
+        Tags { "RenderType"="Opaque" }
+        LOD 100
+        Pass
+        {
+            Tags { "LightMode"="ForwardBase" }
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile_fog
+            #pragma multi_compile __ F2_GRADE_LOW
+            #pragma multi_compile_local __ _CARBON _TYRE _WHEEL _HELMET
+            #include "UnityCG.cginc"
+            #include "Grade.cginc"
+            #include "Lighting.cginc"
+
+            fixed4 _Color, _Color2, _Color3;
+            half _Livery, _AO, _Dust, _Coat, _Gloss, _Metal, _CarLit, _Wet;
+            half4 _Glow, _GroundRefl;
+
+            struct v2f
+            {
+                float4 pos : SV_POSITION;
+                half3 diff : TEXCOORD0;   // light on the base colour (sun + sky, less what the coat reflects)
+                half3 add : TEXCOORD1;    // coat reflection + sun highlight
+                half3 envM : TEXCOORD2;   // metallic reflection (tinted by the base colour per pixel)
+                float3 op : TEXCOORD3;    // object position, for the livery split and the helmet visor
+                half ny : TEXCOORD4;      // object normal y
+                half4 col : COLOR;        // baked AO (r), disc mask (g)
+                UNITY_FOG_COORDS(5)
+            };
+
+            v2f vert (appdata_full v)
+            {
+                v2f o;
+                o.pos = UnityObjectToClipPos(v.vertex);
+                float3 wp = mul(unity_ObjectToWorld, v.vertex).xyz;
+                half3 N = UnityObjectToWorldNormal(v.normal);
+                half3 V = normalize(_WorldSpaceCameraPos.xyz - wp);
+                half3 L = normalize(_WorldSpaceLightPos0.xyz);
+                half ndl = saturate(dot(N, L));
+                half3 R = reflect(-V, N);
+                half3 env = ShadeSH9(half4(R, 1)) * 0.9;
+                env = lerp(env, _GroundRefl.rgb, 1.0 - smoothstep(-0.12, 0.02, R.y));
+                env *= lerp(0.35, 1.0, _CarLit);
+                half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
+                half coat = saturate((0.04 + 0.96 * x2 * x2 * x) * _Coat * (1.0 + 0.35 * _Wet) + 0.03 * _Wet);
+                half gloss = saturate(_Gloss + 0.08 * _Wet);
+                half nh = saturate(dot(N, normalize(L + V)));
+                half spec = pow(nh, lerp(16.0, 128.0, gloss)) * ndl * lerp(0.5, 3.0, gloss);
+                o.diff = (ndl * _LightColor0.rgb + ShadeSH9(half4(N, 1))) * (1.0 - _Metal * 0.6) * (1.0 - 0.12 * _Wet) * (1.0 - coat);
+                o.add = env * coat + spec * _LightColor0.rgb * (_Coat + _Metal);
+                o.envM = env * _Metal;
+                o.op = v.vertex.xyz; o.ny = v.normal.y;
+                o.col = v.color;
+                UNITY_TRANSFER_FOG(o, o.pos);
+                return o;
+            }
+
+            fixed4 frag (v2f i) : SV_Target
+            {
+                half3 base = _Color.rgb;
+                if (_Livery > 0.5)
+                {
+                    // the same areas as the full pass
+                    float3 p = i.op; half ny = i.ny; float ax = abs(p.x);
+                    half side = step(0.30, ax) * step(-1.2, p.z) * step(p.z, 0.99);
+                    half sideSec = side * step(p.z, 0.95) * step(0.55, ny);
+                    half sideAcc = side * step(0.42, ny) * (1.0 - sideSec);
+                    half eng = step(ax, 0.32) * step(-1.7, p.z) * step(p.z, -0.01);
+                    half engSec = eng * step(p.z, -0.05) * step(0.30, ny);
+                    half engAcc = eng * step(0.18, ny) * (1.0 - engSec);
+                    half noseSec = step(2.45, p.z);
+                    half noseAcc = step(2.40, p.z) * (1.0 - noseSec);
+                    half sec = saturate(sideSec + engSec + noseSec);
+                    half acc = saturate(sideAcc + engAcc + noseAcc) * (1.0 - sec);
+                    base = lerp(lerp(base, _Color2.rgb, sec), _Color3.rgb, acc);
+                }
+                half3 emis = 0;
+                #if defined(_WHEEL)
+                    half disc = i.col.g;
+                    base = lerp(base * (1.0 - 0.55 * _Dust), half3(0.1, 0.1, 0.105), disc);
+                    emis = _Glow.rgb * disc;
+                #elif defined(_HELMET)
+                    float3 hp = i.op;
+                    half visor = saturate((hp.z - 0.12) * 25.0) * saturate((hp.y + 0.06) * 40.0) * saturate((0.16 - hp.y) * 40.0);
+                    half stripe = (1.0 - visor) * step(abs(hp.x), 0.045) * step(0.0, hp.y);
+                    base = lerp(lerp(base, _Color3.rgb, stripe), half3(0.3, 0.22, 0.12), visor);
+                #endif
+                half ao = lerp(1.0, i.col.r, _AO);
+                half3 c3 = base * i.diff * ao + (i.add + i.envM * base) * (0.3 + 0.7 * ao) + emis;
+                fixed4 c = fixed4(c3, 1.0);
+                UNITY_APPLY_FOG(i.fogCoord, c);
+                c.rgb = F2Grade(c.rgb);
+                return c;
+            }
+            ENDCG
+        }
+    }
     Fallback "Legacy Shaders/VertexLit"
 }

@@ -61,7 +61,7 @@ public partial class GameManager : MonoBehaviour
 
         LoadMap();
         car = new FormulaCar(PlayerConfig());
-        model = CarModel.CreateFromAsset() ?? CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
+        model = MakePlayerCar(WantFullCar(gfxIdx == 0 ? 2 : gfxIdx)) ?? CarModel.CreateFromAsset() ?? CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
         model.SetLivery(Livery.Player[liveryIdx]);
         var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera"; cam.allowDynamicResolution = true;
         cam.nearClipPlane = 0.2f; cam.farClipPlane = 2500; cam.fieldOfView = 62;
@@ -158,6 +158,7 @@ public partial class GameManager : MonoBehaviour
         QualitySettings.shadowDistance = level >= 3 ? 90 : 55;
         QualitySettings.anisotropicFiltering = level <= 1 ? AnisotropicFiltering.Disable : AnisotropicFiltering.ForceEnable;
         if (cam != null) cam.farClipPlane = level <= 1 ? 1500 : 2500;
+        ApplyPerfLevel(level); // per-level cuts: car shader detail, wheel faces, car effects, glare, grade (GameManagerPerf.cs)
     }
     // Dynamic resolution: when the phone can't hold ~50 fps the 3D picture is drawn at a lower resolution
     // (down to 60%) and scaled up; the HUD is drawn afterwards at full resolution, so text stays sharp.
@@ -166,7 +167,7 @@ public partial class GameManager : MonoBehaviour
     float renderScale = 1f, scaleT;
     void DynamicResolution()
     {
-        if (Paused || Time.realtimeSinceStartup < 6f) return;
+        if (Paused || Time.realtimeSinceStartup < 6f || !DynResWorks) return; // GLES: no dynamic resolution (GameManagerPerf.cs)
         if (fpsAvg < FpsTarget * 0.83f) scaleT -= Time.unscaledDeltaTime; else if (fpsAvg > FpsTarget * 0.96f) scaleT += Time.unscaledDeltaTime; else scaleT = 0;
         float ns = renderScale;
         if (scaleT < -1.5f) { ns = Mathf.Max(ResMin, renderScale - 0.1f); scaleT = 0; }
@@ -178,7 +179,7 @@ public partial class GameManager : MonoBehaviour
         float fps = 1f / Mathf.Max(Time.unscaledDeltaTime, 0.001f);
         fpsAvg += (fps - fpsAvg) * 0.05f;
         DynamicResolution();
-        if (renderScale > ResMin + 0.05f) { slowT = 0; return; } // first lower the resolution, then the effects
+        if (DynResWorks && renderScale > ResMin + 0.05f) { slowT = 0; return; } // first lower the resolution, then the effects
         if (gfxIdx != 0 || Paused || Time.realtimeSinceStartup < 6f || gfxLevel <= 1) return;
         slowT = fpsAvg < FpsTarget * 0.83f ? slowT + Time.unscaledDeltaTime : 0;
         if (slowT < 4f) return;
@@ -276,6 +277,7 @@ public partial class GameManager : MonoBehaviour
             // factor of their tyres on the racing line slows corners and braking just as the grip loss does
             var tune = AiTuning.For(builtFor); tune.grip *= Weather.TrackFactor(rivalSet, 1);
             var d = new AiDriver(track, line, rc, who, tune, DiffScale[diffIdx], k + 1);
+            RcPlan(d, k); // the rival's tyre strategy and start set (GameManagerRaceControl.cs)
             PlaceRival(d, k); // the k-th grid slot the player does not take (GameManagerStart.cs)
             d.car.windX = windX; d.car.windY = windY;
             rivals.Add(d); rivalSpin.Add(0);
@@ -286,6 +288,7 @@ public partial class GameManager : MonoBehaviour
             var far = CarModel.CreateFromAsset("Car/car_far", col, true); if (far != null) { far.SetLivery(liv); far.gameObject.SetActive(false); }
             rivalFar.Add(far); rivalNear.Add(true);
         }
+        RcSetup(); // flags and safety car, rival tyre stripes (GameManagerRaceControl.cs)
         AfterSetupRivals(); // qualifying: the show cars spread round the lap (Qualifying.cs)
         ClearRecording();
     }
@@ -318,6 +321,7 @@ public partial class GameManager : MonoBehaviour
                 var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.Grade(rc.x, rc.y, rc.heading) : 0;
                 if (rivals[i].idx >= 0) Traffic.Wall(rivals[i].car, track.pts[rivals[i].idx], rivals[i].lateral, wallAt);
             }
+            RcStep(); // race control sees every car (GameManagerRaceControl.cs)
             for (int i = 0; i < rivals.Count; i++)
             {
                 for (int j = i + 1; j < rivals.Count; j++) Traffic.Collide(rivals[i].car, rivals[j].car);
@@ -328,7 +332,8 @@ public partial class GameManager : MonoBehaviour
         for (int i = 0; i < rivals.Count; i++)
         {
             var d = rivals[i];
-            if (aiTick % 4 == 1) { WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles); Weather.Apply(track, line, d.car, d.idx, d.lateral, rivalSet); }
+            if (aiTick % 4 == 1) { WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles); Weather.Apply(track, line, d.car, d.idx, d.lateral, d.tyreSet); }
+            if (RivalCoarse(i, d)) continue; // far from the camera and the player: 120 Hz (GameManagerPerf.cs)
             d.car.Step(RivalStartInput(i, d), H); // held until lights out + reaction time, then the launch clutch
         }
     }
@@ -365,8 +370,9 @@ public partial class GameManager : MonoBehaviour
     CarInput ReadInput(float dt)
     {
         float gasT = 0, brkT = 0; bool steerHeld = false; bool gasSeen = false, brakeSeen = false;
-        foreach (var t in Input.touches)
+        for (int ti = 0, tn = Input.touchCount; ti < tn; ti++) // GetTouch: Input.touches allocates an array every frame
         {
+            var t = Input.GetTouch(ti);
             var p = new Vector2(t.position.x, Screen.height - t.position.y); // GUI space (y down)
             bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
             // a finger "owns" the pedal it first touched and keeps controlling it even if it slides off the box
@@ -487,6 +493,7 @@ public partial class GameManager : MonoBehaviour
     void Update()
     {
         if (ui.LoadDue) StartSession();
+        PickPlayerModel(); // full car in the cockpit and on High, the lighter one otherwise (GameManagerPerf.cs)
         if (menuOpen && Input.GetKeyDown(KeyCode.Escape)) CloseSettings(); // Android "back"
         float dt = Mathf.Min(Time.deltaTime, 0.1f);
         if (replaying) { ReplayStep(dt); if (flashT > 0) flashT -= dt; return; } // the race is over: only the recording moves
@@ -557,11 +564,12 @@ public partial class GameManager : MonoBehaviour
             if (near != rivalNear[i]) { rivalNear[i] = near; rivalModels[i].gameObject.SetActive(near); if (rivalFar[i] != null) rivalFar[i].gameObject.SetActive(!near); }
             var rm = near ? rivalModels[i] : rivalFar[i];
             // drawn at the same in-between moment as the player's car, or they would shake against it
-            double back = (1 - acc / H) * H, cch = System.Math.Cos(c.heading), csh = System.Math.Sin(c.heading);
+            double back = (1 - acc / H) * H - RivalLag(i), cch = System.Math.Cos(c.heading), csh = System.Math.Sin(c.heading);
             rm.Apply(c.x - (c.vx * cch - c.vy * csh) * back, c.y - (c.vx * csh + c.vy * cch) * back, c.heading - c.r * back, c.delta, rivalSpin[i], rivalSpin[i], 0, 0);
             rm.SetBrake(c.brake > 0.05);
             rm.Feed(c, dt);
         }
+        RcFrame(dt); // safety car model, flags, penalties, rival tyre changes (GameManagerRaceControl.cs)
         if (!Paused && raceLaps > 0 && !playground) Record(dt, rx, ry, rh, rd);
         UpdateSkids();
         if (weatherFx != null)
@@ -695,8 +703,9 @@ public partial class GameManager : MonoBehaviour
         car.tyreSF = car.tyreSR = double.NaN;               // the surface temperature re-starts from the carcass
         if (model != null) model.SetStripe(Weather.Stripe(carSet));
         double wing = car.damage.WingsDamaged ? AiDriver.WingChange : 0; car.RepairWings(); car.FixPunctures();
-        pitLoss += PitLoss + wing; pitStops++;
-        Flash($"Pit stop: {Weather.TyreName(carSet)}  +{PitLoss + wing:0}s");
+        double loss = RcPitLoss(PitLoss); // cheaper under the safety car / VSC
+        pitLoss += loss + wing; pitStops++;
+        Flash($"Pit stop: {Weather.TyreName(carSet)}  +{loss + wing:0}s");
     }
     // the next tyre set: the one for the weather first (a wet race boxes for wets), then round the rest
     int NextSet => Weather.BestSet() != carSet ? Weather.BestSet() : (carSet + 1) % Weather.Sets;
@@ -926,6 +935,7 @@ public partial class GameManager : MonoBehaviour
         PrepareSession(); // weekend / championship: qualifying, circuit of the round, grid (Qualifying.cs)
         if (lineFor != classIdx && world != null) { Destroy(world); world = null; } // new class: rebuild with its racing line
         LoadMap(); ApplyWeather(); // the menu may have changed the weather
+        if (raceLaps > 0) raceLaps = RaceDistanceLaps(raceLaps); // Settings > Race distance (GameManagerRaceControl.cs)
         menuOpen = false; ApplyScreenLock();
         ResetCar(); Save();
         SessionStarted(); // qualifying timing, team livery (Qualifying.cs)
@@ -979,7 +989,7 @@ public partial class GameManager : MonoBehaviour
             float total = (recCount - 1) / (float)RecHz;
             center.fontSize = (int)S(13);
             Panel(new Rect(S(8), S(8), S(170), S(30)));
-            GUI.Label(new Rect(S(8), S(8), S(170), S(30)), $"<b>REPLAY</b>  {Mathf.Max(0, total - replayT):0}s", center);
+            GUI.Label(new Rect(S(8), S(8), S(170), S(30)), ReplayCaption(Mathf.Max(0, total - replayT)), center);
             if (GUI.Button(new Rect(Screen.width - S(8) - S(110), S(8), S(110), S(30)), "End replay", btn)) StopReplay();
             return;
         }

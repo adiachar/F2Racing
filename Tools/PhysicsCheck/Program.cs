@@ -526,15 +526,74 @@ if (args.Length > 0 && args[0] == "audit")
     return;
 }
 
-// ---- race test: dotnet run -- race [fuel] ("fuel": start on a 70 kg race fuel load instead of qualifying trim) ----
+// ---- tyre strategy plans: dotnet run -- race strat (no driving: the plans the rivals make, per race length) ----
+if (args.Length > 1 && args[0] == "race" && args[1] == "strat")
+{
+    var tracks = Circuits();
+    foreach (var id in new[] { "spa", "monaco", "monza" })
+    {
+        int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == id); var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
+        foreach (int laps in new[] { 3, 8, 12, 22, 44, 78 })
+            foreach (int wet in new[] { 0, 2 })
+            {
+                if (wet == 2 && laps != 22) continue;
+                var plans = new List<string>(); var stops = new int[4];
+                for (int k = 0; k < 10; k++) { var st = new TyreStrategy(k + 1); st.Plan(laps, wet, id, line.lapTime); plans.Add(st.Describe()); stops[Math.Min(3, st.StopsPlanned)]++; }
+                Console.WriteLine($"{id,-7} {laps,2} laps {(wet == 2 ? "WET" : "dry")}: stops 0/1/2/3+ = {stops[0]}/{stops[1]}/{stops[2]}/{stops[3]}  e.g. {string.Join(" | ", plans.Take(4))}");
+            }
+    }
+    // a driven check: Spa, 24 laps, 8 cars, plans and live wear
+    {
+        int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == "spa"); var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
+        int n = 8, laps = 24; var ds = new List<AiDriver>(); var rcs = new RaceControl(t, line, 5) { totalLaps = laps }; rcs.Init(n);
+        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = 0.23 * t.length / 1000 * (laps + 0.5) + 2 }, DriverProfile.Grid[k * 2], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); d.rc = rcs; d.slot = k; d.PlanRace(laps, 0, k + 1); ds.Add(d); }
+        var plan0 = ds.Select(d => d.strat.Describe()).ToArray();
+        var log = ds.Select(_ => new List<string>()).ToArray(); var setSeen = ds.Select(d => d.setSerial).ToArray();
+        double time = 0; int steps = 0; var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (time < laps * 140 && ds.Min(d => d.lap) <= laps)
+        {
+            if (steps++ % 4 == 0)
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    double wr = Math.Max(ds[k].car.wearF, ds[k].car.wearR); int lp = ds[k].lap;
+                    ds[k].Think(4 * H, time, ds, null, -1, 0);
+                    if (ds[k].setSerial != setSeen[k]) { setSeen[k] = ds[k].setSerial; log[k].Add($"L{lp}:{TyreSets.Letter[ds[k].tyreSet]}(worn {wr * 100:F0}%)"); }
+                }
+                for (int k = 0; k < n; k++) rcs.Feed(k, ds[k]); rcs.Update(4 * H, time, time > 2);
+                for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) Traffic.Collide(ds[i].car, ds[j].car);
+            }
+            foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); d.car.Step(d.LastInput, H); }
+            time += H;
+        }
+        Console.WriteLine($"Spa {laps} laps driven ({time:F0} s in {sw.Elapsed.TotalSeconds:F0} s):");
+        for (int k = 0; k < n; k++) Console.WriteLine($"  {ds[k].who.name,-13} plan {plan0[k],-22} stops: {string.Join(" ", log[k])}  wear at the flag {Math.Max(ds[k].car.wearF, ds[k].car.wearR) * 100:F0}%");
+    }
+    return;
+}
+
+// ---- race test: dotnet run -- race [fuel | sc] ("fuel": start on a 70 kg race fuel load instead of qualifying trim;
+// "sc": force a safety car on lap 2 and check the queue, no overtaking and the restart). RC=on: race control and
+// tyre strategy on in the plain race test too (default off: the legacy race test).
 if (args.Length > 0 && args[0] == "race")
 {
+    bool scTest = args.Length > 1 && args[1] == "sc";
+    bool rcOn = scTest || (Environment.GetEnvironmentVariable("RC") ?? "").ToLowerInvariant() == "on";
+    int scPass = 0, scRuns = 0;
     var tracks = Circuits(); double raceFuel = args.Length > 1 && args[1] == "fuel" ? 70 : new CarConfig().fuelStart;
-    var only = Environment.GetEnvironmentVariable("RACEONLY")?.Split(',');   // RACEONLY=monaco,monza: just these circuits
+    var only = Environment.GetEnvironmentVariable("RACEONLY")?.Split(',') ?? (scTest ? new[] { "test", "monaco", "spa", "monza", "silverstone" } : null);   // RACEONLY=monaco,monza: just these circuits
     // DAMAGE=full: damage physics on (CarConfig.damage), as the game's "Damage: Full". Default off (the legacy race test).
     bool dmgFull = (Environment.GetEnvironmentVariable("DAMAGE") ?? "").ToLowerInvariant() == "full";
-    Console.WriteLine($"race test, damage {(dmgFull ? "FULL" : "off")}");
+    Console.WriteLine($"race test, damage {(dmgFull ? "FULL" : "off")}, race control {(rcOn ? "on" : "off")}{(scTest ? ", forced safety car" : "")}");
     int totalResets = 0, totalStops = 0, totalHits = 0;
+    bool coarse = Environment.GetEnvironmentVariable("COARSE") == "1";
+    static bool Coarse(Track t, AiDriver me, AiDriver d)
+    {
+        if (me.idx < 0 || d.idx < 0) return false;
+        int g = Math.Abs(d.idx - me.idx); g = Math.Min(g, t.N - g);
+        return g * t.ds > 150;
+    }
+    if (coarse) Console.WriteLine("COARSE: cars more than 150 m from car 0 stepped at 120 Hz");
     for (int ti = 0; ti < tracks.Length; ti++)
     {
         if (only != null && !only.Contains(FormulaSim.Circuits.All[ti].id)) continue;
@@ -542,23 +601,60 @@ if (args.Length > 0 && args[0] == "race")
         var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
         var hf = t.h != null ? new HeightField(t) : null;
         for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig { fuelStart = raceFuel, damage = dmgFull }, DriverProfile.Grid[k], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); } // the game's grid (CircuitDef.gridOffset)
+        RaceControl rcx = null;
+        if (rcOn) { rcx = new RaceControl(t, line, ti + 1) { totalLaps = scTest ? 12 : 5 }; rcx.Init(n); for (int k = 0; k < n; k++) { ds[k].rc = rcx; ds[k].slot = k; ds[k].PlanRace(rcx.totalLaps, 0, k + 1); } }
+        bool forced = false; double greenAt = -1, deployAt = -1; int greenLap = 0; double formedGap = double.NaN, spreadIn = double.NaN; string orderRestart = null, orderGreen = null; int ovAtGreen = -1, scLapsRun = 0; double leadV10 = double.NaN;
+        string Order() => string.Join(",", Enumerable.Range(0, n).OrderByDescending(k => ds[k].lap + (double)ds[k].idx / t.N).Select(k => k.ToString()));
         double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n]; var where = new List<string>();
         double tMin = 999, tMaxF = 0, tMaxR = 0, tSumF = 0, tSumR = 0; int tN = 0;
+        var lagged = new bool[n]; // COARSE: car k is one 240 Hz tick behind
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (time < 6 * 130 && ds.Min(d => d.lap) < 5)
+        while (scTest ? time < 3000 && (greenAt < 0 || ds.Max(d => d.lap) <= greenLap) : time < 6 * 130 && ds.Min(d => d.lap) < 5)
         {
             if (steps++ % 4 == 0)
             {
                 for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; var dm = ds[k].car.damage; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap <= 1 ? "*" : "")}{(dm.Any ? $"[d fw {dm.wingFL:F1}/{dm.wingFR:F1} rw {dm.wingRear:F1} su {dm.suspFL:F1}/{dm.suspFR:F1}/{dm.suspRL:F1}/{dm.suspRR:F1} fl {dm.floor:F1}{(dm.Punctured ? " flat" : "")}]" : "")}"); } }
+                if (rcx != null)
+                {
+                    var before = rcx.flag;
+                    for (int k = 0; k < n; k++) rcx.Feed(k, ds[k]);
+                    rcx.Update(4 * H, time, time > 2);
+                    if (scTest)
+                    {
+                        if (!forced && ds.Max(d => d.lap) >= 2) { forced = true; rcx.ForceSc(); deployAt = time; }
+                        if (before == FormulaSim.Flag.Sc && rcx.flag == FormulaSim.Flag.ScIn) { formedGap = rcx.maxQueueGapS; scLapsRun = rcx.scLapsDone; }
+                        if (Environment.GetEnvironmentVariable("SCDEBUG") == "1" && rcx.ScOnTrack && steps % 2400 == 1) Console.WriteLine($"   t {time:F0} sc laps {rcx.scLapsDone} gaps " + string.Join(" ", Enumerable.Range(0, n).OrderBy(k => rcx.rank[k]).Select(k => $"{k}:{rcx.gapAhead[k]:F0}/{ds[k].car.vx * 3.6:F0}")));
+                        if (before == FormulaSim.Flag.ScIn && rcx.flag == FormulaSim.Flag.Restart) { orderRestart = Order(); spreadIn = rcx.queueSpread; }
+                        if (before == FormulaSim.Flag.Restart && rcx.flag == FormulaSim.Flag.Green && greenAt < 0) { greenAt = time; greenLap = ds.Max(d => d.lap); orderGreen = Order(); ovAtGreen = rcx.overtakes; }
+                        if (greenAt > 0 && double.IsNaN(leadV10) && time > greenAt + 10) leadV10 = ds.Max(d => d.car.vx);
+                    }
+                }
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
             }
             if (steps % 240 == 0) { var c0 = ds[0].car; tMin = Math.Min(tMin, Math.Min(c0.tyreTF, c0.tyreTR)); tMaxF = Math.Max(tMaxF, c0.tyreTF); tMaxR = Math.Max(tMaxR, c0.tyreTR); if (time > 60) { tSumF += c0.tyreTF; tSumR += c0.tyreTR; tN++; } }
-            foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
+            for (int k = 0; k < n; k++)
+            {
+                var d = ds[k];
+                if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
+                // COARSE=1: the game's far-rival saving (GameManagerPerf.cs) with car 0 standing in for the player and camera
+                // (as RivalCoarse: skip a tick, then 2 ticks at once; a car leaving 120 Hz while a tick behind catches up)
+                bool cs = coarse && k > 0 && time > 60 && Coarse(t, ds[0], d);
+                if (lagged[k]) { d.car.Step(d.LastInput, 2 * H); lagged[k] = false; }
+                else if (cs) lagged[k] = true;
+                else d.car.Step(d.LastInput, H);
+            }
             time += H;
         }
         Console.WriteLine($"  tyres after the race (leader): front {ds[0].car.tyreTF:F0} C, rear {ds[0].car.tyreTR:F0} C; ride at the end F {ds[0].car.rideF * 1000:F0} mm R {ds[0].car.rideR * 1000:F0} mm; over the race: average F {tSumF / Math.Max(1, tN):F0} R {tSumR / Math.Max(1, tN):F0}, peak F {tMaxF:F0} R {tMaxR:F0}; wear after {ds[0].lap} laps F {ds[0].car.wearF * 100:F1}% R {ds[0].car.wearR * 100:F1}%; fuel {ds[0].car.fuel:F1} kg left, {ds[0].car.fuelLastLap:F2} kg last lap");
         Console.WriteLine($"{CircuitNames[ti]}: {n} cars, {time:F0} s raced in {sw.Elapsed.TotalSeconds:F1} s, {recov} resets, {hits} contact ticks");
         Console.WriteLine($"  resets at (m from the line, * = first racing lap): {string.Join(" ", where)}");
+        if (rcx != null) Console.WriteLine($"  race control: {rcx.incidents} incidents, {rcx.vscCount} VSC, {rcx.scCount} SC, flag now {rcx.flag}, tyres {string.Join(" ", ds.Select(d => TyreSets.Letter[d.tyreSet]))}");
+        if (scTest)
+        {
+            bool ok = greenAt > 0 && ovAtGreen == 0 && formedGap < 1.2 && orderRestart == orderGreen && leadV10 > 40;
+            scRuns++; if (ok) scPass++;
+            Console.WriteLine($"  SC: out at {deployAt:F0} s, {scLapsRun + 1} laps behind it, queue formed (biggest gap {formedGap:F2} s, {spreadIn:F0} m long), green at {greenAt:F0} s; overtakes while neutralised {ovAtGreen}; order kept to the line {(orderRestart == orderGreen ? "yes" : "NO")}; leader {leadV10 * 3.6:F0} km/h 10 s after the restart -> {(ok ? "PASS" : "FAIL")}");
+        }
         {
             int dmgCars = ds.Count(d => d.car.damage.Any), stops = ds.Sum(d => d.pitStops), imp = ds.Sum(d => d.car.damage.hits);
             double fw = ds.Max(d => Math.Max(d.car.damage.wingFL, d.car.damage.wingFR)), su = ds.Max(d => Math.Max(Math.Max(d.car.damage.suspFL, d.car.damage.suspFR), Math.Max(d.car.damage.suspRL, d.car.damage.suspRR)));
@@ -569,7 +665,8 @@ if (args.Length > 0 && args[0] == "race")
         foreach (var d in ds.OrderByDescending(d => d.progress))
             Console.WriteLine($"  P{pos++,-2} {d.who.name,-13} pace {d.who.pace:F2} best {d.bestLap:F2} resets {rec[ds.IndexOf(d)]}");
     }
-    Console.WriteLine($"TOTAL (damage {(dmgFull ? "full" : "off")}): {totalResets} resets, {totalHits} damaging impacts, {totalStops} pit stops");
+    if (scTest) Console.WriteLine($"SAFETY CAR: {scPass} of {scRuns} circuits PASS");
+    Console.WriteLine($"TOTAL (damage {(dmgFull ? "full" : "off")}, race control {(rcOn ? "on" : "off")}): {totalResets} resets, {totalHits} damaging impacts, {totalStops} pit stops");
     return;
 }
 

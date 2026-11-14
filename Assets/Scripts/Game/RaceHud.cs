@@ -56,6 +56,7 @@ public partial class GameManager
         DrawTower();
         DrawWheel(speed);
         DrawBanners();
+        DrawRcHud(); // VSC delta, safety car and blue-flag read-outs (GameManagerRaceControl.cs)
         DrawFps();
     }
 
@@ -226,6 +227,7 @@ public partial class GameManager
             if (y && !hudYellow) Banner("YELLOW FLAG", SectorWords[ySector], HudYellow);
             hudYellow = y;
         }
+        RcHudTick(); // safety car, VSC, green flag, track-limits strikes, penalties (GameManagerRaceControl.cs)
     }
 
     void HudReset(bool keepBest)
@@ -239,8 +241,8 @@ public partial class GameManager
 
     CarTiming TimingOf(int e) => e == 0 ? myTime : rivTime[e - 1];
     double Penalty(int e) => e == 0 ? pitLoss : 0;
-    int SetOf(int e) => e == 0 ? carSet : rivalSet;
-    int StopsOf(int e) => e == 0 ? pitStops : 0;
+    int SetOf(int e) => e == 0 ? carSet : rivals[e - 1].tyreSet;
+    int StopsOf(int e) => e == 0 ? pitStops : rivals[e - 1].pitStops;
 
     // gap of the car at rank r to the leader (or the car ahead): "+1.2", "+1 LAP", "" if not known yet
     string GapText(int r)

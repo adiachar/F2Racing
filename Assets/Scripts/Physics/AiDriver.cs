@@ -99,6 +99,23 @@ namespace FormulaSim
         // tyres). The time lost is taken off its race distance in progress, as for the player's stops.
         public const double PitLoss = 22, WingChange = 8;   // s: pit lane and stop (as GameManager.PitLoss), + nose change
         public int pitStops; public double pitLoss; public bool boxing;
+        // race craft (RaceControl.cs). All optional: with rc and strat null the driver races exactly as before.
+        public RaceControl rc; public int slot = -1;   // flags, VSC / safety car, blue flags (slot = this car in rc.cars)
+        public TyreStrategy strat; public int raceLaps; // tyre plan for a race of raceLaps laps
+        public int tyreSet; public int setSerial;       // set on the car (TyreSets numbering), +1 at every change of set
+        public double paceScale = 1;                    // the game's grip factor of the set fitted against the set planned for
+        public int boxReason;                           // 0 plan, 1 damage, 2 cheap stop under the safety car, 3 weather
+        bool scChecked;
+
+        // Plan the race (call once, after the constructor): returns the start set and fits its compound
+        public int PlanRace(int laps, int wet, int seed)
+        {
+            raceLaps = laps; strat = new TyreStrategy(seed, track.def != null ? track.def.id : "test");
+            tyreSet = strat.Plan(laps, wet, track.def != null ? track.def.id : "test", RefLap);
+            car.cfg.compound = TyreSets.Physics(tyreSet); setSerial++;
+            return tyreSet;
+        }
+        public void SetWeather(int wet) { if (strat != null) strat.WeatherChanged(wet, lap); }
 
         readonly Track track; readonly RacingLine line; readonly AiTuning tune;
         readonly double[] speed;          // this driver's own target speeds
@@ -159,14 +176,25 @@ namespace FormulaSim
                 lapStart = simTime; lap++; car.NewLap();
                 if (boxing)
                 {
-                    boxing = false; pitStops++; pitLoss += PitLoss + (car.damage.WingsDamaged ? WingChange : 0);
+                    boxing = false; pitStops++; pitLoss += (rc != null ? rc.PitLoss(PitLoss) : PitLoss) + (car.damage.WingsDamaged ? WingChange : 0);
                     car.RepairWings(); car.FixPunctures();
                     car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0; car.tyreTF = car.tyreTR = car.cfg.tyreStart; car.tyreSF = car.tyreSR = double.NaN;
+                    if (strat != null) { tyreSet = strat.OnStop(lap, boxReason); car.cfg.compound = TyreSets.Physics(tyreSet); setSerial++; }
+                    boxReason = 0;
                 }
+                if (strat != null && raceLaps > 0 && !boxing && strat.BoxThisLap(lap, Math.Max(car.wearF, car.wearR))) { boxing = true; boxReason = 0; }
                 lapPace = 1 + (rng.NextDouble() - 0.5) * 0.02 * (1 - who.consistency); // good laps and bad laps
             }
             else if (prevIdx < N * 0.2 && idx > N * 0.8) lap--;
-            if (car.cfg.damage && car.damage.NeedsPit) boxing = true;
+            if (car.cfg.damage && car.damage.NeedsPit && !boxing) { boxing = true; boxReason = 1; }
+            // race control: no overtaking under VSC / SC, blue flags, a cheap stop under the safety car
+            bool noPass = false, blueFlag = false;
+            if (rc != null)
+            {
+                noPass = rc.NoOvertaking; blueFlag = rc.Blue(slot);
+                if (rc.ScOnTrack) { if (!scChecked && strat != null && !boxing) { scChecked = true; if (strat.CheapStop(lap, Math.Max(car.wearF, car.wearR))) { boxing = true; boxReason = 2; } } }
+                else scChecked = false;
+            }
             progress = lap + (double)idx / N - pitLoss / RefLap;
             if (deploy != null) car.deployMap = deploy[idx];   // the same energy rule as the player's car, with its own map
 
@@ -184,7 +212,7 @@ namespace FormulaSim
                 // keep a gap that grows with speed; the bolder the driver, the closer he sits
                 double safe = 6.5 + (0.16 - 0.07 * who.aggression) * v + Math.Max(0, closing) * 0.6;
                 if (gap < safe) speedCap = Math.Min(speedCap, oV - (safe - gap) * 0.6);
-                if (straight && gap < safe + 12 && closing > -0.5)
+                if (straight && !noPass && !blueFlag && gap < safe + 12 && closing > -0.5)
                 {
                     blocked = true;
                     double left = track.HalfWidth(oIdx) - oLat, right = track.HalfWidth(oIdx) + oLat; // pull out to the side with more room
@@ -243,10 +271,18 @@ namespace FormulaSim
                 if (car.cfg.damage && car.damage.Any) { dmgScale = Math.Pow(Clamp(car.DamageGrip(vt), 0.3, 1.0), 1 / (2 - 2 * car.cfg.loadExp * share)); vt *= dmgScale; }
             }
             vt = Math.Min(vt, speedCap);
+            bool capped = false;   // held below its own speed by race control: no feed-forward braking, no flat-out rule
+            if (paceScale != 1) vt *= paceScale;
+            if (rc != null)
+            {
+                double cap = rc.Cap(slot, Math.Min(V(ip), V(idx) + 3) * dmgScale);
+                if (blueFlag && straight) cap = Math.Min(cap, vt * 0.9);   // blue flag: lift on the straight and let him by
+                if (cap < vt) { vt = cap; capped = true; }
+            }
             target = vt;
             double err = vt - v;
             double thr = Clamp(err * tune.kThr, 0, 1), brk = Clamp(-err * tune.kBrk, 0, 1);
-            if (brakingZone && car.cfg.brakeFullGrip && car.cfg.brakeForce > 0)
+            if (brakingZone && !capped && car.cfg.brakeFullGrip && car.cfg.brakeForce > 0)
             {
                 // feed-forward: the pedal the profile's deceleration needs (less drag), corrected by the speed error, so
                 // the car brakes as hard as its profile says (5 g and more at speed) instead of only on an error
@@ -258,14 +294,14 @@ namespace FormulaSim
             if (brk > 0.02) thr = 0;
             // on a straight, below target, with the line accelerating here and ahead: flat out (a feathered 90-97 %
             // throttle keeps the 2026 wings half shut and spends the battery at part throttle)
-            if (err > -1.5 && brk <= 0.02 && v > 40 && Math.Abs(car.r * v) < 6 && line.phase[idx] > 0)
+            if (!capped && err > -1.5 && brk <= 0.02 && v > 40 && Math.Abs(car.r * v) < 6 && line.phase[idx] > 0)
             {
                 bool flat = true; int nF = (int)Math.Round(v / track.ds);   // the next second: a straight being accelerated on
                 for (int k = 0; k <= nF && flat; k += 4) { int j = (idx + k) % N; flat = line.phase[j] > 0 && v * v * Math.Abs(line.curv[j]) < 6; }
                 if (flat) thr = 1;
             }
             // superclip zone: stay flat while the MGU-K slows the car (the profile already has the speed it loses)
-            if (deploy != null && deploy[idx] < 0 && err > -5 && Math.Abs(car.r * v) < 6) { thr = 1; brk = 0; }
+            if (!capped && deploy != null && deploy[idx] < 0 && err > -5 && Math.Abs(car.r * v) < 6) { thr = 1; brk = 0; }
             // trail-braking stability: braking or lifting deep in a long bend shifts load off the rear, and the hot,
             // fully loaded rear tyres step out (the car yaws faster than the line turns). Ease off the brake and hold
             // a whiff of throttle (cancels engine braking and the MGU-K's lift drag) until the rear grips again.
@@ -303,7 +339,7 @@ namespace FormulaSim
             // ---- stuck, spun or far off the track: put the car back on the line ----
             var pt = track.pts[idx];
             double hd = Math.Atan2(Math.Sin(car.heading - Math.Atan2(pt.ty, pt.tx)), Math.Cos(car.heading - Math.Atan2(pt.ty, pt.tx)));
-            stuckT = (v < 2.5 && simTime > 4) || Math.Abs(hd) > 1.6 ? stuckT + dt : 0;
+            stuckT = (v < 2.5 && simTime > 4 && !(rc != null && rc.InQueue(slot))) || Math.Abs(hd) > 1.6 ? stuckT + dt : 0; // queued behind the safety car is not stuck
             offT = Math.Abs(lateral) > track.HalfWidth(idx) + 3.0 ? offT + dt : 0;
             recovered = false;
             if (stuckT > 2.0 || offT > 1.2)

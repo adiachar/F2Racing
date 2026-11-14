@@ -17,6 +17,7 @@ Shader "F2/WeatherFx"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
             #include "Grade.cginc"

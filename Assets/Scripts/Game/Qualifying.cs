@@ -108,19 +108,17 @@ public sealed class Qualifying
     public double Fastest { get { double b = double.NaN; foreach (var e in entries) if (!double.IsNaN(e.best) && (double.IsNaN(b) || e.best < b)) b = e.best; return b; } }
 
     // the classification: fastest first; drivers without a time at the back (rivals by pace, then the player)
-    public List<Entry> Classified()
+    public List<Entry> Classified() { var l = new List<Entry>(entries.Count); ClassifiedInto(l); return l; }
+    // the same into a list the caller keeps (the live timing HUD: no new list every frame)
+    public void ClassifiedInto(List<Entry> l) { l.Clear(); l.AddRange(entries); l.Sort(ByTime); }
+    static readonly System.Comparison<Entry> ByTime = (a, b) =>
     {
-        var l = new List<Entry>(entries);
-        l.Sort((a, b) =>
-        {
-            bool na = double.IsNaN(a.best), nb = double.IsNaN(b.best);
-            if (na != nb) return na ? 1 : -1;
-            if (!na) return a.best.CompareTo(b.best);
-            if (a.Player != b.Player) return a.Player ? 1 : -1;
-            return a.baseLap.CompareTo(b.baseLap);
-        });
-        return l;
-    }
+        bool na = double.IsNaN(a.best), nb = double.IsNaN(b.best);
+        if (na != nb) return na ? 1 : -1;
+        if (!na) return a.best.CompareTo(b.best);
+        if (a.Player != b.Player) return a.Player ? 1 : -1;
+        return a.baseLap.CompareTo(b.baseLap);
+    };
 
     public static string Fmt(double t)
     {
@@ -315,10 +313,11 @@ public partial class GameManager
         float w = S(200), x = Screen.width / 2 - w / 2, y = S(8), h = S(30);
         Panel(new Rect(x, y, w, h));
         center.fontSize = (int)S(14);
-        GUI.Label(new Rect(x, y, w, h), quali.flag ? "<b>QUALIFYING</b>  ·  FLAG" : $"<b>QUALIFYING</b>  ·  {Qualifying.Clock(quali.Left)}", center);
+        GUI.Label(new Rect(x, y, w, h), quali.flag ? "<b>QUALIFYING</b>  ·  FLAG" : QualiClockText(quali.Left), center);
         if (GUI.Button(new Rect(x + w + S(4), y, S(56), h), "END", btn)) { EndQuali(); return; }
 
-        var list = quali.Classified(); double best = quali.Fastest;
+        if (qFrame != Time.frameCount) { qFrame = Time.frameCount; quali.ClassifiedInto(qList); } // once a frame (OnGUI runs 2+ times)
+        var list = qList; double best = quali.Fastest;
         float lx = S(8), ly = hudInfo ? S(190) : S(40), lw = S(176), rh = S(13);
         int rows = Mathf.Min(Mathf.Max((int)((Screen.height - S(210) - ly) / rh), 3), list.Count);
         int me = list.FindIndex(e => e.Player);
@@ -333,13 +332,33 @@ public partial class GameManager
             bool fresh = quali.clock - e.shownAt < 4;
             if (e.Player) Fill(new Rect(lx, yy, lw, rh), new Color(MenuUI.Accent.r, MenuUI.Accent.g, MenuUI.Accent.b, 0.35f));
             Fill(new Rect(lx + S(22), yy + S(2), S(3), rh - S(4)), e.colour);
-            string time = double.IsNaN(e.best) ? "no time" : i == 0 ? Qualifying.Fmt(e.best) : $"+{e.best - best:0.000}";
-            string col = fresh ? (e.lastDeleted ? "#ff6060" : !double.IsNaN(e.best) && e.best <= best + 1e-9 && e.lastPb ? "#c070ff" : e.lastPb ? "#60ff80" : "#ffe060") : "#ffffff";
-            if (fresh && e.lastDeleted) time = "deleted";
-            GUI.Label(new Rect(lx + S(4), yy - S(1), S(20), rh + S(2)), (i + 1).ToString(), small);
+            int colK = fresh ? (e.lastDeleted ? 1 : !double.IsNaN(e.best) && e.best <= best + 1e-9 && e.lastPb ? 2 : e.lastPb ? 3 : 4) : 0;
+            GUI.Label(new Rect(lx + S(4), yy - S(1), S(20), rh + S(2)), HudNum.Int(i + 1), small);
             GUI.Label(new Rect(lx + S(28), yy - S(1), S(90), rh + S(2)), e.name, small);
-            GUI.Label(new Rect(lx + S(112), yy - S(1), S(64), rh + S(2)), $"<color={col}>{time}</color>", small);
+            GUI.Label(new Rect(lx + S(112), yy - S(1), S(64), rh + S(2)), QualiRowText(r, i, e.best, best, colK), small);
         }
         small.fontSize = old;
+    }
+    // live timing strings, rebuilt only when what they show changes (they were made 2+ times a frame per row)
+    readonly List<Qualifying.Entry> qList = new List<Qualifying.Entry>(); int qFrame = -1;
+    static readonly string[] QualiCols = { "#ffffff", "#ff6060", "#c070ff", "#60ff80", "#ffe060" };
+    readonly long[] qRowKey = new long[64]; readonly string[] qRowText = new string[64];
+    string QualiRowText(int r, int i, double t, double best, int colK)
+    {
+        long ms = double.IsNaN(t) ? -1 : (long)System.Math.Round((i == 0 ? t : t - best) * 1000);
+        long key = ((ms + 2) * 64 + i) * 8 + colK;
+        if (r < qRowKey.Length && qRowText[r] != null && qRowKey[r] == key) return qRowText[r];
+        string time = double.IsNaN(t) ? "no time" : i == 0 ? Qualifying.Fmt(t) : $"+{t - best:0.000}";
+        if (colK == 1) time = "deleted";
+        string s = $"<color={QualiCols[colK]}>{time}</color>";
+        if (r < qRowKey.Length) { qRowKey[r] = key; qRowText[r] = s; }
+        return s;
+    }
+    int qClockKey = int.MinValue; string qClockText;
+    string QualiClockText(double left)
+    {
+        int s = Mathf.CeilToInt((float)left);
+        if (s != qClockKey || qClockText == null) { qClockKey = s; qClockText = $"<b>QUALIFYING</b>  ·  {Qualifying.Clock(left)}"; }
+        return qClockText;
     }
 }

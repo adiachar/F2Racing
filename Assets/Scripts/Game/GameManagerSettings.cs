@@ -54,6 +54,8 @@ public partial class GameManager
     // ---------------------------------------------------------------- load / save
     static float LoadF(string key, float def, float min, float max) => Mathf.Clamp(PlayerPrefs.GetFloat(key, def), min, max);
     int damageMode = 1; // 0 off, 1 visual only, 2 full
+    int flagsMode = 1;  // flags and safety car: 0 off, 1 on (GameManagerRaceControl.cs)
+    int raceDistIdx;    // race length: 0 = the laps on the start menu, else a share of a Grand Prix distance (RaceDistPct)
     static int LoadI(string key, int def, int max) => Mathf.Clamp(PlayerPrefs.GetInt(key, def), 0, max);
     static float LoadOld(string key, string oldKey, float[] list, int defIdx, float min, float max) =>
         Mathf.Clamp(PlayerPrefs.HasKey(key) ? PlayerPrefs.GetFloat(key) : list[Mathf.Clamp(PlayerPrefs.GetInt(oldKey, defIdx), 0, list.Length - 1)], min, max);
@@ -80,6 +82,7 @@ public partial class GameManager
         seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200);
         horizonMode = LoadI("horizon", 1, 2);
         damageMode = LoadI("damage", 1, 2);
+        flagsMode = LoadI("flags", 1, 1); raceDistIdx = LoadI("raceDist", 0, RaceDistNames.Length - 1);
         fpsIdx = LoadI("fps", 1, 1); resPct = LoadF("resScale", 100, 50, 100); shadowsOn = PlayerPrefs.GetInt("shadows", 1) == 1; showFps = PlayerPrefs.GetInt("showFps", 1) == 1;
         volMaster = LoadF("volMaster", 100, 0, 100); volEngine = LoadF("volEngine", 100, 0, 100); volFx = LoadF("volFx", 100, 0, 100); volTyres = LoadF("volTyres", 100, 0, 100);
         unitsIdx = LoadI("units", 0, 1); hudInfo = PlayerPrefs.GetInt("hudInfo", 1) == 1; hudMap = PlayerPrefs.GetInt("hudMap", 1) == 1;
@@ -104,6 +107,7 @@ public partial class GameManager
         PlayerPrefs.SetFloat("seatUp", seatUpCm); PlayerPrefs.SetFloat("seatFwd", seatFwdCm); PlayerPrefs.SetFloat("camShake", camShakePct);
         PlayerPrefs.SetInt("horizon", horizonMode);
         PlayerPrefs.SetInt("damage", damageMode);
+        PlayerPrefs.SetInt("flags", flagsMode); PlayerPrefs.SetInt("raceDist", raceDistIdx);
         PlayerPrefs.SetInt("fps", fpsIdx); PlayerPrefs.SetFloat("resScale", resPct); PlayerPrefs.SetInt("shadows", shadowsOn ? 1 : 0); PlayerPrefs.SetInt("showFps", showFps ? 1 : 0);
         PlayerPrefs.SetFloat("volMaster", volMaster); PlayerPrefs.SetFloat("volEngine", volEngine); PlayerPrefs.SetFloat("volFx", volFx); PlayerPrefs.SetFloat("volTyres", volTyres);
         PlayerPrefs.SetInt("units", unitsIdx); PlayerPrefs.SetInt("hudInfo", hudInfo ? 1 : 0); PlayerPrefs.SetInt("hudMap", hudMap ? 1 : 0);
@@ -133,7 +137,7 @@ public partial class GameManager
     void ApplyResolution()
     {
         float ns = ResMax; scaleT = 0;
-        if (!Mathf.Approximately(ns, renderScale)) { renderScale = ns; ScalableBufferManager.ResizeBuffers(ns, ns); }
+        if (!Mathf.Approximately(ns, renderScale)) { renderScale = ns; if (DynResWorks) ScalableBufferManager.ResizeBuffers(ns, ns); else FixedResolution(ns); } // GLES: GameManagerPerf.cs
     }
     void ApplyDisplay() { ApplyFrameRate(); ApplyResolution(); }
 
@@ -262,7 +266,7 @@ public partial class GameManager
         gfx.Slider("Resolution scale", "Sharpness of the 3D picture (the HUD stays sharp). Lower = faster.", 50, 100, 5, 100, () => resPct, v => { resPct = v; ApplyResolution(); }, Pct);
         gfx.Toggle("Shadows", "Live shadows from cars and scenery. Off = faster.", true, () => shadowsOn, v => { shadowsOn = v; ApplyGraphics(gfxLevel); })
             .LockedWhen(() => LightBake.Active ? "This circuit has its shadows baked in: nothing to switch." : gfxLevel <= 1 ? "Shadows are off at the Low graphics level." : null);
-        gfx.Toggle("Show FPS", "Frames per second in the top-left corner.", true, () => showFps, v => showFps = v);
+        gfx.Toggle("Show FPS", "Frames per second (and the resolution share when it is lowered), top right under the buttons.", true, () => showFps, v => showFps = v);
 
         // ---- AUDIO
         var aud = new SettingsUI.Tab("AUDIO");
@@ -290,6 +294,8 @@ public partial class GameManager
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
         game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => damageMode, v => { damageMode = v; SetupChanged(); });
+        game.Choice("Flags & safety car", "On: yellow flags, Virtual Safety Car and Safety Car after crashes, blue flags, track-limits warnings (3 strikes, then +5 s). Fitted at the next restart.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
+        game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a Grand Prix (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();

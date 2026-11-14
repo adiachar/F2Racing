@@ -31,6 +31,16 @@ inline half3 F2Tone(half3 x)
     return saturate((x * (2.51 * x + 0.05)) / (x * (2.43 * x + 0.59) + 0.14));
 }
 
+#if defined(F2_GRADE_LOW)
+// Low graphics level (global keyword, GameManagerPerf.cs; only the shaders drawn on Low compile this variant):
+// white balance, exposure, tone curve and saturation; no contrast / lift / gamma / gain (no sqrt, ~12 fewer ops)
+inline half3 F2Grade(half3 c)
+{
+    c = F2Tone(c * _GradeTint.rgb * _GradeExposure);
+    half l = dot(c, half3(0.2126, 0.7152, 0.0722));
+    return max(lerp((half3)l, c, _GradeSat), (half3)0.0);
+}
+#else
 inline half3 F2Grade(half3 c)
 {
     c *= _GradeTint.rgb * _GradeExposure;
@@ -43,6 +53,7 @@ inline half3 F2Grade(half3 c)
     p = saturate(p + _GradeGamma.rgb * p * (1.0 - p));
     return p * p;
 }
+#endif
 
 // for additive light (glare, sparks): only the white balance and exposure, so adding stays adding
 inline half3 F2GradeAdd(half3 c) { return c * _GradeTint.rgb * min(_GradeExposure, 1.5); }
