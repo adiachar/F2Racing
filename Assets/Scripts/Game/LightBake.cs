@@ -27,12 +27,13 @@ public static class LightBake
     static Vector3 toSun; static Vector2 sunDir; static float sunSlope;
     static Shader shader;
     static readonly Color LampCol = new Color(0.55f, 0.45f, 0.3f);
-    // set per time of day by Sky.Setup (SetLight); these defaults are the afternoon
-    static Color SunCol = new Color(1f, 0.95f, 0.86f) * 1.25f, Sky = new Color(0.56f, 0.68f, 0.90f), Bounce;
+    // set per time of day by Sky.Setup (SetLight: the sun in linear x intensity); these defaults are the afternoon
+    static Color SunCol = new Color(1f, 0.89f, 0.71f) * 1.45f, Sky = new Color(0.37f, 0.45f, 0.58f), Bounce;
     static readonly Color GroundAlbedo = new Color(0.36f, 0.31f, 0.24f) * 0.75f; // warm: asphalt, dry grass, sand
     static bool night;
-    // the open sky on a clear day is a big, bright light: shade is blue-ish and about half as bright as the sun side
-    // (Real Racing look), not the near-black of a single sun lamp. 1 at night (the floodlights do the work).
+    // the open sky on a clear day is a big, bright light: shade is a clean blue-grey at ~0.36 of the sun side in linear
+    // (~0.58 on screen after the grade: crisp, readable shadows, Real Racing look), not the near-black of a single sun
+    // lamp, nor the flat, blue-cast look of a sky as strong as the sun. 1 at night (the floodlights do the work).
     static float AmbGain => night ? 1f : 1.32f;
     static Track track;
 

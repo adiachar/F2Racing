@@ -8,6 +8,7 @@
 //   Turf          128  astroturf: fibre grain, two-tone painted bands, thin white edge lines.
 //   Paving        256  light concrete slabs with joints and stains (street-circuit pavements).
 //   Stone         256  coursed stone / concrete blocks (retaining walls).
+//   RoadFine      256  linear data for Road.shader HQ (1.4 m per tile): aggregate albedo, stone polish, stone slopes.
 //   Facade        128  one window bay of a plastered town house: frame, sky-lit glass, sill, lintel shadow.
 //   Foliage       512  alpha-tested tree cards, a 2 x 2 atlas: spruce, broad-leaf, umbrella pine, palm. Colour is
 //                      dilated into the cut-out areas and the mip chain keeps its coverage, so trees do not thin out or
@@ -184,6 +185,64 @@ public static class EnvTex
             float k = blk * (0.8f + 0.4f * rough) * (0.5f + 0.5f * joint);
             return new Color(k, k * 0.97f, k * 0.92f);
         }));
+    }
+
+    // ---------------------------------------------------------------- road: fine aggregate (Road.shader HQ, 1.4 m per tile)
+    // Linear data, every channel 0.5 = neutral (so a missing texture changes nothing and the mips fade it out evenly):
+    //   R albedo around the mean (pale and dark stones, black binder and pores between them)
+    //   G polish of the stone tops (tyres wear them smooth: these glint), BA slope of the surface (x, z), 0.5 = flat
+    // Stones are jittered ellipses, ~3 cm cells (48 per tile, ~5 texels each): flat worn tops with a little tilt of
+    // their own, rounded rims that slope away.
+    static Texture2D cRoadFine;
+    public static Texture2D RoadFine() => cRoadFine != null ? cRoadFine : (cRoadFine = MakeRoadFine());
+    static Texture2D MakeRoadFine()
+    {
+        const int N = 256, C = 48;
+        var alb = new float[N * N]; var px = new Color32[N * N]; double sum = 0;
+        var gl = new float[N * N]; var sx = new float[N * N]; var sz = new float[N * N];
+        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
+        {
+            float fx = (x + 0.5f) / N * C, fy = (y + 0.5f) / N * C; int ci = Mathf.FloorToInt(fx), cj = Mathf.FloorToInt(fy);
+            float best = 9f, bdx = 0, bdy = 0; int bi = 0, bj = 0;
+            for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++)
+            {
+                int gi = ((ci + i) % C + C) % C, gj = ((cj + j) % C + C) % C;
+                if (Hash(gi, gj, 201) < 0.1f) continue;                  // a cell of plain binder
+                float cx = ci + i + 0.25f + 0.5f * Hash(gi, gj, 203), cy = cj + j + 0.25f + 0.5f * Hash(gi, gj, 205);
+                float rad = 0.30f + 0.24f * Hash(gi, gj, 207), ang = Hash(gi, gj, 209) * Mathf.PI, e = 0.65f + 0.35f * Hash(gi, gj, 211);
+                float dx = fx - cx, dy = fy - cy, ca = Mathf.Cos(ang), sa = Mathf.Sin(ang);
+                float u = dx * ca + dy * sa, w = (-dx * sa + dy * ca) / e, d = Mathf.Sqrt(u * u + w * w) / rad;
+                if (d < best) { best = d; bdx = dx; bdy = dy; bi = gi; bj = gj; }
+            }
+            int k = y * N + x; float a, g, slx = 0, slz = 0;
+            if (best < 1f)
+            {
+                // a stone: tone of its own (mostly mid grey, some pale, a few near black), darker at the rim
+                float tone = Hash(bi, bj, 213), rim = Mathf.Clamp01((best - 0.7f) / 0.3f);
+                a = tone > 0.85f ? 0.85f : tone < 0.15f ? 0.30f : 0.48f + 0.25f * tone;
+                a *= 1f - 0.3f * rim * rim;
+                // worn flat top with its own tilt; the rim slopes away from the centre
+                float tx = (Hash(bi, bj, 215) - 0.5f) * 0.5f, tz = (Hash(bi, bj, 217) - 0.5f) * 0.5f;
+                float l = Mathf.Max(1e-4f, Mathf.Sqrt(bdx * bdx + bdy * bdy)), out1 = 1.2f * rim;
+                slx = tx * (1f - rim) + bdx / l * out1; slz = tz * (1f - rim) + bdy / l * out1;
+                g = (1f - rim) * (0.35f + 0.65f * Hash(bi, bj, 219));
+            }
+            else
+            {
+                // binder (bitumen mastic) with fine sand and the odd pore
+                float n = Hash(x, y, 221);
+                a = 0.20f + 0.08f * n; g = 0.12f;
+                if (Hash(x >> 1, y >> 1, 223) > 0.9f) { a = 0.08f; g = 0f; }
+                slx = (Hash(x, y, 225) - 0.5f) * 0.4f; slz = (Hash(x, y, 227) - 0.5f) * 0.4f;
+            }
+            alb[k] = a; gl[k] = g; sx[k] = slx; sz[k] = slz; sum += a;
+        }
+        float mean = (float)(sum / (N * N)), gmean = 0;
+        for (int k = 0; k < gl.Length; k++) gmean += gl[k];
+        gmean /= gl.Length;
+        for (int k = 0; k < px.Length; k++)
+            px[k] = new Color32(B(0.5f + (alb[k] - mean) * 0.9f), B(0.5f + (gl[k] - gmean)), B(0.5f + 0.5f * Mathf.Clamp(sx[k], -1f, 1f)), B(0.5f + 0.5f * Mathf.Clamp(sz[k], -1f, 1f)));
+        return Count(Make(N, N, px, true, 4));
     }
 
     // one bay of a town house: plaster, a window with a white frame, glass reflecting the sky (lighter at the top),

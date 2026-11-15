@@ -42,9 +42,9 @@ public static class Trackside
     }
 
     // build state (load time only)
-    static Layer atlasL, crowdL, fenceL, grimeL;
-    static MB A, C, F, G;          // the current chunk of each layer
-    static int chunkPts = 125;
+    static Layer atlasL, crowdL, fenceL, grimeL, postL;
+    static MB A, C, F, G, Pm;       // the current chunk of each layer (P: thin posts, in short chunks culled by distance)
+    static int chunkPts = 125, postPts = 20;
     static Color tint = Color.white;
     static bool aoOn = true;
     const float AoH = 1.4f, AoMin = 0.58f;
@@ -52,7 +52,15 @@ public static class Trackside
     static void SetChunk(int i)
     {
         int c = i / chunkPts;
-        A = atlasL.Get(c); C = crowdL.Get(c); F = fenceL.Get(c); G = grimeL.Get(c);
+        A = atlasL.Get(c); C = crowdL.Get(c); F = fenceL.Get(c); G = grimeL.Get(c); Pm = postL.Get(i / postPts);
+    }
+
+    // a vertical face from p0 to p1 cut into equal pieces of about pieceLen, each showing the whole region r: one precast
+    // block, rail section or cladding panel per piece, so the detail keeps its real size on long faces
+    static void Pieces(MB m, Vector3 p0, Vector3 p1, float y0, float y1, Vector3 n, Vector4 r, float pieceLen)
+    {
+        int k = Mathf.Max(1, Mathf.RoundToInt((p1 - p0).magnitude / pieceLen));
+        for (int j = 0; j < k; j++) Wall(m, Vector3.Lerp(p0, p1, (float)j / k), Vector3.Lerp(p0, p1, (float)(j + 1) / k), y0, y1, n, r);
     }
 
     static Color VTint(float y, Vector3 n)
@@ -196,7 +204,7 @@ public static class Trackside
     // this holder to the world only after LightBake.AddOccluders
     public static GameObject Late;
     static Material fenceMat;
-    static readonly List<Renderer> fenceRs = new List<Renderer>(), optional = new List<Renderer>();
+    static readonly List<Renderer> fenceRs = new List<Renderer>(), optional = new List<Renderer>(), postRs = new List<Renderer>();
 
     static Vector3 P(TrackPoint p, float h = 0f) { return new Vector3((float)p.x, h, (float)p.y); }
     static Vector3 Tan(TrackPoint p) { return new Vector3((float)p.tx, 0f, (float)p.ty).normalized; }
@@ -206,7 +214,7 @@ public static class Trackside
     // ================================================================ build
     public static void Build(Track t, Transform root, bool street)
     {
-        feet.Clear(); fenceRs.Clear(); optional.Clear(); fenceMat = null; Late = null;
+        feet.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
         if (t == null || t.N < 8 || root == null) return;
         int N = t.N; float ds = (float)t.ds;
         float hw = (float)t.width * 0.5f, kerb = WorldBuilder.Kerb;
@@ -219,8 +227,8 @@ public static class Trackside
         bool fences = !low && WorldBuilder.BakeReady && cutSh != null && cutSh.isSupported;
         bool decals = !low && Resources.Load<Material>("Shadow") != null;
         var grid = new Grid(t, 25f); var big = new Grid(t, 60f);
-        atlasL = new Layer(); crowdL = new Layer(); fenceL = new Layer(); grimeL = new Layer();
-        chunkPts = Mathf.Max(20, Mathf.RoundToInt(250f / ds));
+        atlasL = new Layer(); crowdL = new Layer(); fenceL = new Layer(); grimeL = new Layer(); postL = new Layer();
+        chunkPts = Mathf.Max(20, Mathf.RoundToInt(250f / ds)); postPts = Mathf.Max(8, Mathf.RoundToInt(40f / ds));
         tint = Color.white; aoOn = true;
         SetChunk(0);
         System.Func<int, int> W = k => ((k % N) + N) % N;
@@ -388,11 +396,13 @@ public static class Trackside
                 Wall(A, L0, R0, 4.5f, garH - 0.2f, fwdFace, TracksideArt.Glass);
                 Wall(A, L0, R0, garH - 0.2f, garH + 1.6f, fwdFace, TracksideArt.Ad(b));
                 // back, roof
-                Wall(A, ba, bk, skirt, garH + 1.6f, D, TracksideArt.Sw(TracksideArt.BuildGrey));
+                tint = new Color(0.94f, 0.96f, 1f);
+                Pieces(A, ba, bk, skirt, garH + 1.6f, D, TracksideArt.Cladding, 4f);
+                tint = Color.white;
                 Quad(A, fa + up * (garH + 1.6f), fb + up * (garH + 1.6f), bk + up * (garH + 1.6f), ba + up * (garH + 1.6f), up, TracksideArt.Sw(TracksideArt.RoofUnder));
                 // ends of the building
-                if (b == 0) Wall(A, fa, ba, skirt, garH + 1.6f, -T, TracksideArt.Sw(TracksideArt.BuildWhite));
-                if (b == bays - 1) Wall(A, fb, bk, skirt, garH + 1.6f, T, TracksideArt.Sw(TracksideArt.BuildWhite));
+                if (b == 0) Pieces(A, fa, ba, skirt, garH + 1.6f, -T, TracksideArt.PanelWall, 4f);
+                if (b == bays - 1) Pieces(A, fb, bk, skirt, garH + 1.6f, T, TracksideArt.PanelWall, 4f);
                 // canopy over the working lane, and a garage divider pillar
                 if (!low)
                 {
@@ -466,7 +476,9 @@ public static class Trackside
                 for (int k = 0; k < panels; k++)
                 {
                     Vector3 c = O + T * (-halfL + (k + 0.5f) * pw);
-                    Panel(A, c, -D, pw * 0.5f, skirt, baseH - 0.9f, TracksideArt.Sw(street ? TracksideArt.Scaffold : TracksideArt.StandFrame));
+                    tint = street ? new Color(0.4f, 0.41f, 0.44f) : Color.white; // scaffold-dark cladding in town
+                    Panel(A, c, -D, pw * 0.5f, skirt, baseH - 0.9f, TracksideArt.Cladding);
+                    tint = Color.white;
                     Panel(A, c, -D, pw * 0.5f, baseH - 0.9f, baseH, TracksideArt.Ad(id * 3 + k));
                 }
                 // rows: riser, tread and the crowd sitting on it
@@ -496,14 +508,16 @@ public static class Trackside
                     for (int e = -1; e <= 1; e += 2)
                     {
                         Vector3 en = T * e, ea = O + T * (e * halfL) + D * d0, eb = O + T * (e * halfL) + D * d1;
-                        Wall(A, ea, eb, skirt, y, en, TracksideArt.Sw(TracksideArt.StandFrame));
+                        Wall(A, ea, eb, skirt, y, en, TracksideArt.Sub(TracksideArt.Cladding, 0f, 0.25f, 0f, 1f));
                     }
                 }
                 // back wall (outside and the part seen above the top row), railing height
                 Vector3 bl = O - T * halfL + D * depth, br = O + T * halfL + D * depth;
                 float backTop = roof ? topY + 3.6f : topY + 1.1f;
-                Wall(A, bl, br, skirt, backTop, D, TracksideArt.Sw(street ? TracksideArt.Scaffold : TracksideArt.StandFrame));
-                Quad(A, bl + up * topY, br + up * topY, br + up * backTop, bl + up * backTop, -D, TracksideArt.Sw(TracksideArt.StandFrame));
+                if (street) tint = new Color(0.4f, 0.41f, 0.44f);
+                Pieces(A, br, bl, skirt, backTop, D, TracksideArt.Cladding, 4f);
+                tint = Color.white;
+                Pieces(A, bl, br, topY, backTop, -D, TracksideArt.Sub(TracksideArt.Cladding, 0f, 1f, 0.5f, 1f), 4f);
                 if (roof)
                 {
                     // cantilever roof, sloping slightly up towards the track, advertiser fascia along its front edge
@@ -638,11 +652,23 @@ public static class Trackside
                         float h = InPit(i, sg) ? 1.15f : 1.0f, th = 0.5f, hp = h - 0.28f;
                         int paint = InPit(i, sg) ? TracksideArt.PaintWhite : ((segNo & 1) == 0 ? TracksideArt.PaintRed : TracksideArt.PaintWhite);
                         Vector3 a1 = a + da * th, b1 = b + db * th;
+                        // precast blocks of ~4 m (end joints, tie holes, streaks; two kinds mixed), scuffed at impacts
                         if (dirty) tint = new Color(0.86f, 0.83f, 0.8f);
-                        Quad(A, a + up * skirt, b + up * skirt, b + up * hp, a + up * hp, -mid, dirty ? TracksideArt.Scuff : TracksideArt.Sw(TracksideArt.Concrete));
+                        int nb = Mathf.Max(1, Mathf.RoundToInt(len / 4f));
+                        for (int q = 0; q < nb; q++)
+                        {
+                            Vector3 qa = Vector3.Lerp(a, b, (float)q / nb), qb = Vector3.Lerp(a, b, (float)(q + 1) / nb);
+                            var rb2 = dirty ? TracksideArt.Scuff : Rand(segNo * 7 + q, 9) < 0.5f ? TracksideArt.ConcreteBlock : TracksideArt.ConcreteBlock2;
+                            if (skirt < 0f) Quad(A, qa + up * skirt, qb + up * skirt, qb, qa, -mid, TracksideArt.Sub(rb2, 0f, 1f, 0f, 0.02f));
+                            Quad(A, qa, qb, qb + up * hp, qa + up * hp, -mid, rb2);
+                        }
                         tint = Color.white;
-                        Quad(A, a + up * hp, b + up * hp, b + up * h, a + up * h, -mid, TracksideArt.Sw(paint));
-                        Quad(A, a + up * h, b + up * h, b1 + up * h, a1 + up * h, up, TracksideArt.Sw(paint));
+                        // painted strip with a 4 cm chamfer on the top edge (catches the light: a crisp line along the wall)
+                        const float ch = 0.04f;
+                        Vector3 a2 = a + da * ch, b2 = b + db * ch;
+                        Quad(A, a + up * hp, b + up * hp, b + up * (h - ch), a + up * (h - ch), -mid, TracksideArt.Sw(paint));
+                        Quad(A, a + up * (h - ch), b + up * (h - ch), b2 + up * h, a2 + up * h, (up - mid).normalized, TracksideArt.Sw(paint));
+                        Quad(A, a2 + up * h, b2 + up * h, b1 + up * h, a1 + up * h, up, TracksideArt.Sw(paint));
                         Quad(A, a1 + up * skirt, b1 + up * skirt, b1 + up * h, a1 + up * h, mid, TracksideArt.Sw(TracksideArt.Concrete));
                         topY = h;
                         if (decals && (street || InPit(i, sg) || !hills))
@@ -656,14 +682,22 @@ public static class Trackside
                     {
                         // Armco: W-profile beams (two faces each, so the ridge catches the light) on posts behind
                         float[] beams = low ? new[] { 0.45f, 0.80f } : new[] { 0.40f, 0.71f, 0.76f, 1.07f };
+                        // galvanised rail sections of ~4 m (zinc mottling, splice bolts, grime low down)
                         var rs = TracksideArt.Sw(TracksideArt.Steel);
+                        Vector4 rLo = TracksideArt.Sub(TracksideArt.Armco, 0f, 1f, 0f, 0.5f), rHi = TracksideArt.Sub(TracksideArt.Armco, 0f, 1f, 0.5f, 1f);
+                        int nr = Mathf.Max(1, Mathf.RoundToInt(len / 4f));
                         for (int k = 0; k + 1 < beams.Length; k += 2)
                         {
                             float yb = beams[k], yt = beams[k + 1], ym = (yb + yt) * 0.5f;
                             if (dirty && k == 0) tint = new Color(0.72f, 0.69f, 0.64f);
-                            Vector3 ra = a + da * 0.05f, rb = b + db * 0.05f; // recessed middle
-                            Quad(A, a + up * yb, b + up * yb, rb + up * ym, ra + up * ym, -mid - up * 0.5f, rs);
-                            Quad(A, ra + up * ym, rb + up * ym, b + up * yt, a + up * yt, -mid + up * 0.5f, rs);
+                            for (int q = 0; q < nr; q++)
+                            {
+                                float f0 = (float)q / nr, f1 = (float)(q + 1) / nr;
+                                Vector3 qa = Vector3.Lerp(a, b, f0), qb = Vector3.Lerp(a, b, f1), qd = Vector3.Lerp(da, db, f0), qe = Vector3.Lerp(da, db, f1);
+                                Vector3 ra = qa + qd * 0.05f, rb = qb + qe * 0.05f; // recessed middle
+                                Quad(A, qa + up * yb, qb + up * yb, rb + up * ym, ra + up * ym, -mid - up * 0.5f, rLo);
+                                Quad(A, ra + up * ym, rb + up * ym, qb + up * yt, qa + up * yt, -mid + up * 0.5f, rHi);
+                            }
                             tint = Color.white;
                         }
                         if (!low) Quad(A, a + da * 0.12f + up * beams[0], b + db * 0.12f + up * beams[0], b + db * 0.12f + up * beams[beams.Length - 1], a + da * 0.12f + up * beams[beams.Length - 1], mid, rs);
@@ -672,7 +706,7 @@ public static class Trackside
                         while (d < len)
                         {
                             Vector3 pc = Vector3.Lerp(a, b, d / Mathf.Max(len, 1e-3f)) + Vector3.Lerp(da, db, d / Mathf.Max(len, 1e-3f)) * 0.2f;
-                            Post(A, pc, -mid, len3 / Mathf.Max(len, 1e-3f), 0.07f, skirt, beams[beams.Length - 1] + 0.04f, TracksideArt.PostDark);
+                            Post(Pm, pc, -mid, len3 / Mathf.Max(len, 1e-3f), 0.07f, skirt, beams[beams.Length - 1] + 0.04f, TracksideArt.PostDark);
                             d += postGap;
                         }
                         postCarry = d - len;
@@ -690,8 +724,8 @@ public static class Trackside
                         Quad(F, fa + up * y0, fb + up * y0, fb + up * y1, fa + up * y1, -mid, r1);
                         Quad(F, fa + up * y1, fb + up * y1, fb + lean + up * y2, fa + lean + up * y2, -mid, r2);
                         aoOn = true;
-                        Post(A, fa + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
-                        Quad(A, fa + da * 0.06f + up * y1, fa + da * 0.06f + up * (y1 + 0.1f), fa + lean + up * (y2 + 0.05f), fa + lean + up * (y2 - 0.05f), Vector3.Cross(mid, up), TracksideArt.Sw(TracksideArt.PostDark));
+                        Post(Pm, fa + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
+                        Quad(Pm, fa + da * 0.06f + up * y1, fa + da * 0.06f + up * (y1 + 0.1f), fa + lean + up * (y2 + 0.05f), fa + lean + up * (y2 - 0.05f), Vector3.Cross(mid, up), TracksideArt.Sw(TracksideArt.PostDark));
                     }
                     fenceU += len;
                     segNo++;
@@ -749,8 +783,13 @@ public static class Trackside
                     {
                         SetChunk(pI);
                         float len = (front - pf).magnitude;
+                        // belt pieces with bolt rows and tyre scuffs; the blue belt (forest circuits) is the white one tinted
                         tint = dirt[s, pI] > 0.3f ? new Color(0.8f, 0.78f, 0.75f) : Color.white;
-                        Quad(A, pf + up * skirt, front + up * skirt, front + up * hT, pf + up * hT, -(pd + D), TracksideArt.Sw((piece & 1) == 0 ? beltB : TracksideArt.BeltWhite));
+                        bool colour = (piece & 1) == 0;
+                        if (colour && beltB == TracksideArt.BeltBlue) tint *= new Color(0.15f, 0.32f, 0.72f);
+                        Quad(A, pf + up * skirt, front + up * skirt, front + up * hT, pf + up * hT, -(pd + D),
+                             colour && beltB != TracksideArt.BeltBlue ? TracksideArt.BeltRedR : TracksideArt.BeltWhiteR);
+                        tint = dirt[s, pI] > 0.3f ? new Color(0.8f, 0.78f, 0.75f) : Color.white; // (tops: no blue)
                         Quad(A, pf + up * hT, front + up * hT, back + up * hT, pb + up * hT, up, TracksideArt.Sub(TracksideArt.TyreTops, 0, Mathf.Min(1f, len / 2.5f), 0, depthT / 2.5f));
                         tint = Color.white;
                         if (decals && !hills) Decal(G, pf - pd * 0.8f, pf, front - D * 0.8f, front, 0.05f, 0, len / 4f, TracksideArt.GrimeCol(TracksideArt.GrimeShade));
@@ -817,6 +856,11 @@ public static class Trackside
                     SetChunk(k);
                     Panel(A, c, -D, 2.8f, 0.25f, h, TracksideArt.Ad(adNo++));
                     Panel(A, c + D * 0.06f, D, 2.8f, skirt, h, TracksideArt.Sw(TracksideArt.ConcreteDark));
+                    // a 6 cm thick board: top cap and ends, so it reads as a solid panel, not a sheet
+                    Vector3 rt = Vector3.Cross(-D, up).normalized * 2.8f, th6 = D * 0.06f;
+                    Quad(A, c - rt + up * h, c + rt + up * h, c + rt + th6 + up * h, c - rt + th6 + up * h, up, TracksideArt.Sw(TracksideArt.Steel));
+                    Quad(A, c + rt + up * 0.25f, c + rt + th6 + up * 0.25f, c + rt + th6 + up * h, c + rt + up * h, rt, TracksideArt.Sw(TracksideArt.PostDark));
+                    Quad(A, c - rt + th6 + up * 0.25f, c - rt + up * 0.25f, c - rt + up * h, c - rt + th6 + up * h, -rt, TracksideArt.Sw(TracksideArt.PostDark));
                     Post(A, c + D * 0.03f - T * 2.6f, -D, T, 0.05f, skirt, 0.25f, TracksideArt.PostDark);
                     Post(A, c + D * 0.03f + T * 2.6f, -D, T, 0.05f, skirt, 0.25f, TracksideArt.PostDark);
                     adCount++;
@@ -879,6 +923,7 @@ public static class Trackside
         var crowdMat = WorldBuilder.Mat(Color.white, TracksideArt.Crowd(), 0.1f);
         Emit(parent, "Trackside", atlasL, atlasMat, null);
         Emit(parent, "Crowd", crowdL, crowdMat, null);
+        Emit(parent, "Posts", postL, atlasMat, postRs); // thin posts: hidden beyond ~85 m (TracksideLod)
         if (fences)
         {
             fenceMat = WorldBuilder.Mat(Color.white, TracksideArt.Fence(), 0.1f);
@@ -890,7 +935,7 @@ public static class Trackside
             var gm = new Material(Resources.Load<Material>("Shadow")) { mainTexture = TracksideArt.Grime() };
             Emit(Late.transform, "Grime", grimeL, gm, optional);
         }
-        atlasL = crowdL = fenceL = grimeL = null; A = C = F = G = null;
+        atlasL = crowdL = fenceL = grimeL = postL = null; A = C = F = G = Pm = null;
     }
 
     static void Emit(Transform parent, string name, Layer layer, Material mat, List<Renderer> collect)
@@ -936,7 +981,7 @@ public static class Trackside
                 foreach (var r in fenceRs) if (r != null) { r.enabled = false; optional.Remove(r); }
             }
         }
-        if (optional.Count > 0 && root != null) TracksideLod.Attach(root, optional.ToArray());
-        fenceMat = null; fenceRs.Clear(); optional.Clear();
+        if ((optional.Count > 0 || postRs.Count > 0) && root != null) TracksideLod.Attach(root, optional.ToArray(), postRs.ToArray());
+        fenceMat = null; fenceRs.Clear(); optional.Clear(); postRs.Clear();
     }
 }

@@ -1,8 +1,11 @@
-// Car paint for phones: one pass, no textures.
-//  * base colour lit by the car's sun and the sky (spherical harmonics),
-//  * a clear coat that reflects the sky probe, strongest at grazing angles (Fresnel),
-//  * below the horizon the coat reflects the road instead of the sky, which gives the body its horizon line,
-//  * a tight sun highlight, and a metallic tint for metal parts.
+// Car paint for phones: one pass, no textures. The look aims at the polished "showroom" cars of mobile racers:
+//  * base colour lit by the car's sun (with a little wrap, so the flanks never go dead-dark) and the sky (SH),
+//  * a clear coat that mirrors the sky probe almost unblurred on glossy paint; Fresnel F0 0.05 with an x^4 rise
+//    (a touch broader than Schlick's x^5), so the sky reads on the flanks and not only at the silhouette,
+//  * below the horizon the coat reflects the road instead of the sky, which gives the body its horizon line:
+//    crisp on glossy paint, soft on rubber (the line's width follows the gloss),
+//  * a sun highlight whose size follows the gloss (exp2 mapping: broad soft sheen on rubber, tight on metal, a
+//    tight lobe plus a pin-point glint on clear coat), and a metallic tint for metal parts.
 // _Wet (global, Weather.cs: 0 dry .. 1 wet): a water film on the body: slightly darker, deeper base, a glossier and
 // stronger clear coat. No extra cost when dry beyond a few multiplies.
 // _CarLit (global, 0..1) dims reflections when the car is in a baked shadow (tunnel, under buildings).
@@ -11,7 +14,8 @@
 // way the surface faces), so the imported body needs no UVs, mask texture or extra mesh data.
 // Detail (car.bytes F2M2 vertex colours): R = baked ambient occlusion (_AO = strength), G = brake-disc mask.
 // One keyword per kind of part (set by CarModel, all variants always compiled), nothing extra for the body paint:
-//  _CARBON  procedural 2x2 twill weave from object position, fading out beyond ~6 m (no aliasing far away);
+//  _CARBON  procedural 2x2 twill weave (10 mm tows) from object position, faded out by its own pixel size
+//           (fwidth) once a tow is narrower than ~3 pixels, so it never shimmers; lacquered (sharp, faint coat);
 //           with _Under = 1 only down-facing surfaces become carbon (wing undersides of painted parts)
 //  _TYRE    wheel frame (x = axle): tread sheen that dulls with _Wear and _Dirt, subtle moulded sidewall bands
 //  _WHEEL   rims, discs, calipers: brake dust darkening (_Dust) and disc glow (_Glow, from the brake temperature)
@@ -46,6 +50,20 @@ Shader "F2/CarPaint"
     }
     CGINCLUDE
     #include "UnityCG.cginc"
+    #define CARBON_BASE half3(0.022, 0.024, 0.028)
+    // 2x2 twill from the object position: (brightness, highlight) multipliers; each tow is a little cylinder (brighter
+    // along its crown) and catches the light more in one direction. fade 0 = plain (1, 1).
+    half2 Weave(float3 op, half3 on, half fade)
+    {
+        half3 an = abs(on);
+        float2 w = (an.x > max(an.y, an.z) ? op.zy : (an.y > an.z ? op.xz : op.xy)) * 100.0;
+        float2 cell = floor(w), fr = frac(w);
+        half sel = step(0.5, frac((cell.x + cell.y) * 0.25));
+        half across = lerp(fr.y, fr.x, sel), prof = 4.0 * across * (1.0 - across);
+        return half2(lerp(1.0, lerp(0.6, 1.3, prof) * lerp(0.88, 1.12, sel), fade), lerp(1.0, lerp(0.55, 1.45, sel) * prof + 0.3, fade));
+    }
+    // how much weave to show: full while a tow covers 3+ pixels, gone below ~1.4 (derivatives: call outside branches)
+    half WeaveFade(float3 op) { float3 d = fwidth(op) * 100.0; return saturate(1.75 - 2.5 * max(d.x, max(d.y, d.z))); }
     #if defined(_MERGED)
         UNITY_INSTANCING_BUFFER_START(CarProps)
             UNITY_DEFINE_INSTANCED_PROP(fixed4, _LivA)     // livery primary
@@ -83,15 +101,18 @@ Shader "F2/CarPaint"
         // base colour and (clear coat, gloss, metal): the values the per-part materials had (CarModel.CreateFromAsset)
         void MMat(half id, out half3 base, out half3 cgm)
         {
-            base = half3(0.06, 0.065, 0.075); cgm = half3(0.55, 0.7, 0.1);                                    // 2 carbon
-            half k = MIs(id, 0); base = lerp(base, MP(_LivA).rgb, k); cgm = lerp(cgm, half3(1.0, 0.92, 0.15), k);
-            k = MIs(id, 1); base = lerp(base, MP(_LivB).rgb, k); cgm = lerp(cgm, half3(1.0, 0.9, 0.05), k);
-            k = MIs(id, 3); base = lerp(base, half3(0.55, 0.57, 0.6), k); cgm = lerp(cgm, half3(0.3, 0.8, 0.9), k);
-            k = step(3.5, id) * step(id, 5.5); base = lerp(base, half3(0.085, 0.085, 0.09), k); cgm = lerp(cgm, half3(0.22, 0.38, 0.0), k);
-            k = saturate(step(5.5, id) * step(id, 7.5) + MIs(id, 11)); base = lerp(base, half3(0.2, 0.21, 0.23), k); cgm = lerp(cgm, half3(0.3, 0.75, 0.85), k);
+            // (linear values: CarModel gives the per-part materials the same ones via Lin(); livery colours come in
+            // through SetColor, which converts them from sRGB on both paths)
+            base = CARBON_BASE; cgm = half3(0.35, 0.88, 0.05);                                               // 2 carbon
+            half k = MIs(id, 0); base = lerp(base, MP(_LivA).rgb, k); cgm = lerp(cgm, half3(1.0, 0.95, 0.06), k);
+            k = MIs(id, 1); base = lerp(base, MP(_LivB).rgb, k); cgm = lerp(cgm, half3(1.0, 0.93, 0.03), k);
+            k = MIs(id, 3); base = lerp(base, half3(0.45, 0.46, 0.5), k); cgm = lerp(cgm, half3(0.3, 0.85, 0.95), k);
+            k = step(3.5, id) * step(id, 5.5); base = lerp(base, half3(0.015, 0.015, 0.016), k); cgm = lerp(cgm, half3(0.1, 0.35, 0.0), k);
+            k = step(5.5, id) * step(id, 7.5); base = lerp(base, half3(0.22, 0.23, 0.245), k); cgm = lerp(cgm, half3(0.35, 0.82, 0.9), k);
+            k = MIs(id, 11); base = lerp(base, half3(0.03, 0.03, 0.033), k); cgm = lerp(cgm, half3(0.5, 0.7, 0.1), k);
             k = MIs(id, 8); base = lerp(base, half3(1.0, 0.15, 0.12), k); cgm = lerp(cgm, half3(0.5, 0.8, 0.0), k);
             k = MIs(id, 9); base = lerp(base, MP(_StripeCol).rgb, k); cgm = lerp(cgm, half3(0.25, 0.5, 0.0), k);
-            k = MIs(id, 10); base = lerp(base, half3(1.0, 0.82, 0.18), k); cgm = lerp(cgm, half3(1.0, 0.93, 0.1), k);
+            k = MIs(id, 10); base = lerp(base, half3(1.0, 0.64, 0.027), k); cgm = lerp(cgm, half3(1.0, 0.93, 0.1), k);
         }
         // helmet visor / stripe from the body-space position (the helmet sphere sits at (0, 0.72, 0.05), scale 0.26/0.28/0.3)
         half MVisor(float3 op, out half stripe)
@@ -164,7 +185,7 @@ Shader "F2/CarPaint"
                 half3 N = normalize(i.n);
                 half3 V = normalize(_WorldSpaceCameraPos.xyz - i.wp);
                 half3 L = normalize(_WorldSpaceLightPos0.xyz);
-                half ndl = saturate(dot(N, L));
+                half nl = dot(N, L), ndl = saturate(nl);
                 half3 base = _Color.rgb;
                 if (_Livery > 0.5)
                 {
@@ -196,21 +217,16 @@ Shader "F2/CarPaint"
                     half3 on = normalize(i.on);
                     half body = MIs(id, 0) * step(0.5, MP(_LivC).a);
                     base = lerp(base, MLivery(i.op, on.y, MP(_LivA).rgb, MP(_LivB).rgb, MP(_LivC).rgb), body);
-                    // carbon weave (carbon parts, the wings' undersides), only near the camera
-                    half near = (1.0 - _Far) * saturate(1.6 - length(_WorldSpaceCameraPos.xyz - i.wp) * 0.27);
+                    // carbon weave (carbon parts, the wings' undersides) while it is big enough on screen
+                    half near = (1.0 - _Far) * WeaveFade(i.op); // (derivatives: outside the branch)
                     half cw = saturate(MIs(id, 2) + MIs(id, 1) * smoothstep(-0.25, -0.6, on.y));
                     if (cw > 0.0)
                     {
-                        half3 an = abs(on);
-                        float2 w = (an.x > max(an.y, an.z) ? i.op.zy : (an.y > an.z ? i.op.xz : i.op.xy)) * 140.0;
-                        float2 cell = floor(w), fr = frac(w);
-                        half sel = step(0.5, frac((cell.x + cell.y) * 0.25));
-                        half across = lerp(fr.y, fr.x, sel), prof = 4.0 * across * (1.0 - across);
-                        half3 cb = lerp(base, half3(0.06, 0.065, 0.075), MIs(id, 1));
-                        cb *= lerp(1.0, lerp(0.72, 1.18, prof) * lerp(0.9, 1.1, sel), near);
+                        half2 wv = Weave(i.op, on, near);
+                        half3 cb = lerp(base, CARBON_BASE, MIs(id, 1)) * wv.x;
                         base = lerp(base, cb, cw);
-                        coatK = lerp(coatK, 0.6, cw);
-                        specK = lerp(1.0, lerp(1.0, lerp(0.55, 1.45, sel) * prof + 0.3, near), cw);
+                        coatK = lerp(coatK, 0.35, cw);
+                        specK = lerp(1.0, wv.y, cw);
                     }
                     // tyres (LOD wheels are their own objects, so object space is the wheel frame; the far car skips it)
                     half front = step(id, 4.5) + MIs(id, 6);
@@ -223,14 +239,15 @@ Shader "F2/CarPaint"
                         half band = (smoothstep(0.655, 0.665, r) - smoothstep(0.69, 0.70, r)) + (smoothstep(0.925, 0.935, r) - smoothstep(0.95, 0.96, r));
                         band *= 1.0 - tread;
                         base *= 1.0 + 0.45 * band;
-                        base = lerp(base, half3(0.17, 0.155, 0.14), tread * saturate(0.35 * wear + 0.6 * dirt));
+                        base = lerp(base, half3(0.07, 0.064, 0.056), tread * saturate(0.35 * wear + 0.6 * dirt));
                         coatK *= lerp(1.0 + 0.6 * band, 1.7 * (1.0 - 0.75 * wear) * (1.0 - 0.85 * dirt), tread);
                         glossAdd = -0.15 * tread * wear;
+                        specK = 2.0; // the soft sun sheen of rubber lives in the broad lobe, not in the (faint) sky reflection
                     }
                     // rims and brakes: dust and disc glow, per axle
                     half hub = step(5.5, id) * step(id, 7.5);
                     half dust = lerp(MP(_Axle).y, MP(_Axle).x, front) * hub, disc = i.col.g * hub;
-                    base = lerp(base * (1.0 - 0.55 * dust) + half3(0.012, 0.009, 0.006) * dust, half3(0.1, 0.1, 0.105), disc);
+                    base = lerp(base * (1.0 - 0.55 * dust) + half3(0.012, 0.009, 0.006) * dust, half3(0.06, 0.06, 0.065), disc);
                     coatK *= 1.0 - 0.6 * dust; metal *= 1.0 - 0.5 * dust; glossAdd += -0.25 * dust;
                     emis = lerp(MP(_GlowR).rgb, MP(_GlowF).rgb, front) * disc + MP(_LightCol).rgb * MIs(id, 8);
                     // helmet
@@ -241,20 +258,14 @@ Shader "F2/CarPaint"
                 }
                 #elif defined(_CARBON)
                 {
-                    // 2x2 twill: tows ~7 mm wide, alternating direction on a diagonal staircase; each tow is a
-                    // little cylinder (brighter along its crown) and catches the light more in one direction
-                    half3 an = abs(i.on);
-                    float2 w = (an.x > max(an.y, an.z) ? i.op.zy : (an.y > an.z ? i.op.xz : i.op.xy)) * 140.0;
-                    float2 cell = floor(w), fr = frac(w);
-                    half sel = step(0.5, frac((cell.x + cell.y) * 0.25));
-                    half across = lerp(fr.y, fr.x, sel), prof = 4.0 * across * (1.0 - across);
-                    half fade = saturate(1.6 - length(_WorldSpaceCameraPos.xyz - i.wp) * 0.27);
-                    half mask = _Under > 0.5 ? smoothstep(-0.25, -0.6, normalize(i.on).y) : 1.0;
-                    half3 cb = _Under > 0.5 ? half3(0.06, 0.065, 0.075) : base;
-                    cb *= lerp(1.0, lerp(0.72, 1.18, prof) * lerp(0.9, 1.1, sel), fade);
+                    // 2x2 twill: tows 10 mm wide, alternating direction on a diagonal staircase (Weave above)
+                    half3 on = normalize(i.on);
+                    half2 wv = Weave(i.op, on, WeaveFade(i.op));
+                    half mask = _Under > 0.5 ? smoothstep(-0.25, -0.6, on.y) : 1.0;
+                    half3 cb = (_Under > 0.5 ? CARBON_BASE : base) * wv.x;
                     base = lerp(base, cb, mask);
-                    coatK = lerp(coatK, 0.6, mask);
-                    specK = lerp(1.0, lerp(1.0, lerp(0.55, 1.45, sel) * prof + 0.3, fade), mask);
+                    coatK = lerp(coatK, 0.35, mask);
+                    specK = lerp(1.0, wv.y, mask);
                 }
                 #elif defined(_TYRE)
                 {
@@ -265,14 +276,15 @@ Shader "F2/CarPaint"
                     band *= 1.0 - tread;
                     base *= 1.0 + 0.45 * band;
                     // worn tread dulls and greys, dirt (grass, gravel dust) browns it and kills the sheen
-                    base = lerp(base, half3(0.17, 0.155, 0.14), tread * saturate(0.35 * _Wear + 0.6 * _Dirt));
+                    base = lerp(base, half3(0.07, 0.064, 0.056), tread * saturate(0.35 * _Wear + 0.6 * _Dirt));
                     coatK *= lerp(1.0 + 0.6 * band, 1.7 * (1.0 - 0.75 * _Wear) * (1.0 - 0.85 * _Dirt), tread);
                     glossAdd = -0.15 * tread * _Wear;
+                    specK = 2.0; // the soft sun sheen of rubber lives in the broad lobe, not in the (faint) sky reflection
                 }
                 #elif defined(_WHEEL)
                 {
                     half disc = i.col.g;
-                    base = lerp(base * (1.0 - 0.55 * _Dust) + half3(0.012, 0.009, 0.006) * _Dust, half3(0.1, 0.1, 0.105), disc);
+                    base = lerp(base * (1.0 - 0.55 * _Dust) + half3(0.012, 0.009, 0.006) * _Dust, half3(0.06, 0.06, 0.065), disc);
                     coatK *= 1.0 - 0.6 * _Dust; metal *= 1.0 - 0.5 * _Dust; glossAdd = -0.25 * _Dust;
                     emis = _Glow.rgb * disc;
                 }
@@ -288,20 +300,30 @@ Shader "F2/CarPaint"
                 }
                 #endif
                 half gloss = saturate(gloss0 + 0.08 * _Wet + glossAdd);
-                half3 diff = base * (ndl * _LightColor0.rgb + i.amb) * (1.0 - metal * 0.6) * (1.0 - 0.12 * _Wet) * ao;
+                // sun with a little wrap (a softer terminator: flanks turned from the sun stay readable) + sky light
+                half wrapL = saturate((nl + 0.2) * (1.0 / 1.2));
+                half3 diff = base * (wrapL * _LightColor0.rgb + i.amb) * (1.0 - metal * 0.85) * (1.0 - 0.12 * _Wet) * ao; // metal: mostly mirror
                 half3 R = reflect(-V, N);
-                half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, (1.0 - gloss) * 6.0);
+                // glossy paint reads the probe almost unblurred (mip ~0.25): the sky and clouds show as a mirror image
+                half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, (1.0 - gloss) * 5.0);
                 half3 env = DecodeHDR(envRaw, unity_SpecCube0_HDR);
                 // the sky reflection probe when there is one; without it (black cube) the sky light along R
                 env = max(env, i.envSH * 0.9);
-                env = lerp(env, _GroundRefl.rgb, 1.0 - smoothstep(-0.12, 0.02, R.y));
+                // the road below the horizon: a crisp horizon line on glossy paint, a soft one on rubber. _GroundRefl
+                // arrives through SetGlobalColor (sRGB -> linear: 0.15 becomes 0.02, a black road); the grey sky light
+                // from below (SH along R) is the floor, about what sunlit asphalt sends back
+                half grL = dot(i.envSH, half3(0.2126, 0.7152, 0.0722)) * 0.9;
+                half3 gr = max(_GroundRefl.rgb, half3(grL, grL, grL));
+                env = lerp(env, gr, 1.0 - smoothstep(lerp(-0.35, -0.05, gloss), 0.015, R.y));
                 env *= lerp(0.35, 1.0, _CarLit) * (0.3 + 0.7 * ao) * envTint;
-                half nv = saturate(dot(N, V));
-                half f = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+                half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
+                half f = 0.05 + 0.95 * x2 * x2;
                 half coat = saturate(f * coatK * (1.0 + 0.35 * _Wet) + 0.03 * _Wet);
                 half3 H = normalize(L + V);
                 float nh = saturate(dot((float3)N, (float3)H));
-                half spec = pow(nh, lerp(16.0, 512.0, gloss)) * ndl * lerp(0.5, 6.0, gloss);
+                // highlight size from the gloss: 0.35 -> exponent 34 (rubber sheen), 0.82 -> 240 (metal), 0.95 -> 416 (paint)
+                half sp = exp2(3.0 + 6.0 * gloss);
+                half spec = (half)pow(nh, (float)sp) * ndl * min(sp * 0.015, 6.0);
                 // a second, much tighter sun glint on glossy paint (the crisp hot spot of a polished clear coat)
                 spec += (half)pow(nh, 2048.0) * ndl * 14.0 * saturate((gloss - 0.8) * 6.0);
                 spec *= specK * ao;
@@ -370,15 +392,19 @@ Shader "F2/CarPaint"
                 half3 L = normalize(_WorldSpaceLightPos0.xyz);
                 half ndl = saturate(dot(N, L));
                 half3 R = reflect(-V, N);
+                half gloss = saturate(gloss0 + 0.08 * _Wet);
                 half3 env = ShadeSH9(half4(R, 1)) * 0.9;
-                env = lerp(env, _GroundRefl.rgb, 1.0 - smoothstep(-0.12, 0.02, R.y));
+                half grL = dot(env, half3(0.2126, 0.7152, 0.0722));
+                half3 gr = max(_GroundRefl.rgb, half3(grL, grL, grL)); // (as the full pass)
+                env = lerp(env, gr, 1.0 - smoothstep(lerp(-0.35, -0.05, gloss), 0.015, R.y));
                 env *= lerp(0.35, 1.0, _CarLit);
                 half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
-                half coat = saturate((0.04 + 0.96 * x2 * x2 * x) * coat0 * (1.0 + 0.35 * _Wet) + 0.03 * _Wet);
-                half gloss = saturate(gloss0 + 0.08 * _Wet);
+                half coat = saturate((0.05 + 0.95 * x2 * x2) * coat0 * (1.0 + 0.35 * _Wet) + 0.03 * _Wet);
                 half nh = saturate(dot(N, normalize(L + V)));
-                half spec = pow(nh, lerp(16.0, 128.0, gloss)) * ndl * lerp(0.5, 3.0, gloss);
-                o.diff = (ndl * _LightColor0.rgb + ShadeSH9(half4(N, 1))) * (1.0 - metal0 * 0.6) * (1.0 - 0.12 * _Wet) * (1.0 - coat);
+                half sp = min(exp2(3.0 + 6.0 * gloss), 128.0); // (per vertex: no tighter than the mesh can show)
+                half spec = pow(nh, sp) * ndl * min(sp * 0.02, 3.0);
+                half wrapL = saturate((dot(N, L) + 0.2) * (1.0 / 1.2));
+                o.diff = (wrapL * _LightColor0.rgb + ShadeSH9(half4(N, 1))) * (1.0 - metal0 * 0.85) * (1.0 - 0.12 * _Wet) * (1.0 - coat);
                 o.add = env * coat + spec * _LightColor0.rgb * (coat0 + metal0);
                 o.envM = env * metal0;
                 o.op = v.vertex.xyz; o.ny = v.normal.y;
@@ -414,13 +440,13 @@ Shader "F2/CarPaint"
                     base = lerp(base, MLivery(i.op, i.ny, MP(_LivA).rgb, MP(_LivB).rgb, MP(_LivC).rgb), MIs(id, 0) * step(0.5, MP(_LivC).a));
                     half front = step(id, 4.5) + MIs(id, 6), hub = step(5.5, id) * step(id, 7.5);
                     half dust = lerp(MP(_Axle).y, MP(_Axle).x, front) * hub, disc = i.col.g * hub;
-                    base = lerp(base * (1.0 - 0.55 * dust), half3(0.1, 0.1, 0.105), disc);
+                    base = lerp(base * (1.0 - 0.55 * dust), half3(0.06, 0.06, 0.065), disc);
                     emis = lerp(MP(_GlowR).rgb, MP(_GlowF).rgb, front) * disc + MP(_LightCol).rgb * MIs(id, 8);
                     half hs; half visor = MVisor(i.op, hs) * MIs(id, 10); hs *= MIs(id, 10);
                     base = lerp(lerp(base, half3(0.08, 0.08, 0.1), hs), half3(0.3, 0.22, 0.12), visor);
                 #elif defined(_WHEEL)
                     half disc = i.col.g;
-                    base = lerp(base * (1.0 - 0.55 * _Dust), half3(0.1, 0.1, 0.105), disc);
+                    base = lerp(base * (1.0 - 0.55 * _Dust), half3(0.06, 0.06, 0.065), disc);
                     emis = _Glow.rgb * disc;
                 #elif defined(_HELMET)
                     float3 hp = i.op;

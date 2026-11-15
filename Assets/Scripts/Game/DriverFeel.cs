@@ -24,7 +24,7 @@ public class DriverFeel
     const float RollPerG = 0.30f, RollMax = 1.5f;                               // deg per g: head tilted to the outside
     const float LookPerYaw = 4.6f, LookMax = 5f;                                // deg per rad/s of yaw rate: eyes into the corner
     const float ShakeY = 0.008f, ShakeX = 0.003f, ShakePitch = 0.22f, ShakeRoll = 0.15f; // at car.vib = 1 (m, m, deg, deg)
-    const float BuzzY = 0.0012f, BuzzPitch = 0.045f, BuzzFullSpeed = 90f;       // fine vibration at 324 km/h (m, deg); grows with speed squared
+    const float BuzzY = 0.0005f, BuzzPitch = 0.015f, /* kept below ~1/3 px so distant objects don't shimmer */ BuzzFullSpeed = 90f;       // fine vibration at 324 km/h (m, deg); grows with speed squared
     const float ShiftKick = 9f, DownKick = 4f;                                  // deg/s given to the head on a gear change (about 0.17 / 0.08 deg nod)
     const float BottomShake = 0.5f;                                             // shake level while the floor is on the road
     // spring speeds (rad/s): about 3 Hz for the head, slower for the eyes, quick for the shake level

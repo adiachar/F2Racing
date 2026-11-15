@@ -343,6 +343,9 @@ public class CarModel : MonoBehaviour
         if (!paintTried) { paintTried = true; paintShader = Resources.Load<Shader>("CarPaint"); if (paintShader != null && !paintShader.isSupported) paintShader = null; }
         return paintShader;
     }
+    // a colour given in linear (the value the shader should get): Material.color / SetColor take sRGB in this
+    // linear-colour-space project and convert it, so hand them the sRGB equivalent
+    static Color Lin(float r, float g, float b) => new Color(r, g, b).gamma;
     static Material Paint(Color c, float coat, float gloss, float metal, float stdSmooth, float stdMetal)
     {
         PaintShader();
@@ -419,15 +422,17 @@ public class CarModel : MonoBehaviour
         if (d.Length < 8 || d[0] != 'F' || d[1] != '2' || d[2] != 'M' || (d[3] != '1' && d[3] != '2')) return null;
         bool hasCol = d[3] == '2'; // F2M2: RGBA8 per vertex (R = baked AO, B = AO of the back face, G = brake-disc mask)
         o = 4; int n = I();
+        // livery colours are sRGB (as picked); the rest are given in linear (Lin), the same values the merged rivals'
+        // shader uses (CarPaint MMat), so a rival and the player's car look alike part for part
         var mats = new[] {
-            Paint(paint ?? new Color(0.78f, 0.05f, 0.07f), 1f, 0.92f, 0.15f, 0.88f, 0.35f),   // 0 body paint
-            Paint(new Color(0.93f, 0.93f, 0.94f), 1f, 0.9f, 0.05f, 0.86f, 0.15f),           // 1 white paint
-            Paint(new Color(0.06f, 0.065f, 0.075f), 0.55f, 0.7f, 0.1f, 0.6f, 0.25f),        // 2 carbon (satin)
-            Paint(new Color(0.55f, 0.57f, 0.6f), 0.3f, 0.8f, 0.9f, 0.8f, 0.9f),             // 3 metal
-            // 4 tyre rubber: dark grey with a soft sheen that brightens towards the rounded shoulders, so the tyre
-            // reads as a thick rubber body rather than a flat black shape
-            Paint(new Color(0.085f, 0.085f, 0.09f), 0.22f, 0.38f, 0f, 0.25f, 0f),
-            Paint(new Color(0.2f, 0.21f, 0.23f), 0.3f, 0.75f, 0.85f, 0.75f, 0.85f),         // 5 rims / discs
+            Paint(paint ?? new Color(0.78f, 0.05f, 0.07f), 1f, 0.95f, 0.06f, 0.9f, 0.3f),    // 0 body paint: deep solid gloss
+            Paint(new Color(0.93f, 0.93f, 0.94f), 1f, 0.93f, 0.03f, 0.88f, 0.15f),          // 1 white paint
+            Paint(Lin(0.022f, 0.024f, 0.028f), 0.35f, 0.88f, 0.05f, 0.7f, 0.25f),            // 2 carbon (lacquered weave)
+            Paint(Lin(0.45f, 0.46f, 0.5f), 0.3f, 0.85f, 0.95f, 0.85f, 0.9f),                 // 3 metal
+            // 4 tyre rubber: near-black with a broad, soft sheen that brightens towards the rounded shoulders, so the
+            // tyre reads as a thick rubber body rather than a flat black (or grey) shape
+            Paint(Lin(0.015f, 0.015f, 0.016f), 0.1f, 0.35f, 0f, 0.25f, 0f),
+            Paint(Lin(0.22f, 0.23f, 0.245f), 0.35f, 0.82f, 0.9f, 0.8f, 0.9f),                  // 5 rims / discs: gunmetal
             WorldBuilder.Glow(new Color(1f, 0.15f, 0.12f), new Color(0.25f, 0.02f, 0.02f)),  // 6 rear light
             Paint(stripe ?? StripeFor(FormulaSim.Compound.Soft), 0.25f, 0.5f, 0f, 0.3f, 0f),     // 7 tyre sidewall stripe
         };
@@ -437,14 +442,14 @@ public class CarModel : MonoBehaviour
         Kind(mats[2], "_CARBON"); Kind(mats[1], "_CARBON"); mats[1].SetFloat("_Under", 1); // wing undersides: bare carbon
         var tyreF = Kind(mats[4], "_TYRE"); var tyreR = Kind(new Material(tyreF), "_TYRE");
         var hubF = Kind(mats[5], "_WHEEL"); var hubR = Kind(new Material(hubF), "_WHEEL");
-        var steerMat = new Material(mats[5]); steerMat.DisableKeyword("_WHEEL");
+        var steerMat = Paint(Lin(0.03f, 0.03f, 0.033f), 0.5f, 0.7f, 0.1f, 0.6f, 0.2f); // dark carbon rim (CarPaint MMat id 11)
         if (hasCol)
             foreach (var (mm, k) in new[] { (mats[0], 0.6f), (mats[1], 0.55f), (mats[2], 0.75f), (mats[3], 0.7f), (tyreF, 0.45f), (tyreR, 0.45f), (hubF, 0.7f), (hubR, 0.7f), (steerMat, 0.5f) })
                 if (mm.HasProperty("_AO")) mm.SetFloat("_AO", k);
         meshCache.TryGetValue(cacheKey, out var cached); var made = cached == null ? new Mesh[n] : null;
         var root = new GameObject("Car");
         // the mesh was converted at Formula 2 size (3.135 m wheelbase); a 2026 F1 car is 3.40 m long between the axles and 1.9 m wide
-        root.transform.localScale = Vector3.one * (3.40f / 3.135f);
+        root.transform.localScale = Vector3.one * RootScale;
         var cm = root.AddComponent<CarModel>();
         cm.body = new GameObject("Body").transform; cm.body.SetParent(root.transform, false);
         var wheels = new System.Collections.Generic.Dictionary<string, Transform>();
@@ -452,6 +457,7 @@ public class CarModel : MonoBehaviour
         {
             int len = I(); string name = System.Text.Encoding.UTF8.GetString(d, o, len); o += len;
             int mid = I(); var piv = new Vector3(F(), F(), F());
+            if (name.StartsWith("wheel_")) piv.y = WheelY(name[6] == 'F'); // every tyre on the road (FitTyre)
             int nv = I(), ni = I();
             Vector3[] pos = null, nrm = null; int[] idx = null; Color32[] col = null;
             Mesh mesh;
@@ -469,6 +475,7 @@ public class CarModel : MonoBehaviour
                 for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
                 if (hasCol) { col = new Color32[nv]; for (int i = 0; i < nv; i++) { col[i] = new Color32(d[o], d[o + 1], d[o + 2], d[o + 3]); o += 4; } }
                 for (int i = 0; i < ni; i++) idx[i] = I();
+                if (name.EndsWith("_tyre")) FitTyre(pos, idx, name[6] == 'F');
                 if (cached != null) mesh = cached[p];
                 else
                 {
@@ -477,6 +484,7 @@ public class CarModel : MonoBehaviour
                     // other way. The painted body, tyres and rims are closed shapes and stay one-sided (half the work).
                     bool twoSided = TwoSided(mid, name) || (twinPaint && mid == 0);
                     Compact(ref pos, ref nrm, ref col, idx); nv = pos.Length; // some parts carry a whole shared vertex list (halo_pillar: 53k for 447 triangles)
+                    if (!name.StartsWith("wheel_") && !name.StartsWith("steer_")) LowerBody(pos, nrm);
                     if (twoSided) Twin(ref pos, ref nrm, ref col, ref idx);
                     mesh = new Mesh { indexFormat = pos.Length > 65000 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16 };
                     mesh.vertices = pos; mesh.normals = nrm; if (col != null) mesh.colors32 = col;
@@ -539,7 +547,7 @@ public class CarModel : MonoBehaviour
             h.name = "Helmet"; h.transform.SetParent(cm.body, false);
             h.transform.localPosition = new Vector3(0, 0.72f, 0.05f); h.transform.localScale = new Vector3(0.26f, 0.28f, 0.3f);
             // glossy shell with a gold mirror visor and a thin dark stripe, all in the shader (no extra mesh or draw call)
-            var hm = Kind(Paint(new Color(1f, 0.82f, 0.18f), 1f, 0.93f, 0.1f, 0.9f, 0.2f), "_HELMET");
+            var hm = Kind(Paint(new Color(1f, 0.82f, 0.18f), 1f, 0.95f, 0.1f, 0.9f, 0.2f), "_HELMET");
             if (hm.HasProperty("_Color3")) hm.SetColor("_Color3", new Color(0.08f, 0.08f, 0.1f));
             h.GetComponent<MeshRenderer>().sharedMaterial = hm;
             cm.helmet = h.transform;
@@ -626,13 +634,16 @@ public class CarModel : MonoBehaviour
         {
             int len = I(); string name = System.Text.Encoding.UTF8.GetString(d, o, len); o += len;
             int mid = I(); var piv = new Vector3(F(), F(), F());
+            if (name.StartsWith("wheel_")) piv.y = WheelY(name[6] == 'F'); // as CreateFromAsset
             int nv = I(), ni = I();
             var pos = new Vector3[nv]; var nrm = new Vector3[nv]; var idx = new int[ni]; Color32[] col = null;
             for (int i = 0; i < nv; i++) pos[i] = new Vector3(F(), F(), F());
             for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
             if (hasCol) { col = new Color32[nv]; for (int i = 0; i < nv; i++) { col[i] = new Color32(d[o], d[o + 1], d[o + 2], d[o + 3]); o += 4; } }
             for (int i = 0; i < ni; i++) idx[i] = I();
+            if (name.EndsWith("_tyre")) FitTyre(pos, idx, name[6] == 'F');
             Compact(ref pos, ref nrm, ref col, idx);
+            if (!name.StartsWith("wheel_") && !name.StartsWith("steer_")) LowerBody(pos, nrm);
             if (TwoSided(mid, name)) Twin(ref pos, ref nrm, ref col, ref idx);
             var at = Matrix4x4.Translate(piv);
             if (name.StartsWith("wheel_"))
@@ -684,7 +695,7 @@ public class CarModel : MonoBehaviour
             set = BuildRivalSet(res); if (set == null) return null; rivalCache[res] = set;
         }
         var root = new GameObject("Car");
-        root.transform.localScale = Vector3.one * (3.40f / 3.135f); // as CreateFromAsset
+        root.transform.localScale = Vector3.one * RootScale; // as CreateFromAsset
         var cm = root.AddComponent<CarModel>();
         cm.body = new GameObject("Body").transform; cm.body.SetParent(root.transform, false);
         cm.Res = res; cm.rival = true; cm.merged = true; cm.rset = set; cm.mpb = new MaterialPropertyBlock(); cm.tyreR = set.tyreR[0];
@@ -701,7 +712,7 @@ public class CarModel : MonoBehaviour
             }
         // the helmet is in the body mesh; an empty stand-in keeps CarModel.helmet usable
         var h = new GameObject("Helmet").transform; h.SetParent(cm.body, false); h.localPosition = HelmetPos; cm.helmet = h;
-        if (rivalDebris == null) { rivalDebris = Kind(Paint(new Color(0.06f, 0.065f, 0.075f), 0.55f, 0.7f, 0.1f, 0.6f, 0.25f), "_CARBON"); rivalDebris.name = "RivalDebris"; }
+        if (rivalDebris == null) { rivalDebris = Kind(Paint(Lin(0.022f, 0.024f, 0.028f), 0.35f, 0.88f, 0.05f, 0.7f, 0.25f), "_CARBON"); rivalDebris.name = "RivalDebris"; }
         cm.debrisSrc = rivalDebris;
         // per-car values: the old per-part materials' defaults until SetLivery / SetStripe / the brakes change them
         cm.mpb.SetColor(LivAId, paint ?? new Color(0.78f, 0.05f, 0.07f)); cm.mpb.SetColor(LivBId, new Color(0.93f, 0.93f, 0.94f));
@@ -784,6 +795,54 @@ public class CarModel : MonoBehaviour
         r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         go.SetActive(false);
         return go;
+    }
+
+    // ---- fit to a 2026 car. The source model is an F2-size car, scaled up at the root by 3.40 / 3.135 (wheelbase).
+    //  * tyres: 705 mm front / 710 mm rear across (the model's were 688 mm). The rubber is stretched outward from the
+    //    bead, so the 18" rim keeps its size; the wheel centre goes to the new radius less a 4 mm squash, so every
+    //    tyre sits on the road (the fronts floated 6 mm) and its bottom tucks into the contact shadow.
+    //  * ride height: the model's floor sat ~13 cm off the road; a 2026 car runs ~5-7 cm. Only the lower body moves
+    //    down (floor, nose, front wing, sidepod flanks, diffuser), fading out to nothing at DropY1, so the cockpit,
+    //    halo, airbox and rear wing stay exactly where the cockpit camera was fitted. Near each wheel centre the drop
+    //    fades out across x towards the upright (linearly in x, so the suspension arms stay straight and still meet
+    //    the uprights, which move with the wheel).
+    public const float RootScale = 3.40f / 3.135f;
+    const float TyreSquash = 0.004f, Drop = 0.045f, DropY0 = 0.30f, DropY1 = 0.52f; // model units (x RootScale = m)
+    static readonly Vector2[] AxleZY = { new Vector2(1.724f, 0.32f), new Vector2(-1.411f, 0.32f) };
+    static float TyreTarget(bool front) => (front ? 0.705f : 0.710f) * 0.5f / RootScale;
+    static float WheelY(bool front) => TyreTarget(front) - TyreSquash;
+    static void FitTyre(Vector3[] pos, int[] idx, bool front)
+    {
+        float R = 0f, rb = float.MaxValue;
+        foreach (int i in idx) { float r = new Vector2(pos[i].y, pos[i].z).magnitude; R = Mathf.Max(R, r); rb = Mathf.Min(rb, r); }
+        float Rt = TyreTarget(front);
+        if (R <= 0f || R >= Rt || rb >= R - 0.02f) return;
+        float k = (Rt - rb) / (R - rb);
+        for (int i = 0; i < pos.Length; i++)
+        {
+            float r = new Vector2(pos[i].y, pos[i].z).magnitude; if (r < rb || r < 1e-5f) continue;
+            float s = (rb + (r - rb) * k) / r; pos[i].y *= s; pos[i].z *= s;
+        }
+    }
+    static void LowerBody(Vector3[] pos, Vector3[] nrm)
+    {
+        const float band = DropY1 - DropY0;
+        for (int i = 0; i < pos.Length; i++)
+        {
+            var p = pos[i];
+            float fy = Mathf.Clamp01((DropY1 - p.y) / band);
+            if (fy <= 0f) continue;
+            float xs = Mathf.Clamp01((Mathf.Abs(p.x) - 0.20f) / 0.36f), keep = 0f;
+            for (int a = 0; a < AxleZY.Length; a++)
+            {
+                float r = new Vector2(p.z - AxleZY[a].x, p.y - AxleZY[a].y).magnitude;
+                keep = Mathf.Max(keep, Mathf.Clamp01((0.31f - r) / 0.06f) * xs);
+            }
+            float w = 1f - keep;
+            pos[i].y = p.y - Drop * fy * w;
+            // the band DropY0..DropY1 is stretched vertically: lean its normals to match
+            if (p.y > DropY0 && nrm != null && i < nrm.Length) { var n = nrm[i]; n.y /= 1f + Drop / band * w; nrm[i] = n.normalized; }
+        }
     }
 
     static bool TwoSided(int mid, string name) => mid == 1 || mid == 2 || mid == 3 || mid == 6 || name.StartsWith("steer_");
@@ -902,7 +961,7 @@ public class CarModel : MonoBehaviour
         float rr = 0; for (int i = 0; i < nv; i++) if (pos[i].x * sg > xo - 0.03f) rr = Mathf.Max(rr, new Vector2(pos[i].y, pos[i].z).magnitude);
         if (rr <= 0.05f) return;
         int k = front ? 0 : 1;
-        if (faceMat[k] == null) { faceMat[k] = new Material(sh); faceMat[k].SetColor("_Color", new Color(0.2f, 0.21f, 0.23f)); }
+        if (faceMat[k] == null) { faceMat[k] = new Material(sh); faceMat[k].SetColor("_Color", Lin(0.22f, 0.23f, 0.245f)); faceMat[k].SetColor("_Cover", Lin(0.03f, 0.032f, 0.036f)); }
         float x = (xo + 0.004f) * sg;
         var m = new Mesh
         {
@@ -920,7 +979,12 @@ public class CarModel : MonoBehaviour
         faces.Add(r);
     }
 
-    // contact shadow: the old soft blob plus a tight dark core under the floor and dark tyre contact patches
+    // contact shadow (one quad, one texture, no lighting): what makes the car sit ON the road. Four layers:
+    //  * a broad soft blob (sky light blocked by the whole car),
+    //  * a near-black core under the floor (5-7 cm above the road: almost no light gets under it),
+    //  * an occlusion skirt fading ~35 cm out from the floor edge,
+    //  * per tyre a black contact patch plus an occlusion halo in front of and behind it (the tyre's bulge
+    //    shades the road where it meets it).
     static Material contactMat;
     static Material ContactShadowMat()
     {
@@ -932,21 +996,28 @@ public class CarModel : MonoBehaviour
         contactMat.mainTexture = WorldBuilder.Tex(96, 224, (u, v, px, py) =>
         {
             float dx = (u - 0.5f) * 2, dy = (v - 0.5f) * 2, d = Mathf.Sqrt(dx * dx * 1.1f + dy * dy * 0.9f);
-            float soft = Mathf.Clamp01(1 - d); soft = soft * soft * (3 - 2 * soft) * 0.75f;
+            float soft = Mathf.Clamp01(1 - d); soft = soft * soft * (3 - 2 * soft) * 0.6f;
             float x = (u - 0.5f) * 2.4f, z = 0.3f + (v - 0.5f) * 5.6f;
             // floor plan: ~0.62 m half width beside the cockpit, tapering into the nose
             float hw = z > 1.1f ? Mathf.Lerp(0.55f, 0.12f, Mathf.Clamp01((z - 1.1f) / 1.5f)) : z < -1.5f ? Mathf.Lerp(0.55f, 0.3f, Mathf.Clamp01((-1.5f - z) / 0.6f)) : 0.62f;
             float ex = Mathf.Abs(x) - hw, ez = Mathf.Max(z - 2.7f, -2.15f - z);
             float out1 = Mathf.Sqrt(Mathf.Max(ex, 0) * Mathf.Max(ex, 0) + Mathf.Max(ez, 0) * Mathf.Max(ez, 0)) + Mathf.Min(Mathf.Max(ex, ez), 0);
-            float core = Mathf.Clamp01(1 - (out1 + 0.12f) / 0.22f) * 0.6f;
+            float core = Mathf.Clamp01(1 - (out1 + 0.08f) / 0.2f); core = core * (2 - core) * 0.88f;
+            float skirt = Mathf.Clamp01(1 - out1 / 0.35f); skirt = skirt * skirt * 0.4f;
+            float noseK = Mathf.Lerp(1f, 0.35f, Mathf.Clamp01((z - 1.2f) / 0.8f)); core *= noseK; skirt *= noseK; // the nose is high: softer
             float patch = 0;
-            foreach (var (wx, wz, hx) in new[] { (0.71f, 1.72f, 0.14f), (-0.71f, 1.72f, 0.14f), (0.68f, -1.41f, 0.18f), (-0.68f, -1.41f, 0.18f) })
+            foreach (var (wx, wz, hx) in new[] { (0.71f, 1.72f, 0.13f), (-0.71f, 1.72f, 0.13f), (0.68f, -1.41f, 0.16f), (-0.68f, -1.41f, 0.16f) })
             {
-                float px2 = (Mathf.Abs(x - wx) - hx) / 0.08f, pz2 = (Mathf.Abs(z - wz) - 0.16f) / 0.1f;
-                float q = Mathf.Clamp01(1 - Mathf.Max(px2, pz2)); patch = Mathf.Max(patch, q * q * 0.8f);
+                float ax = Mathf.Abs(x - wx) - hx, az = Mathf.Abs(z - wz);
+                // the patch itself (~12 cm long), hard-edged
+                float px2 = ax / 0.04f, pz2 = (az - 0.06f) / 0.05f;
+                float q = Mathf.Clamp01(1 - Mathf.Max(px2, pz2));
+                // occlusion halo: along the tyre ~40 cm each way, a little to the sides, strongest at the patch
+                float hxz = Mathf.Max(ax, 0) / 0.1f, hzz = az / 0.42f, h = Mathf.Clamp01(1 - Mathf.Sqrt(hxz * hxz + hzz * hzz));
+                patch = Mathf.Max(patch, Mathf.Max(q * 0.97f, h * h * 0.7f));
             }
-            float a = 1 - (1 - soft) * (1 - core) * (1 - patch);
-            return new Color32(0, 0, 0, (byte)(Mathf.Clamp01(a) * 235));
+            float a = 1 - (1 - soft) * (1 - core) * (1 - skirt) * (1 - patch);
+            return new Color32(0, 0, 0, (byte)(Mathf.Clamp01(a) * 250));
         });
         contactMat.mainTexture.wrapMode = TextureWrapMode.Clamp;
         return contactMat;
@@ -1019,7 +1090,7 @@ public class CarModel : MonoBehaviour
     // wing pieces, split off the imported model's carbon / white / paint parts: 0 front wing left, 1 right,
     // 2 left endplate, 3 right endplate (children of the sides), 4 rear wing. Car frame: model -x = the car's left.
     readonly Transform[] dmgPiv = new Transform[5];
-    static readonly Vector3[] DmgPivPos = { new Vector3(-0.14f, 0.24f, 2.08f), new Vector3(0.14f, 0.24f, 2.08f), new Vector3(-0.68f, 0.2f, 2.35f), new Vector3(0.68f, 0.2f, 2.35f), new Vector3(0f, 0.72f, -1.8f) };
+    static readonly Vector3[] DmgPivPos = { new Vector3(-0.14f, 0.195f, 2.08f), new Vector3(0.14f, 0.195f, 2.08f), new Vector3(-0.68f, 0.155f, 2.35f), new Vector3(0.68f, 0.155f, 2.35f), new Vector3(0f, 0.72f, -1.8f) }; // (front: lowered with the body, LowerBody)
     static readonly Dictionary<string, Mesh[]> splitCache = new Dictionary<string, Mesh[]>();
     Material debrisSrc;
     // wheels by physics index (0 FL, 1 FR, 2 RL, 3 RR), their rest positions and tyres; toe / camber shown (deg)

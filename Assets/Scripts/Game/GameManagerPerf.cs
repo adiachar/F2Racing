@@ -7,7 +7,7 @@
 //  * per-level cuts that the other files read: CarModel.LowDetail, the car paint's cheap SubShader, the sun glare,
 //    the cheap colour grade (F2_GRADE_LOW)
 //  * dynamic resolution only where the graphics API supports it (Vulkan, Metal); on OpenGL ES the resolution
-//    setting changes the screen buffer size instead
+//    setting changes the screen buffer size instead. Floor 75%; MSAA per level (4x Medium/High, 2x Low)
 using FormulaSim;
 using UnityEngine;
 
@@ -125,6 +125,17 @@ public partial class GameManager
             return dynRes == 1;
         }
     }
+    // Below about 75% the picture goes visibly blocky and every edge and thin pole swims, so dynamic resolution stops
+    // there (or at the "Resolution scale" setting, if the player chose less). The old floor was 60%.
+    float DynResMin => Mathf.Min(0.75f, ResMax);
+    // Auto's first resolution steps stop at 85%; the shadows go next, then the rest of the way to DynResMin.
+    bool ShadowsLive => gfxLevel >= 2 && shadowsOn && !autoNoShadows && !LightBake.Active;
+    float AutoResFloor => gfxIdx == 0 && ShadowsLive ? Mathf.Max(DynResMin, Mathf.Min(0.85f, ResMax)) : DynResMin;
+
+    // MSAA samples per graphics level (QualitySettings clamps to what the GPU supports). Tile GPUs resolve MSAA on
+    // the chip, so 4x costs roughly 5-15% of the GPU frame and 2x less; a lower resolution looks far worse.
+    static int MsaaFor(int level) => level <= 1 ? 2 : 4;
+
     int nativeW, nativeH; float fixedScale = 1f;
     void FixedResolution(float k)
     {

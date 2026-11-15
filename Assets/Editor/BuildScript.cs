@@ -1,7 +1,7 @@
 // BuildScript.cs — called by the cloud build (GameCI: buildMethod BuildScript.Build).
 // Creates everything the build needs from code, so the project never has to be opened in the Unity editor:
 // an empty startup scene (the game builds itself at runtime), a base material that keeps the Standard
-// shader in the build, and the player settings for Android / WebGL.
+// shader in the build, the player settings for Android / WebGL, and MSAA in the quality levels.
 using System;
 using System.IO;
 using UnityEditor;
@@ -71,9 +71,29 @@ public static class BuildScript
         PlayerSettings.SetScriptingBackend(NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
         PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
         PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel23;
+        // Android Frame Pacing (Swappy): frames are shown at even intervals, and on 90/120 Hz screens the display is
+        // asked for a rate the 30/60 fps target divides into. Without it a 60 fps target on a 90 Hz panel alternates
+        // 11 ms and 22 ms frames, which reads as a judder of everything on screen.
+        PlayerSettings.Android.optimizedFramePacing = true;
+
+        QualityLevels();
 
         PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
         PlayerSettings.WebGL.decompressionFallback = true;
+    }
+
+    // The project uses the built-in render pipeline (no URP package), so MSAA is QualitySettings.antiAliasing.
+    // Every quality level gets 4x, so whatever level a platform starts on, the screen buffer is created with MSAA
+    // from the first frame; GameManager.ApplyGraphics then sets the per-level value (4x Medium/High, 2x Low).
+    static void QualityLevels()
+    {
+        int keep = QualitySettings.GetQualityLevel();
+        for (int i = 0; i < QualitySettings.names.Length; i++)
+        {
+            QualitySettings.SetQualityLevel(i, false);
+            QualitySettings.antiAliasing = 4;
+        }
+        QualitySettings.SetQualityLevel(keep, false);
     }
 
     public static void Build()

@@ -52,7 +52,7 @@ fixed4 frag (v2f i) : SV_Target
     float lat = i.trk.x;
     float wl = max(fwidth(lat), 1e-3); // outside any branch
 #ifdef GROUND_HQ
-    half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, _MipBias));
+    half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, max(_MipBias, 0.0))); // never sharper than the mips: no crawling grass
 #else
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.6)); // Low: blurrier mips, kinder to the texture cache
 #endif
@@ -77,7 +77,9 @@ fixed4 frag (v2f i) : SV_Target
     float g = lat - _Ruts.x;
     half near = (half)saturate(1.0 - g * 0.22) * (half)step(0.0, g);
     float o = g - 2.2 - 1.6 * sin(i.trk.y * 0.045 + mac.r * 6.0);
-    half rut = (half)saturate(1.0 - abs(abs(o) - 0.8) / max(0.14, wl)) * (half)saturate((mac.b - 0.42) * 6.0);
+    // a 0.14 m rut; once a pixel is wider it keeps its average darkness (thinner contrast), not its width in pixels
+    float rw = max(0.14, wl);
+    half rut = (half)(saturate(1.0 - abs(abs(o) - 0.8) / rw) * (0.14 / rw)) * (half)saturate((mac.b - 0.42) * 6.0);
     col *= 1.0 - _Ruts.y * (0.12 * near + 0.32 * rut * near);
 #endif
 

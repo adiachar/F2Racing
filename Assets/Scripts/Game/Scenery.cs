@@ -223,14 +223,14 @@ public static class Scenery
             b.tri.Add(a0); b.tri.Add(a1); b.tri.Add(b0); b.tri.Add(a1); b.tri.Add(b1); b.tri.Add(b0);
         }
         var mat = new Material(Resources.Load<Material>("Shadow"));
-        var tex = new Texture2D(32, 4, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear };
+        var tex = new Texture2D(32, 4, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear };
         var px = new Color32[32 * 4];
         for (int y = 0; y < 4; y++) for (int x = 0; x < 32; x++)
         {
             float u = (x + 0.5f) / 32f, e = Mathf.Clamp01(Mathf.Min(u, 1 - u) * 3f);
             px[y * 32 + x] = new Color32(10, 10, 12, (byte)(e * e * 70));
         }
-        tex.SetPixels32(px); tex.Apply(false); mat.mainTexture = tex;
+        tex.SetPixels32(px); tex.Apply(true, true); mat.mainTexture = tex;
         var mesh = new Mesh { name = "Rubber", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
         mesh.SetVertices(b.v); mesh.SetUVs(0, b.uv); mesh.SetTriangles(b.tri, 0); mesh.RecalculateBounds();
         var go = new GameObject("Rubber"); go.transform.SetParent(parent, false);

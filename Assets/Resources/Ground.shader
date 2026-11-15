@@ -10,7 +10,7 @@ Shader "F2/Ground"
         _MainTex ("Detail (world space)", 2D) = "white" {}
         _MacroTex ("Macro (R brightness, G dry, B clumps)", 2D) = "gray" {}
         _MacroScale ("Macro tiles per metre", Float) = 0.0105
-        _MipBias ("Detail mip bias", Float) = -0.25
+        _MipBias ("Detail mip bias (>= 0)", Float) = 0
         _DryTint ("Dry patch tint (a = amount)", Color) = (1.2, 1.08, 0.72, 0.5)
         _Stripe ("Stripes: from m, to m, width m, strength", Vector) = (0, 0, 3, 0)
         _Wall ("Barrier: line m, darkening", Vector) = (-100, 0, 0, 0)

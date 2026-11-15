@@ -8,8 +8,10 @@
 // Paint edges are drawn with box-filtered maths in metres (fwidth), so they stay crisp near and do not
 // shimmer far away, whatever the screen resolution.
 //
-// Two levels: LOD 300 (Medium/High) = 2 texture reads, sun sheen and horizon Fresnel;
-//             LOD 150 (Low)         = 1 texture read, no sheen. Road.cs picks one from the graphics level.
+// Two levels: LOD 300 (Medium/High) = 3 texture reads (5 m detail, 43 m macro, 1.4 m fine aggregate from the global
+//                                     _F2RoadFine), sun sheen with glinting stones, tar seams, rubber streaks, Fresnel;
+//             LOD 150 (Low)         = 1 texture read, no sheen; section shades, patches and kerb relief are maths only.
+// RoadSurface.cs picks one from the graphics level and sets _F2RoadFine.
 Shader "F2/Road"
 {
     Properties

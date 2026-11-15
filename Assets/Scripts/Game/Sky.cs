@@ -29,58 +29,65 @@ public class Sky : MonoBehaviour
         public Color fog; public float fogStart, fogEnd;
     }
 
-    // per circuit, from Track.def (id; style and forest for circuits not listed)
+    // per circuit, from Track.def (id; style and forest for circuits not listed). Every dry circuit is a clear, sunny
+    // race day: a clean, saturated blue sky (brighter than the old one, which at 45 degrees was darker than the sunlit
+    // asphalt: a "dim movie" look), fair-weather cloud, and a light, clean blue horizon haze instead of a grey one.
+    // Procedural skybox numbers (Unity's maths, linear colour space, sun 48 degrees up), sRGB on screen:
+    //   tint (0.40, 0.54, 0.80), atmosphere 0.95, exposure 2.0: zenith (0.33, 0.47, 0.82), 45 deg (0.32, 0.46, 0.78),
+    //   15 deg ~(0.52, 0.72, 1.0); the bottom ~8 degrees are covered by the haze band in the fog colour (Clouds.shader).
+    // Fog: it starts further out and is a clean light blue that matches the horizon, so distance reads as air, not milk;
+    // it is still well on at the cloud sphere (0.9 x the far plane), where the haze band takes over the far land.
     public static Look For(Track t, bool street)
     {
         var k = new Look
         {
-            cover = 0.35f, haze = 0.85f, deck = 0.22f, wind = 1f, tint = new Color(0.5f, 0.6f, 0.75f), atmosphere = 0.85f, exposure = 1.25f,
-            fog = new Color(0.72f, 0.80f, 0.88f), fogStart = 300, fogEnd = 1800,
+            cover = 0.3f, haze = 0.75f, deck = 0.22f, wind = 1f, tint = new Color(0.40f, 0.54f, 0.80f), atmosphere = 0.95f, exposure = 2.0f,
+            fog = new Color(0.68f, 0.78f, 0.90f), fogStart = 420, fogEnd = 1950,
         };
         var d = t.def;
         string id = d != null ? d.id : "";
-        if (street) { k.fog = new Color(0.80f, 0.82f, 0.85f); k.fogStart = 220; k.fogEnd = 1500; } // sea haze
-        else if (d != null && d.forest > 0.6) { k.fog = new Color(0.66f, 0.74f, 0.78f); k.fogStart = 180; k.fogEnd = 1300; k.cover = 0.55f; }
-        else if (d != null) k.cover = 0.3f + 0.3f * (float)d.forest;
+        if (street) { k.fog = new Color(0.70f, 0.79f, 0.90f); k.fogStart = 350; k.fogEnd = 1750; } // sea air
+        else if (d != null && d.forest > 0.6) { k.fog = new Color(0.66f, 0.77f, 0.86f); k.fogStart = 300; k.fogEnd = 1700; k.cover = 0.42f; }
+        else if (d != null) k.cover = 0.22f + 0.25f * (float)d.forest;
         switch (id)
         {
-            case "monaco": // Riviera: deep blue, a few fair-weather clouds, sea haze
-                k.cover = 0.28f; k.haze = 0.8f; k.tint = new Color(0.42f, 0.56f, 0.80f); k.atmosphere = 0.75f; k.exposure = 1.35f;
+            case "monaco": // Riviera: deep blue, a few fair-weather clouds
+                k.cover = 0.22f; k.haze = 0.7f; k.tint = new Color(0.36f, 0.52f, 0.82f); k.atmosphere = 0.85f; k.exposure = 2.1f;
                 break;
-            case "spa": // Ardennes: low grey deck, damp air
-                k.cover = 0.8f; k.haze = 0.95f; k.deck = 0.18f; k.tint = new Color(0.56f, 0.60f, 0.66f); k.atmosphere = 1.15f; k.exposure = 0.95f;
-                k.fog = new Color(0.66f, 0.71f, 0.74f); k.fogStart = 160; k.fogEnd = 1250;
+            case "spa": // Ardennes on a good day: big cumulus over the forest, fresh air
+                k.cover = 0.5f; k.haze = 0.8f; k.deck = 0.18f; k.tint = new Color(0.42f, 0.55f, 0.78f); k.atmosphere = 1.0f; k.exposure = 1.85f;
+                k.fog = new Color(0.66f, 0.76f, 0.84f); k.fogStart = 300; k.fogEnd = 1650;
                 break;
-            case "silverstone": // English summer on an open plateau: a grey, mostly closed sky
-                k.cover = 0.78f; k.deck = 0.19f; k.tint = new Color(0.55f, 0.60f, 0.68f); k.atmosphere = 1.1f; k.exposure = 1.05f;
-                k.fog = new Color(0.71f, 0.75f, 0.79f); k.fogStart = 260; k.fogEnd = 1600;
+            case "silverstone": // English summer on an open plateau: sunshine and fair-weather cumulus
+                k.cover = 0.46f; k.deck = 0.19f; k.tint = new Color(0.42f, 0.55f, 0.79f); k.atmosphere = 1.0f; k.exposure = 1.9f;
+                k.fog = new Color(0.68f, 0.77f, 0.88f); k.fogStart = 380; k.fogEnd = 1800;
                 break;
-            case "monza": // Po valley: warm, hazy, mostly clear
-                k.cover = 0.3f; k.haze = 0.95f; k.tint = new Color(0.52f, 0.60f, 0.72f); k.atmosphere = 1.0f; k.exposure = 1.25f;
-                k.fog = new Color(0.82f, 0.80f, 0.74f); k.fogStart = 200; k.fogEnd = 1400;
+            case "monza": // Po valley: warm, a little hazy, clear
+                k.cover = 0.25f; k.haze = 0.85f; k.tint = new Color(0.42f, 0.54f, 0.78f); k.atmosphere = 1.0f; k.exposure = 1.95f;
+                k.fog = new Color(0.74f, 0.79f, 0.86f); k.fogStart = 340; k.fogEnd = 1750;
                 break;
             case "suzuka":
-                k.cover = 0.45f; k.fog = new Color(0.72f, 0.79f, 0.86f);
+                k.cover = 0.38f; k.fog = new Color(0.68f, 0.78f, 0.90f);
                 break;
-            case "austin": // Texas: hot, pale, nearly cloudless
-                k.cover = 0.18f; k.tint = new Color(0.50f, 0.60f, 0.78f); k.exposure = 1.35f;
-                k.fog = new Color(0.83f, 0.82f, 0.78f); k.fogStart = 280; k.fogEnd = 1700; // dust in the air
+            case "austin": // Texas: hot, nearly cloudless, a little dust low down
+                k.cover = 0.15f; k.tint = new Color(0.42f, 0.55f, 0.80f); k.exposure = 2.05f;
+                k.fog = new Color(0.74f, 0.80f, 0.88f); k.fogStart = 400; k.fogEnd = 1900;
                 break;
-            case "budapest": // summer heat haze
-                k.cover = 0.25f; k.haze = 0.95f; k.exposure = 1.3f;
-                k.fog = new Color(0.81f, 0.80f, 0.76f); k.fogStart = 240; k.fogEnd = 1500;
+            case "budapest": // summer heat
+                k.cover = 0.22f; k.haze = 0.85f; k.exposure = 2.0f;
+                k.fog = new Color(0.73f, 0.79f, 0.88f); k.fogStart = 360; k.fogEnd = 1800;
                 break;
             case "catalunya": // Mediterranean: clear and blue
-                k.cover = 0.2f; k.haze = 0.95f; k.tint = new Color(0.44f, 0.57f, 0.80f); k.atmosphere = 0.8f; k.exposure = 1.35f;
-                k.fog = new Color(0.82f, 0.82f, 0.80f); k.fogStart = 260; k.fogEnd = 1600; // hot haze
+                k.cover = 0.18f; k.haze = 0.8f; k.tint = new Color(0.36f, 0.52f, 0.82f); k.atmosphere = 0.85f; k.exposure = 2.1f;
+                k.fog = new Color(0.70f, 0.79f, 0.90f); k.fogStart = 400; k.fogEnd = 1850;
                 break;
             case "spielberg": // Alps: clear air, big fair-weather cumulus
-                k.cover = 0.5f; k.haze = 0.7f; k.deck = 0.17f; k.tint = new Color(0.45f, 0.58f, 0.80f); k.atmosphere = 0.75f; k.exposure = 1.3f;
-                k.fog = new Color(0.70f, 0.79f, 0.90f); k.fogStart = 350; k.fogEnd = 2000;
+                k.cover = 0.42f; k.haze = 0.65f; k.deck = 0.17f; k.tint = new Color(0.38f, 0.53f, 0.82f); k.atmosphere = 0.85f; k.exposure = 2.05f;
+                k.fog = new Color(0.66f, 0.78f, 0.92f); k.fogStart = 480; k.fogEnd = 2100;
                 break;
-            case "zandvoort": // North Sea dunes: windy, broken cloud, salt haze
-                k.cover = 0.45f; k.wind = 2.0f; k.haze = 0.85f; k.tint = new Color(0.48f, 0.59f, 0.76f); k.exposure = 1.3f;
-                k.fog = new Color(0.78f, 0.83f, 0.87f); k.fogStart = 260; k.fogEnd = 1600;
+            case "zandvoort": // North Sea dunes: windy, broken cloud, bright
+                k.cover = 0.38f; k.wind = 2.0f; k.haze = 0.8f; k.tint = new Color(0.40f, 0.54f, 0.80f); k.exposure = 2.0f;
+                k.fog = new Color(0.70f, 0.80f, 0.90f); k.fogStart = 380; k.fogEnd = 1800;
                 break;
         }
         return k;
@@ -98,13 +105,13 @@ public class Sky : MonoBehaviour
         k.wind *= 1f + 0.8f * w;
         k.tint = Color.Lerp(k.tint, new Color(0.55f, 0.57f, 0.60f), w);
         k.atmosphere = Mathf.Lerp(k.atmosphere, 1.3f, w);
-        k.exposure *= 1f - 0.35f * w;
+        k.exposure *= 1f - 0.5f * w;                                   // (the dry sky is brighter now: wet ends where it did)
         k.fog = Color.Lerp(k.fog, grey, Mathf.Clamp01(w * 1.3f));
-        k.fogStart *= 1f - 0.75f * w;                                  // wet: fog from ~25 % of the dry start
-        k.fogEnd *= 1f - 0.55f * w;                                    // and gone by ~45 % of the dry distance
+        k.fogStart *= 1f - 0.8f * w;                                   // wet: fog from ~20 % of the dry start
+        k.fogEnd *= 1f - 0.6f * w;                                     // and gone by ~40 % of the dry distance
         return k;
     }
-    static float GlareMax(Look k, float w) => 0.5f * todGlare * (1f - 0.65f * k.cover) * Mathf.Clamp01(1f - 1.6f * w); // none in the rain
+    static float GlareMax(Look k, float w) => 0.4f * todGlare * (1f - 0.65f * k.cover) * Mathf.Clamp01(1f - 1.6f * w); // none in the rain
 
     // ---------------------------------------------------------------- time of day (TimeOfDay.cs)
     // Afternoon is the original light. The others move and colour the sun, change the sky, fog and cloud light,
@@ -140,21 +147,29 @@ public class Sky : MonoBehaviour
         return k;
     }
 
-    // sun angle / colour / intensity, the cars' ambient and the bake's light for the time of day
+    // sun angle / colour / intensity, the cars' ambient and the bake's light for the time of day.
+    // Balance (afternoon, on flat ground): sun 1.45 x sin 48 = 1.08 against a sky fill of (0.49, 0.59, 0.77) after
+    // LightBake's gain: sunlit white is neutral-warm (it was blue-tinted: the old sky fill was as strong as the sun and
+    // bluer), shade is a clean blue-grey at ~0.36 of the sun side in linear (0.58 on screen; it was 0.69: flat).
+    // The bake gets the sun colour in linear, like the real-time light the cars get, so world and cars match.
     static void SunAt(Light sun, TimeOfDay.Kind t)
     {
-        Color sky = new Color(0.56f, 0.68f, 0.90f); // what the bake uses for the sky light (blue from above)
+        Color sky = new Color(0.37f, 0.45f, 0.58f); // the bake's sky light, linear (blue from above; LightBake scales it)
         switch (t)
         {
-            case TimeOfDay.Kind.Morning:
-                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.91f, 0.78f); sun.intensity = 1.15f;
-                sky = new Color(0.50f, 0.62f, 0.88f);
-                RenderSettings.ambientSkyColor = new Color(0.58f, 0.68f, 0.85f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.58f, 0.62f);
+            case TimeOfDay.Kind.Morning: // low, cool-gold sun
+                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.4f;
+                sky = new Color(0.36f, 0.44f, 0.60f);
+                RenderSettings.ambientSkyColor = new Color(0.66f, 0.74f, 0.86f); RenderSettings.ambientEquatorColor = new Color(0.60f, 0.62f, 0.64f);
                 break;
-            case TimeOfDay.Kind.Evening:
-                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.70f, 0.42f); sun.intensity = 1.1f;
-                sky = new Color(0.36f, 0.42f, 0.62f);
-                RenderSettings.ambientSkyColor = new Color(0.45f, 0.50f, 0.65f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.48f, 0.42f);
+            case TimeOfDay.Kind.Afternoon:
+                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.45f;
+                RenderSettings.ambientSkyColor = new Color(0.69f, 0.76f, 0.86f); RenderSettings.ambientEquatorColor = new Color(0.62f, 0.64f, 0.64f);
+                break;
+            case TimeOfDay.Kind.Evening: // golden hour: a strong, low, warm sun lights every wall that faces it
+                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 1.6f;
+                sky = new Color(0.29f, 0.32f, 0.45f);
+                RenderSettings.ambientSkyColor = new Color(0.58f, 0.62f, 0.74f); RenderSettings.ambientEquatorColor = new Color(0.64f, 0.58f, 0.52f);
                 RenderSettings.ambientGroundColor *= new Color(1f, 0.85f, 0.7f);
                 break;
             case TimeOfDay.Kind.Night:   // the "sun" is the moon; the cars get the floodlights (Create)
@@ -164,8 +179,10 @@ public class Sky : MonoBehaviour
                 RenderSettings.ambientGroundColor = new Color(0.10f, 0.09f, 0.08f);
                 break;
         }
-        todSun = t == TimeOfDay.Kind.Night ? 0.5f : sun.intensity / 1.25f;
-        LightBake.SetLight(sun.color * sun.intensity, sky, t == TimeOfDay.Kind.Night);
+        todSun = t == TimeOfDay.Kind.Night ? 0.5f : sun.intensity / 1.25f; // GameManager: car sun = 1.25 x SunShare
+        bool night = t == TimeOfDay.Kind.Night;
+        // night keeps its tuned (non-linear) moon value: the floodlights do the work there
+        LightBake.SetLight(night ? sun.color * sun.intensity : sun.color.linear * sun.intensity, sky, night);
     }
 
     static Look dryLook; static bool haveLook;
@@ -221,9 +238,10 @@ public class Sky : MonoBehaviour
         cloudMat.SetFloat("_Cover", c);
         cloudMat.SetFloat("_Scale", k.deck);
         cloudMat.SetFloat("_Haze", k.haze);
-        cloudMat.SetFloat("_HazeHeight", 0.12f);
+        cloudMat.SetFloat("_HazeHeight", 0.15f); // a little higher: covers the procedural sky's over-cyan bottom degrees
         cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c) * cloudLit * (1f - 0.3f * Weather.Wetness));
-        cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.62f, 0.65f, 0.71f), new Color(0.42f, 0.45f, 0.50f), c) * cloudShade * (1f - 0.2f * Weather.Wetness));
+        // fair-weather cumulus have light, sky-lit blue-grey bases; only a closing (rain) deck goes dark grey
+        cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.74f, 0.78f, 0.86f), new Color(0.44f, 0.47f, 0.52f), c) * cloudShade * (1f - 0.2f * Weather.Wetness));
         cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * cloudSun * (1f - 0.5f * c));
         cloudMat.SetVector("_Wind", new Vector4(0.030f, 0.012f, 0.050f, 0.020f) * ((0.7f + 0.6f * c) * k.wind));
     }
@@ -447,7 +465,7 @@ public class Sky : MonoBehaviour
         return t;
     }
 
-    // radial glow: a bright core and a wide soft halo, zero at the quad's edge
+    // radial glow: a bright core and a soft halo that falls off quickly, zero at the quad's edge
     static Texture2D GlareTexture()
     {
         const int N = 64;
@@ -456,7 +474,7 @@ public class Sky : MonoBehaviour
         {
             float dx = (x + 0.5f) / N * 2f - 1f, dy = (y + 0.5f) / N * 2f - 1f, r = Mathf.Sqrt(dx * dx + dy * dy);
             float g = 0f;
-            if (r < 1f) { float f = 1f - r; g = 0.55f * Mathf.Exp(-r * r * 40f) + 0.45f * f * f; }
+            if (r < 1f) { float f = 1f - r; g = 0.6f * Mathf.Exp(-r * r * 40f) + 0.4f * f * f * f; } // tight halo: no milky veil
             px[y * N + x] = new Color32(255, 255, 255, (byte)Mathf.Clamp(Mathf.RoundToInt(g * 255f), 0, 255));
         }
         var t = new Texture2D(N, N, TextureFormat.RGBA32, true) { name = "SunGlare", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };

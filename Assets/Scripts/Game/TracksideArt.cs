@@ -1,9 +1,17 @@
 // TracksideArt.cs — the procedural textures the trackside is drawn with (made once per circuit load, no files):
-//  * Atlas (256 x 256, 5 mip levels so swatches never bleed into each other up close):
-//      y   0..63   64 flat colour swatches (16 x 4 cells of 16 px); flat-coloured parts point all their UVs at a cell centre
-//      y  64..127  garage door | glass windows | tyre-wall tops | scuffed concrete (64 x 64 each)
-//      y 128..255  eight 128 x 32 advertising boards with INVENTED names (no real teams, sponsors or car makers)
-//    So every opaque trackside part shares one material: one draw call.
+//  * Atlas (512 x 256, 5 mip levels so regions never bleed into each other up close):
+//      left half (x 0..255), as before:
+//        y   0..63   64 flat colour swatches (16 x 4 cells of 16 px); flat-coloured parts point all their UVs at a cell centre
+//        y  64..127  garage door | glass windows | tyre-wall tops | scuffed concrete (64 x 64 each)
+//        y 128..255  eight 128 x 32 advertising boards with INVENTED names (no real teams, sponsors or car makers)
+//      right half (x 256..511), surface detail so walls and barriers are not flat-coloured boxes:
+//        y   0..63   precast concrete block (128 x 64: end joints, tie holes, rain streaks, splash dirt at the foot) |
+//                    galvanised Armco rail (64 x 64: zinc mottling, rolled edges, splice bolts, grime low down) |
+//                    conveyor belt red | white (32 x 64 each: bolt rows, overlap seam, tyre scuffs)
+//        y  64..127  ribbed steel cladding (grandstands, garage backs) | composite wall panels (pit building) |
+//                    a second, newer concrete block (128 x 64) so neighbouring blocks differ
+//        y 128..255  eight more advertising boards (condensed lettering, a mark block on the left)
+//    So every opaque trackside part still shares one material: one draw call.
 //  * Crowd: coloured noise of heads and shirts in four density bands, tiled along grandstand rows.
 //  * Fence: chain-link diamonds in alpha for the alpha-tested debris/catch fence, with mip levels whose alpha is boosted
 //    so the fence fades to a grey veil in the distance instead of vanishing.
@@ -12,7 +20,7 @@ using UnityEngine;
 
 public static class TracksideArt
 {
-    public const int AS = 256;
+    public const int AS = 256, AW = 512, AH = 256; // AS: the old 256 square part (swatches, regions, first ads)
 
     // ---------------------------------------------------------------- swatches
     public const int Concrete = 0, ConcreteDark = 1, PaintRed = 2, PaintWhite = 3, PaintYellow = 4, PaintBlue = 5, Steel = 6,
@@ -37,25 +45,37 @@ public static class TracksideArt
     // UV rect (u0, v0, u1, v1) of a swatch: a single point at the cell centre
     public static Vector4 Sw(int s)
     {
-        float u = ((s % 16) * 16 + 8) / (float)AS, v = ((s / 16) * 16 + 8) / (float)AS;
+        float u = ((s % 16) * 16 + 8) / (float)AW, v = ((s / 16) * 16 + 8) / (float)AH;
         return new Vector4(u, v, u, v);
     }
-    static Vector4 Reg(int x, int y, int w, int h) => new Vector4((x + 1f) / AS, (y + 1f) / AS, (x + w - 1f) / AS, (y + h - 1f) / AS);
+    static Vector4 Reg(int x, int y, int w, int h) => new Vector4((x + 1f) / AW, (y + 1f) / AH, (x + w - 1f) / AW, (y + h - 1f) / AH);
     public static readonly Vector4 Door = Reg(0, 64, 64, 64), Glass = Reg(64, 64, 64, 64), TyreTops = Reg(128, 64, 64, 64), Scuff = Reg(192, 64, 64, 64);
-    public const int AdCount = 8;
-    public static Vector4 Ad(int k) { k = ((k % AdCount) + AdCount) % AdCount; return Reg((k % 2) * 128, 128 + (k / 2) * 32, 128, 32); }
+    // surface detail regions (each is mapped whole onto one block / rail / panel, see Trackside.Pieces)
+    public static readonly Vector4 ConcreteBlock = Reg(256, 0, 128, 64), ConcreteBlock2 = Reg(384, 64, 128, 64), Armco = Reg(384, 0, 64, 64),
+        BeltRedR = Reg(448, 0, 32, 64), BeltWhiteR = Reg(480, 0, 32, 64), Cladding = Reg(256, 64, 64, 64), PanelWall = Reg(320, 64, 64, 64);
+    public const int AdCount = 16;
+    public static Vector4 Ad(int k)
+    {
+        k = ((k % AdCount) + AdCount) % AdCount;
+        return k < 8 ? Reg((k % 2) * 128, 128 + (k / 2) * 32, 128, 32) : Reg(256 + (k % 2) * 128, 128 + ((k - 8) / 2) * 32, 128, 32);
+    }
     // part of a region: u from a to b, v from c to d (fractions of the region)
     public static Vector4 Sub(Vector4 r, float a, float b, float c, float d)
         => new Vector4(r.x + (r.z - r.x) * a, r.y + (r.w - r.y) * c, r.x + (r.z - r.x) * b, r.y + (r.w - r.y) * d);
 
     // ---------------------------------------------------------------- invented advertisers
-    static readonly string[] AdNames = { "VORLEK", "ZANTRO", "QUELBA", "NIMRAX", "KAVBRO", "OBRANI", "TEMPIX", "HULGEN" };
+    static readonly string[] AdNames = { "VORLEK", "ZANTRO", "QUELBA", "NIMRAX", "KAVBRO", "OBRANI", "TEMPIX", "HULGEN",
+                                         "BRELTO", "VASKIN", "MORLEX", "SKYRAL", "FENRIQ", "CORVIK", "YALDEN", "WIXORA" };
     static readonly Color32[] AdBack = {
         new Color32(24, 64, 160, 255), new Color32(240, 196, 30, 255), new Color32(20, 120, 70, 255), new Color32(236, 112, 24, 255),
-        new Color32(240, 240, 236, 255), new Color32(20, 20, 24, 255), new Color32(196, 28, 34, 255), new Color32(18, 128, 136, 255) };
+        new Color32(240, 240, 236, 255), new Color32(20, 20, 24, 255), new Color32(196, 28, 34, 255), new Color32(18, 128, 136, 255),
+        new Color32(248, 248, 246, 255), new Color32(28, 28, 32, 255), new Color32(118, 22, 38, 255), new Color32(78, 38, 136, 255),
+        new Color32(0, 146, 200, 255), new Color32(236, 236, 234, 255), new Color32(18, 62, 40, 255), new Color32(250, 198, 0, 255) };
     static readonly Color32[] AdText = {
         new Color32(250, 250, 250, 255), new Color32(20, 20, 24, 255), new Color32(250, 250, 250, 255), new Color32(250, 250, 250, 255),
-        new Color32(196, 28, 34, 255), new Color32(244, 200, 40, 255), new Color32(250, 250, 250, 255), new Color32(250, 250, 250, 255) };
+        new Color32(196, 28, 34, 255), new Color32(244, 200, 40, 255), new Color32(250, 250, 250, 255), new Color32(250, 250, 250, 255),
+        new Color32(22, 42, 112, 255), new Color32(124, 204, 58, 255), new Color32(250, 250, 250, 255), new Color32(250, 214, 50, 255),
+        new Color32(250, 250, 250, 255), new Color32(206, 28, 40, 255), new Color32(240, 200, 60, 255), new Color32(20, 20, 24, 255) };
     // 5 x 7 pixel letters (top row first)
     static string[] Glyph(char ch)
     {
@@ -63,7 +83,10 @@ public static class TracksideArt
         {
             case 'A': return new[] { " ### ", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
             case 'B': return new[] { "#### ", "#   #", "#   #", "#### ", "#   #", "#   #", "#### " };
+            case 'C': return new[] { " ### ", "#   #", "#    ", "#    ", "#    ", "#   #", " ### " };
+            case 'D': return new[] { "#### ", "#   #", "#   #", "#   #", "#   #", "#   #", "#### " };
             case 'E': return new[] { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#####" };
+            case 'F': return new[] { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#    " };
             case 'G': return new[] { " ### ", "#   #", "#    ", "# ###", "#   #", "#   #", " ### " };
             case 'H': return new[] { "#   #", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
             case 'I': return new[] { " ### ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", " ### " };
@@ -75,10 +98,13 @@ public static class TracksideArt
             case 'P': return new[] { "#### ", "#   #", "#   #", "#### ", "#    ", "#    ", "#    " };
             case 'Q': return new[] { " ### ", "#   #", "#   #", "#   #", "# # #", "#  # ", " ## #" };
             case 'R': return new[] { "#### ", "#   #", "#   #", "#### ", "# #  ", "#  # ", "#   #" };
+            case 'S': return new[] { " ####", "#    ", "#    ", " ### ", "    #", "    #", "#### " };
             case 'T': return new[] { "#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  " };
             case 'U': return new[] { "#   #", "#   #", "#   #", "#   #", "#   #", "#   #", " ### " };
             case 'V': return new[] { "#   #", "#   #", "#   #", "#   #", "#   #", " # # ", "  #  " };
+            case 'W': return new[] { "#   #", "#   #", "#   #", "# # #", "# # #", "## ##", "#   #" };
             case 'X': return new[] { "#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #" };
+            case 'Y': return new[] { "#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  " };
             case 'Z': return new[] { "#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####" };
             default: return null;
         }
@@ -99,12 +125,13 @@ public static class TracksideArt
     // ---------------------------------------------------------------- atlas
     public static Texture2D Atlas()
     {
-        var px = new Color32[AS * AS];
-        for (int y = 0; y < AS; y++)
-            for (int x = 0; x < AS; x++)
+        var px = new Color32[AW * AH];
+        for (int y = 0; y < AH; y++)
+            for (int x = 0; x < AW; x++)
             {
                 Color32 c;
-                if (y < 64)
+                if (x >= AS) c = DetailPixel(x - AS, y);
+                else if (y < 64)
                 {
                     int s = (y / 16) * 16 + x / 16;
                     c = s < Swatch.Length ? Swatch[s] : new Color32(128, 128, 128, 255);
@@ -149,9 +176,9 @@ public static class TracksideArt
                     int k = (x / 128) + ((y - 128) / 32) * 2, lx = x % 128, ly = (y - 128) % 32;
                     c = AdPixel(k, lx, ly);
                 }
-                px[y * AS + x] = c;
+                px[y * AW + x] = c;
             }
-        var t = new Texture2D(AS, AS, TextureFormat.RGBA32, 5, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
+        var t = new Texture2D(AW, AH, TextureFormat.RGBA32, 5, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
         t.SetPixels32(px); t.Apply(true, true);
         return t;
     }
@@ -160,6 +187,23 @@ public static class TracksideArt
     {
         var bg = AdBack[k]; var fg = AdText[k];
         if (ly < 2 || ly > 29) return Mul(bg, 0.7f); // thin darker edge
+        if (k >= 8)
+        {
+            // second set: a block in the text colour with an invented mark (ring or chevron), condensed name beside it
+            if (lx >= 2 && lx <= 27)
+            {
+                float mx = lx - 14.5f, my = ly - 15.5f, r = Mathf.Sqrt(mx * mx + my * my);
+                bool mark = (k & 1) == 0 ? (r > 5.5f && r < 9f) : (Mathf.Abs(Mathf.Abs(my) * 0.9f - (mx + 4f)) < 2.2f && Mathf.Abs(my) < 9f);
+                return mark ? bg : fg;
+            }
+            int cx = lx - 34, cy = ly - 5;
+            if (cx >= 0 && cy >= 0 && cy < 21 && cx < 6 * 13 && cx % 13 < 10)
+            {
+                var g2 = Glyph(AdNames[k][cx / 13]);
+                if (g2 != null && g2[6 - cy / 3][(cx % 13) / 2] == '#') return fg;
+            }
+            return bg;
+        }
         // invented mark: a slanted bar left of the name
         int sx = lx - 4 - (ly - 4) / 3;
         if (ly >= 5 && ly <= 26 && sx >= 0 && sx < 7) return fg;
@@ -171,6 +215,119 @@ public static class TracksideArt
             if (g != null && g[6 - gy / 3][(gx % 18) / 3] == '#') return fg;
         }
         return bg;
+    }
+
+    // ---------------------------------------------------------------- surface detail (right half of the atlas)
+    // smooth value noise (no tiling needed: each region is mapped whole onto one block, rail or panel)
+    static float Noise(float x, float y, int s)
+    {
+        int i = Mathf.FloorToInt(x), j = Mathf.FloorToInt(y); float a = x - i, b = y - j;
+        a = a * a * (3 - 2 * a); b = b * b * (3 - 2 * b);
+        return Mathf.Lerp(Mathf.Lerp(Hash(i, j, s), Hash(i + 1, j, s), a), Mathf.Lerp(Hash(i, j + 1, s), Hash(i + 1, j + 1, s), a), b);
+    }
+    static Color32 Tone(Color32 c, float r, float g, float b) => new Color32(B(c.r * r), B(c.g * g), B(c.b * b), 255);
+
+    // x 0..255, y 0..255 within the right half
+    static Color32 DetailPixel(int x, int y)
+    {
+        if (y < 64)
+        {
+            if (x < 128) return ConcretePixel(x, y, 0);
+            if (x < 192) return ArmcoPixel(x - 128, y);
+            return BeltPixel((x - 192) % 32, y, x < 224);
+        }
+        if (y < 128)
+        {
+            if (x < 64) return CladPixel(x, y - 64);
+            if (x < 128) return PanelPixel(x - 64, y - 64);
+            return ConcretePixel(x - 128, y - 64, 1);
+        }
+        int k = 8 + (x / 128) + ((y - 128) / 32) * 2;
+        return AdPixel(k, x % 128, (y - 128) % 32);
+    }
+
+    // one precast concrete block, 128 x 64 (~4 m x 1 m); v = 0 at the foot
+    static Color32 ConcretePixel(int lx, int ly, int variant)
+    {
+        int sd = 300 + variant * 40;
+        float k = 0.9f + 0.14f * (Noise(lx / 9f, ly / 6f, sd) - 0.5f) + 0.08f * (Noise(lx / 3f, ly / 2f, sd + 1) - 0.5f) + 0.05f * (Hash(lx, ly, sd + 2) - 0.5f);
+        if (variant == 1) k += 0.05f;                                                   // the newer block is a little paler
+        // rain streaks running down from the top, stronger near it
+        float streak = Mathf.Clamp01((Noise(lx / 2.5f, ly / 40f, sd + 3) - 0.55f) * 4f) * Mathf.Clamp01(ly / 64f + 0.15f);
+        k *= 1f - (variant == 1 ? 0.10f : 0.18f) * streak;
+        // splash dirt at the foot, ragged
+        float foot = Mathf.Clamp01(1f - ly / (9f + 6f * Noise(lx / 4f, 0, sd + 4)));
+        // pour line and tie holes
+        if (ly == 33) k *= 0.93f;
+        float hx = Mathf.Min(Mathf.Abs(lx - 32f), Mathf.Abs(lx - 96f)), hy = Mathf.Min(Mathf.Abs(ly - 20f), Mathf.Abs(ly - 46f));
+        if (hx * hx + hy * hy < 2.3f) k *= 0.6f;
+        // block ends: a dark gap and a chamfered, lighter arris
+        if (lx < 2 || lx > 125) k *= 0.5f; else if (lx < 4 || lx > 123) k *= 1.1f;
+        var c = Tone(Swatch[Concrete], k, k, k * 0.99f);
+        return Tone(c, 1f - 0.35f * foot, 1f - 0.38f * foot, 1f - 0.45f * foot);
+    }
+
+    // a galvanised W-beam rail section, 64 x 64 (~4 m); v 0..0.5 the lower face, 0.5..1 the upper face
+    static Color32 ArmcoPixel(int lx, int ly)
+    {
+        float k = 0.88f + 0.16f * (Noise(lx / 3f, ly / 3f, 351) - 0.5f) + 0.06f * (Hash(lx, ly, 352) - 0.5f); // zinc spangle
+        if (ly < 2 || ly > 61) k *= 1.12f;                 // rolled edges catch the light
+        else if (ly == 31 || ly == 32) k *= 0.82f;         // the fold of the W
+        // splice bolts at both ends and the post bolt in the middle
+        foreach (float bx in new[] { 3.5f, 60.5f, 31.5f })
+            foreach (float by in new[] { 16f, 47f })
+            {
+                if (bx == 31.5f && by == 47f) continue;
+                float dx = lx - bx, dy = ly - by, d = dx * dx + dy * dy;
+                if (d < 1.6f) k *= 0.45f; else if (d < 3.2f) k *= 1.15f;
+            }
+        if (lx < 1 || lx > 62) k *= 0.6f;                  // overlap of the next rail
+        // road grime and a few rust-brown runs on the lower face
+        float g = Mathf.Clamp01(1f - ly / 18f) * (0.5f + 0.5f * Noise(lx / 5f, 0, 353));
+        float rust = Mathf.Clamp01((Noise(lx / 1.5f, ly / 20f, 354) - 0.78f) * 5f) * Mathf.Clamp01(1f - ly / 40f);
+        var c = Tone(Swatch[Steel], k, k, k);
+        return Tone(c, 1f - 0.3f * g - 0.1f * rust, 1f - 0.32f * g - 0.2f * rust, 1f - 0.34f * g - 0.32f * rust);
+    }
+
+    // tyre-wall conveyor belt, 32 x 64 (one ~2.4 m piece): bolt rows, an overlap seam, black tyre scuffs
+    static Color32 BeltPixel(int lx, int ly, bool red)
+    {
+        var bc = red ? Swatch[BeltRed] : Swatch[BeltWhite];
+        float k = 0.93f + 0.08f * (Noise(lx / 4f, ly / 4f, 361 + (red ? 0 : 7)) - 0.5f);
+        if (ly < 2 || ly > 61) k *= 0.72f;
+        if (lx < 2) k *= 0.6f;                                                     // overlap seam
+        foreach (float by in new[] { 9f, 33f, 55f })
+            for (int b = 0; b < 4; b++)
+            {
+                float dx = lx - (4f + b * 8f), dy = ly - by, d = dx * dx + dy * dy;
+                if (d < 1.3f) { var bolt = new Color32(70, 72, 76, 255); return Tone(bolt, 1f, 1f, 1f); }
+                if (d < 2.6f) k *= 0.8f;
+            }
+        float scuff = Mathf.Clamp01((Noise(lx / 5f, ly / 3f, 365 + (red ? 0 : 3)) - 0.62f) * 3f) * Mathf.Clamp01(1.2f - ly / 40f);
+        k *= 1f - 0.55f * scuff;
+        return Tone(bc, k, k, k);
+    }
+
+    // ribbed steel cladding, 64 x 64: a rib every 8 px (~0.5 m), weathered low down
+    static Color32 CladPixel(int lx, int ly)
+    {
+        int r = lx % 8;
+        float k = r == 0 ? 0.70f : r == 1 ? 0.86f : r == 4 ? 1.10f : r == 5 ? 1.04f : 0.97f;
+        k *= 0.95f + 0.08f * (Noise(lx / 6f, ly / 10f, 371) - 0.5f);
+        k *= 1f - 0.15f * Mathf.Clamp01(1f - ly / 10f);
+        if (ly > 61) k *= 0.8f;                                  // flashing at the top
+        return Tone(new Color32(168, 170, 168, 255), k, k, k * 1.01f);
+    }
+
+    // composite wall panels, 64 x 64: two panels each way with joints, a slight tone per panel, fixings
+    static Color32 PanelPixel(int lx, int ly)
+    {
+        int px = lx / 32, py = ly / 32, ix = lx % 32, iy = ly % 32;
+        float k = 0.97f + 0.05f * Hash(px, py, 381) + 0.03f * (Noise(lx / 8f, ly / 8f, 382) - 0.5f);
+        if (ix == 0 || iy == 0) k *= 0.72f; else if (ix == 1 || iy == 1) k *= 1.04f;
+        if ((ix == 3 || ix == 29) && (iy == 3 || iy == 29)) k *= 0.7f;
+        k *= 1f - 0.12f * Mathf.Clamp01(1f - ly / 8f);
+        return Tone(Swatch[BuildWhite], k, k, k);
     }
 
     // ---------------------------------------------------------------- crowd: 32 seats x 4 density bands
@@ -211,7 +368,8 @@ public static class TracksideArt
     public static Texture2D Fence()
     {
         const int S = 64;
-        var t = new Texture2D(S, S, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, anisoLevel = 2 };
+        // trilinear: the wire's alpha is blended between mip levels before the alpha test, so it does not pop or crawl
+        var t = new Texture2D(S, S, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
         var lvl = new Color32[S * S];
         var a = new float[S * S];
         for (int y = 0; y < S; y++)
@@ -283,7 +441,7 @@ public static class TracksideArt
                 }
                 px[y * S + x] = c;
             }
-        var t = new Texture2D(S, S, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear };
+        var t = new Texture2D(S, S, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear };
         t.SetPixels32(px); t.Apply(true, true);
         return t;
     }

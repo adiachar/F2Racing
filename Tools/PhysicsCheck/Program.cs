@@ -55,6 +55,80 @@ if (args.Length > 0 && args[0] == "damage")
     return;
 }
 
+// ---- standstill check: dotnet run -- standstill [csv dir] ----
+// The car at rest or creeping (0-3 km/h), throttle zero, brake on or off, the steering held / swept to full lock.
+// A real car does not move or turn there (static friction holds it): only the front wheels turn. Prints how far
+// the whole car moved and turned; with a directory, writes every step (position, yaw, velocities, wheel speed,
+// slip angles, forces) to CSV. Then low-speed turning circles (5-15 km/h) as a check of the transition.
+if (args.Length > 0 && args[0] == "standstill")
+{
+    var inv = CultureInfo.InvariantCulture;
+    string csvDir = args.Length > 1 ? args[1] : null; if (csvDir != null) Directory.CreateDirectory(csvDir);
+    // steering profiles over time (s): + = right
+    var profiles = new (string name, Func<double, double> steer)[]
+    {
+        ("hold right", t => 1),
+        ("hold left", t => -1),
+        ("sweep R and back", t => t < 1.5 ? 1 : 0),
+        ("saw L-R 1 Hz", t => Math.Sin(2 * Math.PI * t) > 0 ? 1 : -1),
+    };
+    double worstMove = 0, worstYaw = 0;
+    foreach (var cls in new[] { 0, 1, 2 })
+        foreach (var kmh in new[] { 0.0, 1.0, 3.0 })
+            foreach (var brk in new[] { 0.0, 1.0 })
+                foreach (var (pname, steer) in profiles)
+                {
+                    var car = new FormulaCar(CarConfig.ForClass(cls)) { vx = kmh / 3.6 };
+                    double T = 4, x0 = car.x, y0 = car.y, maxVy = 0, maxR = 0, maxAy = 0, maxAF = 0, maxAR = 0, side = 0, yawAtStop = double.NaN;
+                    // the brake is held 0.55 s (after 0.6 s at rest the brake pedal selects reverse, as designed), then released
+                    StreamWriter w = csvDir != null && cls == 0 ? new StreamWriter(Path.Combine(csvDir, $"standstill_{kmh:F0}kmh_brake{brk:F0}_{pname.Replace(' ', '_')}.csv")) : null;
+                    w?.WriteLine("t,x,y,heading_deg,vx,vy,r,delta_deg,steerIn,wR,alphaF_deg,alphaR_deg,ay,ax,Fy_total,useF,useR,reverse");
+                    for (int i = 0; i < (int)(T / H); i++)
+                    {
+                        double t = i * H;
+                        car.Step(new CarInput(steer(t), 0, t < 0.55 ? brk : 0), H);
+                        // sideways = displacement across the car's starting heading (0): world y
+                        maxVy = Math.Max(maxVy, Math.Abs(car.vy)); maxR = Math.Max(maxR, Math.Abs(car.r)); maxAy = Math.Max(maxAy, Math.Abs(car.ay));
+                        maxAF = Math.Max(maxAF, Math.Abs(car.alphaF)); maxAR = Math.Max(maxAR, Math.Abs(car.alphaR));
+                        if (double.IsNaN(yawAtStop) && Math.Abs(car.vx) < 0.01 && kmh > 0) yawAtStop = car.heading;
+                        w?.WriteLine(string.Join(",", new[] { t, car.x, car.y, car.heading * 180 / Math.PI, car.vx, car.vy, car.r, car.delta * 180 / Math.PI, car.steerIn, car.wR, car.alphaF * 180 / Math.PI, car.alphaR * 180 / Math.PI, car.ay, car.ax, car.ay * car.massNow, car.useF, car.useR, car.reverse ? 1 : 0 }.Select(v => v.ToString("G6", inv))));
+                    }
+                    w?.Dispose();
+                    side = car.y - y0;
+                    double fwd = car.x - x0, yaw = car.heading * 180 / Math.PI;
+                    // at rest: any movement is creep. Creeping in: the car may roll forward a little and turn by the steering
+                    // geometry (kinematic arc); report sideways slip of the body (max |vy|) and the yaw after it stopped
+                    double yawAfter = double.IsNaN(yawAtStop) ? double.NaN : (car.heading - yawAtStop) * 180 / Math.PI;
+                    if (kmh == 0) { worstMove = Math.Max(worstMove, Math.Sqrt(fwd * fwd + side * side)); worstYaw = Math.Max(worstYaw, Math.Abs(yaw)); }
+                    else if (!double.IsNaN(yawAfter)) worstYaw = Math.Max(worstYaw, Math.Abs(yawAfter));
+                    Console.WriteLine($"  {CarConfig.ClassNames[cls],-9} {kmh,3:F0} km/h brake {brk:F0} {pname,-17}: fwd {fwd * 100,7:F1} cm, side {side * 100,7:F1} cm, yaw {yaw,6:F2} deg (after stop {yawAfter,6:F2}), max |vy| {maxVy,6:F3} m/s, |r| {maxR,6:F3} rad/s, |ay| {maxAy,5:F2} m/s2, |alphaF| {maxAF * 180 / Math.PI,5:F1}, |alphaR| {maxAR * 180 / Math.PI,5:F1} deg, end v {Math.Sqrt(car.vx * car.vx + car.vy * car.vy) * 100:F1} cm/s{(car.reverse ? " [reverse]" : "")}");
+                }
+    Console.WriteLine($"STANDSTILL worst: movement from rest {worstMove * 100:F2} cm, yaw {worstYaw:F3} deg");
+    // a shove at low speed (a nudge from another car, a slow spin): the tyres must stop it like friction, without
+    // springing back or ringing
+    foreach (var (name, vx0, vy0, r0) in new[] { ("pushed sideways 1 m/s", 0.0, 1.0, 0.0), ("pushed sideways 3 m/s", 0.0, 3.0, 0.0), ("spinning 1 rad/s at rest", 0.0, 0.0, 1.0), ("2 m/s + 1.5 rad/s spin", 2.0, 0.0, 1.5) })
+    {
+        var car = new FormulaCar(new CarConfig()) { vx = vx0, vy = vy0, r = r0 };
+        int flips = 0; double lastVy = vy0, tStop = double.NaN;
+        for (int i = 0; i < 240 * 4; i++)
+        {
+            car.Step(new CarInput(0, 0, 0), H);
+            if (Math.Sign(car.vy) != Math.Sign(lastVy) && Math.Abs(car.vy) > 0.01) { flips++; lastVy = car.vy; }
+            if (double.IsNaN(tStop) && Math.Sqrt(car.vx * car.vx + car.vy * car.vy) < 0.02 && Math.Abs(car.r) < 0.01) tStop = i * H;
+        }
+        Console.WriteLine($"  {name,-25}: moved {Math.Sqrt(car.x * car.x + car.y * car.y) * 100,6:F1} cm, turned {car.heading * 180 / Math.PI,6:F2} deg, still after {tStop:F2} s, vy sign flips {flips}, end v {Math.Sqrt(car.vx * car.vx + car.vy * car.vy) * 100:F2} cm/s r {car.r:F4}");
+    }
+    // the transition: steady full-lock circles at walking to parking speeds (radius from v / r), held speed
+    foreach (var kmh in new[] { 2.0, 5.0, 8.0, 10.0, 11.0, 12.0, 15.0, 20.0 })
+    {
+        var car = new FormulaCar(new CarConfig()) { vx = kmh / 3.6 };
+        for (int i = 0; i < 240 * 4; i++) { double v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy); car.Step(new CarInput(1, Math.Clamp((kmh / 3.6 - v) * 0.8, 0, 1), Math.Clamp((v - kmh / 3.6) * 0.8, 0, 1)), H); }
+        double sp = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+        Console.WriteLine($"  full lock right at {kmh,4:F0} km/h: radius {(Math.Abs(car.r) > 1e-6 ? sp / Math.Abs(car.r) : 0),7:F3} m, slip angle body {Math.Atan2(car.vy, car.vx) * 180 / Math.PI,7:F3} deg, alphaF {car.alphaF * 180 / Math.PI,7:F3} alphaR {car.alphaR * 180 / Math.PI,7:F3}, x {car.x:F4} y {car.y:F4}");
+    }
+    return;
+}
+
 // ---- AI trainer: dotnet run -- train ----
 // Evolution search (cross-entropy method) over the controller gains. Every candidate drives full laps in the
 // real physics; the score is the flying-lap time, and leaving the track disqualifies it.
@@ -672,6 +746,9 @@ if (args.Length > 0 && args[0] == "race")
 
 var dir = AppContext.BaseDirectory.Split("/bin/")[0];
 var sc = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "scenarios.json"))).RootElement;
+// golden.csv came from the old JS prototype; without it the JS comparison is skipped and the calibration still runs
+if (!File.Exists(Path.Combine(dir, "golden.csv"))) Console.WriteLine("golden.csv missing: JS comparison skipped");
+else {
 var golden = File.ReadAllLines(Path.Combine(dir, "golden.csv")).Select(l => l.Split(',')).ToList();
 int row = 0; double worstPos = 0, worstVel = 0; string worstAt = "";
 var perScenario = new Dictionary<string, (double pos, double vel)>();
@@ -708,6 +785,7 @@ foreach (var s in sc.EnumerateArray())
 Console.WriteLine($"JS vs C# over {row} samples:");
 foreach (var (k, v) in perScenario) Console.WriteLine($"  {k,-18} max position diff {v.pos:E2} m, max speed diff {v.vel:E2} m/s");
 Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "MATCH" : "DIFFERENT")}");
+}
 
 // ---- 2026 F1 car against real-world figures ----
 {

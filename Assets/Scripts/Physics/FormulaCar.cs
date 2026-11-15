@@ -313,6 +313,8 @@ namespace FormulaSim
     public class FormulaCar
     {
         const double G = 9.81, RHO = 1.225;
+        const double LowV = 3;              // m/s: below this the low-speed tyre and kinematic blends work (see Step)
+        const double LowDamp = 0.04;        // s, tyre tread damping time at a standstill (about critical with the low-speed blend)
         public CarConfig cfg;
 
         // state
@@ -917,9 +919,36 @@ namespace FormulaSim
             if (c.damage) alphaR -= RearToe() * (vx >= 0 ? 1 : -1);   // bent rear toe steers the rear axle
             if (c.relaxLen > 0)
             {
-                if (double.IsNaN(relF)) { relF = alphaF; relR = alphaR; }
+                if (double.IsNaN(relF)) { relF = alphaF; relR = alphaR; if (speed < LowV) relF = relR = 0; } // a car placed at rest starts with straight tyres
                 double kr = Math.Min(1, Math.Max(Math.Abs(vx), 2) * dt / c.relaxLen);
-                relF += (alphaF - relF) * kr; relR += (alphaR - relR) * kr; alphaF = relF; alphaR = relR;
+                double dRF = (alphaF - relF) * kr, dRR = (alphaR - relR) * kr;
+                if (speed < LowV)
+                {
+                    // Near a standstill the slip angles above (at least 4 m/s assumed, relaxing at at least 2 m/s) turn
+                    // the steering angle itself into slip: a car at rest with the wheel turned got full side force and
+                    // crept sideways. Here the tyre follows how its contact patch really moves (Pacejka's transient
+                    // tyre, which holds through zero speed): relaxation length x d alpha/dt = lateral velocity of the
+                    // patch - rolling speed x tan alpha. Turning the wheels at rest moves no patch sideways, so no force;
+                    // a push sideways meets the tyre's grip (static friction) as a stiff spring. Blended into the
+                    // normal model from 1.5 to 3 m/s, so nothing changes above about 11 km/h.
+                    double wN = Clamp((speed - 1.5) / (LowV - 1.5), 0, 1); wN = wN * wN * (3 - 2 * wN);
+                    double vfy = vy + a * r, cdl = Math.Cos(delta), sdl = Math.Sin(delta);
+                    double uF = vx * cdl + vfy * sdl, latF = vfy * cdl - vx * sdl;
+                    double toeR = c.damage ? RearToe() : 0;
+                    double uR = vx * Math.Cos(toeR) + (vy - b * r) * Math.Sin(toeR), latR = (vy - b * r) * Math.Cos(toeR) - vx * Math.Sin(toeR);
+                    double lF = PeakBa(c) / (c.tireB * Math.Pow(fzF / nF0, -c.slipGrowth)), lR = PeakBa(c) / (c.tireB * Math.Pow(fzR / nR0, -c.slipGrowth)); // peak-grip slip angles
+                    double sF = (latF - Math.Abs(uF) * Math.Tan(Clamp(relF, -lF, lF))) * dt / c.relaxLen;
+                    double sR = (latR - Math.Abs(uR) * Math.Tan(Clamp(relR, -lR, lR))) * dt / c.relaxLen;
+                    relF += dRF * wN + sF * (1 - wN); relR += dRR * wN + sR * (1 - wN);
+                    // the patch slides once the tread is deflected to the peak-grip angle; it stores no more than that
+                    double ext = 1.6 * wN;
+                    relF = Clamp(relF, -lF - ext, lF + ext); relR = Clamp(relR, -lR - ext, lR + ext);
+                    // tread damping (Pacejka's low-speed damping term): the spring alone would let the car rock to and
+                    // fro after a nudge at rest. Acts on the rate of deflection only, so it is zero in a steady state.
+                    double kd = LowDamp / dt * (1 - wN);
+                    alphaF = Clamp(relF + kd * sF, -lF - ext, lF + ext); alphaR = Clamp(relR + kd * sR, -lR - ext, lR + ext);
+                }
+                else { relF += dRF; relR += dRR; alphaF = relF; alphaR = relR; }
             }
             double FyF = -DF * Magic(c, alphaF, fzF / nF0);
 
@@ -1087,6 +1116,9 @@ namespace FormulaSim
 
             if (dir != 0 && Math.Sign(vx) != dir && fdrive == 0) vx = 0;
             if (brk > 0 && Math.Abs(vx) < 0.3 && Math.Abs(fdrive) < 1) vx *= 0.5;
+            // rolling resistance keeps acting until the car stands still (below 5 cm/s `dir` is 0 and it did not, so an
+            // unbraked car crept on at a few cm/s for ever, turning slowly with the wheels on lock)
+            if (dir == 0 && Math.Abs(fdrive) < 1) vx = Approach(vx, 0, roll / m * dt);
 
             if (speed < 3)
             {

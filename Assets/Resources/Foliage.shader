@@ -70,7 +70,7 @@ Shader "F2/Foliage"
             #pragma fragment frag
             #pragma multi_compile_fog
             v2f vert (appdata v) { return vertF(v, 1.0); }
-            fixed4 frag (v2f i) : SV_Target { return fragF(i, -0.3); }
+            fixed4 frag (v2f i) : SV_Target { return fragF(i, 0.0); } // no negative bias: cut-outs would crawl
             ENDCG
         }
     }

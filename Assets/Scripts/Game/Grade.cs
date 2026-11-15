@@ -1,6 +1,7 @@
 // Grade.cs — the colour grade of the picture (Assets/Resources/Grade.cginc does the work at the end of every world
 // shader; this side picks the values and puts them in shader globals). One grade per circuit (its light and air:
-// Monaco warm, Spa cool grey-green...), changed by the time of day and by the weather (wet = cooler, flatter).
+// Monaco warm, Spa fresh green, Austin hot...), changed by the time of day and by the weather (wet = cooler, flatter).
+// Every dry circuit is a bright, sunny race day (Real Racing look): the looks only nudge colour, never grey it out.
 // Values go in with SetGlobalVector / SetGlobalFloat (not SetGlobalColor: in linear colour space Unity would
 // convert a Color from sRGB and exaggerate the tints).
 using UnityEngine;
@@ -14,10 +15,12 @@ public struct GradeLook
 
 public static class Grade
 {
-    // keeps mid-grey where it was with the tone curve on (the curve alone would brighten the mids)
-    // global punch on top of every circuit look: richer colour, a little more contrast, much less lifted (hazy) black
-    public const float PunchSat = 1.12f, PunchCon = 1.06f, LiftKeep = 0.35f;
-    public const float BaseExposure = 1.06f; // a bright, sunny broadcast look (0.78 with the old film curve read as a dark "movie")
+    // global punch on top of every circuit look: richer colour (saturation works in the perceptual space, so 1.08 there
+    // is about 1.16 in linear), a little more contrast, much less lifted (hazy) black
+    public const float PunchSat = 1.08f, PunchCon = 1.08f, LiftKeep = 0.35f;
+    // a bright, sunny broadcast look: sunlit asphalt (sRGB 0.38) reads as a clean mid grey, ~0.51 on screen. The bake now
+    // has a stronger, warmer sun and a dimmer sky fill (LightBake / Sky.SunAt), so this is a little higher than before.
+    public const float BaseExposure = 1.18f;
 
     static readonly int idExp = Shader.PropertyToID("_GradeExposure"), idSat = Shader.PropertyToID("_GradeSat"),
         idTint = Shader.PropertyToID("_GradeTint"), idCon = Shader.PropertyToID("_GradeContrast"),
@@ -39,28 +42,28 @@ public static class Grade
     {
         switch (id)
         {
-            case "monaco":      // warm Mediterranean: golden light, rich colour, deep blue shadows off the sea
-                return G(1.02f, 1.12f, 1.08f, V(1.05f, 1.00f, 0.92f), V(0.000f, 0.006f, 0.016f), V(0.04f, 0.02f, -0.02f), V(1.02f, 1.00f, 0.97f));
-            case "spa":         // Ardennes: cool, grey-green, soft
-                return G(0.98f, 0.86f, 0.97f, V(0.95f, 0.99f, 1.02f), V(0.006f, 0.012f, 0.010f), V(-0.02f, 0.03f, 0.00f), V(0.97f, 1.00f, 1.00f));
-            case "austin":      // Texas: hot, dusty, bleached highlights, warm lifted blacks
-                return G(1.06f, 0.94f, 1.10f, V(1.07f, 1.00f, 0.88f), V(0.022f, 0.016f, 0.006f), V(0.03f, 0.01f, -0.04f), V(1.00f, 0.99f, 0.95f));
-            case "silverstone": // English summer: neutral grey, gentle
-                return G(1.00f, 0.92f, 1.00f, V(0.99f, 1.00f, 1.01f), V(0.006f, 0.007f, 0.008f), V(0.00f, 0.00f, 0.00f), V(1.00f, 1.00f, 1.00f));
-            case "zandvoort":   // North Sea dunes: bright, airy, cool-clean
-                return G(1.10f, 1.04f, 1.02f, V(0.98f, 1.00f, 1.03f), V(0.010f, 0.012f, 0.016f), V(0.02f, 0.02f, 0.03f), V(1.00f, 1.00f, 1.01f));
-            case "monza":       // Po valley: warm haze, soft contrast
-                return G(1.02f, 1.00f, 0.97f, V(1.04f, 1.00f, 0.93f), V(0.016f, 0.012f, 0.006f), V(0.02f, 0.01f, -0.02f), V(1.00f, 0.99f, 0.97f));
-            case "suzuka":      // crisp, slightly cool, vivid greens
-                return G(1.00f, 1.08f, 1.06f, V(0.99f, 1.00f, 1.00f), V(0.002f, 0.004f, 0.008f), V(0.00f, 0.03f, 0.00f), V(1.00f, 1.00f, 1.00f));
-            case "budapest":    // summer heat: warm, hazy
-                return G(1.04f, 0.98f, 1.03f, V(1.05f, 1.00f, 0.90f), V(0.014f, 0.010f, 0.004f), V(0.03f, 0.01f, -0.02f), V(1.00f, 0.99f, 0.96f));
+            case "monaco":      // warm Mediterranean: golden light, rich colour, clean blue shadows off the sea
+                return G(1.02f, 1.06f, 1.06f, V(1.05f, 1.00f, 0.93f), V(0.000f, 0.004f, 0.010f), V(0.03f, 0.01f, -0.02f), V(1.01f, 1.00f, 0.98f));
+            case "spa":         // Ardennes on a sunny day: fresh, green, neutral light
+                return G(1.00f, 1.00f, 1.03f, V(1.00f, 1.00f, 0.99f), V(0.002f, 0.004f, 0.004f), V(-0.01f, 0.03f, 0.00f), V(1.00f, 1.00f, 1.00f));
+            case "austin":      // Texas: hot, warm, bright
+                return G(1.03f, 1.00f, 1.06f, V(1.06f, 1.00f, 0.91f), V(0.008f, 0.006f, 0.002f), V(0.02f, 0.01f, -0.03f), V(1.00f, 0.99f, 0.96f));
+            case "silverstone": // English summer sun: neutral, clean, green
+                return G(1.00f, 1.00f, 1.03f, V(1.02f, 1.00f, 0.97f), V(0.002f, 0.003f, 0.004f), V(0.00f, 0.01f, 0.00f), V(1.00f, 1.00f, 1.00f));
+            case "zandvoort":   // North Sea dunes: bright, airy, clean
+                return G(1.04f, 1.04f, 1.03f, V(1.00f, 1.00f, 1.00f), V(0.004f, 0.006f, 0.010f), V(0.02f, 0.02f, 0.02f), V(1.00f, 1.00f, 1.01f));
+            case "monza":       // Po valley summer: warm, sunny
+                return G(1.01f, 1.02f, 1.03f, V(1.04f, 1.00f, 0.94f), V(0.006f, 0.005f, 0.002f), V(0.02f, 0.01f, -0.02f), V(1.00f, 0.99f, 0.97f));
+            case "suzuka":      // crisp, vivid greens
+                return G(1.00f, 1.06f, 1.05f, V(1.01f, 1.00f, 0.98f), V(0.002f, 0.004f, 0.008f), V(0.00f, 0.03f, 0.00f), V(1.00f, 1.00f, 1.00f));
+            case "budapest":    // summer heat: warm
+                return G(1.02f, 1.02f, 1.04f, V(1.05f, 1.00f, 0.92f), V(0.006f, 0.005f, 0.002f), V(0.02f, 0.01f, -0.02f), V(1.00f, 0.99f, 0.97f));
             case "catalunya":   // clear Mediterranean: warm, saturated, punchy
-                return G(1.03f, 1.10f, 1.08f, V(1.03f, 1.00f, 0.94f), V(0.002f, 0.004f, 0.010f), V(0.02f, 0.01f, -0.01f), V(1.01f, 1.00f, 0.98f));
-            case "spielberg":   // Alps: clean air, cool, high contrast
-                return G(1.03f, 1.10f, 1.10f, V(0.98f, 1.00f, 1.03f), V(0.000f, 0.003f, 0.008f), V(0.00f, 0.02f, 0.02f), V(1.00f, 1.00f, 1.01f));
-            default:
-                return G(1.00f, 1.04f, 1.04f, V(1.00f, 1.00f, 1.00f), V(0.004f, 0.005f, 0.007f), V(0.00f, 0.00f, 0.00f), V(1.00f, 1.00f, 1.00f));
+                return G(1.02f, 1.06f, 1.06f, V(1.04f, 1.00f, 0.94f), V(0.002f, 0.004f, 0.008f), V(0.02f, 0.01f, -0.01f), V(1.01f, 1.00f, 0.98f));
+            case "spielberg":   // Alps: clean air, high contrast
+                return G(1.02f, 1.06f, 1.07f, V(1.00f, 1.00f, 1.00f), V(0.000f, 0.003f, 0.008f), V(0.00f, 0.02f, 0.02f), V(1.00f, 1.00f, 1.01f));
+            default:            // sunny, a touch warm
+                return G(1.00f, 1.02f, 1.04f, V(1.03f, 1.00f, 0.96f), V(0.002f, 0.003f, 0.005f), V(0.00f, 0.00f, 0.00f), V(1.00f, 1.00f, 1.00f));
         }
     }
 
@@ -71,15 +74,15 @@ public static class Grade
     {
         switch (tod)
         {
-            case TimeOfDay.Kind.Morning: // cool, fresh, a little softer
-                g.tint = Mul(g.tint, V(0.98f, 1.00f, 1.04f)); g.contrast -= 0.02f; g.lift += V(0.000f, 0.002f, 0.006f);
+            case TimeOfDay.Kind.Morning: // cool, fresh, a little softer; opened up for the low sun (less of it on the ground)
+                g.tint = Mul(g.tint, V(0.98f, 1.00f, 1.04f)); g.contrast -= 0.02f; g.exposure *= 1.06f; g.lift += V(0.000f, 0.002f, 0.006f);
                 break;
             case TimeOfDay.Kind.Evening: // golden hour: warm, rich, a touch more contrast, blue-violet shadows
-                g.tint = Mul(g.tint, V(1.10f, 0.98f, 0.84f)); g.sat += 0.05f; g.contrast += 0.04f; g.exposure *= 1.06f;
+                g.tint = Mul(g.tint, V(1.10f, 0.98f, 0.84f)); g.sat += 0.05f; g.contrast += 0.04f; g.exposure *= 1.10f;
                 g.lift += V(0.004f, 0.000f, 0.012f); g.gain = Mul(g.gain, V(1.02f, 0.99f, 0.95f));
                 break;
             case TimeOfDay.Kind.Night:   // floodlit: neutral-cool white light, deep blacks, punchy
-                g.tint = Mul(g.tint, V(0.97f, 0.99f, 1.04f)); g.sat *= 0.95f; g.contrast += 0.06f; g.exposure *= 1.25f;
+                g.tint = Mul(g.tint, V(0.97f, 0.99f, 1.04f)); g.sat *= 0.95f; g.contrast += 0.06f; g.exposure *= 1.12f; // = the old 1.06 x 1.25 night exposure
                 g.lift = V(0.000f, 0.003f, 0.010f); g.gamma += V(0.02f, 0.02f, 0.04f);
                 break;
         }
@@ -117,12 +120,13 @@ public static class Grade
     public static Color Apply(Color srgb)
     {
         var g = Last; var c = srgb.linear; float e = g.exposure * BaseExposure;
-        float r = Tone(c.r * g.tint.x * e), gg = Tone(c.g * g.tint.y * e), b = Tone(c.b * g.tint.z * e);
+        // perceptual space (square root of the tone-mapped linear value), saturation there, as Grade.cginc
+        float r = Mathf.Sqrt(Tone(c.r * g.tint.x * e)), gg = Mathf.Sqrt(Tone(c.g * g.tint.y * e)), b = Mathf.Sqrt(Tone(c.b * g.tint.z * e));
         float l = 0.2126f * r + 0.7152f * gg + 0.0722f * b;
-        float sa = g.sat * PunchSat; r = Mathf.Max(0, l + (r - l) * sa); gg = Mathf.Max(0, l + (gg - l) * sa); b = Mathf.Max(0, l + (b - l) * sa);
+        float sa = g.sat * PunchSat; r = l + (r - l) * sa; gg = l + (gg - l) * sa; b = l + (b - l) * sa;
         float P(float v, float lift, float gam, float gain)
         {
-            float p = Mathf.Clamp01((Mathf.Sqrt(v) - 0.45f) * g.contrast * PunchCon + 0.45f);
+            float p = Mathf.Clamp01((v - 0.45f) * g.contrast * PunchCon + 0.45f);
             p = p * gain + lift * LiftKeep * (1 - p); p = Mathf.Clamp01(p + gam * p * (1 - p));
             return p * p;
         }

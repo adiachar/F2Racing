@@ -1,6 +1,8 @@
 # Software renderer for car .bytes files (z-buffer), to see the model the way the game camera does.
 # usage: render.py file.bytes out.png view [cull] [ao]   (ao: shade with the baked vertex AO of F2M2 files)
 #        render.py game file.bytes before|after out.png views   (the rival car as CarModel builds it: per part / merged)
+#        render.py shade file.bytes old|new out.png views [W H]     (the player's car lit like CarPaint.shader: sky probe,
+#                 sun, Fresnel clear coat, contact shadow on the road; old = before the RR3-style pass, new = now)
 #   view: name from VIEWS; cull: "cull" = one-sided like a normal game shader (back faces magenta = would be invisible)
 import struct, sys, numpy as np
 from PIL import Image
@@ -142,11 +144,210 @@ def game_parts(path, merged):
         for key,(Ps,Fs,TCs,IDs,nv) in acc.items(): parts.append((key,0,np.concatenate(Ps),np.concatenate(Fs),None,np.concatenate(TCs)))
     return parts
 
+
+# ---- shaded preview: CarPaint.shader (full pass) ported to numpy, per pixel, for the player's car as CarModel builds it.
+# The sky probe is a stand-in (procedural gradient + sun disc), so judge looks, not exact values. Linear light, then
+# exposure + Grade.cginc's tone curve, then sRGB. Geometry: 'new' applies CarModel.FitTyre / WheelY / LowerBody.
+ROOT=3.40/3.135
+def lin(c): c=np.array(c,float); return np.where(c<=0.04045,c/12.92,((c+0.055)/1.055)**2.4)
+def to_srgb(c): c=np.clip(c,0,1); return np.where(c<=0.0031308,c*12.92,1.055*c**(1/2.4)-0.055)
+SUN_L=np.array([0.45,0.62,0.64]); SUN_L/=np.linalg.norm(SUN_L); SUN_C=lin([1,0.95,0.86])*1.25
+AMB_SKY=lin([0.62,0.72,0.85]); AMB_EQ=lin([0.55,0.6,0.6]); AMB_GR=lin([0.3,0.37,0.24])
+GROUND_REFL=lin([0.15,0.15,0.16])   # what the shader gets from SetGlobalColor (linear conversion)
+ROAD=np.array([0.11,0.11,0.115])    # baked road radiance stand-in (linear, after the bake's sun + sky)
+def sh(n):   # trilight ambient as Unity's SH roughly gives it
+    y=n[...,1:2]; return np.where(y>0, AMB_EQ+(AMB_SKY-AMB_EQ)*y, AMB_EQ+(AMB_GR-AMB_EQ)*(-y))
+def sky(R, mip):
+    t=np.clip(R[...,1:2],0,1)
+    c=np.array([0.78,0.84,0.93])+(np.array([0.17,0.3,0.62])-np.array([0.78,0.84,0.93]))*t**0.45
+    sd=(R@SUN_L)[...,None]; c=c+np.clip((sd-0.9990)/0.0006,0,1)*(1-mip[...,None]/7)
+    c=c+0.25*np.clip((sd-0.97)/0.03,0,1)**2
+    avg=np.array([0.45,0.55,0.74]); k=np.clip(mip/7,0,1)[...,None]
+    return np.clip(c*(1-k)+avg*k,0,1)
+def smooth(a,b,x): t=np.clip((x-a)/(b-a),0,1); return t*t*(3-2*t)
+def tone(x):
+    x=np.maximum(x,0); h=np.maximum(x-0.8,0); return np.minimum(x,0.8+h/(1+h*5))
+
+# materials of the player's car per part id (as CarModel.CreateFromAsset sets them): base (linear, what the shader
+# gets), coat, gloss, metal, AO strength
+def mats(new):
+    if new: L=lambda *c: np.array(c,float)
+    else: L=lambda *c: lin(c)
+    red=lin([0.78,0.05,0.07]); white=lin([0.93,0.93,0.94])
+    if new: return {0:(red,1,.95,.06,.6),1:(white,1,.93,.03,.55),2:(L(.022,.024,.028),.35,.88,.05,.75),3:(L(.45,.46,.5),.3,.85,.95,.7),
+                    4:(L(.015,.015,.016),.1,.35,0,.45),6:(L(.22,.23,.245),.35,.82,.9,.7),8:(lin([1,.15,.12]),.5,.8,0,0),
+                    9:(lin([.85,.08,.08]),.25,.5,0,0),10:(lin([1,.82,.18]),1,.95,.1,0),11:(L(.03,.03,.033),.5,.7,.1,.5)}
+    return {0:(red,1,.92,.15,.6),1:(white,1,.9,.05,.55),2:(L(.06,.065,.075),.55,.7,.1,.75),3:(L(.55,.57,.6),.3,.8,.9,.7),
+            4:(L(.085,.085,.09),.22,.38,0,.45),6:(L(.2,.21,.23),.3,.75,.85,.7),8:(lin([1,.15,.12]),.5,.8,0,0),
+            9:(lin([.85,.08,.08]),.25,.5,0,0),10:(lin([1,.82,.18]),1,.93,.1,0),11:(L(.2,.21,.23),.3,.75,.85,.5)}
+
+def fit_tyre(P,F,front):
+    u=np.unique(F); r=np.hypot(P[u,1],P[u,2]); R=r.max(); rb=r.min(); Rt=(0.705 if front else 0.710)*0.5/ROOT
+    if R>=Rt or rb>=R-0.02: return P
+    rr=np.hypot(P[:,1],P[:,2]); s=np.where((rr>=rb)&(rr>1e-5),(rb+(rr-rb)*(Rt-rb)/(R-rb))/np.maximum(rr,1e-5),1.0)
+    P=P.copy(); P[:,1]*=s; P[:,2]*=s; return P
+def lower_body(P,N):
+    D,Y0,Y1=0.045,0.30,0.52; P=P.copy(); N=N.copy()
+    fy=np.clip((Y1-P[:,1])/(Y1-Y0),0,1); xs=np.clip((np.abs(P[:,0])-0.20)/0.36,0,1); keep=np.zeros(len(P))
+    for az,ay in ((1.724,0.32),(-1.411,0.32)):
+        r=np.hypot(P[:,2]-az,P[:,1]-ay); keep=np.maximum(keep,np.clip((0.31-r)/0.06,0,1)*xs)
+    w=1-keep; band=(P[:,1]>Y0)&(fy>0)
+    N[band,1]/=1+D/(Y1-Y0)*w[band]; N/=np.linalg.norm(N,axis=1)[:,None]+1e-12
+    P[:,1]-=D*fy*w; return P,N
+
+def shade_parts(path,new):
+    out=load_raw(path)
+    # normals: read separately (load_raw skips them)
+    d=open(path,'rb').read(); o=4; n,=struct.unpack_from('<i',d,o); o+=4; normals=[]
+    for _ in range(n):
+        l,=struct.unpack_from('<i',d,o);o+=4+l; o+=16; nv,ni=struct.unpack_from('<ii',d,o);o+=8; o+=nv*12
+        normals.append(np.frombuffer(d,np.float32,nv*3,o).reshape(-1,3).astype(float)); o+=nv*12+nv*4+ni*4
+    res=[]
+    for (nm,mid,piv,P,F,C),N in zip(out,normals):
+        piv=piv.copy()
+        if nm.startswith('wheel_'):
+            front=nm[6]=='F'
+            if new: piv[1]=(0.705 if front else 0.710)*0.5/ROOT-0.004
+            if nm.endswith('_tyre'):
+                if new: P=fit_tyre(P,F,front)
+                pid=4
+            else: pid=6
+        elif nm.startswith('steer_'): P=P@rotx(float(nm[6:])).T; N=N@rotx(float(nm[6:])).T; pid=11; front=False
+        else:
+            pid={0:0,1:1,3:3,6:8}.get(mid,2); front=False
+            if new: P,N=lower_body(P,N)
+        used=np.unique(F)
+        if len(used)*2<=len(P):
+            mp=-np.ones(len(P),int); mp[used]=np.arange(len(used)); P,N,C,F=P[used],N[used],C[used],mp[F]
+        if mid in (1,2,3,6) or nm.startswith('steer_'):
+            C2=C.copy(); C2[:,0]=C[:,2]
+            P=np.concatenate([P,P]); N=np.concatenate([N,-N]); F=np.concatenate([F,F[:,::-1]+len(P)//2]); C=np.concatenate([C,C2])
+        res.append((P+piv,N,F,C,pid,front))
+        if pid==4:
+            sm=stripe_mesh(P)
+            if sm is not None:
+                sv,sf=sm; sn=np.zeros_like(sv); sn[:,0]=np.sign(sv[:,0])
+                res.append((sv+piv,sn,sf,np.ones((len(sv),4)),9,front))
+    hv,hf=sphere_mesh((0,0.72,0.05),(0.26,0.28,0.3)); hn=(hv-np.array([0,0.72,0.05]))/np.array([0.26,0.28,0.3])**2
+    hn/=np.linalg.norm(hn,axis=1)[:,None]; res.append((hv,hn,hf,np.ones((len(hv),4)),10,False))
+    return res
+
+def contact_alpha(x,z,new):
+    u=x/2.4+0.5; v=(z-0.3)/5.6+0.5; inside=(u>=0)&(u<=1)&(v>=0)&(v<=1)
+    dx=(u-0.5)*2; dy=(v-0.5)*2; dd=np.sqrt(dx*dx*1.1+dy*dy*0.9)
+    soft=np.clip(1-dd,0,1); soft=soft*soft*(3-2*soft)*(0.6 if new else 0.75)
+    hw=np.where(z>1.1,0.55+(0.12-0.55)*np.clip((z-1.1)/1.5,0,1),np.where(z<-1.5,0.55+(0.3-0.55)*np.clip((-1.5-z)/0.6,0,1),0.62))
+    ex=np.abs(x)-hw; ez=np.maximum(z-2.7,-2.15-z)
+    out1=np.sqrt(np.maximum(ex,0)**2+np.maximum(ez,0)**2)+np.minimum(np.maximum(ex,ez),0)
+    patch=np.zeros_like(x)
+    if new:
+        core=np.clip(1-(out1+0.08)/0.2,0,1); core=core*(2-core)*0.88
+        skirt=np.clip(1-out1/0.35,0,1); skirt=skirt*skirt*0.4
+        noseK=1+(0.35-1)*np.clip((z-1.2)/0.8,0,1); core*=noseK; skirt*=noseK
+        for wx,wz,hx in ((0.71,1.72,0.13),(-0.71,1.72,0.13),(0.68,-1.41,0.16),(-0.68,-1.41,0.16)):
+            ax=np.abs(x-wx)-hx; az=np.abs(z-wz); q=np.clip(1-np.maximum(ax/0.04,(az-0.06)/0.05),0,1)
+            h=np.clip(1-np.sqrt((np.maximum(ax,0)/0.1)**2+(az/0.42)**2),0,1); patch=np.maximum(patch,np.maximum(q*0.97,h*h*0.7))
+        a=1-(1-soft)*(1-core)*(1-skirt)*(1-patch); a*=250/255
+    else:
+        core=np.clip(1-(out1+0.12)/0.22,0,1)*0.6
+        for wx,wz,hx in ((0.71,1.72,0.14),(-0.71,1.72,0.14),(0.68,-1.41,0.18),(-0.68,-1.41,0.18)):
+            q=np.clip(1-np.maximum((np.abs(x-wx)-hx)/0.08,(np.abs(z-wz)-0.16)/0.1),0,1); patch=np.maximum(patch,q*q*0.8)
+        a=(1-(1-soft)*(1-core)*(1-patch))*235/255
+    return np.where(inside,a,0)
+
+def render_shaded(parts,view,new,W=960,H=540):
+    pos,look,fov=VIEWS[view] if isinstance(view,str) else view
+    pos=np.array(pos,float); look=np.array(look,float)
+    fwd=look-pos; fwd/=np.linalg.norm(fwd); right=np.cross([0,1,0],fwd); right/=np.linalg.norm(right); up=np.cross(fwd,right)
+    f=1/np.tan(np.radians(fov)/2); near=0.05
+    zb=np.full((H,W),1e9); tid=np.full((H,W),-1); ba=np.zeros((H,W)); bb=np.zeros((H,W))
+    allP=[];allN=[];allC=[];allI=[];allFr=[];allF=[];off=0
+    for P,N,F,C,pid,front in parts:
+        allP.append(P);allN.append(N);allC.append(C);allI.append(np.full(len(P),pid));allFr.append(np.full(len(P),front));allF.append(F+off);off+=len(P)
+    P=np.concatenate(allP);N=np.concatenate(allN);C=np.concatenate(allC);PI=np.concatenate(allI);FR=np.concatenate(allFr);F=np.concatenate(allF)
+    rel=P-pos; cx=rel@right; cy=rel@up; cz=rel@fwd
+    sx=(cx/np.maximum(cz,1e-6)*f*(H/W)+1)*W/2; sy=(1-cy/np.maximum(cz,1e-6)*f)*H/2
+    t=P[F]; fn=np.cross(t[:,1]-t[:,0],t[:,2]-t[:,0]); facing=np.einsum('ij,ij->i',fn,pos-t[:,0])>0
+    ok=(cz[F]>near).all(1)&facing
+    for k in np.where(ok)[0]:
+        i0,i1,i2=F[k]; x0,y0,x1,y1,x2,y2=sx[i0],sy[i0],sx[i1],sy[i1],sx[i2],sy[i2]
+        mnx=int(max(0,np.floor(min(x0,x1,x2)))); mxx=int(min(W-1,np.ceil(max(x0,x1,x2))))
+        mny=int(max(0,np.floor(min(y0,y1,y2)))); mxy=int(min(H-1,np.ceil(max(y0,y1,y2))))
+        if mnx>mxx or mny>mxy: continue
+        den=(y1-y2)*(x0-x2)+(x2-x1)*(y0-y2)
+        if abs(den)<1e-9: continue
+        X,Y=np.meshgrid(np.arange(mnx,mxx+1)+0.5,np.arange(mny,mxy+1)+0.5)
+        a=((y1-y2)*(X-x2)+(x2-x1)*(Y-y2))/den; b=((y2-y0)*(X-x2)+(x0-x2)*(Y-y2))/den; c=1-a-b
+        m=(a>=0)&(b>=0)&(c>=0)
+        if not m.any(): continue
+        # perspective-correct barycentrics
+        wa=a/cz[i0]; wb=b/cz[i1]; wc=c/cz[i2]; ws=wa+wb+wc; z=1/ws
+        sub=zb[mny:mxy+1,mnx:mxx+1]; m&=z<sub
+        if not m.any(): continue
+        sub[m]=z[m]; tid[mny:mxy+1,mnx:mxx+1][m]=k; ba[mny:mxy+1,mnx:mxx+1][m]=(wa/ws)[m]; bb[mny:mxy+1,mnx:mxx+1][m]=(wb/ws)[m]
+    # background: sky above, road with the contact shadow below
+    ys,xs=np.mgrid[0:H,0:W]+0.5
+    dirs=fwd[None,None,:]+right[None,None,:]*((xs/W*2-1)/f/(H/W))[...,None]+up[None,None,:]*((1-ys/H*2)/f)[...,None]
+    dirs/=np.linalg.norm(dirs,axis=2)[...,None]
+    img=sky(dirs,np.zeros((H,W)))
+    tg=-pos[1]/np.minimum(dirs[...,1],-1e-6); hit=dirs[...,1]<-1e-4
+    gx=pos[0]+dirs[...,0]*tg; gz=pos[2]+dirs[...,2]*tg
+    a=contact_alpha(gx,gz,new); road=ROAD*(1-a[...,None])
+    img=np.where(hit[...,None],road,img)
+    # shade the car pixels
+    msk=tid>=0; T=F[tid[msk]]; A=ba[msk][:,None]; B=bb[msk][:,None]; Cc=1-A-B
+    Nn=N[T[:,0]]*A+N[T[:,1]]*B+N[T[:,2]]*Cc; Nn/=np.linalg.norm(Nn,axis=1)[:,None]+1e-12
+    Pp=P[T[:,0]]*A+P[T[:,1]]*B+P[T[:,2]]*Cc
+    ao_v=C[T[:,0],0]*A[:,0]+C[T[:,1],0]*B[:,0]+C[T[:,2],0]*Cc[:,0]; gm=(C[T[:,0],1]*A[:,0]+C[T[:,1],1]*B[:,0]+C[T[:,2],1]*Cc[:,0])
+    pid=PI[T[:,0]]; MT=mats(new)
+    base=np.zeros((len(pid),3)); coatK=np.zeros(len(pid)); gloss=np.zeros(len(pid)); metal=np.zeros(len(pid)); aoK=np.zeros(len(pid))
+    for k,(bc,ck,gl,me,ak) in MT.items():
+        s_=pid==k; base[s_]=bc; coatK[s_]=ck; gloss[s_]=gl; metal[s_]=me; aoK[s_]=ak
+    ao=1-aoK*(1-ao_v)
+    V=pos-Pp; V/=np.linalg.norm(V,axis=1)[:,None]
+    # per-part details: wing undersides carbon, tyre tread sheen, discs, helmet visor (approx)
+    under=(pid==1)*smooth(0.25,0.6,-Nn[:,1]); cb=np.array([.022,.024,.028]) if new else np.array([.06,.065,.075])
+    base=base*(1-under[:,None])+cb*under[:,None]; coatK=coatK+(( .35 if new else .6)-coatK)*under
+    tread=(pid==4)*(1-smooth(0.35,0.8,np.abs(Nn[:,0]))); coatK=coatK*np.where(pid==4,1+0.7*tread,1)
+    disc=(pid==6)*np.clip(gm,0,1); base=base*(1-disc[:,None])+(np.array([.06,.06,.065]) if new else np.array([.1,.1,.105]))*disc[:,None]
+    L=SUN_L; nl=Nn@L; ndl=np.clip(nl,0,1)
+    R=2*(Nn*V).sum(1)[:,None]*Nn-V
+    if new:
+        wrap=np.clip((nl+0.2)/1.2,0,1); mip=(1-gloss)*5
+        diff=base*(wrap[:,None]*SUN_C+sh(Nn))*(1-metal*0.85)[:,None]*ao[:,None]
+        env=np.maximum(sky(R,mip),sh(R)*0.9)
+        lum=(sh(R)*0.9)@np.array([0.2126,0.7152,0.0722]); gr=np.maximum(GROUND_REFL,lum[:,None])
+        lo=-0.35+0.30*gloss; env=env+(gr-env)*(1-smooth(lo,0.015,R[:,1]))[:,None]
+        x=1-np.clip((Nn*V).sum(1),0,1); fz=0.05+0.95*x**4
+        sp=2**(3+6*gloss); sm=np.minimum(sp*0.015,6)
+    else:
+        diff=base*(ndl[:,None]*SUN_C+sh(Nn))*(1-metal*0.6)[:,None]*ao[:,None]
+        mip=(1-gloss)*6; env=np.maximum(sky(R,mip),sh(R)*0.9)
+        env=env+(GROUND_REFL-env)*(1-smooth(-0.12,0.02,R[:,1]))[:,None]
+        x=1-np.clip((Nn*V).sum(1),0,1); fz=0.04+0.96*x**5
+        sp=16+(512-16)*gloss; sm=0.5+5.5*gloss
+    env=env*(0.3+0.7*ao)[:,None]
+    coat=np.clip(fz*coatK,0,1)
+    H_=L[None,:]+V; H_/=np.linalg.norm(H_,axis=1)[:,None]; nh=np.clip((Nn*H_).sum(1),0,1)
+    spec=nh**sp*ndl*sm+nh**2048*ndl*14*np.clip((gloss-0.8)*6,0,1); spec*=ao
+    if new: spec*=np.where(pid==4,2.0,1.0)
+    col=diff*(1-coat)[:,None]+env*(coat[:,None]+metal[:,None]*base)+spec[:,None]*SUN_C*(coatK+metal)[:,None]
+    col=np.where((pid==8)[:,None],np.array([0.25,0.02,0.02])+col,col)
+    img[msk]=col
+    out=to_srgb(tone(img*1.06))
+    return (out*255).astype(np.uint8)
+
 if __name__=='__main__' and len(sys.argv)>1 and sys.argv[1]=='game':
     # usage: render.py game file.bytes before|after out.png views
     parts=game_parts(sys.argv[2], sys.argv[3]=='after')
     print(sys.argv[3], 'renderers:', len(parts), [p[0] for p in parts] if len(parts)<12 else '')
     ims=[render(parts,v,'skip') for v in sys.argv[5].split(',')]
+    Image.fromarray(np.concatenate(ims,0) if len(ims)<3 else np.concatenate([np.concatenate(ims[i:i+2],1) for i in range(0,len(ims)-len(ims)%2,2)],0)).save(sys.argv[4])
+elif __name__=='__main__' and len(sys.argv)>1 and sys.argv[1]=='shade':
+    # usage: render.py shade file.bytes old|new out.png views [W H]
+    W,H=(int(sys.argv[6]),int(sys.argv[7])) if len(sys.argv)>7 else (960,540)
+    parts=shade_parts(sys.argv[2], sys.argv[3]=='new')
+    ims=[render_shaded(parts,v,sys.argv[3]=='new',W,H) for v in sys.argv[5].split(',')]
     Image.fromarray(np.concatenate(ims,0) if len(ims)<3 else np.concatenate([np.concatenate(ims[i:i+2],1) for i in range(0,len(ims)-len(ims)%2,2)],0)).save(sys.argv[4])
 elif __name__=='__main__':
     parts=load(sys.argv[1], colours='ao' in sys.argv); cull=len(sys.argv)>4 and sys.argv[4]=='cull'

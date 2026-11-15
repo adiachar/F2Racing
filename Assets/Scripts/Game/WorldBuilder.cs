@@ -222,7 +222,7 @@ public static class WorldBuilder
         float outerMax = Mathf.Min(wallLat + 16f, Wd / 2 + Mathf.Max(env.flatTo - 2f, 12f));
         var v = new List<Vector3>(); var uv = new List<Vector2>(); var uv2 = new List<Vector2>(); var tri = new List<int>(); var tint = new List<Color>();
         const int K = 5; var lat = new float[K];
-        int step = Mathf.Max(1, Mathf.RoundToInt(4f / (float)t.ds)), rows = (t.N + step - 1) / step; // a row every ~4 m
+        int step = Mathf.Max(1, Mathf.RoundToInt(2f / (float)t.ds)), rows = (t.N + step - 1) / step; // a row every ~2 m (4 m showed straight segments in tight bends)
         for (int side = 1; side >= -1; side -= 2)
         {
             int start = v.Count;
@@ -282,12 +282,13 @@ public static class WorldBuilder
 
         // sky, light, fog: procedural skybox (sun, atmosphere) tuned per circuit, fog matched to its horizon (Sky.cs)
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-        RenderSettings.ambientSkyColor = new Color(0.62f, 0.72f, 0.85f);
-        RenderSettings.ambientEquatorColor = new Color(0.55f, 0.6f, 0.6f);
+        // (afternoon values; Sky.Setup sets the sun and the sky / equator ambient per time of day, matched to the bake)
+        RenderSettings.ambientSkyColor = new Color(0.69f, 0.76f, 0.86f);
+        RenderSettings.ambientEquatorColor = new Color(0.62f, 0.64f, 0.64f);
         Environment.Prepare(t); var env = Environment.Cur; // the look of the land round this circuit (Environment.cs)
         RenderSettings.ambientGroundColor = Color.Lerp(new Color(0.3f, 0.35f, 0.25f), env.grass, 0.5f);
         var sunGo = new GameObject("Sun"); sunGo.transform.SetParent(root);
-        var sun = sunGo.AddComponent<Light>(); sun.type = LightType.Directional; sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.25f;
+        var sun = sunGo.AddComponent<Light>(); sun.type = LightType.Directional; sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.45f;
         sun.shadows = LightShadows.Soft; sun.shadowStrength = 0.8f; sun.shadowBias = 0.03f; sun.shadowNormalBias = 0.3f;
         sunGo.transform.rotation = Quaternion.Euler(48, -35, 0);
         var skyLook = Sky.Setup(t, Street(t), sun);
@@ -635,6 +636,8 @@ public static class WorldBuilder
         probe.mode = UnityEngine.Rendering.ReflectionProbeMode.Realtime;
         probe.refreshMode = UnityEngine.Rendering.ReflectionProbeRefreshMode.ViaScripting;
         probe.size = new Vector3(5000, 2000, 5000); probe.resolution = 128; probe.hdr = false;
+        // the bright procedural sky behind the clouds, at full strength (the paint reflects a clear blue sky, not grey)
+        probe.clearFlags = UnityEngine.Rendering.ReflectionProbeClearFlags.Skybox; probe.intensity = 1f;
         // sky only (skybox + the cloud/haze layer): grass reflected in the glossy paint showed as green patches
         probe.cullingMask = 1 << Sky.Layer; probe.farClipPlane = 3000;
         // clouds + sun glare (camera-following, so made after static batching); renders the probe once, clouds included

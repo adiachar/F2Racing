@@ -64,7 +64,8 @@ public partial class GameManager : MonoBehaviour
         model = MakePlayerCar(WantFullCar(gfxIdx == 0 ? 2 : gfxIdx)) ?? CarModel.CreateFromAsset() ?? CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
         model.SetLivery(Livery.Player[liveryIdx]);
         var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera"; cam.allowDynamicResolution = true;
-        cam.nearClipPlane = 0.2f; cam.farClipPlane = 2500; cam.fieldOfView = 62;
+        cam.allowMSAA = true; // the built-in pipeline takes its MSAA from QualitySettings.antiAliasing (ApplyGraphics)
+        cam.nearClipPlane = ChaseNear; cam.farClipPlane = 2500; cam.fieldOfView = 62;
         cam.clearFlags = RenderSettings.skybox != null ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor; cam.backgroundColor = RenderSettings.fogColor;
         camGo.AddComponent<AudioListener>();
         audioEngine = camGo.AddComponent<EngineAudio>(); audioEngine.muted = !sound;
@@ -148,42 +149,60 @@ public partial class GameManager : MonoBehaviour
     // Graphics level (a setting). Auto starts at Medium and steps down if the phone cannot hold about 50 fps.
     static readonly string[] GfxNames = { "Auto", "Low", "Medium", "High" }; int gfxIdx; int gfxLevel = 2;
     float fpsAvg = 60, slowT;
-    void ApplyGraphics(int level)
+    bool autoNoShadows; // Auto switched the live shadows off (a step before Low; any graphics setting change clears it)
+    void ApplyGraphics(int level) { autoNoShadows = false; SetGraphics(level); }
+    void SetGraphics(int level)
     {
         gfxLevel = level;
-        QualitySettings.antiAliasing = level >= 3 ? 4 : level == 2 ? 2 : 0;
-        QualitySettings.shadows = level <= 1 || LightBake.Active || !shadowsOn ? ShadowQuality.Disable : ShadowQuality.All; // baked lighting needs no shadow maps
+        // Anti-aliasing. This project uses the built-in render pipeline, where QualitySettings.antiAliasing IS the
+        // camera's MSAA (BuildScript also puts 4x into every quality level, so the screen buffer starts with it).
+        // MSAA is resolved on-chip on phone (tile) GPUs, so it costs little: 4x on Medium/High, 2x on Low. It smooths
+        // the track edges, barriers and thin poles that otherwise step and flicker. Auto never turns it off.
+        QualitySettings.antiAliasing = MsaaFor(level);
+        if (cam != null) cam.allowMSAA = true;
+        QualitySettings.shadows = level <= 1 || LightBake.Active || !shadowsOn || autoNoShadows ? ShadowQuality.Disable : ShadowQuality.All; // baked lighting needs no shadow maps
         QualitySettings.shadowCascades = level >= 3 ? 2 : 1;
         QualitySettings.shadowResolution = level >= 3 ? ShadowResolution.High : ShadowResolution.Medium;
         QualitySettings.shadowDistance = level >= 3 ? 90 : 55;
+        // anisotropic filtering keeps the road and verges sharp at a low angle. Other files read "Disable" as "Low".
+        // Medium forces at least 4x, High 8x; a texture that asks for more (its own anisoLevel) gets it, up to 16x.
         QualitySettings.anisotropicFiltering = level <= 1 ? AnisotropicFiltering.Disable : AnisotropicFiltering.ForceEnable;
+        Texture.SetGlobalAnisotropicFilteringLimits(level >= 3 ? 8 : 4, 16);
+        QualitySettings.globalTextureMipmapLimit = 0; // full-size textures on every level (some default levels halve them)
         if (cam != null) cam.farClipPlane = level <= 1 ? 1500 : 2500;
         ApplyPerfLevel(level); // per-level cuts: car shader detail, wheel faces, car effects, glare, grade (GameManagerPerf.cs)
     }
     // Dynamic resolution: when the phone can't hold ~50 fps the 3D picture is drawn at a lower resolution
-    // (down to 60%) and scaled up; the HUD is drawn afterwards at full resolution, so text stays sharp.
+    // (never below 75%, see DynResMin) and scaled up (bilinear); the HUD is drawn afterwards at full resolution.
+    // It starts at the full "Resolution scale" setting (ResMax, 100% = the panel's own resolution).
     // Works where the graphics API supports it (Vulkan, Metal); elsewhere it does nothing.
-    // The "Resolution scale" setting is the most it may use (ResMax); "about 50 fps" is 83% of the frame-rate target.
+    // "About 50 fps" is 83% of the frame-rate target.
     float renderScale = 1f, scaleT;
-    void DynamicResolution()
+    void DynamicResolution(float floor)
     {
         if (Paused || Time.realtimeSinceStartup < 6f || !DynResWorks) return; // GLES: no dynamic resolution (GameManagerPerf.cs)
         if (fpsAvg < FpsTarget * 0.83f) scaleT -= Time.unscaledDeltaTime; else if (fpsAvg > FpsTarget * 0.96f) scaleT += Time.unscaledDeltaTime; else scaleT = 0;
         float ns = renderScale;
-        if (scaleT < -1.5f) { ns = Mathf.Max(ResMin, renderScale - 0.1f); scaleT = 0; }
+        if (scaleT < -1.5f) { ns = Mathf.Min(renderScale, Mathf.Max(floor, renderScale - 0.1f)); scaleT = 0; } // a step down never goes up
         else if (scaleT > 6f) { ns = Mathf.Min(ResMax, renderScale + 0.05f); scaleT = 0; }
         if (!Mathf.Approximately(ns, renderScale)) { renderScale = ns; ScalableBufferManager.ResizeBuffers(ns, ns); }
     }
+    // Auto steps, cheapest-looking loss first; anti-aliasing is never what goes (Low keeps 2x MSAA):
+    //   resolution down to 85% -> live shadows off -> resolution down to 75% -> Low level.
+    // A graphics level chosen by hand only gets the resolution steps.
     void AutoQuality()
     {
         float fps = 1f / Mathf.Max(Time.unscaledDeltaTime, 0.001f);
         fpsAvg += (fps - fpsAvg) * 0.05f;
-        DynamicResolution();
-        if (DynResWorks && renderScale > ResMin + 0.05f) { slowT = 0; return; } // first lower the resolution, then the effects
+        float floor = AutoResFloor;
+        DynamicResolution(floor);
+        if (DynResWorks && renderScale > floor + 0.01f) { slowT = 0; return; } // first lower the resolution, then the effects
         if (gfxIdx != 0 || Paused || Time.realtimeSinceStartup < 6f || gfxLevel <= 1) return;
         slowT = fpsAvg < FpsTarget * 0.83f ? slowT + Time.unscaledDeltaTime : 0;
         if (slowT < 4f) return;
-        slowT = 0; ApplyGraphics(gfxLevel - 1); Flash("Graphics lowered to keep it smooth");
+        slowT = 0;
+        if (ShadowsLive) { autoNoShadows = true; SetGraphics(gfxLevel); Flash("Shadows off to keep it smooth"); return; }
+        SetGraphics(gfxLevel - 1); Flash("Graphics lowered to keep it smooth");
     }
 
     SkidMarks skids;
@@ -733,7 +752,7 @@ public partial class GameManager : MonoBehaviour
         {
             TvCamera(tr, Time.deltaTime);
             CockpitBits(false); // seen from outside: helmet and halo pillar shown, cockpit floor hidden, as in chase
-            cam.nearClipPlane = 0.5f;
+            cam.nearClipPlane = ChaseNear;
             return;
         }
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
@@ -770,7 +789,20 @@ public partial class GameManager : MonoBehaviour
         if (tilt && (horizonMode == 2 || (horizonMode == 1 && camMode == 2))) cam.transform.Rotate(0, 0, -tiltSmooth * 0.6f, Space.Self);
         cam.fieldOfView += (fov - cam.fieldOfView) * Mathf.Min(1, Time.deltaTime * 4);
         CockpitBits(camMode == 2); tvWasOn = false;
-        cam.nearClipPlane = camMode == 2 || camMode == 3 ? 0.05f : 0.3f;
+        cam.nearClipPlane = camMode == 2 ? CockpitNear() : camMode == 3 ? HaloNear : ChaseNear;
+    }
+    // Near clip plane. The depth buffer's precision far away goes with near / distance^2, so a tiny near plane makes
+    // distant road, kerbs, lines and verges z-fight (shimmer and swap as the car moves). Each view uses the largest
+    // near plane that cuts nothing of the car it looks through (measured on car.bytes, with the head movement and
+    // the FOV / seat settings): chase and TV 0.5 m (was 0.3), halo cam 0.12 m (the halo is 0.2 m away at the widest
+    // FOV; was 0.05), cockpit 0.085 m at the default view, down to 0.05 m at the widest FOV and screen (was 0.05).
+    const float ChaseNear = 0.5f, HaloNear = 0.12f;
+    float CockpitNear()
+    {
+        // the nearest bodywork in view is the tub side at the screen's left/right edge: it scales with the
+        // horizontal half-width of the view (1.145 = 55 deg vertical FOV on a 20:9 screen)
+        float halfW = Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * Mathf.Max(1f, cam.aspect);
+        return Mathf.Clamp(0.085f * 1.145f / Mathf.Max(halfW, 0.01f), 0.05f, 0.085f);
     }
     // helmet and halo pillar are hidden from the driver's eyes; the dark cockpit floor is only shown there
     void CockpitBits(bool cockpit)

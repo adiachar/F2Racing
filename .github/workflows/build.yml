@@ -15,8 +15,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # fast C# syntax check (~1 min): a typo fails here instead of after 15 minutes of Unity build
+  check:
+    name: C# syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: cd Tools/SyntaxCheck && dotnet run -c Release -- ../../Assets
+
   build:
     name: Build ${{ matrix.targetPlatform }}
+    needs: check
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
