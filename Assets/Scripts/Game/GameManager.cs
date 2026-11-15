@@ -129,21 +129,25 @@ public partial class GameManager : MonoBehaviour
     void DrawMiniMap()
     {
         if (miniTex == null || playground) return;
-        float size = S(110), x = Screen.width - size - S(8), y = S(46);
-        Fill(new Rect(x - S(4), y - S(4), size + S(8), size + S(8)), new Color(0, 0, 0, 0.3f));
+        var m = mapRect; Glass(m, 12f);                      // under the race card, top right (RaceHud.cs: HudLayout)
+        float pad = S(6), size = m.width - 2 * pad, x = m.x + pad, y = m.y + pad;
         // texture rows go bottom-up, GUI goes top-down: flip vertically (physics +y = north = up on screen)
+        var old = GUI.color; GUI.color = new Color(1f, 1f, 1f, 0.78f) * old;
         GUI.DrawTextureWithTexCoords(new Rect(x, y, size, size), miniTex, new Rect(0, 0, 1, 1));
+        GUI.color = old;
         float k = size / MM;
-        float cx = x + (6 + ((float)car.x - mmMinX) * mmScale) * k, cy = y + size - (6 + ((float)car.y - mmMinY) * mmScale) * k;
         var p0 = track.pts[0];
         float sx = x + (6 + ((float)p0.x - mmMinX) * mmScale) * k, sy = y + size - (6 + ((float)p0.y - mmMinY) * mmScale) * k;
-        Fill(new Rect(sx - S(3), sy - S(3), S(6), S(6)), new Color(1f, 0.82f, 0.25f));
+        UiKit.Rect(new Rect(sx - S(1), sy - S(3.5f), S(2), S(7)), Color.white, 1f); // start / finish
+        float rd = S(4.6f);
         foreach (var d in rivals)
         {
             float rx = x + (6 + ((float)d.car.x - mmMinX) * mmScale) * k, ry = y + size - (6 + ((float)d.car.y - mmMinY) * mmScale) * k;
-            Fill(new Rect(rx - S(2.5f), ry - S(2.5f), S(5), S(5)), new Color(d.who.r, d.who.g, d.who.b));
+            UiKit.Rect(new Rect(rx - rd * 0.5f, ry - rd * 0.5f, rd, rd), new Color(d.who.r, d.who.g, d.who.b), 999f);
         }
-        Fill(new Rect(cx - S(4), cy - S(4), S(8), S(8)), new Color(1f, 0.25f, 0.2f));
+        float cx = x + (6 + ((float)car.x - mmMinX) * mmScale) * k, cy = y + size - (6 + ((float)car.y - mmMinY) * mmScale) * k;
+        UiKit.Rect(new Rect(cx - S(4.5f), cy - S(4.5f), S(9), S(9)), Color.white, 999f);
+        UiKit.Rect(new Rect(cx - S(3.2f), cy - S(3.2f), S(6.4f), S(6.4f)), new Color(1f, 0.16f, 0.1f), 999f);
     }
 
     // Graphics level (a setting). Auto starts at Medium and steps down if the phone cannot hold about 50 fps.
@@ -990,20 +994,12 @@ public partial class GameManager : MonoBehaviour
     }
 
     // ---------------------------------------------------------------- HUD
-    GUIStyle big, small, btn, center;
+    // Drawing only: the touch logic (ReadInput, GasRect, BrakeRect) is above and does not depend on any of this.
+    // Look: UiKit.cs; layout and the race read-outs: RaceHud.cs.
     Texture2D white;
     void OnGUI()
     {
-        if (big == null)
-        {
-            white = Texture2D.whiteTexture;
-            big = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
-            small = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.UpperLeft };
-            center = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter };
-            btn = new GUIStyle(GUI.skin.button);
-            big.richText = small.richText = center.richText = true;
-        }
-        big.fontSize = (int)S(34); small.fontSize = (int)S(11); center.fontSize = (int)S(13); btn.fontSize = (int)S(12);
+        if (white == null) white = Texture2D.whiteTexture;
         if (menuOpen && !replaying) { DrawSettings(); return; } // the settings screen covers everything (race paused, or over the start menu)
         if (ui.Showing)
         {
@@ -1015,50 +1011,100 @@ public partial class GameManager : MonoBehaviour
             else if (choice != MenuUI.Choice.None) SessionChoice(choice); // weekend flow (Qualifying.cs)
             return;
         }
+        HudInit(); HudLayout();
         if (replaying)
         {
             // replay: a small caption and a way out, nothing else on screen
             float total = (recCount - 1) / (float)RecHz;
-            center.fontSize = (int)S(13);
-            Panel(new Rect(S(8), S(8), S(170), S(30)));
-            GUI.Label(new Rect(S(8), S(8), S(170), S(30)), ReplayCaption(Mathf.Max(0, total - replayT)), center);
-            if (GUI.Button(new Rect(Screen.width - S(8) - S(110), S(8), S(110), S(30)), "End replay", btn)) StopReplay();
+            var cap = new Rect(hudL, hudT, S(116), S(28));
+            Panel(cap);
+            bool dot = Mathf.Repeat(Time.unscaledTime, 1f) < 0.6f;
+            Disc(new Rect(cap.x + S(11), cap.center.y - S(3), S(6), S(6)), dot ? HudAccent : new Color(0.4f, 0.05f, 0.03f));
+            TF(new Rect(cap.x + S(23), cap.y, S(60), cap.height), "REPLAY", UiKit.Black, 9f, Color.white);
+            TF(new Rect(cap.x, cap.y, cap.width - S(11), cap.height), ReplayCaption(Mathf.Max(0, total - replayT)), UiKit.Semi, 8f, HudGrey, TextAnchor.MiddleRight);
+            if (PillBtn(new Rect(hudR - S(112), hudT, S(112), S(28)), "END REPLAY", null, HudAccent)) StopReplay();
             return;
         }
         DrawQualiHud(); // qualifying clock and live timing (Qualifying.cs)
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
 
-        // top-right: Settings, Camera, Restart. Everything else lives in the settings screen.
-        float bh = S(30), bw = S(74), x0 = Screen.width - S(8);
-        if (GUI.Button(new Rect(x0 - 3 * (bw + S(4)), S(8), bw, bh), "Settings", btn)) menuOpen = true;
-        if (GUI.Button(new Rect(x0 - 2 * (bw + S(4)), S(8), bw, bh), "Cam", btn)) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); Save(); }
-        if (GUI.Button(new Rect(x0 - 1 * (bw + S(4)), S(8), bw, bh), "Restart", btn)) { ResetCar(); menuOpen = false; }
-        // pit stop: arm it during a race (not on the last lap); it happens when the car next crosses the line
-        if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps)
+        DrawTopButtons();
+        if (!menuOpen && !playground && (surface == 2 || hitT > 0))
         {
-            var boxR = new Rect(Screen.width - S(8) - bw, S(162), bw, bh);
-            if (GUI.Button(boxR, boxArmed ? "BOXING" : "BOX", btn)) { boxArmed = !boxArmed; Flash(boxArmed ? $"Box this lap: {Weather.TyreName(NextSet)}" : "Box cancelled"); }
+            var bt = new Rect(Mathf.Round(Screen.width * 0.5f - S(72)), Screen.height * 0.5f, S(144), S(32));
+            if (PillBtn(bt, "BACK ON TRACK", icoBack, HudCyan, false, 8.5f)) Recover();
         }
-        if (!menuOpen && !playground && (surface == 2 || hitT > 0) && GUI.Button(new Rect(Screen.width / 2 - S(60), Screen.height * 0.5f, S(120), bh), "Back on track", btn)) Recover();
-        // timing tower, timing panel and sectors, steering-wheel display, banners (RaceHud.cs)
+        // timing tower, race card and sectors, dash, banners (RaceHud.cs)
         DrawRaceHud(speed);
 
         if (hudMap) DrawMiniMap();
         DrawStartLights(); // the five red lights (GameManagerStart.cs)
 
-        // pedals
-        Pedal(GasRect, pedalGas, new Color(0.24f, 0.86f, 0.52f), "GAS");
-        Pedal(BrakeRect, pedalBrake, new Color(1f, 0.3f, 0.23f), "BRAKE");
-        if (!tilt) { center.fontSize = (int)S(11); GUI.Label(new Rect(S(20), Screen.height - S(40), S(190), S(20)), "Touch & drag to steer", center); }
+        // pedals (drawn inside their touch rects; the rects themselves are unchanged)
+        Pedal(GasRect, pedalGas, new Color(0.13f, 0.86f, 0.45f), "GAS");
+        Pedal(BrakeRect, pedalBrake, new Color(1f, 0.24f, 0.2f), "BRAKE");
+        if (!tilt) DrawSteerHint();
 
-        if (Time.realtimeSinceStartup < 8f) { small.fontSize = (int)S(9); GUI.Label(new Rect(S(8), Screen.height - S(16), Screen.width, S(14)), CarModel.Credit, small); small.fontSize = (int)S(11); }
+        if (Time.realtimeSinceStartup < 8f)
+            UiKit.Text(new Rect(hudL, hudB - S(86), Mathf.Max(S(120), Screen.width * 0.5f - S(140) - hudL), S(30)), CarModel.Credit, UiKit.Regular, 5.8f, new Color(1f, 1f, 1f, 0.55f), TextAnchor.LowerLeft, true);
     }
-    void Panel(Rect r) => Fill(r, new Color(0, 0, 0, 0.35f));
-    void Fill(Rect r, Color c) { var o = GUI.color; GUI.color = c; GUI.DrawTexture(r, white); GUI.color = o; }
+
+    // top right, left of the race card: settings, camera, restart (round glass icons) and the BOX pill in a race
+    void DrawTopButtons()
+    {
+        float b = S(30), g = S(7), y = hudT + S(1), x = btnRight - b;
+        if (RoundBtn(new Rect(x, y, b, b), icoBack)) { ResetCar(); menuOpen = false; }
+        x -= b + g;
+        if (RoundBtn(new Rect(x, y, b, b), icoCam)) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); Save(); }
+        x -= b + g;
+        if (RoundBtn(new Rect(x, y, b, b), icoGear)) menuOpen = true;
+        // pit stop: arm it during a race (not on the last lap); it happens when the car next crosses the line
+        if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps)
+        {
+            float pw = S(58); x -= pw + g;
+            bool armed = boxArmed, blink = armed && Mathf.Repeat(Time.unscaledTime * 2f, 1f) < 0.5f;
+            if (PillBtn(new Rect(x, y, pw, b), armed ? "BOXING" : "BOX", null, armed && blink ? new Color(1f, 0.16f, 0.1f) : HudAccent, armed, 8.5f))
+            { boxArmed = !boxArmed; Flash(boxArmed ? $"Box this lap: {Weather.TyreName(NextSet)}" : "Box cancelled"); }
+        }
+    }
+
+    // drag steering: a slim track bottom left; the dot follows your thumb
+    void DrawSteerHint()
+    {
+        float w = S(130), x = hudL + S(10), y = hudB - S(8);
+        bool held = steerFinger >= 0;
+        float a = held ? 1f : 0.55f;
+        var rail = new Rect(x, y, w, S(3));
+        UiKit.Rect(rail, new Color(1f, 1f, 1f, 0.14f * a), 1.5f);
+        UiKit.Rect(new Rect(x + w * 0.5f - S(0.5f), y - S(2), S(1), S(7)), new Color(1f, 1f, 1f, 0.3f * a));
+        float s = held ? Mathf.Clamp(dragSteer, -1f, 1f) : 0f, px = x + w * 0.5f + s * w * 0.5f;
+        if (held) UiKit.Rect(new Rect(Mathf.Min(px, x + w * 0.5f), y, Mathf.Abs(px - (x + w * 0.5f)), S(3)), new Color(HudCyan.r, HudCyan.g, HudCyan.b, 0.7f), 1.5f);
+        Disc(new Rect(px - S(5), y + S(1.5f) - S(5), S(10), S(10)), held ? Color.white : new Color(1f, 1f, 1f, 0.45f));
+        if (!held) TF(new Rect(x, y - S(15), w, S(10)), "DRAG TO STEER", UiKit.Semi, 6.2f, new Color(1f, 1f, 1f, 0.5f), TextAnchor.MiddleCenter);
+    }
+
+    void Panel(Rect r) => Glass(r, 10f);
+    void Fill(Rect r, Color c) { var o = GUI.color; GUI.color = c * o; GUI.DrawTexture(r, white != null ? white : Texture2D.whiteTexture); GUI.color = o; }
+    // a touch pedal: translucent rounded glass, analog fill from the bottom with a bright level line, glow when pressed
     void Pedal(Rect r, float v, Color c, string label)
     {
-        Fill(r, new Color(c.r, c.g, c.b, 0.18f));
-        Fill(new Rect(r.x, r.yMax - r.height * v, r.width, r.height * v), new Color(c.r, c.g, c.b, 0.55f));
-        center.fontSize = (int)S(12); GUI.Label(new Rect(r.x, r.yMax - S(30), r.width, S(24)), label, center);
+        v = Mathf.Clamp01(v);
+        float rad = 16f;
+        if (v > 0.02f) UiKit.Rect(new Rect(r.x - S(3), r.y - S(3), r.width + S(6), r.height + S(6)), new Color(c.r, c.g, c.b, 0.16f * v), rad + 3f); // glow
+        UiKit.Rect(r, new Color(0.02f, 0.025f, 0.035f, 0.26f), rad);
+        if (v > 0.01f)
+        {
+            float h = Mathf.Max(S(6), r.height * v);
+            var f = new Rect(r.x, r.yMax - h, r.width, h);
+            var old = GUI.color; GUI.color = new Color(1f, 1f, 1f, 0.35f + 0.4f * v) * old;
+            UiKit.Gradient(f, new Color(c.r, c.g, c.b, 0.85f), new Color(c.r * 0.6f, c.g * 0.6f, c.b * 0.6f, 0.55f), rad);
+            GUI.color = old;
+            UiKit.Rect(new Rect(r.x + S(8), f.y + S(1), r.width - S(16), S(2)), new Color(1f, 1f, 1f, 0.75f * v), 1f); // level line
+        }
+        UiKit.Outline(r, new Color(c.r, c.g, c.b, 0.30f + 0.5f * v), rad, 0.8f + 0.6f * v);
+        // grip ribs and the label
+        float gx = r.x + r.width * 0.3f, gw = r.width * 0.4f;
+        for (int i = 0; i < 3; i++) UiKit.Rect(new Rect(gx, r.y + S(14) + i * S(6), gw, S(1.6f)), new Color(1f, 1f, 1f, 0.16f), 1f);
+        UiKit.TextShadow(new Rect(r.x, r.yMax - S(24), r.width, S(16)), label, UiKit.Bold, 8f, new Color(1f, 1f, 1f, 0.8f), TextAnchor.MiddleCenter);
     }
 }

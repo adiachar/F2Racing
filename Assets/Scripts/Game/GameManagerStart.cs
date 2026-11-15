@@ -118,31 +118,40 @@ public partial class GameManager
         audioEngine.rpm = (float)car.rpm;
     }
 
-    // HUD: a row of five red lights, top centre, until just after lights out
-    static Texture2D startDot;
+    // HUD: five big red lights on a dark gantry plate, top centre. Each lamp eases on over 0.12 s as its second comes;
+    // at lights out all go dark at once and the plate fades away within a second.
     void DrawStartLights()
     {
         if (!GridStart || raceTime >= Countdown + 1.0) return;
-        if (startDot == null)
-        {
-            const int D = 64; startDot = new Texture2D(D, D, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, hideFlags = HideFlags.HideAndDontSave };
-            var px = new Color32[D * D];
-            for (int y = 0; y < D; y++) for (int x = 0; x < D; x++)
-            {
-                float d = Mathf.Sqrt((x - D / 2f + 0.5f) * (x - D / 2f + 0.5f) + (y - D / 2f + 0.5f) * (y - D / 2f + 0.5f));
-                px[y * D + x] = new Color32(255, 255, 255, (byte)(255 * Mathf.Clamp01(D / 2f - 1 - d)));
-            }
-            startDot.SetPixels32(px); startDot.Apply(false);
-        }
+        HudInit();
+        float t = (float)raceTime, after = (float)(raceTime - Countdown);
+        float enter = UiKit.EaseOut(t / 0.45f), fade = after > 0 ? 1f - UiKit.EaseOut(after / 0.9f) : 1f, a = enter * fade;
+        if (a <= 0.01f) return;
         int lit = LitLights();
-        float r = S(34), gap = S(10), w = 5 * r + 4 * gap, x0 = (Screen.width - w) / 2, y0 = Screen.height * 0.16f;
-        Fill(new Rect(x0 - S(10), y0 - S(10), w + S(20), r + S(20)), new Color(0, 0, 0, 0.55f));
-        var o = GUI.color;
+        float pod = S(40), pg = S(9), pad = S(11), lamp = S(26);
+        float w = 5 * pod + 4 * pg + 2 * pad, h = S(94);
+        float x0 = Mathf.Round((Screen.width - w) * 0.5f), y0 = Mathf.Round(hudT + Screen.height * 0.11f - (1f - enter) * S(18));
+        var old = GUI.color; GUI.color = new Color(1f, 1f, 1f, a) * old;
+        var plate = new Rect(x0, y0, w, h);
+        UiKit.Shadow(plate, 14f, 10f, 0.4f);
+        UiKit.Gradient(plate, new Color(0.11f, 0.115f, 0.13f, 0.96f), new Color(0.035f, 0.038f, 0.045f, 0.96f), 14f);
+        UiKit.Outline(plate, new Color(1f, 1f, 1f, 0.10f), 14f, 0.7f);
+        Color unlit = new Color(0.075f, 0.075f, 0.09f, 1f), redOn = new Color(1f, 0.07f, 0.04f, 1f);
         for (int k = 0; k < 5; k++)
         {
-            GUI.color = k < lit ? new Color(1f, 0.08f, 0.05f) : new Color(0.16f, 0.16f, 0.18f);
-            GUI.DrawTexture(new Rect(x0 + k * (r + gap), y0, r, r), startDot);
+            var pr = new Rect(x0 + pad + k * (pod + pg), y0 + pad, pod, h - 2 * pad);
+            UiKit.Rect(pr, new Color(0.015f, 0.015f, 0.02f, 1f), 10f);
+            UiKit.Outline(pr, new Color(1f, 1f, 1f, 0.06f), 10f, 0.6f);
+            float b = k < lit ? Mathf.Clamp01(((float)(raceTime - GridWait) - k) / 0.12f) : 0f;
+            for (int j = 0; j < 2; j++)
+            {
+                var lr = new Rect(pr.center.x - lamp * 0.5f, pr.y + S(6) + j * (lamp + S(8)), lamp, lamp);
+                if (b > 0.01f) UiKit.Rect(UiKit.Scale(lr, 1.6f), new Color(1f, 0.05f, 0.02f, 0.22f * b), 999f); // glow
+                UiKit.Rect(lr, Color.Lerp(unlit, redOn, b), 999f);
+                if (b > 0.01f) UiKit.Rect(new Rect(lr.x + lamp * 0.22f, lr.y + lamp * 0.16f, lamp * 0.36f, lamp * 0.28f), new Color(1f, 0.75f, 0.65f, 0.45f * b), 999f); // highlight
+                else UiKit.Outline(lr, new Color(1f, 1f, 1f, 0.07f), 999f, 0.6f);
+            }
         }
-        GUI.color = o;
+        GUI.color = old;
     }
 }

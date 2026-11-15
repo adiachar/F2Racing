@@ -306,51 +306,72 @@ public partial class GameManager
         ui.resultNote = note;
     }
 
-    // HUD during qualifying: session clock, END, and live timing
+    // HUD during qualifying (top left, in the timing tower's place): the session clock and END in the header, then the
+    // live classification. Tap the rows: the whole list or the top three and the cars round you.
     void DrawQualiHud()
     {
         if (quali == null) return;
-        float w = S(200), x = Screen.width / 2 - w / 2, y = S(8), h = S(30);
-        Panel(new Rect(x, y, w, h));
-        center.fontSize = (int)S(14);
-        GUI.Label(new Rect(x, y, w, h), quali.flag ? "<b>QUALIFYING</b>  ·  FLAG" : QualiClockText(quali.Left), center);
-        if (GUI.Button(new Rect(x + w + S(4), y, S(56), h), "END", btn)) { EndQuali(); return; }
-
         if (qFrame != Time.frameCount) { qFrame = Time.frameCount; quali.ClassifiedInto(qList); } // once a frame (OnGUI runs 2+ times)
         var list = qList; double best = quali.Fastest;
-        float lx = S(8), ly = hudInfo ? S(190) : S(40), lw = S(176), rh = S(13);
-        int rows = Mathf.Min(Mathf.Max((int)((Screen.height - S(210) - ly) / rh), 3), list.Count);
-        int me = list.FindIndex(e => e.Player);
+        float x = hudL, y = hudT, w = S(150), rh = S(15), hh = S(24);
+        float bottom = tilt ? BrakeRect.y - S(8) : Screen.height - S(48);
+        int me = 0; for (int i = 0; i < list.Count; i++) if (list[i].Player) { me = i; break; }
+        int fit = Mathf.Max(3, (int)((bottom - y - hh - S(10)) / rh));
+        int rows = Mathf.Min(towerFull ? fit : Mathf.Min(fit, 6), list.Count);
         bool meShown = me < rows;
-        int show = meShown ? rows : rows - 1;
-        Panel(new Rect(lx, ly, lw, rh * (show + (meShown ? 0 : 1)) + S(6)));
-        int old = small.fontSize; small.fontSize = (int)S(10);
-        for (int r = 0; r < show + (meShown ? 0 : 1); r++)
+        int show = meShown ? rows : rows - 1, total = show + (meShown ? 0 : 1);
+        float rowsTop = y + hh + S(2), height = hh + S(4) + total * rh + (meShown ? 0 : S(5));
+
+        Glass(new Rect(x, y, w, height), 8f);
+        // header: red Q tag, session clock (or the chequered flag), END
+        float tagW = S(24);
+        RR(new Rect(x, y, tagW, hh), HudAccent, 8, 0, 0, 0);
+        TF(new Rect(x, y, tagW, hh), "Q", UiKit.Black, 11f, Color.white, TextAnchor.MiddleCenter);
+        if (quali.flag)
+        {
+            float cs = S(3.2f), fx = x + tagW + S(8), fy = y + hh * 0.5f - cs * 2;
+            for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) UiKit.Rect(new Rect(fx + i * cs, fy + j * cs, cs, cs), (i + j) % 2 == 0 ? Color.white : new Color(0.08f, 0.08f, 0.1f));
+            TF(new Rect(fx + 4 * cs + S(5), y, S(60), hh), "FLAG", UiKit.Black, 10f, Color.white);
+        }
+        else
+        {
+            TF(new Rect(x + tagW + S(8), y + S(1), S(60), hh), QualiClockText(quali.Left), UiKit.Black, 12f, quali.Left < 60 ? HudYellow : Color.white);
+            TF(new Rect(x + tagW + S(8), y, S(84), hh), "QUALIFYING", UiKit.Semi, 5.6f, HudFaint, TextAnchor.MiddleRight);
+        }
+        if (PillBtn(new Rect(x + w - S(38), y + S(4), S(34), hh - S(8)), "END", null, HudAccent, false, 6.5f)) { EndQuali(); return; }
+        UiKit.Rect(new Rect(x, y + hh, w, Mathf.Max(1f, S(0.5f))), new Color(1f, 1f, 1f, 0.07f));
+
+        float ry = rowsTop;
+        for (int r = 0; r < total; r++)
         {
             int i = r < show ? r : me;
-            var e = list[i]; float yy = ly + S(3) + r * rh;
+            if (r == show && !meShown) { UiKit.Rect(new Rect(x + S(8), ry + S(2), w - S(16), Mathf.Max(1f, S(0.6f))), new Color(1f, 1f, 1f, 0.14f)); ry += S(5); }
+            var e = list[i];
             bool fresh = quali.clock - e.shownAt < 4;
-            if (e.Player) Fill(new Rect(lx, yy, lw, rh), new Color(MenuUI.Accent.r, MenuUI.Accent.g, MenuUI.Accent.b, 0.35f));
-            Fill(new Rect(lx + S(22), yy + S(2), S(3), rh - S(4)), e.colour);
             int colK = fresh ? (e.lastDeleted ? 1 : !double.IsNaN(e.best) && e.best <= best + 1e-9 && e.lastPb ? 2 : e.lastPb ? 3 : 4) : 0;
-            GUI.Label(new Rect(lx + S(4), yy - S(1), S(20), rh + S(2)), HudNum.Int(i + 1), small);
-            GUI.Label(new Rect(lx + S(28), yy - S(1), S(90), rh + S(2)), e.name, small);
-            GUI.Label(new Rect(lx + S(112), yy - S(1), S(64), rh + S(2)), QualiRowText(r, i, e.best, best, colK), small);
+            var row = new Rect(x + S(1), ry, w - S(2), rh);
+            if (e.Player) UiKit.Gradient(row, MeLeft, MeRight, 0f, true);
+            if (fresh && colK > 0) UiKit.Rect(new Rect(x + S(1), ry + S(2), S(2), rh - S(4)), QualiCols[colK], 1f);
+            TF(new Rect(x, ry, S(18), rh), HudNum.Int(i + 1), UiKit.Bold, 8.5f, Color.white, TextAnchor.MiddleCenter);
+            UiKit.Rect(new Rect(x + S(19), ry + S(3.5f), S(2.2f), rh - S(7)), e.colour, 1f);
+            TF(new Rect(x + S(25), ry, S(34), rh), e.Player ? "YOU" : Code(e.who), UiKit.Bold, 8.5f, Color.white);
+            TF(new Rect(x + S(60), ry, w - S(68), rh), QualiRowText(r, i, e.best, best, colK), UiKit.Semi, 7.8f, colK == 0 && double.IsNaN(e.best) ? HudFaint : QualiCols[colK], TextAnchor.MiddleRight);
+            ry += rh;
         }
-        small.fontSize = old;
+        if (GUI.Button(new Rect(x, rowsTop, w, height - hh), GUIContent.none, GUIStyle.none)) towerFull = !towerFull;
     }
     // live timing strings, rebuilt only when what they show changes (they were made 2+ times a frame per row)
     readonly List<Qualifying.Entry> qList = new List<Qualifying.Entry>(); int qFrame = -1;
-    static readonly string[] QualiCols = { "#ffffff", "#ff6060", "#c070ff", "#60ff80", "#ffe060" };
+    // 0 white, 1 deleted (red), 2 session best (purple), 3 personal best (green), 4 slower (yellow)
+    static readonly Color[] QualiCols = { Color.white, new Color(1f, 0.26f, 0.22f), new Color(0.66f, 0.33f, 0.97f), new Color(0.13f, 0.77f, 0.37f), new Color(0.98f, 0.80f, 0.08f) };
     readonly long[] qRowKey = new long[64]; readonly string[] qRowText = new string[64];
     string QualiRowText(int r, int i, double t, double best, int colK)
     {
         long ms = double.IsNaN(t) ? -1 : (long)System.Math.Round((i == 0 ? t : t - best) * 1000);
         long key = ((ms + 2) * 64 + i) * 8 + colK;
         if (r < qRowKey.Length && qRowText[r] != null && qRowKey[r] == key) return qRowText[r];
-        string time = double.IsNaN(t) ? "no time" : i == 0 ? Qualifying.Fmt(t) : $"+{t - best:0.000}";
-        if (colK == 1) time = "deleted";
-        string s = $"<color={QualiCols[colK]}>{time}</color>";
+        string s = double.IsNaN(t) ? "NO TIME" : i == 0 ? Qualifying.Fmt(t) : $"+{t - best:0.000}";
+        if (colK == 1) s = "DELETED";
         if (r < qRowKey.Length) { qRowKey[r] = key; qRowText[r] = s; }
         return s;
     }
@@ -358,7 +379,7 @@ public partial class GameManager
     string QualiClockText(double left)
     {
         int s = Mathf.CeilToInt((float)left);
-        if (s != qClockKey || qClockText == null) { qClockKey = s; qClockText = $"<b>QUALIFYING</b>  ·  {Qualifying.Clock(left)}"; }
+        if (s != qClockKey || qClockText == null) { qClockKey = s; qClockText = Qualifying.Clock(left); }
         return qClockText;
     }
 }

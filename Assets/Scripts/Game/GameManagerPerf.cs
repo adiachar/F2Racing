@@ -150,6 +150,6 @@ public partial class GameManager
     string ReplayCaption(float secondsLeft)
     {
         int s = Mathf.Clamp(Mathf.RoundToInt(secondsLeft), 0, replayCaps.Length - 1);
-        return replayCaps[s] ??= "<b>REPLAY</b>  " + s + "s";
+        return replayCaps[s] ??= s + " s"; // the "REPLAY" label is drawn beside it (GameManager.OnGUI)
     }
 }

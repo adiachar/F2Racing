@@ -1,42 +1,54 @@
-// RaceHud.cs — the in-race HUD in the style of the F1 TV graphics and the onboard steering-wheel display, another
-// part of GameManager (see GameManager.cs, OnGUI calls DrawRaceHud). IMGUI, no packages.
-//  * timing tower (left): position, 3-letter code, gap to the leader or interval (tap to switch), tyre, stops,
-//    fastest lap; compact (leader + the cars round you) or full (tap the arrow)
-//  * timing panel (top centre): position / lap, lap clock, last and best, three sectors (purple / green / yellow),
-//    live delta to your best lap; the lap time flashes at the line
-//  * wheel display (bottom centre): shift lights, speed, gear, battery and MGU-K state (deploy / harvest /
-//    superclip), X-mode; beside it the tyres and brakes (car diagram) and fuel
-//  * broadcast banners: fastest lap, pit stop, track limits, jump start, yellow flag
-// Sector and gap bookkeeping is in Sectors.cs. Styles, textures and number strings are made once (number strings
-// are cached the first time each value is shown), so drawing allocates nothing frame to frame.
+// RaceHud.cs — the in-race HUD, in the style of the 2025/26 F1 TV graphics and a modern onboard dash. Another part of
+// GameManager (see GameManager.cs: OnGUI calls HudLayout, the buttons, then DrawRaceHud). IMGUI, drawn with the shared
+// design system (UiKit.cs: Titillium Web, palette, rounded glass), no packages.
+//  * timing tower (top left): position, team stripe, 3-letter code, gap to the leader or interval (tap the rows),
+//    tyre, stops, fastest lap. Rows glide to their new place when positions change and flash green / red.
+//    The chevron cycles compact (leader + the cars round you) -> full -> collapsed (just you)
+//  * race card (top right): position P3/20, lap, lap clock, live delta to your best lap, three mini-sectors
+//    (purple / green / yellow, with the time), last and best lap; the lap time flashes at the line
+//  * dash (bottom centre): one slim glass bar: shift-light strip (green -> red -> blue), speed, big gear, battery
+//    with deploy / harvest state, tyre quad (temperature colour, tread fill). Beside it, when there is room,
+//    tyre / brake temperatures and fuel. Above it: X-MODE, TOW, YELLOW, BOX chips
+//  * banners (top centre): fastest lap, pit stop, track limits, jump start, flags; they slide in and out
+// Sector and gap bookkeeping is in Sectors.cs. Number strings come from tables filled once (HudNum) or are rebuilt only
+// when their value changes (HudSlot); text widths are measured once per value, so drawing allocates nothing per frame.
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
 
 public partial class GameManager
 {
-    // ---------------------------------------------------------------- look
-    static readonly Color HudAccent = new Color(0.882f, 0.024f, 0f);          // #E10600
-    static readonly Color HudPanel = new Color(0.04f, 0.04f, 0.06f, 0.78f), HudPanel2 = new Color(0.13f, 0.13f, 0.16f, 0.86f);
-    static readonly Color HudPurple = new Color(0.66f, 0.25f, 0.95f), HudGreen = new Color(0.10f, 0.84f, 0.36f), HudYellow = new Color(1f, 0.84f, 0.08f);
-    static readonly Color HudGrey = new Color(0.62f, 0.63f, 0.68f), HudBlue = new Color(0.25f, 0.62f, 1f), HudCyan = new Color(0.2f, 0.85f, 1f);
-    static readonly Color[] SectorCols = { new Color(0.35f, 0.35f, 0.4f), new Color(1f, 0.84f, 0.08f), new Color(0.10f, 0.84f, 0.36f), new Color(0.66f, 0.25f, 0.95f) };
+    // ---------------------------------------------------------------- look (UiKit palette + HUD colours)
+    static readonly Color HudAccent = new Color(0.882f, 0.024f, 0f);           // #E10600 (UiKit.Accent)
+    static readonly Color HudPanel = new Color(0.045f, 0.05f, 0.068f, 0.84f), HudPanel2 = new Color(0.12f, 0.13f, 0.16f, 0.88f);
+    static readonly Color HudPurple = new Color(0.66f, 0.33f, 0.97f), HudGreen = new Color(0.13f, 0.77f, 0.37f), HudYellow = new Color(0.98f, 0.80f, 0.08f);
+    static readonly Color HudGrey = new Color(0.62f, 0.66f, 0.72f), HudBlue = new Color(0.25f, 0.55f, 1f), HudCyan = new Color(0f, 0.82f, 1f);
+    static readonly Color HudRed = new Color(1f, 0.26f, 0.22f), HudAmber = new Color(1f, 0.66f, 0.12f), HudFaint = new Color(0.42f, 0.45f, 0.51f);
+    static readonly Color[] SectorCols = { new Color(0.35f, 0.35f, 0.4f), new Color(0.98f, 0.80f, 0.08f), new Color(0.13f, 0.77f, 0.37f), new Color(0.66f, 0.33f, 0.97f) };
     static readonly string[] SetLetter = { "S", "M", "H", "I", "W" };
-    static readonly Color[] SetCol = { new Color(0.92f, 0.12f, 0.12f), new Color(1f, 0.82f, 0.1f), new Color(0.95f, 0.95f, 0.95f), new Color(0.2f, 0.78f, 0.25f), new Color(0.15f, 0.48f, 0.98f) };
-    static readonly string[] SectorNames = { "S1", "S2", "S3" }, SectorWords = { "SECTOR 1", "SECTOR 2", "SECTOR 3" };
+    static readonly Color[] SetCol = { new Color(0.93f, 0.16f, 0.16f), new Color(1f, 0.82f, 0.1f), new Color(0.95f, 0.95f, 0.95f), new Color(0.2f, 0.78f, 0.25f), new Color(0.15f, 0.48f, 0.98f) };
+    static readonly string[] SectorWords = { "SECTOR 1", "SECTOR 2", "SECTOR 3" };
+    // glass: a vertical gradient (cached texture: colours never change) and a hairline
+    static readonly Color GlassTop = new Color(0.085f, 0.095f, 0.122f, 0.80f), GlassBot = new Color(0.03f, 0.035f, 0.05f, 0.86f), GlassLine = new Color(1f, 1f, 1f, 0.09f);
+    static readonly Color MeLeft = new Color(0.882f, 0.024f, 0f, 0.85f), MeRight = new Color(0.882f, 0.024f, 0f, 0.18f);
+    static readonly Color DimSeg = new Color(1f, 1f, 1f, 0.09f), Hair = new Color(1f, 1f, 1f, 0.07f);
 
-    static Texture2D hudTri, hudRing, hudDisc; static Font hudFont; static bool hudFontTried;
-    GUIStyle hs;
+    static Texture2D hudTri, icoGear, icoCam, icoBack;
+
+    // ---------------------------------------------------------------- layout (once per OnGUI, from GameManager.OnGUI)
+    float hudL, hudT, hudR, hudB; Rect cardRect, mapRect; float btnRight;
 
     // ---------------------------------------------------------------- timing state
     SectorTimer secTimer; Track secFor; readonly CarTiming myTime = new CarTiming(); CarTiming[] rivTime = new CarTiming[0]; DeltaTrace deltaTr;
     double hudPrevRace; int hudFrame = -1;
-    bool towerFull, towerInterval;
+    bool towerFull, towerMin, towerInterval;
     float lapFlashT, sectorHoldT; double lapFlashTime; int lapFlashCol;   // 0 deleted, 1 yellow, 2 green, 3 purple
     double fastest = double.NaN; int fastestBy = -1, lapsTimed;          // fastestBy: 0 = you, i + 1 = rival i
     bool hudCutSeen, hudJumpSeen, hudYellow; int hudPitSeen; float yellowCheckT;
     readonly int[] ord = new int[40]; readonly double[] prog = new double[40]; int ordN;
     readonly int[] showRanks = new int[40];
+    // tower animation per car (index = 0 you, i + 1 rival i): row y (units, from the first row), last rank, gain/loss flash
+    readonly float[] rowY = new float[40], rowFx = new float[40]; readonly int[] rowSeen = new int[40], rowRank = new int[40];
 
     // ---------------------------------------------------------------- banners
     readonly string[] bTitle = new string[4], bSub = new string[4]; readonly Color[] bCol = new Color[4]; int bCount; float bT;
@@ -52,7 +64,7 @@ public partial class GameManager
     {
         HudInit();
         HudTick();
-        DrawTimingPanel();
+        DrawRaceCard();
         DrawTower();
         DrawWheel(speed);
         DrawBanners();
@@ -60,20 +72,21 @@ public partial class GameManager
         DrawFps();
     }
 
+    // where everything goes this frame: the safe area, the race card (top right), the buttons left of it, the map below
+    void HudLayout()
+    {
+        var sa = UiKit.Safe;
+        hudL = sa.x + S(8); hudT = sa.y + S(6); hudR = sa.xMax - S(8); hudB = sa.yMax - S(8);
+        float cw = playground ? S(236) : S(150);
+        float ch = playground ? S(42) : hudSectors ? S(85) : S(70);
+        cardRect = new Rect(Mathf.Round(hudR - cw), hudT, cw, ch);
+        btnRight = cardRect.x - S(8);
+        float ms = S(80);
+        mapRect = new Rect(Mathf.Round(hudR - ms), cardRect.yMax + S(6), ms, ms);
+    }
+
     void HudInit()
     {
-        if (!hudFontTried)
-        {
-            hudFontTried = true;
-            try { hudFont = Font.CreateDynamicFontFromOSFont(new[] { "Roboto Condensed", "RobotoCondensed-Bold", "Arial Narrow", "Helvetica Neue Condensed Bold", "DIN Condensed", "Roboto", "Arial" }, 32); }
-            catch { hudFont = null; }
-        }
-        if (hs == null)
-        {
-            hs = new GUIStyle(GUI.skin.label) { padding = new RectOffset(0, 0, 0, 0), margin = new RectOffset(0, 0, 0, 0), wordWrap = false, clipping = TextClipping.Overflow, richText = false };
-            if (hudFont != null) hs.font = hudFont;
-            hs.normal.textColor = Color.white;
-        }
         if (hudTri == null)
         {
             const int D = 32;
@@ -85,46 +98,120 @@ public partial class GameManager
                 px[ty * D + x] = new Color32(255, 255, 255, (byte)(255 * Mathf.Clamp01(yG - x + 0.5f)));
             }
             hudTri.SetPixels32(px); hudTri.Apply(false);
-            hudRing = Circle(64, 0.62f); hudDisc = Circle(64, 0f);
         }
+        if (icoGear == null) { icoGear = MakeIcon(0); icoCam = MakeIcon(1); icoBack = MakeIcon(2); }
     }
-    static Texture2D Circle(int D, float inner)
+
+    // ---------------------------------------------------------------- icons, drawn once into small alpha textures
+    // 0 settings cog, 1 camera, 2 circular arrow (restart / back on track). Signed distances, 1-pixel anti-aliasing.
+    static Texture2D MakeIcon(int kind)
     {
+        const int D = 64;
         var t = new Texture2D(D, D, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp, hideFlags = HideFlags.HideAndDontSave };
-        var px = new Color32[D * D]; float R = D / 2f - 1;
+        var px = new Color32[D * D];
         for (int y = 0; y < D; y++) for (int x = 0; x < D; x++)
         {
-            float d = Mathf.Sqrt((x - D / 2f + 0.5f) * (x - D / 2f + 0.5f) + (y - D / 2f + 0.5f) * (y - D / 2f + 0.5f));
-            float a = Mathf.Clamp01(R - d) * (inner > 0 ? Mathf.Clamp01(d - R * inner) : 1);
-            px[y * D + x] = new Color32(255, 255, 255, (byte)(255 * a));
+            float u = (x + 0.5f) / D - 0.5f, v = (y + 0.5f) / D - 0.5f; // v up (texture row 0 is the bottom)
+            float r = Mathf.Sqrt(u * u + v * v), a;
+            if (kind == 0)
+            {
+                float ang = Mathf.Atan2(v, u), tooth = Mathf.Clamp01(Mathf.Cos(ang * 8f) * 2.4f + 0.5f);
+                float outer = 0.345f + 0.11f * tooth * tooth * (3f - 2f * tooth);
+                a = Mathf.Clamp01((outer - r) * D + 0.5f) * Mathf.Clamp01((r - 0.14f) * D + 0.5f);
+            }
+            else if (kind == 1)
+            {
+                float body = Mathf.Clamp01(-BoxSd(u, v + 0.035f, 0.42f, 0.25f, 0.075f) * D + 0.5f);
+                float bump = Mathf.Clamp01(-BoxSd(u + 0.13f, v - 0.25f, 0.11f, 0.07f, 0.03f) * D + 0.5f);
+                float lr = Mathf.Sqrt(u * u + (v + 0.035f) * (v + 0.035f));
+                float ring = Mathf.Clamp01((0.185f - lr) * D + 0.5f) * Mathf.Clamp01((lr - 0.115f) * D + 0.5f);
+                a = Mathf.Max(body, bump) * (1f - ring);
+            }
+            else
+            {
+                // a ring from 90 deg (top) clockwise round to 25 deg, with the arrow head at the top pointing right
+                float ang = Mathf.Atan2(v, u) * Mathf.Rad2Deg; if (ang < 0) ang += 360f;
+                float ringA = Mathf.Clamp01((0.355f - r) * D + 0.5f) * Mathf.Clamp01((r - 0.235f) * D + 0.5f);
+                float outside = ang >= 25f && ang <= 90f ? -Mathf.Min(ang - 25f, 90f - ang) : Mathf.Min(Mathf.Abs(Mathf.DeltaAngle(ang, 25f)), Mathf.Abs(Mathf.DeltaAngle(ang, 90f)));
+                ringA *= Mathf.Clamp01(outside * Mathf.Deg2Rad * r * D + 0.5f);
+                float head = Mathf.Clamp01(TriSd(u, v, -0.02f, 0.445f, -0.02f, 0.145f, 0.17f, 0.295f) * D + 0.5f);
+                a = Mathf.Max(ringA, head);
+            }
+            px[y * D + x] = new Color32(255, 255, 255, (byte)(255 * Mathf.Clamp01(a)));
         }
-        t.SetPixels32(px); t.Apply(false); return t;
+        t.SetPixels32(px); t.Apply(false);
+        return t;
+    }
+    // signed distance to a rounded box centred at the origin (half size hx, hy, corner radius rad); < 0 inside
+    static float BoxSd(float x, float y, float hx, float hy, float rad)
+    {
+        float qx = Mathf.Abs(x) - (hx - rad), qy = Mathf.Abs(y) - (hy - rad);
+        float ox = Mathf.Max(qx, 0f), oy = Mathf.Max(qy, 0f);
+        return Mathf.Sqrt(ox * ox + oy * oy) + Mathf.Min(Mathf.Max(qx, qy), 0f) - rad;
+    }
+    // distance inside a triangle (a, b, c in either winding); > 0 inside
+    static float TriSd(float px, float py, float ax, float ay, float bx, float by, float cx, float cy)
+    {
+        float s = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) >= 0 ? 1f : -1f;
+        return Mathf.Min(Edge(px, py, ax, ay, bx, by) * s, Mathf.Min(Edge(px, py, bx, by, cx, cy) * s, Edge(px, py, cx, cy, ax, ay) * s));
+    }
+    static float Edge(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float ex = bx - ax, ey = by - ay, l = Mathf.Max(1e-5f, Mathf.Sqrt(ex * ex + ey * ey));
+        return (ex * (py - ay) - ey * (px - ax)) / l;
     }
 
     // ---------------------------------------------------------------- drawing helpers
+    // text in layout units (same unit as S): bold = Titillium Bold, else SemiBold
     void T(Rect r, string s, float size, TextAnchor a, Color c, bool bold = true)
     {
         if (string.IsNullOrEmpty(s)) return;
-        hs.fontSize = Mathf.Max(6, (int)S(size)); hs.alignment = a; hs.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
-        var o = GUI.contentColor; GUI.contentColor = c; GUI.Label(r, s, hs); GUI.contentColor = o;
+        UiKit.Text(r, s, bold ? UiKit.Bold : UiKit.Semi, size, c, a);
+    }
+    static void TF(Rect r, string s, Font f, float size, Color c, TextAnchor a = TextAnchor.MiddleLeft)
+    {
+        if (string.IsNullOrEmpty(s)) return;
+        UiKit.Text(r, s, f, size, c, a);
+    }
+    // rounded rect with its own radius per corner (layout units): top-left, top-right, bottom-right, bottom-left
+    void RR(Rect r, Color c, float tl, float tr, float br, float bl)
+    {
+        if (c.a <= 0.001f || r.width <= 0 || r.height <= 0) return;
+        float m = Mathf.Min(r.width, r.height) * 0.5f;
+        GUI.DrawTexture(r, Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0f, c * GUI.color, new Vector4(0f, 0f, 0f, 0f),
+            new Vector4(Mathf.Min(S(tl), m), Mathf.Min(S(tr), m), Mathf.Min(S(br), m), Mathf.Min(S(bl), m)));
+    }
+    // HUD glass: gradient body and a hairline, two draws
+    static void Glass(Rect r, float radius)
+    {
+        UiKit.Gradient(r, GlassTop, GlassBot, radius);
+        UiKit.Outline(r, GlassLine, radius, 0.6f);
+    }
+    static void Disc(Rect r, Color c) => UiKit.Rect(r, c, 999f);
+    static Color Fade(float a) { var o = GUI.color; GUI.color = new Color(o.r, o.g, o.b, o.a * a); return o; }
+    // F1 TV style block (kept for GameManagerRaceControl.cs): a flat colour block, rounded on the ends asked for
+    void Para(Rect r, Color c, bool left = true, bool right = true)
+    {
+        float k = 6f;
+        RR(r, c, left ? k : 0, right ? k : 0, right ? k : 0, left ? k : 0);
     }
     // kind: 0 lower-left, 1 lower-right, 2 upper-left, 3 upper-right half of r filled
     static readonly Rect[] TriUv = { new Rect(0, 0, 1, 1), new Rect(1, 0, -1, 1), new Rect(0, 1, 1, -1), new Rect(1, 1, -1, -1) };
-    void Tri(Rect r, int kind, Color c) { var o = GUI.color; GUI.color = c; GUI.DrawTextureWithTexCoords(r, hudTri, TriUv[kind]); GUI.color = o; }
-    // F1 TV panel: sharp corners, both ends slanted "/" (a parallelogram); the slants stick out of r
-    void Para(Rect r, Color c, bool left = true, bool right = true)
+    void Tri(Rect r, int kind, Color c) { var o = GUI.color; GUI.color = c * o; GUI.DrawTextureWithTexCoords(r, hudTri, TriUv[kind]); GUI.color = o; }
+    void Tex(Rect r, Texture2D t, Color c) { if (t == null) return; var o = GUI.color; GUI.color = c * o; GUI.DrawTexture(r, t); GUI.color = o; }
+    // a small chevron: down (v) or up (^)
+    void Chevron(Rect r, bool down, Color c)
     {
-        float s = r.height * 0.36f;
-        Fill(r, c);
-        if (left) Tri(new Rect(r.x - s, r.y, s, r.height), 1, c);
-        if (right) Tri(new Rect(r.xMax, r.y, s, r.height), 2, c);
+        float h = r.width * 0.5f;
+        var a = new Rect(r.x, r.center.y - h * 0.5f, h, h); var b = new Rect(r.x + h, r.center.y - h * 0.5f, h, h);
+        if (down) { Tri(a, 3, c); Tri(b, 2, c); } else { Tri(a, 1, c); Tri(b, 0, c); }
     }
-    void Tex(Rect r, Texture2D t, Color c) { var o = GUI.color; GUI.color = c; GUI.DrawTexture(r, t); GUI.color = o; }
+    // tyre compound: a thin ring in the compound colour with its letter
     void TyreIcon(Rect r, int set)
     {
         set = Mathf.Clamp(set, 0, SetLetter.Length - 1);
-        Tex(r, hudRing, SetCol[set]);
-        T(r, SetLetter[set], r.height / S(1) * 0.62f, TextAnchor.MiddleCenter, SetCol[set]);
+        UiKit.Outline(r, SetCol[set], 999f, 1.1f);
+        TF(r, SetLetter[set], UiKit.Bold, r.height / S(1) * 0.56f, SetCol[set], TextAnchor.MiddleCenter);
     }
     static Color TempCol(double t, double opt, double win)
     {
@@ -134,7 +221,67 @@ public partial class GameManager
         if (k < -0.35f) return Color.Lerp(HudBlue, HudGreen, (k + 1) / 0.65f);
         if (k < 0.35f) return HudGreen;
         if (k < 1) return Color.Lerp(HudGreen, HudYellow, (k - 0.35f) / 0.65f);
-        return Color.Lerp(HudYellow, new Color(1f, 0.2f, 0.15f), Mathf.Clamp01(k - 1));
+        return Color.Lerp(HudYellow, HudRed, Mathf.Clamp01(k - 1));
+    }
+
+    // a touch button: fires on release inside, reports how pressed it looks (0..1). Same handling as UiKit.Button.
+    static bool HudButton(Rect r, out float press)
+    {
+        int id = GUIUtility.GetControlID(FocusType.Passive, r);
+        var e = Event.current; bool clicked = false;
+        switch (e.GetTypeForControl(id))
+        {
+            case EventType.MouseDown:
+                if (r.Contains(e.mousePosition)) { GUIUtility.hotControl = id; e.Use(); }
+                break;
+            case EventType.MouseDrag:
+                if (GUIUtility.hotControl == id) e.Use();
+                break;
+            case EventType.MouseUp:
+                if (GUIUtility.hotControl == id)
+                {
+                    GUIUtility.hotControl = 0;
+                    if (r.Contains(e.mousePosition)) clicked = true;
+                    e.Use();
+                }
+                break;
+        }
+        bool down = GUIUtility.hotControl == id && r.Contains(e.mousePosition);
+        press = UiKit.Anim(id, down ? 1f : 0f, 20f);
+        return clicked;
+    }
+    // round glass icon button (the hit area is a little bigger than the disc)
+    bool RoundBtn(Rect r, Texture2D icon, bool on = false)
+    {
+        var hit = new Rect(r.x - S(3), r.y - S(3), r.width + S(6), r.height + S(6));
+        bool c = HudButton(hit, out float p);
+        var rr = UiKit.Scale(r, 1f - 0.07f * p);
+        Disc(rr, Color.Lerp(on ? new Color(0.55f, 0.03f, 0f, 0.85f) : new Color(0.05f, 0.06f, 0.08f, 0.66f), new Color(0.18f, 0.19f, 0.23f, 0.88f), p));
+        UiKit.Outline(rr, new Color(1f, 1f, 1f, 0.13f + 0.15f * p), 999f, 0.6f);
+        Tex(UiKit.Scale(rr, 0.56f), icon, new Color(1f, 1f, 1f, 0.92f));
+        return c;
+    }
+    // glass pill button with an optional icon and an accent colour
+    bool PillBtn(Rect r, string label, Texture2D icon, Color accent, bool filled = false, float size = 8f)
+    {
+        bool c = HudButton(r, out float p);
+        var rr = UiKit.Scale(r, 1f - 0.04f * p);
+        if (filled) Disc(rr, Color.Lerp(accent, Color.white, 0.12f * p));
+        else
+        {
+            Disc(rr, Color.Lerp(new Color(0.05f, 0.06f, 0.08f, 0.78f), new Color(0.16f, 0.17f, 0.21f, 0.9f), p));
+            UiKit.Outline(rr, new Color(accent.r, accent.g, accent.b, 0.55f + 0.3f * p), 999f, 0.8f);
+        }
+        float ix = 0;
+        if (icon != null) { float s = rr.height * 0.5f; ix = s + S(4); Tex(new Rect(rr.x + rr.height * 0.42f, rr.center.y - s * 0.5f, s, s), icon, filled ? Color.white : accent); }
+        TF(new Rect(rr.x + ix * 0.5f, rr.y, rr.width, rr.height), label, UiKit.Bold, size, Color.white, TextAnchor.MiddleCenter);
+        return c;
+    }
+    // small status chip (X-MODE, TOW...)
+    void Chip(Rect r, string s, Color bg, Color fg)
+    {
+        Disc(r, bg);
+        TF(r, s, UiKit.Bold, 6.5f, fg, TextAnchor.MiddleCenter);
     }
 
     // ---------------------------------------------------------------- once a frame: timing and events
@@ -237,6 +384,7 @@ public partial class GameManager
         if (keepBest && fastestBy > 0) { fastest = myTime.bestLap; fastestBy = double.IsNaN(fastest) ? -1 : 0; }
         foreach (var r in rivTime) r.Clear();
         hudPitSeen = pitStops; hudJumpSeen = jumped; hudCutSeen = cut; hudYellow = false; bCount = 0; lapFlashT = sectorHoldT = 0;
+        for (int i = 0; i < rowSeen.Length; i++) { rowSeen[i] = -100; rowFx[i] = 0; }
     }
 
     CarTiming TimingOf(int e) => e == 0 ? myTime : rivTime[e - 1];
@@ -278,266 +426,408 @@ public partial class GameManager
                 used.Add(c); codes[g.name] = c;
             }
         }
-        return codes.TryGetValue(who.name, out var s) ? s : "???";
+        return who != null && codes.TryGetValue(who.name, out var s) ? s : "???";
     }
 
-    // ---------------------------------------------------------------- timing tower
+    // ---------------------------------------------------------------- timing tower (top left)
     readonly HudSlot lapTag = new HudSlot();
     void DrawTower()
     {
         if (!hudTower || playground || rivals.Count == 0 || ordN == 0 || quali != null) return; // qualifying draws its own list (Qualifying.cs)
-        float x = S(10), y = S(6), w = S(150), rh = S(16), hh = S(18);
+        float x = hudL, y = hudT, w = S(136), rh = S(15), hh = S(19);
         float bottom = tilt ? BrakeRect.y - S(8) : Screen.height - S(48);
-        // header: red lap tag, GAP / INT, collapse arrow
-        Para(new Rect(x, y, S(66), hh), HudAccent, false, true);
-        int lapShown = raceLaps > 0 ? Mathf.Clamp(pLap, 1, raceLaps) : lapNo;
-        T(new Rect(x + S(5), y, S(64), hh), lapTag.Lap(lapShown, raceLaps), 10.5f, TextAnchor.MiddleLeft, Color.white);
-        Fill(new Rect(x + S(76), y, w - S(76), hh), HudPanel);
-        T(new Rect(x + S(80), y, S(40), hh), towerInterval ? "INT" : "GAP", 9.5f, TextAnchor.MiddleLeft, HudGrey);
-        T(new Rect(x + w - S(20), y, S(18), hh), towerFull ? "▲" : "▼", 9, TextAnchor.MiddleCenter, Color.white);
-        if (GUI.Button(new Rect(x + S(76), y, w - S(98), hh), GUIContent.none, GUIStyle.none)) towerInterval = !towerInterval;
-        if (GUI.Button(new Rect(x + w - S(24), y - S(2), S(28), hh + S(4)), GUIContent.none, GUIStyle.none)) towerFull = !towerFull;
-        y += hh + S(2);
 
-        // which ranks: all that fit, else the top of the field and the cars round you
+        // which ranks: all that fit, else the top of the field and the cars round you; collapsed: just you
         int myRank = 0; for (int r = 0; r < ordN; r++) if (ord[r] == 0) { myRank = r; break; }
-        int cap = towerFull ? Mathf.Max(4, (int)((bottom - y) / rh)) : 4;
         int n = 0;
-        if (ordN <= cap) for (int r = 0; r < ordN; r++) showRanks[n++] = r;
+        if (towerMin) showRanks[n++] = myRank;
         else
         {
-            int lo = Mathf.Clamp(myRank - 1, 0, ordN - 3), top = cap - 3;
-            if (myRank < cap - 1) { lo = cap; top = cap; }
-            for (int r = 0; r < top; r++) showRanks[n++] = r;
-            for (int r = lo; r < lo + 3 && r < ordN && n < cap; r++) if (r >= top) showRanks[n++] = r;
+            int cap = towerFull ? Mathf.Max(4, (int)((bottom - y - hh) / rh)) : 5;
+            if (ordN <= cap) for (int r = 0; r < ordN; r++) showRanks[n++] = r;
+            else
+            {
+                int top = cap - 3, lo = Mathf.Clamp(myRank - 1, 0, ordN - 3);
+                if (myRank < cap - 1) { lo = cap; top = cap; }
+                for (int r = 0; r < top; r++) showRanks[n++] = r;
+                for (int r = lo; r < lo + 3 && r < ordN && n < cap; r++) if (r >= top) showRanks[n++] = r;
+            }
         }
-        float y0 = y;
+        int breaks = 0; for (int k = 1; k < n; k++) if (showRanks[k - 1] != showRanks[k] - 1) breaks++;
+        float rowsTop = y + hh + S(2), total = hh + S(4) + n * rh + breaks * S(5);
+
+        // panel and header: red lap tag, GAP / INT, chevron
+        Glass(new Rect(x, y, w, total), 8f);
+        float tagW = S(62);
+        RR(new Rect(x, y, tagW, hh), HudAccent, 8, 0, 0, 0);
+        int lapShown = raceLaps > 0 ? Mathf.Clamp(pLap, 1, raceLaps) : lapNo;
+        TF(new Rect(x, y, tagW, hh), lapTag.Lap(lapShown, raceLaps), UiKit.Bold, 8f, Color.white, TextAnchor.MiddleCenter);
+        TF(new Rect(x + tagW + S(7), y, S(50), hh), towerInterval ? "INTERVAL" : "GAP", UiKit.Semi, 6.5f, HudGrey);
+        Chevron(new Rect(x + w - S(15), y + hh * 0.5f - S(3), S(8), S(6)), !towerFull || towerMin, new Color(1f, 1f, 1f, 0.8f));
+        UiKit.Rect(new Rect(x, y + hh, w, Mathf.Max(1f, S(0.5f))), Hair);
+        if (GUI.Button(new Rect(x + tagW, y, w - tagW - S(26), hh), GUIContent.none, GUIStyle.none)) towerInterval = !towerInterval;
+        if (GUI.Button(new Rect(x + w - S(28), y - S(4), S(32), hh + S(8)), GUIContent.none, GUIStyle.none))
+        {
+            if (towerMin) { towerMin = false; towerFull = false; } else if (towerFull) towerMin = true; else towerFull = true; // compact -> full -> collapsed
+        }
+
+        // rows (each glides to its place; a gain / loss flashes the row green / red)
+        bool rep = Event.current.type == EventType.Repaint; float dt = Time.unscaledDeltaTime;
+        float ty = 0; int frame = Time.frameCount;
         for (int k = 0; k < n; k++)
         {
             int r = showRanks[k], e = ord[r];
-            if (k > 0 && showRanks[k - 1] != r - 1) { Fill(new Rect(x, y, w, S(2)), HudAccent); y += S(3); }
-            bool me = e == 0;
-            Fill(new Rect(x, y, w, rh - S(1)), me ? new Color(HudAccent.r, HudAccent.g, HudAccent.b, 0.55f) : HudPanel);
-            T(new Rect(x, y, S(18), rh), HudNum.Int(r + 1), 10.5f, TextAnchor.MiddleCenter, Color.white);
-            Color team = me ? new Color(1f, 0.25f, 0.2f) : new Color(rivals[e - 1].who.r, rivals[e - 1].who.g, rivals[e - 1].who.b);
-            Fill(new Rect(x + S(19), y + S(2), S(3), rh - S(5)), team);
-            T(new Rect(x + S(25), y, S(34), rh), me ? "YOU" : Code(rivals[e - 1].who), 10.5f, TextAnchor.MiddleLeft, Color.white);
-            T(new Rect(x + S(58), y, S(46), rh), GapText(r), r == 0 ? 7.5f : 9.5f, TextAnchor.MiddleRight, r == 0 ? HudGrey : Color.white, r != 0);
-            TyreIcon(new Rect(x + S(108), y + S(2), rh - S(5), rh - S(5)), SetOf(e));
-            int stops = StopsOf(e); if (stops > 0) T(new Rect(x + S(122), y, S(10), rh), HudNum.Int(stops), 8.5f, TextAnchor.MiddleCenter, HudGrey);
-            if (fastestBy == e) { Fill(new Rect(x + S(134), y + S(2), S(14), rh - S(5)), HudPurple); T(new Rect(x + S(134), y + S(2), S(14), rh - S(5)), "FL", 6.5f, TextAnchor.MiddleCenter, Color.white); }
-            y += rh;
+            if (k > 0 && showRanks[k - 1] != r - 1)
+            {
+                UiKit.Rect(new Rect(x + S(8), rowsTop + ty + S(2), w - S(16), Mathf.Max(1f, S(0.6f))), new Color(1f, 1f, 1f, 0.14f));
+                ty += S(5);
+            }
+            if (e >= rowY.Length) { ty += rh; continue; }
+            float tyU = ty / S(1);
+            if (rep)
+            {
+                if (frame - rowSeen[e] > 3) { rowY[e] = tyU; rowFx[e] = 0; }
+                else
+                {
+                    rowY[e] += (tyU - rowY[e]) * Mathf.Min(1f, dt * 12f);
+                    if (rowRank[e] != r) rowFx[e] = r < rowRank[e] ? 1f : -1f;
+                }
+                rowRank[e] = r; rowSeen[e] = frame;
+                rowFx[e] = Mathf.MoveTowards(rowFx[e], 0f, dt * 0.45f);
+            }
+            float ry = rowsTop + S(rowY[e]);
+            DrawTowerRow(x, ry, w, rh, r, e);
+            ty += rh;
         }
-        if (GUI.Button(new Rect(x, y0, w, y - y0), GUIContent.none, GUIStyle.none)) towerInterval = !towerInterval; // tap the tower: gap / interval
+        if (GUI.Button(new Rect(x, rowsTop, w, total - hh), GUIContent.none, GUIStyle.none)) towerInterval = !towerInterval; // tap the rows: gap / interval
     }
 
-    // ---------------------------------------------------------------- timing panel (top centre)
-    readonly HudSlot lastSlot = new HudSlot(), bestSlot = new HudSlot(), flashSlot = new HudSlot(), testSlot = new HudSlot();
-    readonly HudSlot[] secSlot = { new HudSlot(), new HudSlot(), new HudSlot() };
-    void DrawTimingPanel()
+    void DrawTowerRow(float x, float y, float w, float rh, int r, int e)
     {
-        float w = S(300), x = Screen.width / 2f - w / 2, y = S(6), h = S(32);
-        if (x + w + S(14) > Screen.width - S(246) || quali != null) y = S(44); // narrow screen: below the buttons; qualifying: below its clock
+        bool me = e == 0;
+        var row = new Rect(x + S(1), y, w - S(2), rh);
+        if (me) UiKit.Gradient(row, MeLeft, MeRight, 0f, true);
+        float fx = rowFx[e];
+        if (fx > 0.01f) UiKit.Rect(row, new Color(HudGreen.r, HudGreen.g, HudGreen.b, 0.38f * fx));
+        else if (fx < -0.01f) UiKit.Rect(row, new Color(HudRed.r, HudRed.g, HudRed.b, -0.38f * fx));
+        TF(new Rect(x, y, S(18), rh), HudNum.Int(r + 1), UiKit.Bold, 8.5f, Color.white, TextAnchor.MiddleCenter);
+        Color team = me ? new Color(1f, 0.25f, 0.2f) : new Color(rivals[e - 1].who.r, rivals[e - 1].who.g, rivals[e - 1].who.b);
+        UiKit.Rect(new Rect(x + S(19), y + S(3.5f), S(2.2f), rh - S(7)), team, 1f);
+        TF(new Rect(x + S(25), y, S(34), rh), me ? "YOU" : Code(rivals[e - 1].who), UiKit.Bold, 8.5f, Color.white);
+        string gap = GapText(r);
+        if (r == 0) TF(new Rect(x + S(56), y, S(48), rh), gap, UiKit.Semi, 6.2f, me ? Color.white : HudGrey, TextAnchor.MiddleRight);
+        else TF(new Rect(x + S(56), y, S(48), rh), gap, UiKit.Semi, 7.8f, Color.white, TextAnchor.MiddleRight);
+        TyreIcon(new Rect(x + S(108), y + S(2.5f), rh - S(5), rh - S(5)), SetOf(e));
+        if (fastestBy == e)
+        {
+            var fl = new Rect(x + S(120), y + S(3), S(13), rh - S(6));
+            UiKit.Rect(fl, HudPurple, 2f);
+            TF(fl, "FL", UiKit.Bold, 5.2f, Color.white, TextAnchor.MiddleCenter);
+        }
+        else
+        {
+            int stops = StopsOf(e);
+            if (stops > 0) TF(new Rect(x + S(120), y, S(12), rh), HudNum.Int(stops), UiKit.Semi, 6.5f, HudGrey, TextAnchor.MiddleCenter);
+        }
+    }
+
+    // ---------------------------------------------------------------- race card (top right)
+    readonly HudSlot lastSlot = new HudSlot(), bestSlot = new HudSlot(), flashSlot = new HudSlot(), testSlot = new HudSlot(), lapFrac = new HudSlot();
+    readonly HudSlot[] secSlot = { new HudSlot(), new HudSlot(), new HudSlot() };
+    readonly float[] posW = new float[41]; int posWH;
+    float PosWidth(int p)
+    {
+        if (posWH != Screen.height) { System.Array.Clear(posW, 0, posW.Length); posWH = Screen.height; }
+        if (p < 0 || p >= posW.Length) return S(30);
+        if (posW[p] <= 0) posW[p] = UiKit.Width(HudNum.Pos(p), UiKit.Black, 21f);
+        return posW[p];
+    }
+
+    void DrawRaceCard()
+    {
+        var c = cardRect; float pad = S(9), x = c.x + pad, iw = c.width - 2 * pad, y = c.y;
+        Glass(c, 10f);
         if (playground)
         {
-            Para(new Rect(x, y, w, S(40)), HudPanel);
-            Fill(new Rect(x, y, S(4), S(40)), HudAccent);
-            T(new Rect(x, y + S(2), w, S(18)), "TEST DATA (ours vs real F1)", 12, TextAnchor.MiddleCenter, Color.white);
-            T(new Rect(x, y + S(20), w, S(18)), testSlot.Test(t100, topSpeed * (unitsIdx == 1 ? 0.621371 : 1), SpeedUnit), 10, TextAnchor.MiddleCenter, HudGrey, false);
+            UiKit.Rect(new Rect(c.x, c.y + S(8), S(2.5f), c.height - S(16)), HudAccent, 1f);
+            TF(new Rect(x, y + S(5), iw, S(14)), "TEST DATA", UiKit.Bold, 8f, Color.white);
+            TF(new Rect(x, y + S(5), iw, S(14)), "OURS VS REAL F1", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
+            TF(new Rect(x, y + S(21), iw, S(14)), testSlot.Test(t100, topSpeed * (unitsIdx == 1 ? 0.621371 : 1), SpeedUnit), UiKit.Semi, 7.2f, HudGrey);
             return;
         }
-        // tag: position in a race, lap in practice
-        Para(new Rect(x, y, S(52), h), HudAccent, true, false);
-        Tri(new Rect(x + S(52), y, h * 0.36f, h), 2, HudAccent);
-        if (rivals.Count > 0) T(new Rect(x, y, S(54), h), HudNum.Pos(Position()), 17, TextAnchor.MiddleCenter, Color.white);
-        else T(new Rect(x, y, S(54), h), HudNum.LapShort(lapNo), 13, TextAnchor.MiddleCenter, Color.white);
-        // lap clock (flashes the lap just done at the line)
-        var clock = new Rect(x + S(62), y, S(128), h);
-        Fill(new Rect(x + S(52) + h * 0.36f, y, w - S(52) - h * 0.36f, h), HudPanel);
+
+        // row A: position (or lap in practice) and lap counter
+        int pos = 0, of = 0;
+        if (quali != null) { of = qList.Count; for (int i = 0; i < qList.Count; i++) if (qList[i].Player) { pos = i + 1; break; } }
+        else if (rivals.Count > 0) { pos = Position(); of = rivals.Count + 1; }
+        if (pos > 0)
+        {
+            var pr = new Rect(x, y + S(3), S(70), S(28));
+            TF(pr, HudNum.Pos(pos), UiKit.Black, 21f, Color.white);
+            TF(new Rect(x + PosWidth(pos) + S(1), y + S(8), S(30), S(22)), HudNum.Of(of), UiKit.Semi, 9.5f, HudFaint);
+        }
+        bool race = raceLaps > 0;
+        if (pos > 0)
+        {
+            int lapShown = race ? Mathf.Clamp(pLap, 1, raceLaps) : lapNo;
+            TF(new Rect(x, y + S(5), iw, S(9)), "LAP", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
+            TF(new Rect(x, y + S(12), iw, S(18)), lapFrac.Frac(lapShown, race ? raceLaps : 0), UiKit.Bold, 12f, Color.white, TextAnchor.MiddleRight);
+        }
+        else
+        {
+            // alone on track: the lap counter is the big number
+            TF(new Rect(x, y + S(5), S(40), S(9)), "LAP", UiKit.Semi, 6f, HudFaint);
+            TF(new Rect(x, y + S(11), S(80), S(21)), race ? lapFrac.Frac(Mathf.Clamp(pLap, 1, raceLaps), raceLaps) : HudNum.Int(lapNo), UiKit.Black, 18f, Color.white);
+            TF(new Rect(x, y + S(5), iw, S(9)), race ? "RACE" : "PRACTICE", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
+        }
+        UiKit.Rect(new Rect(x, y + S(33), iw, Mathf.Max(1f, S(0.5f))), Hair);
+
+        // row B: lap clock (the lap just done flashes at the line) and the live delta
+        var clock = new Rect(x, y + S(35), S(90), S(17));
         if (lapFlashT > 0)
         {
             bool on = lapFlashT > 2.4f ? Mathf.Repeat(lapFlashT * 4, 1) > 0.35f : true;
-            Color c = lapFlashCol == 0 ? HudGrey : SectorCols[lapFlashCol];
-            if (on) Fill(new Rect(clock.x - S(4), y + S(3), clock.width + S(4), h - S(6)), new Color(c.r * 0.35f, c.g * 0.35f, c.b * 0.35f, 0.9f));
-            T(clock, flashSlot.Lap(lapFlashTime), 20, TextAnchor.MiddleCenter, lapFlashCol == 0 ? HudGrey : c);
-            if (lapFlashCol == 0) T(new Rect(clock.x, y + h - S(9), clock.width, S(9)), "DELETED", 7, TextAnchor.MiddleCenter, HudAccent);
+            Color fc = lapFlashCol == 0 ? HudGrey : SectorCols[lapFlashCol];
+            if (on) UiKit.Rect(new Rect(clock.x - S(4), clock.y + S(1), S(76), clock.height - S(2)), new Color(fc.r, fc.g, fc.b, 0.22f), 4f);
+            TF(clock, flashSlot.Lap(lapFlashTime), UiKit.Bold, 12.5f, lapFlashCol == 0 ? HudGrey : fc);
+            if (lapFlashCol == 0) TF(new Rect(x, clock.y, iw, clock.height), "DELETED", UiKit.Bold, 6.5f, HudRed, TextAnchor.MiddleRight);
         }
-        else T(clock, lapStart.HasValue ? HudNum.Clock(simTime - lapStart.Value) : "--:--.-", 20, TextAnchor.MiddleCenter, cut && lapStart.HasValue ? HudGrey : Color.white);
-        // last / best
-        float lx = x + S(194);
-        T(new Rect(lx, y + S(3), S(30), S(13)), "LAST", 8, TextAnchor.MiddleLeft, HudGrey);
-        T(new Rect(lx + S(28), y + S(3), S(74), S(13)), lastSlot.Lap(lastLap ?? double.NaN), 10.5f, TextAnchor.MiddleRight, Color.white);
-        T(new Rect(lx, y + S(16), S(30), S(13)), "BEST", 8, TextAnchor.MiddleLeft, HudGrey);
-        T(new Rect(lx + S(28), y + S(16), S(74), S(13)), bestSlot.Lap(bestLap ?? double.NaN), 10.5f, TextAnchor.MiddleRight, fastestBy == 0 ? HudPurple : HudGreen);
-        y += h + S(2);
+        else
+        {
+            bool invalid = cut && lapStart.HasValue;
+            TF(clock, lapStart.HasValue ? HudNum.Clock(simTime - lapStart.Value) : "--:--.-", UiKit.Bold, 12.5f, invalid ? HudGrey : Color.white);
+            bool deltaShown = false;
+            if (hudDelta && deltaTr != null && lapStart.HasValue)
+            {
+                double dl = deltaTr.Delta(idx, simTime - lapStart.Value);
+                if (!double.IsNaN(dl))
+                {
+                    Color dc = dl <= 0 ? HudGreen : HudRed;
+                    var dr = new Rect(x + iw - S(46), clock.y + S(2), S(46), clock.height - S(4));
+                    UiKit.Rect(dr, new Color(dc.r, dc.g, dc.b, 0.20f), 4f);
+                    TF(dr, HudNum.Delta(dl), UiKit.Bold, 8.5f, dc, TextAnchor.MiddleCenter);
+                    deltaShown = true;
+                }
+            }
+            if (invalid && !deltaShown) TF(new Rect(x, clock.y, iw, clock.height), "INVALID", UiKit.Bold, 6.5f, HudRed, TextAnchor.MiddleRight);
+        }
+        float yy = y + S(55);
 
-        // sectors
-        if (hudSectors && secTimer != null)
+        // row C: mini-sectors (the lap just done is held for a few seconds after the line)
+        if (hudSectors)
         {
             bool hold = sectorHoldT > 0;
-            float sw = (w - S(4)) / 3f, sh = S(18);
-            int curSec = secTimer.SectorOf(Mathf.Max(idx, 0));
+            float g = S(3), sw = (iw - 2 * g) / 3f, sh = S(11);
+            int curSec = secTimer != null ? secTimer.SectorOf(Mathf.Max(idx, 0)) : 0;
+            float pulse = 0.18f + 0.14f * Mathf.Sin(Time.unscaledTime * 6f);
             for (int s = 0; s < 3; s++)
             {
-                var r = new Rect(x + s * (sw + S(2)), y, sw, sh);
-                double t = hold ? myTime.last[s] : myTime.cur[s]; int col = hold ? myTime.lastCol[s] : myTime.curCol[s];
-                Fill(r, HudPanel);
-                bool live = !hold && double.IsNaN(t) && s == curSec && lapStart.HasValue;
-                Fill(new Rect(r.x, r.y, r.width, S(3)), double.IsNaN(t) ? (live ? new Color(1, 1, 1, 0.55f) : SectorCols[0]) : SectorCols[col]);
-                T(new Rect(r.x + S(4), r.y + S(2), S(20), sh - S(2)), SectorNames[s], 8, TextAnchor.MiddleLeft, HudGrey);
-                if (!double.IsNaN(t)) T(new Rect(r.x, r.y + S(2), r.width - S(5), sh - S(2)), secSlot[s].Sec(t), 10.5f, TextAnchor.MiddleRight, col >= 1 ? SectorCols[col] : Color.white);
+                var r = new Rect(x + s * (sw + g), yy, sw, sh);
+                double t = double.NaN; int col = 0;
+                if (secTimer != null) { t = hold ? myTime.last[s] : myTime.cur[s]; col = hold ? myTime.lastCol[s] : myTime.curCol[s]; }
+                if (double.IsNaN(t))
+                {
+                    bool live = !hold && s == curSec && lapStart.HasValue;
+                    UiKit.Rect(r, live ? new Color(1f, 1f, 1f, pulse) : DimSeg, 3f);
+                }
+                else
+                {
+                    Color sc = col >= 1 ? SectorCols[col] : new Color(0.55f, 0.58f, 0.64f);
+                    UiKit.Rect(r, sc, 3f);
+                    TF(r, secSlot[s].Sec(t), UiKit.Bold, 6.4f, col == 3 ? Color.white : new Color(0.05f, 0.05f, 0.06f), TextAnchor.MiddleCenter);
+                }
             }
-            y += sh + S(2);
+            yy += sh + S(4);
         }
-        // live delta to your best lap
-        if (hudDelta && deltaTr != null && lapStart.HasValue && lapFlashT <= 0)
-        {
-            double dl = deltaTr.Delta(idx, simTime - lapStart.Value);
-            if (!double.IsNaN(dl))
-            {
-                float dw = S(124), dx = Screen.width / 2f - dw / 2, dh = S(18);
-                Color c = dl <= 0 ? HudGreen : new Color(1f, 0.22f, 0.18f);
-                Fill(new Rect(dx, y, dw, dh), HudPanel);
-                float half = dw / 2, k = Mathf.Clamp01(Mathf.Abs((float)dl)) * half;
-                Fill(new Rect(dx + half - (dl <= 0 ? k : 0), y + dh - S(3), k, S(3)), c);
-                Fill(new Rect(dx + half - S(0.5f), y + dh - S(5), S(1), S(5)), Color.white);
-                T(new Rect(dx, y, dw, dh - S(2)), HudNum.Delta(dl), 11.5f, TextAnchor.MiddleCenter, c);
-            }
-        }
+        // row D: last and best
+        float half = iw * 0.5f;
+        TF(new Rect(x, yy, S(24), S(10)), "LAST", UiKit.Semi, 5.6f, HudFaint);
+        TF(new Rect(x, yy, half - S(3), S(10)), lastSlot.Lap(lastLap ?? double.NaN), UiKit.Semi, 7f, Color.white, TextAnchor.MiddleRight);
+        TF(new Rect(x + half + S(3), yy, S(24), S(10)), "BEST", UiKit.Semi, 5.6f, HudFaint);
+        TF(new Rect(x + half, yy, half, S(10)), bestSlot.Lap(bestLap ?? double.NaN), UiKit.Semi, 7f, fastestBy == 0 ? HudPurple : HudGreen, TextAnchor.MiddleRight);
     }
 
-    // ---------------------------------------------------------------- steering-wheel display (bottom centre)
+    // ---------------------------------------------------------------- dash (bottom centre)
     void DrawWheel(float speed)
     {
-        float cw = S(196), ch = S(76), pod = S(92), gap = S(6);
-        float cx = Screen.width / 2f - cw / 2, cy = Screen.height - ch - S(8);
-        bool pods = hudInfo && Screen.width / 2f + cw / 2 + gap + pod + S(8) < (tilt ? Screen.width - S(104) : Screen.width - S(212))
-                             && Screen.width / 2f - cw / 2 - gap - pod - S(8) > (tilt ? BrakeRect.xMax : S(0));
-        // chips above: X-mode, slipstream, yellow flag
-        float chipY = cy - S(17), chipX = cx;
-        if (car.aeroX > 0.5) { Para(new Rect(chipX + S(4), chipY, S(52), S(14)), HudCyan); T(new Rect(chipX + S(4), chipY, S(52), S(14)), "X-MODE", 9, TextAnchor.MiddleCenter, Color.black); chipX += S(64); }
-        if (car.tow > 0.3) { Para(new Rect(chipX + S(4), chipY, S(40), S(14)), HudPanel2); T(new Rect(chipX + S(4), chipY, S(40), S(14)), "TOW", 9, TextAnchor.MiddleCenter, HudCyan); chipX += S(52); }
-        if (hudYellow) { Para(new Rect(chipX + S(4), chipY, S(58), S(14)), HudYellow); T(new Rect(chipX + S(4), chipY, S(58), S(14)), "YELLOW", 9, TextAnchor.MiddleCenter, Color.black); chipX += S(70); }
-        if (boxArmed) { Para(new Rect(chipX + S(4), chipY, S(40), S(14)), HudAccent); T(new Rect(chipX + S(4), chipY, S(40), S(14)), "BOX", 9, TextAnchor.MiddleCenter, Color.white); }
+        float dw = S(250), dh = S(52);
+        var dash = new Rect(Mathf.Round(Screen.width * 0.5f - dw * 0.5f), Mathf.Round(hudB - dh), dw, dh);
+        float dx = dash.x, dy = dash.y;
+        float wingW = S(70), gap = S(5);
+        float rightLimit = tilt ? GasRect.x : BrakeRect.x, leftLimit = tilt ? BrakeRect.xMax : hudL + S(160);
+        bool wings = hudInfo && dash.xMax + gap + wingW + S(8) < rightLimit && dash.x - gap - wingW - S(8) > leftLimit;
 
-        // centre screen
-        Fill(new Rect(cx, cy, cw, ch), HudPanel);
-        Fill(new Rect(cx, cy + ch - S(2), cw, S(2)), HudAccent);
-        // shift lights: 5 green, 5 red, 5 blue; all blink at the limiter
+        // chips above: X-mode, slipstream, yellow flag, box
+        float chipY = dy - S(17), chipH = S(13), cx = dx + S(4);
+        if (car.aeroX > 0.5) { Chip(new Rect(cx, chipY, S(40), chipH), "X-MODE", HudCyan, Color.black); cx += S(44); }
+        if (car.tow > 0.3) { Chip(new Rect(cx, chipY, S(30), chipH), "TOW", HudPanel2, HudCyan); cx += S(34); }
+        if (hudYellow) { Chip(new Rect(cx, chipY, S(42), chipH), "YELLOW", HudYellow, Color.black); cx += S(46); }
+        if (boxArmed) Chip(new Rect(cx, chipY, S(30), chipH), "BOX", HudAccent, Color.white);
+        if (hudInfo && !wings && !double.IsNaN(car.fuel))
+        {
+            TF(new Rect(dx, chipY, dw - S(6), chipH), HudNum.Tenths(car.fuel), UiKit.Bold, 7.5f, Color.white, TextAnchor.MiddleRight);
+            TF(new Rect(dx, chipY, dw - S(28), chipH), "FUEL", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
+        }
+
+        Glass(dash, 12f);
+        // shift lights: 5 green, 5 red, 5 blue; all blink blue at the limiter
         double red = car.cfg.redline, frac = (car.rpm - red * 0.62) / (red * 0.36);
         int lit = Mathf.Clamp(Mathf.CeilToInt((float)frac * 15), 0, 15);
         bool limiter = car.rpm > red * 0.985 && !car.reverse;
         bool blinkOn = Mathf.Repeat(Time.unscaledTime * 10, 1) > 0.5f;
-        float ld = S(9), lg = (cw - S(16) - 15 * ld) / 14f;
+        float sx0 = dx + S(12), sg = S(2.4f), segW = (dw - S(24) - 14 * sg) / 15f, segH = S(3.6f);
         for (int i = 0; i < 15; i++)
         {
-            Color c = i < 5 ? HudGreen : i < 10 ? new Color(1f, 0.15f, 0.1f) : new Color(0.35f, 0.4f, 1f);
+            Color c = i < 5 ? HudGreen : i < 10 ? HudRed : HudBlue;
             bool on = limiter ? blinkOn : i < lit;
-            Tex(new Rect(cx + S(8) + i * (ld + lg), cy + S(4), ld, ld), hudDisc, on ? (limiter ? new Color(0.35f, 0.4f, 1f) : c) : new Color(1, 1, 1, 0.12f));
+            UiKit.Rect(new Rect(sx0 + i * (segW + sg), dy + S(5), segW, segH), on ? (limiter ? HudBlue : c) : DimSeg, 2f);
         }
-        // speed (left), gear (middle), battery (right)
-        float top = cy + S(16);
-        T(new Rect(cx + S(4), top, S(66), S(30)), HudNum.Int(Mathf.RoundToInt(speed * (unitsIdx == 1 ? 2.23694f : 3.6f))), 25, TextAnchor.MiddleCenter, Color.white);
-        T(new Rect(cx + S(4), top + S(27), S(66), S(12)), SpeedUnit, 8, TextAnchor.MiddleCenter, HudGrey);
-        Fill(new Rect(cx + S(72), top, S(52), S(42)), new Color(0, 0, 0, 0.5f));
-        T(new Rect(cx + S(72), top - S(1), S(52), S(44)), car.reverse ? "R" : car.gear <= 0 ? "N" : HudNum.Int(car.gear), 34, TextAnchor.MiddleCenter, limiter ? new Color(0.45f, 0.55f, 1f) : Color.white);
-        float bx = cx + S(130), bw = S(58);
+
+        // speed (left)
+        TF(new Rect(dx + S(8), dy + S(11), S(66), S(27)), HudNum.Int(Mathf.RoundToInt(speed * (unitsIdx == 1 ? 2.23694f : 3.6f))), UiKit.Black, 23f, Color.white, TextAnchor.MiddleRight);
+        TF(new Rect(dx + S(8), dy + S(37), S(66), S(9)), unitsIdx == 1 ? "MPH" : "KM/H", UiKit.Semi, 5.8f, HudFaint, TextAnchor.MiddleRight);
+        Color off = new Color(1f, 1f, 1f, 0.16f);
+        TF(new Rect(dx + S(11), dy + S(37), S(14), S(9)), "TC", UiKit.Bold, 5.8f, car.tcActive ? HudAmber : off);
+        TF(new Rect(dx + S(22), dy + S(37), S(16), S(9)), "ABS", UiKit.Bold, 5.8f, car.absActive ? HudAmber : off);
+        if (car.spinR) TF(new Rect(dx + S(37), dy + S(37), S(18), S(9)), "SPIN", UiKit.Bold, 5.8f, HudRed);
+        else if (car.lockF || car.lockR) TF(new Rect(dx + S(37), dy + S(37), S(18), S(9)), "LOCK", UiKit.Bold, 5.8f, HudRed);
+
+        // gear (middle)
+        var gb = new Rect(dx + S(80), dy + S(12), S(42), S(36));
+        UiKit.Rect(gb, new Color(0f, 0f, 0f, 0.36f), 8f);
+        UiKit.Outline(gb, limiter ? new Color(HudBlue.r, HudBlue.g, HudBlue.b, 0.8f) : new Color(1f, 1f, 1f, 0.07f), 8f, 0.7f);
+        TF(new Rect(gb.x, gb.y - S(1.5f), gb.width, gb.height), car.reverse ? "R" : car.gear <= 0 ? "N" : HudNum.Int(car.gear), UiKit.Black, 29f, limiter ? new Color(0.5f, 0.62f, 1f) : Color.white, TextAnchor.MiddleCenter);
+
+        // battery (right of the gear)
+        float bx = dx + S(130), bw = S(62);
         float soc = double.IsNaN(car.ersEnergy) ? 1f : Mathf.Clamp01((float)(car.ersEnergy / car.cfg.ersCapacity));
         double kw = double.IsNaN(car.ersKw) ? 0 : car.ersKw;
         string mode; Color mc;
         if (kw > 5) { mode = "DEPLOY"; mc = HudBlue; }
-        else if (kw < -5 && car.throttle > 0.5) { mode = "SUPERCLIP"; mc = new Color(1f, 0.6f, 0.1f); }
+        else if (kw < -5 && car.throttle > 0.5) { mode = "SUPERCLIP"; mc = HudAmber; }
         else if (kw < -5) { mode = "HARVEST"; mc = HudGreen; }
-        else { mode = "BATT"; mc = HudGrey; }
-        T(new Rect(bx, top, bw, S(11)), "SOC", 7.5f, TextAnchor.MiddleLeft, HudGrey);
-        T(new Rect(bx, top, bw, S(11)), HudNum.Pct(Mathf.RoundToInt(soc * 100)), 9.5f, TextAnchor.MiddleRight, Color.white);
-        Fill(new Rect(bx, top + S(12), bw, S(7)), new Color(1, 1, 1, 0.14f));
-        Fill(new Rect(bx, top + S(12), bw * soc, S(7)), soc < 0.15f ? new Color(1f, 0.25f, 0.2f) : mc == HudGrey ? new Color(0.8f, 0.85f, 0.9f) : mc);
-        T(new Rect(bx, top + S(20), bw, S(12)), mode, 8.5f, TextAnchor.MiddleLeft, mc);
-        if (mode != "BATT") T(new Rect(bx, top + S(31), bw, S(11)), HudNum.Kw(Mathf.RoundToInt((float)System.Math.Abs(kw))), 8, TextAnchor.MiddleLeft, mc, false);
-        // aids
-        float ay = cy + ch - S(14);
-        T(new Rect(cx + S(6), ay, S(30), S(10)), "TC", 7.5f, TextAnchor.MiddleLeft, car.tcActive ? new Color(1f, 0.69f, 0.13f) : new Color(1, 1, 1, 0.3f));
-        T(new Rect(cx + S(24), ay, S(30), S(10)), "ABS", 7.5f, TextAnchor.MiddleLeft, car.absActive ? new Color(1f, 0.69f, 0.13f) : new Color(1, 1, 1, 0.3f));
-        T(new Rect(cx + S(48), ay, S(30), S(10)), "LOCK", 7.5f, TextAnchor.MiddleLeft, car.lockF || car.lockR ? new Color(1f, 0.3f, 0.23f) : new Color(1, 1, 1, 0.3f));
-        if (car.spinR) T(new Rect(cx + S(130), ay, S(40), S(10)), "SPIN", 7.5f, TextAnchor.MiddleLeft, new Color(1f, 0.3f, 0.23f));
-        if (!pods) return;
-
-        // left pod: tyres (temperature colour, tread bar, carcass temp) and brakes on a little car
-        var lp = new Rect(cx - gap - pod, cy, pod, ch);
-        Para(lp, HudPanel, true, false);
-        if (car.cfg.chassis && !double.IsNaN(car.tyreTF))
+        else { mode = ""; mc = HudGrey; }
+        TF(new Rect(bx, dy + S(12), bw, S(9)), "ERS", UiKit.Semi, 5.8f, HudFaint);
+        TF(new Rect(bx, dy + S(12), bw, S(9)), HudNum.Pct(Mathf.RoundToInt(soc * 100)), UiKit.Bold, 7.2f, Color.white, TextAnchor.MiddleRight);
+        var bar = new Rect(bx, dy + S(23), bw, S(5));
+        UiKit.Rect(bar, DimSeg, 2.5f);
+        Color fill = soc < 0.15f ? HudRed : mode.Length == 0 ? new Color(0.82f, 0.86f, 0.92f) : mc;
+        if (soc > 0.005f) UiKit.Rect(new Rect(bar.x, bar.y, Mathf.Max(bar.height, bw * soc), bar.height), fill, 2.5f);
+        if (mode.Length > 0)
         {
-            var cd = CompoundTable.Defs[Mathf.Clamp((int)car.cfg.compound, 0, CompoundTable.Defs.Length - 1)];
-            float tw = S(15), th = S(22), mx = lp.x + pod / 2;
-            float fy = cy + S(6), ry = cy + ch - th - S(8);
-            Fill(new Rect(mx - S(4), fy + S(4), S(8), ry + th - fy - S(8)), new Color(1, 1, 1, 0.18f));     // chassis
-            Fill(new Rect(mx - S(14), fy + th / 2 - S(1), S(28), S(2)), new Color(1, 1, 1, 0.18f));         // front axle
-            Fill(new Rect(mx - S(14), ry + th / 2 - S(1), S(28), S(2)), new Color(1, 1, 1, 0.18f));         // rear axle
+            TF(new Rect(bx, dy + S(31), bw, S(9)), mode, UiKit.Bold, 6.2f, mc);
+            TF(new Rect(bx, dy + S(31), bw, S(9)), HudNum.Kw(Mathf.RoundToInt((float)System.Math.Abs(kw))), UiKit.Semi, 5.8f, HudGrey, TextAnchor.MiddleRight);
+        }
+
+        // tyre quad (temperature colour, the fill is the tread left) and the compound
+        var cd = CompoundTable.Defs[Mathf.Clamp((int)car.cfg.compound, 0, CompoundTable.Defs.Length - 1)];
+        bool temps = car.cfg.chassis && !double.IsNaN(car.tyreTF);
+        float tw = S(9), th = S(14), lx = dx + S(201), rx = dx + S(231), fy = dy + S(12), ry = dy + S(33);
+        for (int wh = 0; wh < 4; wh++)
+        {
+            bool front = wh < 2, left = (wh & 1) == 0;
+            var tr = new Rect(left ? lx : rx, front ? fy : ry, tw, th);
+            Color tc = temps ? TempCol(front ? car.tyreTF : car.tyreTR, cd.opt, cd.window) : HudGrey;
+            float tread = temps ? Mathf.Clamp01(1 - (float)(front ? car.wearF : car.wearR)) : 1f;
+            UiKit.Rect(tr, new Color(tc.r, tc.g, tc.b, 0.26f), 3f);
+            if (tread > 0.02f) UiKit.Rect(new Rect(tr.x, tr.yMax - th * tread, tw, th * tread), tread < 0.3f ? HudRed : tc, 3f);
+        }
+        TyreIcon(new Rect(dx + S(214.5f), dy + S(23.5f), S(13), S(13)), carSet);
+        if (!wings) return;
+
+        // left wing: tyre temperatures and tread, brake temperatures
+        var lw = new Rect(dx - gap - wingW, dy, wingW, dh);
+        Glass(lw, 12f);
+        if (temps)
+        {
+            float bw2 = S(15), bh2 = S(18), mx = lw.center.x;
             for (int wh = 0; wh < 4; wh++)
             {
                 bool front = wh < 2, left = (wh & 1) == 0;
                 double t = front ? car.tyreTF : car.tyreTR, wear = front ? car.wearF : car.wearR;
-                float wx = left ? mx - S(30) : mx + S(30) - tw, wy = front ? fy : ry;
-                Fill(new Rect(wx, wy, tw, th), TempCol(t, cd.opt, cd.window));
-                T(new Rect(wx - S(2), wy, tw + S(4), th), HudNum.Int(Mathf.RoundToInt((float)t)), 8, TextAnchor.MiddleCenter, Color.black);
-                float tread = Mathf.Clamp01(1 - (float)wear), bxw = left ? wx - S(4) : wx + tw + S(1);
-                Fill(new Rect(bxw, wy, S(3), th), new Color(1, 1, 1, 0.15f));
-                Fill(new Rect(bxw, wy + th * (1 - tread), S(3), th * tread), tread < 0.3f ? new Color(1f, 0.3f, 0.2f) : Color.white);
+                var br = new Rect(left ? lw.x + S(8) : lw.xMax - S(8) - bw2, front ? dy + S(6) : dy + S(28), bw2, bh2);
+                UiKit.Rect(br, TempCol(t, cd.opt, cd.window), 3.5f);
+                TF(br, HudNum.Int(Mathf.RoundToInt((float)t)), UiKit.Bold, 6.2f, new Color(0.04f, 0.04f, 0.05f), TextAnchor.MiddleCenter);
+                float tread = Mathf.Clamp01(1 - (float)wear), wx = left ? br.x - S(4) : br.xMax + S(2);
+                UiKit.Rect(new Rect(wx, br.y, S(2), bh2), DimSeg, 1f);
+                UiKit.Rect(new Rect(wx, br.yMax - bh2 * tread, S(2), bh2 * tread), tread < 0.3f ? HudRed : Color.white, 1f);
             }
             if (!double.IsNaN(car.brakeTF))
             {
-                Fill(new Rect(mx - S(12), fy + th + S(1), S(24), S(3)), TempCol(car.brakeTF, 650, 380));
-                Fill(new Rect(mx - S(12), ry - S(4), S(24), S(3)), TempCol(car.brakeTR, 650, 380));
-                T(new Rect(mx - S(20), fy + th + S(3), S(40), S(10)), HudNum.Int(Mathf.RoundToInt((float)car.brakeTF)), 7, TextAnchor.MiddleCenter, HudGrey);
-                T(new Rect(mx - S(20), ry - S(14), S(40), S(10)), HudNum.Int(Mathf.RoundToInt((float)car.brakeTR)), 7, TextAnchor.MiddleCenter, HudGrey);
+                Color fc = TempCol(car.brakeTF, 650, 380), rc = TempCol(car.brakeTR, 650, 380);
+                UiKit.Rect(new Rect(mx - S(8), dy + S(9), S(16), S(2)), fc, 1f);
+                TF(new Rect(mx - S(12), dy + S(12), S(24), S(9)), HudNum.Int(Mathf.RoundToInt((float)car.brakeTF)), UiKit.Semi, 5.6f, fc, TextAnchor.MiddleCenter);
+                UiKit.Rect(new Rect(mx - S(8), dy + S(42), S(16), S(2)), rc, 1f);
+                TF(new Rect(mx - S(12), dy + S(32), S(24), S(9)), HudNum.Int(Mathf.RoundToInt((float)car.brakeTR)), UiKit.Semi, 5.6f, rc, TextAnchor.MiddleCenter);
+                TF(new Rect(mx - S(12), dy + S(22), S(24), S(8)), "BRK", UiKit.Semi, 4.8f, HudFaint, TextAnchor.MiddleCenter);
             }
-            T(new Rect(lp.x - S(8), cy + ch - S(10), S(30), S(9)), "BRK", 6.5f, TextAnchor.MiddleLeft, HudGrey, false);
-            T(new Rect(lp.xMax - S(32), cy + ch - S(10), S(30), S(9)), "TYRE", 6.5f, TextAnchor.MiddleRight, HudGrey, false);
         }
-        // right pod: fuel and the tyre set
-        var rp = new Rect(cx + cw + gap, cy, pod, ch);
-        Para(rp, HudPanel, false, true);
-        TyreIcon(new Rect(rp.x + S(6), cy + S(6), S(16), S(16)), carSet);
-        T(new Rect(rp.x + S(26), cy + S(6), pod - S(28), S(16)), Weather.TyreName(carSet), 9, TextAnchor.MiddleLeft, Color.white);
+        else TF(lw, "TYRES", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleCenter);
+
+        // right wing: fuel, laps it lasts, tyre set
+        var rw = new Rect(dash.xMax + gap, dy, wingW, dh);
+        Glass(rw, 12f);
+        float px0 = rw.x + S(8), pw = wingW - S(16);
         if (!double.IsNaN(car.fuel))
         {
-            T(new Rect(rp.x + S(6), cy + S(25), S(40), S(12)), "FUEL", 7.5f, TextAnchor.MiddleLeft, HudGrey);
-            T(new Rect(rp.x + S(6), cy + S(24), pod - S(10), S(16)), HudNum.Tenths(car.fuel), 13, TextAnchor.MiddleRight, Color.white);
+            TF(new Rect(px0, dy + S(5), pw, S(12)), "FUEL", UiKit.Semi, 5.8f, HudFaint);
+            TF(new Rect(px0, dy + S(4), pw, S(14)), HudNum.Tenths(car.fuel), UiKit.Bold, 10f, Color.white, TextAnchor.MiddleRight);
             float ff = Mathf.Clamp01((float)(car.fuel / System.Math.Max(1, car.cfg.fuelStart)));
-            Fill(new Rect(rp.x + S(6), cy + S(42), pod - S(12), S(4)), new Color(1, 1, 1, 0.14f));
-            Fill(new Rect(rp.x + S(6), cy + S(42), (pod - S(12)) * ff, S(4)), ff < 0.1f ? new Color(1f, 0.3f, 0.2f) : new Color(0.85f, 0.88f, 0.92f));
+            UiKit.Rect(new Rect(px0, dy + S(19), pw, S(3)), DimSeg, 1.5f);
+            if (ff > 0.01f) UiKit.Rect(new Rect(px0, dy + S(19), Mathf.Max(S(3), pw * ff), S(3)), ff < 0.1f ? HudRed : new Color(0.85f, 0.88f, 0.92f), 1.5f);
             if (!double.IsNaN(car.fuelLastLap) && car.fuelLastLap > 0.05)
             {
                 double laps = car.fuel / car.fuelLastLap; int toGo = raceLaps > 0 ? raceLaps - Mathf.Clamp(pLap, 1, raceLaps) + 1 : 0;
-                T(new Rect(rp.x + S(6), cy + S(50), S(40), S(12)), "LAPS", 7.5f, TextAnchor.MiddleLeft, HudGrey);
-                T(new Rect(rp.x + S(6), cy + S(49), pod - S(10), S(14)), HudNum.Tenths(laps), 11, TextAnchor.MiddleRight, raceLaps > 0 && laps < toGo ? new Color(1f, 0.3f, 0.2f) : HudGreen);
+                TF(new Rect(px0, dy + S(25), pw, S(11)), "LAPS", UiKit.Semi, 5.8f, HudFaint);
+                TF(new Rect(px0, dy + S(25), pw, S(12)), HudNum.Tenths(laps), UiKit.Bold, 8.5f, raceLaps > 0 && laps < toGo ? HudRed : HudGreen, TextAnchor.MiddleRight);
             }
         }
+        TF(new Rect(px0, dy + S(38), pw, S(9)), Weather.TyreName(carSet), UiKit.Semi, 5.8f, SetCol[Mathf.Clamp(carSet, 0, SetCol.Length - 1)]);
     }
 
     // ---------------------------------------------------------------- banners and messages
+    object bKeyT, bKeyS; float bTw, bSw; int bKeyH;
+    object fKey; float fW; int fKeyH;
     void DrawBanners()
     {
         if (bCount > 0)
         {
-            float a = Mathf.Clamp01(bT / 0.18f);
-            float w = S(300), h = S(30), x = Screen.width / 2f - w / 2 - (1 - a) * (1 - a) * S(60), y = Screen.height * 0.33f;
+            string title = bTitle[0], sub = bSub[0];
+            if (!ReferenceEquals(bKeyT, title) || !ReferenceEquals(bKeyS, sub) || bKeyH != Screen.height)
+            {
+                bKeyT = title; bKeyS = sub; bKeyH = Screen.height; // measured once per banner (CalcSize allocates)
+                bTw = UiKit.Width(title, UiKit.Black, 10f); bSw = string.IsNullOrEmpty(sub) ? 0 : UiKit.Width(sub, UiKit.Semi, 8.5f);
+            }
+            float k = UiKit.EaseOut(bT / 0.35f) * (1f - (bT > 2.45f ? UiKit.EaseOut((bT - 2.45f) / 0.35f) : 0f));
             Color c = bCol[0];
-            float tw = S(130);
-            Para(new Rect(x, y, tw, h), c, true, false);
-            Tri(new Rect(x + tw, y, h * 0.36f, h), 2, c);
-            Para(new Rect(x + tw + h * 0.36f + S(2), y, w - tw - h * 0.36f - S(2), h), HudPanel, false, true);
-            T(new Rect(x, y, tw + S(4), h), bTitle[0], 14, TextAnchor.MiddleCenter, c == HudYellow ? Color.black : Color.white);
-            T(new Rect(x + tw + S(14), y, w - tw - S(14), h), bSub[0], 12, TextAnchor.MiddleLeft, Color.white);
+            float h = S(28), tw = Mathf.Max(S(64), bTw + S(22)), sw = bSw > 0 ? bSw + S(26) : 0, w = tw + sw;
+            float x = Mathf.Round(Screen.width * 0.5f - w * 0.5f), y = hudT + S(44) - (1f - k) * S(22);
+            var old = Fade(k);
+            RR(new Rect(x, y, tw, h), c, 8, sw > 0 ? 0 : 8, sw > 0 ? 0 : 8, 8);
+            TF(new Rect(x, y, tw, h), title, UiKit.Black, 10f, c == HudYellow ? new Color(0.05f, 0.05f, 0.06f) : Color.white, TextAnchor.MiddleCenter);
+            if (sw > 0)
+            {
+                var body = new Rect(x + tw, y, sw, h);
+                RR(body, HudPanel, 0, 8, 8, 0);
+                TF(new Rect(body.x + S(13), y, sw, h), sub, UiKit.Semi, 8.5f, Color.white);
+            }
+            float life = Mathf.Clamp01(1f - bT / 2.8f);
+            UiKit.Rect(new Rect(x + S(8), y + h - S(2), (w - S(16)) * life, S(1.2f)), new Color(c.r, c.g, c.b, 0.9f));
+            GUI.color = old;
         }
         // the game's own short messages, unless a banner or the lap flash already says it
         if (flashT > 0 && !string.IsNullOrEmpty(flash) && !Covered(flash))
         {
-            float w = S(260), h = S(24), x = Screen.width / 2f - w / 2, y = Screen.height * 0.42f;
-            Para(new Rect(x, y, w, h), HudPanel);
-            Fill(new Rect(x, y, S(3), h), HudAccent);
-            T(new Rect(x, y, w, h), flash, 12, TextAnchor.MiddleCenter, Color.white);
+            if (!ReferenceEquals(fKey, flash) || fKeyH != Screen.height) { fKey = flash; fKeyH = Screen.height; fW = UiKit.Width(flash, UiKit.Semi, 9.5f); }
+            float a = Mathf.Clamp01(flashT / 0.3f) * Mathf.Clamp01((1.4f - flashT) / 0.12f);
+            float w = fW + S(36), h = S(24), x = Mathf.Round(Screen.width * 0.5f - w * 0.5f), y = Screen.height * 0.40f + (1f - a) * S(6);
+            var old = Fade(a);
+            var r = new Rect(x, y, w, h);
+            Disc(r, HudPanel);
+            UiKit.Outline(r, GlassLine, 999f, 0.6f);
+            Disc(new Rect(x + S(11), y + h * 0.5f - S(2.5f), S(5), S(5)), HudAccent);
+            TF(new Rect(x + S(22), y, w - S(28), h), flash, UiKit.Semi, 9.5f, Color.white, TextAnchor.MiddleCenter);
+            GUI.color = old;
         }
     }
     static bool Covered(string s) =>
@@ -548,7 +838,7 @@ public partial class GameManager
     void DrawFps()
     {
         if (!showFps) return;
-        T(new Rect(Screen.width - S(250), S(40), S(110), S(12)), fpsSlot.Fps(Mathf.RoundToInt(fpsAvg), renderScale < 0.99f ? Mathf.RoundToInt(renderScale * 100) : 0), 8.5f, TextAnchor.MiddleLeft, HudGrey, false);
+        TF(new Rect(btnRight - S(150), hudT + S(35), S(150), S(10)), fpsSlot.Fps(Mathf.RoundToInt(fpsAvg), renderScale < 0.99f ? Mathf.RoundToInt(renderScale * 100) : 0), UiKit.Semi, 6.2f, HudFaint, TextAnchor.MiddleRight);
     }
 }
 
@@ -556,7 +846,7 @@ public partial class GameManager
 // shown; values that change rarely (lap and sector times) are kept per place on screen and rebuilt only when they change.
 static class HudNum
 {
-    static readonly string[] ints = new string[4001], tenths = new string[10000], gaps = new string[10000], deltas = new string[4001], clocks = new string[12000], pcts = new string[101], kws = new string[1001], poss = new string[41], laps = new string[200], lapsDown = new string[100];
+    static readonly string[] ints = new string[4001], tenths = new string[10000], gaps = new string[10000], deltas = new string[4001], clocks = new string[12000], pcts = new string[101], kws = new string[1001], poss = new string[41], laps = new string[200], lapsDown = new string[100], ofs = new string[41];
     public static string Int(int v) => v >= 0 && v < ints.Length ? ints[v] ??= v.ToString() : v.ToString();
     public static string Tenths(double v) { int k = (int)System.Math.Round(v * 10); return k >= 0 && k < tenths.Length ? tenths[k] ??= (k / 10) + "." + (k % 10) : v.ToString("0.0"); }
     public static string Gap(double v) { int k = (int)System.Math.Round(v * 10); return k >= 0 && k < gaps.Length ? gaps[k] ??= "+" + (k / 10) + "." + (k % 10) : "+" + v.ToString("0"); }
@@ -575,6 +865,7 @@ static class HudNum
     public static string Pct(int v) { v = v < 0 ? 0 : v > 100 ? 100 : v; return pcts[v] ??= v + "%"; }
     public static string Kw(int v) { v = v < 0 ? 0 : v > 1000 ? 1000 : v; return kws[v] ??= v + " kW"; }
     public static string Pos(int p) => p >= 0 && p < poss.Length ? poss[p] ??= "P" + p : "P" + p;
+    public static string Of(int n) => n >= 0 && n < ofs.Length ? ofs[n] ??= "/" + n : "/" + n;
     public static string LapShort(int n) => n >= 0 && n < laps.Length ? laps[n] ??= "L" + n : "L" + n;
     public static string LapsDown(int n) => n > 0 && n < lapsDown.Length ? lapsDown[n] ??= "+" + n + (n == 1 ? " LAP" : " LAPS") : "+LAPS";
 }
@@ -601,16 +892,23 @@ class HudSlot
         if (k != key) { key = k; s = of > 0 ? "LAP " + lap + "/" + of : "LAP " + lap; }
         return s;
     }
+    // "4/10" (or "4" without a race distance)
+    public string Frac(int a, int b)
+    {
+        long k = a * 10000L + b + (1L << 40);
+        if (k != key) { key = k; s = b > 0 ? a + "/" + b : a.ToString(); }
+        return s;
+    }
     public string Fps(int fps, int res)
     {
         long k = fps * 1000L + res;
-        if (k != key) { key = k; s = fps + " fps" + (res > 0 ? "  (" + res + "% res)" : ""); }
+        if (k != key) { key = k; s = fps + " FPS" + (res > 0 ? "  ·  " + res + "% RES" : ""); }
         return s;
     }
     public string Test(double? t100, double top, string unit)
     {
         long k = (t100.HasValue ? (long)System.Math.Round(t100.Value * 100) : 99999) * 100000L + (long)System.Math.Round(top) * 10 + (unit == "mph" ? 1 : 0);
-        if (k != key) { key = k; s = "0-100 " + (t100.HasValue ? t100.Value.ToString("0.00") + "s" : "—") + " (real 2.2-2.6)  ·  top " + top.ToString("0") + " " + unit; }
+        if (k != key) { key = k; s = "0-100 " + (t100.HasValue ? t100.Value.ToString("0.00") + " s" : "—") + "  (real 2.2-2.6)  ·  top " + top.ToString("0") + " " + unit; }
         return s;
     }
 }
