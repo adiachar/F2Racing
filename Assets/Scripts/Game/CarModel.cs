@@ -273,7 +273,7 @@ public class CarModel : MonoBehaviour
     public const string Credit = CarCredit + "  \u00b7  " + RealWorld.Attribution;
     static readonly System.Collections.Generic.Dictionary<string, Mesh[]> meshCache = new System.Collections.Generic.Dictionary<string, Mesh[]>();
     Material lightMat, stripeMat; bool braking;
-    public void SetStripe(Color c) { stripeCol = c; hasStripe = true; if (stripeMat != null) stripeMat.color = c; if (merged) { mpb.SetColor(StripeId, c); Flush(); } }
+    public void SetStripe(Color c) { stripeCol = c; hasStripe = true; if (stripeMat != null) stripeMat.color = c; if (merged) { mpb.SetVector(StripeId, LinV(c)); Flush(); } }
     // performance (GameManagerPerf.cs): which asset this car came from (null = code-built), the last livery and
     // stripe set (so a swapped-in player LOD looks the same), and the Low graphics level (no wheel faces, no sparks/smoke)
     public string Res { get; private set; }
@@ -294,8 +294,8 @@ public class CarModel : MonoBehaviour
         lastLivery = l; hasLivery = true;
         if (merged)
         {
-            mpb.SetColor(LivAId, l.primary); mpb.SetColor(LivBId, l.secondary);
-            var acc = l.accent; acc.a = 1f; mpb.SetColor(LivCId, acc); // a = 1: livery split on
+            mpb.SetVector(LivAId, LinV(l.primary)); mpb.SetVector(LivBId, LinV(l.secondary));
+            var acc = l.accent; acc.a = 1f; mpb.SetVector(LivCId, LinV(acc)); // a = 1: livery split on
             Flush(); return;
         }
         if (liveryBody != null)
@@ -334,7 +334,7 @@ public class CarModel : MonoBehaviour
         if (st == lightState) return;
         lightState = st;
         var em = st == 2 ? new Color(3f, 0.25f, 0.2f) : st == 1 ? new Color(0.6f, 0.05f, 0.04f) : new Color(0.25f, 0.02f, 0.02f);
-        if (merged) { mpb.SetColor(LightColId, em); mpbDirty = true; }
+        if (merged) { mpb.SetVector(LightColId, LinV(em)); mpbDirty = true; }
         else lightMat.SetColor("_EmissionColor", em);
     }
 
@@ -348,6 +348,9 @@ public class CarModel : MonoBehaviour
     // a colour given in linear (the value the shader should get): Material.color / SetColor take sRGB in this
     // linear-colour-space project and convert it, so hand them the sRGB equivalent
     static Color Lin(float r, float g, float b) => new Color(r, g, b).gamma;
+    // a sRGB colour as the linear vector the merged rivals' shader reads. Vectors are never converted, so the colour
+    // is converted exactly once here (MaterialPropertyBlock.SetColor on an undeclared property is not reliable)
+    static Vector4 LinV(Color c) { c = c.linear; return new Vector4(c.r, c.g, c.b, c.a); }
     static Material Paint(Color c, float coat, float gloss, float metal, float stdSmooth, float stdMetal)
     {
         PaintShader();
@@ -720,10 +723,10 @@ public class CarModel : MonoBehaviour
         if (rivalDebris == null) { rivalDebris = Kind(Paint(Lin(0.022f, 0.024f, 0.028f), 0.35f, 0.88f, 0.05f, 0.7f, 0.25f), "_CARBON"); rivalDebris.name = "RivalDebris"; }
         cm.debrisSrc = rivalDebris;
         // per-car values: the old per-part materials' defaults until SetLivery / SetStripe / the brakes change them
-        cm.mpb.SetColor(LivAId, paint ?? new Color(0.78f, 0.05f, 0.07f)); cm.mpb.SetColor(LivBId, new Color(0.93f, 0.93f, 0.94f));
-        cm.mpb.SetColor(LivCId, new Color(0.1f, 0.1f, 0.11f, 0f)); // a = 0: no livery split until SetLivery
-        cm.mpb.SetColor(StripeId, stripe ?? StripeFor(FormulaSim.Compound.Soft)); cm.mpb.SetColor(LightColId, new Color(0.25f, 0.02f, 0.02f));
-        cm.mpb.SetColor(GlowFId, Color.black); cm.mpb.SetColor(GlowRId, Color.black);
+        cm.mpb.SetVector(LivAId, LinV(paint ?? new Color(0.78f, 0.05f, 0.07f))); cm.mpb.SetVector(LivBId, LinV(new Color(0.93f, 0.93f, 0.94f)));
+        cm.mpb.SetVector(LivCId, LinV(new Color(0.1f, 0.1f, 0.11f, 0f))); // a = 0: no livery split until SetLivery
+        cm.mpb.SetVector(StripeId, LinV(stripe ?? StripeFor(FormulaSim.Compound.Soft))); cm.mpb.SetVector(LightColId, LinV(new Color(0.25f, 0.02f, 0.02f)));
+        cm.mpb.SetVector(GlowFId, LinV(Color.black)); cm.mpb.SetVector(GlowRId, LinV(Color.black));
         cm.mpb.SetVector(AxleId, Vector4.zero); cm.mpb.SetVector(TyreWDId, Vector4.zero);
         cm.lightState = 0;
         var sh = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(sh.GetComponent<Collider>());
@@ -926,7 +929,7 @@ public class CarModel : MonoBehaviour
             // material writes only when the value moved (a cold disc stays black for most of a lap; dust creeps)
             if (glow == glowSet[k] && Mathf.Abs(dust[k] - dustSet[k]) < 0.002f) continue;
             glowSet[k] = glow; dustSet[k] = dust[k];
-            if (merged) { mpb.SetColor(k == 0 ? GlowFId : GlowRId, glow); mpb.SetVector(AxleId, new Vector4(dust[0], dust[1], 0, 0)); mpbDirty = true; continue; }
+            if (merged) { mpb.SetVector(k == 0 ? GlowFId : GlowRId, LinV(glow)); mpb.SetVector(AxleId, new Vector4(dust[0], dust[1], 0, 0)); mpbDirty = true; continue; }
             if (hubMat[k] != null && hubMat[k].HasProperty(GlowId)) { hubMat[k].SetColor(GlowId, glow); hubMat[k].SetFloat(DustId, dust[k]); }
             if (faceMat[k] != null) { faceMat[k].SetColor(GlowId, glow); faceMat[k].SetFloat(DustId, dust[k]); }
         }

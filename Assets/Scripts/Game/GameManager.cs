@@ -18,7 +18,8 @@ public partial class GameManager : MonoBehaviour
     Camera cam;
     double acc, simTime;
     int surface, idx = -1, prevIdx = -1;
-    double frontSpin, px, py, ph, pd;
+    double frontSpin, px, py, ph, pd, psi, renderDelta, renderSteer;
+    readonly SteerFilter steerF = new SteerFilter(); bool steerReset = true; // smooth steering for the physics steps (SteerFilter.cs)
 
     // settings (saved)
     TcMode tc; bool tilt, playground, invertTilt, sound = true; int camMode;
@@ -255,6 +256,7 @@ public partial class GameManager : MonoBehaviour
     {
         car = new FormulaCar(PlayerConfig());
         car.windX = windX; car.windY = windY;
+        steerReset = true; // a new car starts from the driver's hands, not from the last session's steering
         carSet = tyreSet;
         if (model != null) model.SetStripe(Weather.Stripe(carSet));
         SetupRivals();
@@ -439,28 +441,26 @@ public partial class GameManager : MonoBehaviour
     // The phone is the steering wheel: its turn angle is the direction of gravity within the screen plane.
     //  * The angle is measured from a LOCKED "down" axis, so a big tilt can never flip the steering, and the screen
     //    is kept from auto-rotating while tilt steering is on (a rotating screen made the steering jump).
-    //  * All sensor samples since the last frame are averaged, then smoothed with a "one euro" filter: it smooths
-    //    hard when the phone is held still (no jitter) and hardly at all when it moves quickly (no lag).
+    //  * Every sensor sample is smoothed on its own, with its own time step, by a "one euro" filter: it smooths hard
+    //    when the phone is held still (no jitter) and hardly at all when it turns quickly (no lag). The sensor runs at
+    //    its own rate (often 60 Hz, beating with a 60 fps game: some frames get no sample, the next two). Before,
+    //    the samples were averaged per frame and the filter's speed came from (input - output) / frame time, so a
+    //    frame without a sample and then one with two made the filter open and close: fast turns came in steps.
+    //    Now the speed is the phone's real turn rate, and between samples the filter keeps running on the last one.
     //  * Only when the phone lies almost flat is there too little gravity in the screen plane to measure; steering
     //    then fades out. It works normally from about 15 degrees of screen tilt upwards.
-    // Dead zone, angle for full lock and smoothing are settings.
-    float tiltCenter, tiltSmooth, tiltAxis = float.NaN, tiltAxisT, tiltConf, tiltRawDeg, tiltVel; bool tiltInit;
+    // Dead zone, angle for full lock and smoothing are settings. The result is ramped smoothly across the physics
+    // steps like the drag steering (SteerFilter.cs).
+    float tiltCenter, tiltSmooth, tiltAxis = float.NaN, tiltAxisT, tiltConf, tiltRawDeg, tiltVel, tiltLastX, tiltSince; bool tiltInit;
     static readonly string[] SmoothNames = { "Off", "Low", "Medium", "High" };
     static readonly float[] SmoothCut = { 60f, 6f, 3f, 1.5f }; int smoothIdx = 1;
     static readonly string[] SpeedSteerNames = { "Full lock always", "Quick", "Normal", "Calm" };
     static readonly double[] SpeedSteer = { 0.0, 0.25, 0.5, 1.25 }; int speedSteerIdx = 2;
 
-    Vector3 Gravity()
+    // tilt angle (deg) from one gravity sample; dt: time since the previous sample (the settings' "set straight now" reads the current one)
+    float TiltRaw() => TiltRaw(Input.acceleration, 0);
+    float TiltRaw(Vector3 a, float dt)
     {
-        // every accelerometer sample since the last frame (phones report 2-4 per frame), averaged
-        Vector3 sum = Vector3.zero; float w = 0;
-        int n = Input.accelerationEventCount;
-        for (int i = 0; i < n; i++) { var e = Input.GetAccelerationEvent(i); float dtE = Mathf.Max(e.deltaTime, 1e-4f); sum += e.acceleration * dtE; w += dtE; }
-        return w > 0 ? sum / w : Input.acceleration;
-    }
-    float TiltRaw()
-    {
-        var a = Gravity();
         float inPlane = Mathf.Sqrt(a.x * a.x + a.y * a.y);
         tiltConf = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.12f, 0.26f, inPlane));
         if (inPlane < 0.1f) return tiltRawDeg; // lying flat: nothing to measure, keep the last value
@@ -468,23 +468,40 @@ public partial class GameManager : MonoBehaviour
         float nearest = Mathf.Round(th / 90f) * 90f;
         if (float.IsNaN(tiltAxis)) { if (inPlane < 0.3f) return 0; tiltAxis = nearest; }
         bool clearlyOther = Mathf.Abs(Mathf.DeltaAngle(th, nearest)) < 20f && Mathf.Abs(Mathf.DeltaAngle(nearest, tiltAxis)) > 1f && inPlane > 0.35f;
-        if (clearlyOther) { tiltAxisT += Time.unscaledDeltaTime; if (tiltAxisT > 0.5f) { tiltAxis = nearest; tiltAxisT = 0; } }
+        if (clearlyOther) { tiltAxisT += dt; if (tiltAxisT > 0.5f) { tiltAxis = nearest; tiltAxisT = 0; } }
         else tiltAxisT = 0;
         float deg = Mathf.Clamp(Mathf.DeltaAngle(tiltAxis, th), -85, 85);
         tiltRawDeg = invertTilt ? -deg : deg;
         return tiltRawDeg;
     }
     static float Alpha(float cutoffHz, float dt) => 1f / (1f + 1f / (2f * Mathf.PI * cutoffHz * dt));
+    // one sample into the one euro filter. run: how long the filter runs on it (less than dt when frames without a
+    // sample already ran the filter on the previous one)
+    void TiltSample(Vector3 a, float dt, float run)
+    {
+        float x = (TiltRaw(a, dt) - tiltCenter) * tiltConf;
+        if (!tiltInit) { tiltSmooth = tiltLastX = x; tiltVel = 0; tiltInit = true; }
+        tiltVel += ((x - tiltLastX) / dt - tiltVel) * Alpha(4f, dt); // the phone's turn rate (deg/s), smoothed
+        tiltLastX = x;
+        tiltSmooth += (x - tiltSmooth) * Alpha(SmoothCut[smoothIdx] + 0.18f * Mathf.Abs(tiltVel), run);
+    }
     float TiltSteer()
     {
-        float dt = Mathf.Clamp(Time.unscaledDeltaTime, 0.002f, 0.1f);
-        float x = (TiltRaw() - tiltCenter) * tiltConf;
-        if (!tiltInit) { tiltSmooth = x; tiltVel = 0; tiltInit = true; }
-        // one euro filter: the faster the phone turns, the less it is smoothed
-        float v = (x - tiltSmooth) / dt;
-        tiltVel += (v - tiltVel) * Alpha(4f, dt);
-        float cut = SmoothCut[smoothIdx] + 0.18f * Mathf.Abs(tiltVel);
-        tiltSmooth += (x - tiltSmooth) * Alpha(cut, dt);
+        float frameDt = Mathf.Clamp(Time.unscaledDeltaTime, 0.002f, 0.1f);
+        int n = Input.accelerationEventCount;
+        for (int i = 0; i < n; i++)
+        {
+            var e = Input.GetAccelerationEvent(i);
+            float dt = Mathf.Clamp(e.deltaTime, 0.001f, 0.1f);
+            TiltSample(e.acceleration, dt, Mathf.Max(dt - tiltSince, 0.0005f));
+            tiltSince = 0;
+        }
+        if (n == 0)
+        {
+            tiltSince += frameDt;
+            if (!tiltInit || tiltSince > 0.1f) { TiltSample(Input.acceleration, frameDt, frameDt); tiltSince = 0; } // no sample events (editor, some phones): read it per frame
+            else tiltSmooth += (tiltLastX - tiltSmooth) * Alpha(SmoothCut[smoothIdx] + 0.18f * Mathf.Abs(tiltVel), frameDt); // between samples: keep running on the last one
+        }
         return TiltToSteer();
     }
     float TiltToSteer()
@@ -524,11 +541,16 @@ public partial class GameManager : MonoBehaviour
         if (hitT > 0) hitT -= dt;
         var input = ReadInput(dt);
         acc += dt;
+        // steering is read once per frame but the physics takes 4-8 steps per frame: ramp it smoothly across them
+        // (SteerFilter.cs) instead of one jump per frame and then nothing (the wheel turned in small steps)
+        if (steerReset) { steerF.Reset(input.steer); steerReset = false; }
+        steerF.BeginFrame(input.steer, (int)(acc / H), H);
         double wallDv = 0; // biggest speed change from a barrier hit this frame (m/s), for the haptics
         while (acc >= H)
         {
             SetSurface();
-            px = car.x; py = car.y; ph = car.heading; pd = car.delta;
+            px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn;
+            input.steer = steerF.Step(H);
             if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
             car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
             car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
@@ -562,9 +584,10 @@ public partial class GameManager : MonoBehaviour
         visR = Mathf.Repeat(visR + Mathf.Clamp(wRr * dt, -0.5f, 0.5f), Mathf.PI * 2);
         // draw the car between the last two physics steps (frames don't line up with the 240 Hz steps;
         // without this the car moved 3, 4 or 5 steps per frame, a small rhythmic judder)
-        if ((car.x - px) * (car.x - px) + (car.y - py) * (car.y - py) > 25) { px = car.x; py = car.y; ph = car.heading; pd = car.delta; } // reset / recover
+        if ((car.x - px) * (car.x - px) + (car.y - py) * (car.y - py) > 25) { px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn; } // reset / recover
         double al = acc / H, dh = System.Math.Atan2(System.Math.Sin(car.heading - ph), System.Math.Cos(car.heading - ph));
         double rx = px + (car.x - px) * al, ry = py + (car.y - py) * al, rh = ph + dh * al, rd = pd + (car.delta - pd) * al;
+        renderDelta = rd; renderSteer = psi + (car.steerIn - psi) * al; // the steering wheel at the same moment as the car
         model.Apply(rx, ry, rh, rd, visF, visR, gLon, gLat);
         if (LightBake.Active && LightBake.CarSun != null)
         {
@@ -574,7 +597,7 @@ public partial class GameManager : MonoBehaviour
             LightBake.CarSun.intensity = 1.25f * (0.12f + 0.88f * carLit) * Sky.SunShare;
             Shader.SetGlobalFloat("_CarLit", carLit);
         }
-        model.SetBrake(car.brake > 0.05); model.SetSteer((float)car.steerIn);
+        model.SetBrake(car.brake > 0.05); model.SetSteer((float)renderSteer);
         model.Feed(car, dt, surface == 0);
         for (int i = 0; i < rivals.Count; i++)
         {
@@ -583,7 +606,7 @@ public partial class GameManager : MonoBehaviour
             // close rivals use the detailed model, distant ones the light one
             // (a zoomed-in TV camera sees far cars big: their distance counts as shorter by the zoom)
             float ddx = (float)c.x - cam.transform.position.x, ddz = (float)c.y - cam.transform.position.z, zoom = camMode == TvMode ? Mathf.Clamp(cam.fieldOfView / 62f, 0.05f, 1f) : 1f;
-            bool near = (ddx * ddx + ddz * ddz) * zoom * zoom < (rivalNear[i] ? 34f * 34f : 28f * 28f) || rivalFar[i] == null;
+            bool near = (ddx * ddx + ddz * ddz) * zoom * zoom < (rivalNear[i] ? 60f * 60f : 52f * 52f) || rivalFar[i] == null;
             if (near != rivalNear[i]) { rivalNear[i] = near; rivalModels[i].gameObject.SetActive(near); if (rivalFar[i] != null) rivalFar[i].gameObject.SetActive(!near); }
             var rm = near ? rivalModels[i] : rivalFar[i];
             // drawn at the same in-between moment as the player's car, or they would shake against it
@@ -764,7 +787,7 @@ public partial class GameManager : MonoBehaviour
         Vector3 pos, look; float fov;
         float lonG = gLon / 9.81f;
         DriverFeel.Intensity = camShakePct * 0.01f; // the camera-shake setting scales all of the camera's force motion
-        feel.Cockpit(model, car, Time.time); // steering wheel by the real front-wheel angle, shift lights
+        feel.Cockpit(model, car, Time.time, renderDelta); // steering wheel by the real front-wheel angle (drawn between physics steps, like the car), shift lights
         feel.Step(car, gLon, gLat, speed, Paused ? 0 : Time.deltaTime, camMode == 2 ? 1 : camMode == 3 ? 2 : 0);
         if (camMode == 2 || camMode == 3)
         {

@@ -107,7 +107,7 @@ Shader "F2/CarPaint"
         void MMat(half id, out half3 base, out half3 cgm)
         {
             // (linear values: CarModel gives the per-part materials the same ones via Lin(); livery colours come in
-            // through SetColor, which converts them from sRGB on both paths)
+            // through CarModel.LinV: converted from sRGB once, sent as a vector on the merged path)
             base = CARBON_BASE; cgm = half3(0.35, 0.88, 0.05);                                               // 2 carbon
             half k = MIs(id, 0); base = lerp(base, MP(_Color).rgb, k); cgm = lerp(cgm, half3(1.0, 0.95, 0.06), k);
             k = MIs(id, 1); base = lerp(base, MP(_LivB).rgb, k); cgm = lerp(cgm, half3(1.0, 0.93, 0.03), k);

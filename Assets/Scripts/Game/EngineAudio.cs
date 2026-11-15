@@ -86,27 +86,42 @@ public class EngineAudio : MonoBehaviour
         new[] { 1f, 0.72f, 0.93f, 0.68f, 0.97f, 0.80f },   // F2: rough, growly half-orders
         new[] { 1f, 0.82f, 0.95f, 0.78f, 0.99f, 0.86f },   // F3: in between
     };
-    internal static readonly float[] JitterC      = { 0.05f, 0.11f, 0.06f };   // random pulse-to-pulse variation
+    internal static readonly float[] JitterC      = { 0.07f, 0.11f, 0.06f };   // random pulse-to-pulse level variation
+    // 90-degree V6: the firing gaps alternate 150 / 90 degrees (average 120), so every second pulse comes early
+    // or late. That is the "wobbly", half-order texture of an F1 V6. Share of the gap (0.25 = the full 150/90).
+    internal static readonly float[] UnevenC      = { 0.25f, 0.10f, 0.12f };
+    internal static readonly float[] TimeJitC     = { 0.012f, 0.02f, 0.012f }; // cycle-to-cycle timing wobble of the gaps
+    // Tonal stack: sines at 1/2, 1, 3/2, 2, 3 and 4 times the firing frequency (the half orders come from the
+    // uneven firing). Relative levels per class, then shaped by the exhaust formant (ResC) and the tone filter.
+    internal static readonly float[] OrdC =
+    {
+        0.30f, 1.00f, 0.42f, 0.72f, 0.46f, 0.26f,   // F1: strong 1st and 2nd orders, 1.5 audible, raspy 3rd and 4th
+        0.60f, 1.00f, 0.60f, 0.55f, 0.30f, 0.15f,   // F2: more half-order growl, less top
+        0.40f, 1.00f, 0.50f, 0.50f, 0.35f, 0.20f,   // F3
+    };
+    internal static readonly float[] ResC         = { 1100f, 800f, 1500f };    // exhaust / airbox formant (Hz)
+    internal static readonly float[] RaspC        = { 0.30f, 0.22f, 0.22f };   // upper-harmonic rasp when on the throttle
+    static readonly int[] OrdK = { 1, 2, 3, 4, 6, 8 };                          // multiples of half the firing frequency
     internal static readonly float[] Body1MulC    = { 1.00f, 0.75f, 1.00f };   // exhaust resonance / firing freq
     internal static readonly float[] Body1QC      = { 1.10f, 0.90f, 1.30f };
     internal static readonly float[] Body1WC      = { 0.90f, 1.10f, 0.70f };
     internal static readonly float[] Body2MulC    = { 2.00f, 1.50f, 3.00f };   // upper (intake) resonance / firing freq
     internal static readonly float[] Body2QC      = { 1.60f, 1.20f, 2.20f };
     internal static readonly float[] Body2WC      = { 0.60f, 0.55f, 0.95f };
-    internal static readonly float[] ToneBaseC    = { 700f, 600f, 950f };       // tone low-pass: base + thr * span + rpm * k
-    internal static readonly float[] ToneThrC     = { 4200f, 3400f, 5400f };
-    internal static readonly float[] ToneRpmC     = { 0.12f, 0.16f, 0.30f };
-    internal static readonly float[] EngGainC     = { 0.90f, 1.05f, 0.95f };
+    internal static readonly float[] ToneBaseC    = { 520f, 600f, 950f };       // tone low-pass: base + thr * span + rpm * k
+    internal static readonly float[] ToneThrC     = { 5600f, 3400f, 5400f };
+    internal static readonly float[] ToneRpmC     = { 0.16f, 0.16f, 0.30f };
+    internal static readonly float[] EngGainC     = { 0.80f, 1.05f, 0.95f };
     static readonly float[] SpoolRpmC    = { 9000f, 5200f, 1f };       // revs where the turbo is fully spooled (own estimate)
-    static readonly float[] WhistleLvlC  = { 0.012f, 0.018f, 0f };
-    static readonly float[] WhistleBaseC = { 5200f, 3600f, 0f };
-    static readonly float[] WhistleSpanC = { 5200f, 4800f, 0f };
-    static readonly float[] ChatterLvlC  = { 0.015f, 0.06f, 0f };      // wastegate / bypass flutter on lift
-    internal static readonly float[] CrackleThrC  = { 0.95f, 0.88f, 0.90f };    // higher = fewer pops (Noise() threshold)
-    internal static readonly float[] CrackleRpmC  = { 0.58f, 0.55f, 0.60f };    // pops above this fraction of redline
-    static readonly float[] IntakeC      = { 0.8f, 0.7f, 1.4f };       // induction roar (F3: open airbox howl)
+    static readonly float[] WhistleLvlC  = { 0.017f, 0.018f, 0f };
+    static readonly float[] WhistleBaseC = { 3100f, 3600f, 0f };
+    static readonly float[] WhistleSpanC = { 3800f, 4800f, 0f };
+    static readonly float[] ChatterLvlC  = { 0.03f, 0.06f, 0f };      // wastegate / bypass flutter on lift
+    internal static readonly float[] CrackleThrC  = { 0.90f, 0.88f, 0.90f };    // higher = fewer pops (Noise() threshold)
+    internal static readonly float[] CrackleRpmC  = { 0.45f, 0.55f, 0.60f };    // pops above this fraction of redline
+    static readonly float[] IntakeC      = { 1.5f, 0.7f, 1.4f };       // induction roar (F3: open airbox howl)
     static readonly float[] LimHzC       = { 16f, 10f, 12f };          // rev-limiter bounces per second
-    internal static readonly int[] DownPopsC      = { 2, 4, 3 };                // exhaust pops after a downshift (plus up to 2 random)
+    internal static readonly int[] DownPopsC      = { 3, 4, 3 };                // exhaust pops after a downshift (plus up to 2 random)
 
     int rate = 48000;
     double firePh;          // firing phase 0..1
@@ -130,10 +145,37 @@ public class EngineAudio : MonoBehaviour
     readonly Biquad subF = new Biquad(), indF = new Biquad(), popLoF = new Biquad(), compF = new Biquad(), bovF = new Biquad();
     readonly Biquad squeal2F = new Biquad(), spinHiF = new Biquad(), lockHF = new Biquad(), kerbF = new Biquad();
     readonly Biquad rushF = new Biquad(), boomF = new Biquad(), thumpF = new Biquad(), pToneF = new Biquad(), pWhF = new Biquad();
+    double halfPh, gearPh; float rateK = 1, sg = 1, wobR, wobT, chuff, gearG, raspLvl;
+    readonly float[] wt = new float[6];
+    readonly Biquad raspF = new Biquad(), chuffF = new Biquad();
     uint seed = 22222;
     float Noise() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return (seed & 0xFFFFFF) / 8388608f - 1f; }
     static float Fin(float v, float def) => float.IsNaN(v) || float.IsInfinity(v) ? def : v;
     static float Ramp(float x, float a, float b) { float t = Mathf.Clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); }
+
+    // Tonal weights for the stack, from half the firing frequency (Hz): level per order x exhaust formant x
+    // low-pass at fc. Throttle brightens the upper orders, the onboard view (view 1) trims them. No allocation.
+    internal static void Weigh(int cc, float fHalf, float fc, float fs, float thr, float view, float[] w)
+    {
+        float fres = ResC[cc], lim = fs * 0.42f;
+        for (int i = 0; i < 6; i++)
+        {
+            float fk = OrdK[i] * fHalf;
+            if (fk > lim) { w[i] = 0; continue; }
+            float r = fk / fc, x = (fk - fres) / (0.6f * fres);
+            float g = OrdC[cc * 6 + i] / (1f + r * r) * (1f + 1.1f / (1f + x * x));
+            g *= i >= 3 ? (0.3f + 0.7f * thr) * (1f - 0.25f * view) : i == 2 ? 0.55f + 0.45f * thr : 0.7f + 0.3f * thr;
+            w[i] = g;
+        }
+    }
+    // Sum of the six sines of a (radians) using multiple-angle recursion: one sin and one cos per sample.
+    internal static float Stack(float a, float[] w)
+    {
+        float s = Mathf.Sin(a), c = Mathf.Cos(a);
+        float s2 = 2 * s * c, c2 = c * c - s * s, s3 = s2 * c + c2 * s, c3 = c2 * c - s2 * s;
+        float s4 = 2 * s2 * c2, c4 = c2 * c2 - s2 * s2, s6 = 2 * s3 * c3, s8 = 2 * s4 * c4;
+        return s * w[0] + s2 * w[1] + s3 * w[2] + s4 * w[3] + s6 * w[4] + s8 * w[5];
+    }
 
     internal sealed class Biquad
     {
@@ -188,7 +230,7 @@ public class EngineAudio : MonoBehaviour
         rumbleF.LowPass(90, 0.7f, rate); kerbF.LowPass(220, 0.8f, rate);
         lockFrF.BandPass(980, 7f, rate); scrapeF.BandPass(2700, 1.1f, rate); scrapeLoF.BandPass(240, 1.5f, rate); hissF.BandPass(3200, 0.6f, rate);
         rainF.BandPass(5200, 0.5f, rate); sprayF.BandPass(1800, 0.8f, rate);
-        compF.BandPass(6500, 2f, rate); bovF.BandPass(3800, 0.9f, rate);
+        compF.BandPass(6500, 2f, rate); bovF.BandPass(3800, 0.9f, rate); raspF.BandPass(2700, 0.8f, rate); chuffF.BandPass(1000, 0.7f, rate);
         rushF.BandPass(900, 0.7f, rate); boomF.BandPass(220, 1.5f, rate); thumpF.LowPass(90, 0.7f, rate);
         pToneF.LowPass(18000, 0.7f, rate); pWhF.BandPass(800, 0.9f, rate);
     }
@@ -265,8 +307,10 @@ public class EngineAudio : MonoBehaviour
         float fs = rate;
         // smoothing per sample: revs 8 ms, levels 25 ms, tyre sounds 40 ms (release 90 ms), boost 350 ms
         float kR = 1 - Mathf.Exp(-1f / (0.008f * fs)), kG = 1 - Mathf.Exp(-1f / (0.025f * fs)), kS = 1 - Mathf.Exp(-1f / (0.04f * fs)), kSr = 1 - Mathf.Exp(-1f / (0.09f * fs)), kB = 1 - Mathf.Exp(-1f / (0.35f * fs));
+        float chuffDecay = Mathf.Exp(-1f / (0.12f * fs)), kRfall = 1 - Mathf.Exp(-1f / (0.045f * fs)), kWob = 1 - Mathf.Exp(-1f / (0.03f * fs)), kSg = 1 - Mathf.Exp(-1f / (0.004f * fs));
         float crackDecay = 1 - 1f / (0.012f * fs), gravDecay = Mathf.Exp(-1f / (0.004f * fs)), bovDecay = Mathf.Exp(-1f / (0.18f * fs)), barkDecay = Mathf.Exp(-1f / (0.05f * fs));
         float chunkSec = frames / fs;
+        float uneven = UnevenC[cc], timeJit = TimeJitC[cc], raspC = RaspC[cc];
         float tRpm = Mathf.Clamp(Fin(rpm, 4000), 1500, 16000), tThr = Mathf.Clamp01(Fin(throttle, 0)), sp = Mathf.Max(0, Fin(speed, 0)), red = Mathf.Max(3000, Fin(redline, 12000));
         bool mute = muted;
         float vMaster = Mathf.Clamp01(masterVol) * Volume, vEng = Mathf.Clamp01(engineVol), vTyre = Mathf.Clamp01(tyreVol), vFx = Mathf.Clamp01(fxVol);
@@ -292,14 +336,14 @@ public class EngineAudio : MonoBehaviour
 
         // ---- shifts ----
         int us = upSeq, ds = downSeq;
-        if (us != seenUp) { seenUp = us; cutN = (int)(0.045f * fs); bark = 0; }
+        if (us != seenUp) { seenUp = us; cutN = (int)((cc == 0 ? 0.032f : 0.045f) * fs); bark = 0; }
         if (ds != seenDown)
         {
             seenDown = ds; cutN = (int)(0.025f * fs);
             if (tThr < 0.3f) { popsLeft = DownPopsC[cc] + (int)(Mathf.Abs(Noise()) * 2.99f); popWait = (int)(0.03f * fs); }
         }
         // bypass valve: a fast lift at high boost
-        if (turbo && prevThrIn > 0.55f && tThr < 0.15f && boost > 0.4f) bovG = Mathf.Max(bovG, boost);
+        if (turbo && prevThrIn > 0.55f && tThr < 0.15f && boost > 0.4f) { bovG = Mathf.Max(bovG, boost); chuff = Mathf.Max(chuff, boost); }
         prevThrIn = tThr;
         // rev limiter: the target revs sit at the limit on throttle
         bool atLim = tRpm >= red - 50 && tThr > 0.3f;
@@ -377,10 +421,12 @@ public class EngineAudio : MonoBehaviour
         // ---- MGU-K (F1 only): at racing speeds its pitch follows road speed ----
         float kw = cc == 0 ? Fin(ersKw, 0) : 0;
         float spFade = Mathf.Clamp01(sp / 6f), ersView = vw == 1 ? 1.3f : 1f;
-        float tErsG = kw > 0 ? Mathf.Sqrt(Mathf.Clamp01(kw / 350f)) * 0.035f * spFade * ersView
+        float tErsG = kw > 0 ? Mathf.Sqrt(Mathf.Clamp01(kw / 350f)) * 0.04f * spFade * ersView
                     : kw < 0 ? Mathf.Sqrt(Mathf.Clamp01(-kw / 350f)) * 0.026f * spFade * ersView : 0;
         float tErsHm = kw < 0 ? 1f : 0f;                     // 0 = deploy timbre, 1 = harvest timbre
-        float tErsF = kw < 0 ? 120f + sp * 30f : 180f + sp * 52f;
+        float tErsF = kw < 0 ? 260f + sp * 15f : 380f + sp * 20f;
+        float tGear = Mathf.Clamp01((sp - 4f) / 30f) * (0.25f + 0.75f * tThr) * (vw == 1 ? 0.014f : vw == 0 ? 0.004f : 0.003f) * (cc == 0 ? 1f : 0.6f);
+        float gearF0 = 130f + sp * 15f;
         float tChat = turbo && tThr < 0.2f ? chLvl : 0;
         bool shiftFlag = shifting;
 
@@ -404,17 +450,17 @@ public class EngineAudio : MonoBehaviour
             }
             else { limPh = 0; ign += (1 - ign) * kG; }
             limOff += (limT - limOff) * kR;
-            curRpm += (tRpm - curRpm) * kR; curThr += (tThr - curThr) * kG;
+            curRpm += (tRpm - curRpm) * (tRpm >= curRpm ? kR : tThr < 0.15f ? kRfall : kR * 0.5f); curThr += (tThr - curThr) * kG;
             float tBoost = bIn >= 0 ? bIn : tThr * Mathf.Clamp01(curRpm * spool);
             boost += (tBoost - boost) * (bIn >= 0 ? kG : kB);
             scrub += (tScrub - scrub) * (tScrub > scrub ? kS : kSr); squeal += (tSqueal - squeal) * (tSqueal > squeal ? kS : kSr);
             lockG += (tLock - lockG) * kS; spinG += (tSpin - spinG) * (tSpin > spinG ? kS : kSr);
             sqF += (tSqF - sqF) * kS; sqBright += (tBright - sqBright) * kS; spinF0 += (tSpinF - spinF0) * kS; spinAm += (tSpinAm - spinAm) * kS;
             windG += (tWind - windG) * kS; kerbG += (tKerb - kerbG) * kS;
-            float tCut = cutN > 0 || shiftFlag ? 0.12f : 1f; if (cutN > 0) { cutN--; if (cutN == 0) bark = 0.35f; }
+            float tCut = cutN > 0 || shiftFlag ? 0.12f : 1f; if (cutN > 0) { cutN--; if (cutN == 0) { bark = cc == 0 ? 0.8f : 0.4f; crackle = Mathf.Max(crackle, cc == 0 ? 0.4f : 0.25f); } }
             cut += (tCut - cut) * (tCut < cut ? 0.02f : kG);
             gravG += (tGrav - gravG) * kS; grassG += (tGrass - grassG) * kS; chatG += (tChat - chatG) * kG;
-            ersG += (tErsG - ersG) * kS; ersHm += (tErsHm - ersHm) * kS; ersF += (tErsF - ersF) * kG;
+            gearG += (tGear - gearG) * kS; ersG += (tErsG - ersG) * kS; ersHm += (tErsHm - ersHm) * kS; ersF += (tErsF - ersF) * kG;
             lockFG += (tLockF - lockFG) * kS; scrapeG += (tScrape - scrapeG) * kG; hissG += (tHiss - hissG) * kS;
             rushG += (tRush - rushG) * kS; boomG += (tBoom - boomG) * kS; thumpG += (tThump - thumpG) * kS;
             gust += (gustT - gust) * kGust; turb += (turbT - turb) * kTurb;
@@ -428,7 +474,9 @@ public class EngineAudio : MonoBehaviour
                 body2.BandPass(Mathf.Clamp(f0c * b2Mul, 300, 3200), b2Q, fs);
                 subF.LowPass(Mathf.Clamp(f0c * 0.8f, 60, 600), 0.9f, fs);
                 indF.BandPass(Mathf.Clamp(f0c * 2.5f, 400, 4000), 1.4f, fs);
-                tone.LowPass((toneBase + curThr * toneThr + rpmNow * toneRpm) * (1.05f - 0.2f * vView), 0.8f, fs);
+                float toneFc = (toneBase + curThr * toneThr + rpmNow * toneRpm) * (1.05f - 0.2f * vView);
+                tone.LowPass(toneFc, 0.8f, fs);
+                Weigh(cc, f0c * 0.5f, toneFc * 1.2f, fs, curThr, vView, wt);
                 windF.LowPass((350 + sp * 14f) * (1 + 0.15f * gust), 0.7f, fs);
                 if (rushG > 1e-5f) rushF.BandPass(700 + sp * 12f, 0.7f, fs);
                 if (boomG > 1e-5f) boomF.BandPass(180 + sp * 1.2f, 1.5f, fs);
@@ -440,11 +488,16 @@ public class EngineAudio : MonoBehaviour
                 if (spinG > 1e-5f) { spinF.BandPass(spinF0, 1.6f, fs); spinHiF.BandPass(2000 + 25 * spinF0 * 0.1f, 2f, fs); }
             }
             // ---- engine: one pulse per firing ----
-            float f0 = rpmNow / 20f * cpD;
-            firePh += f0 / fs;
+            wobR += (wobT - wobR) * kWob;
+            float f0 = rpmNow / 20f * cpD * (1f + wobR);
+            firePh += f0 * rateK / fs;
+            halfPh += f0 * 0.5f / fs; if (halfPh >= 1) halfPh -= 1;
             if (firePh >= 1)
             {
                 firePh -= 1; cyl = (cyl + 1) % 6;
+                // uneven gaps (150 / 90 degrees) plus a little cycle-to-cycle timing jitter
+                rateK = ((cyl & 1) == 0 ? 1f / (1f + uneven) : 1f / (1f - uneven)) * (1f + timeJit * Noise());
+                wobT = 0.0025f * Noise() * (0.4f + curThr);   // slow wander of the whole note
                 pulseGain = cylG[cyl] * (1 + jitter * Noise());
                 // overrun: unburnt fuel popping in the exhaust when the driver lifts at high revs
                 if (curThr < 0.05f && curRpm > crRpm && Noise() > crThr) crackle = 0.5f + 0.5f * Mathf.Abs(Noise());
@@ -456,15 +509,20 @@ public class EngineAudio : MonoBehaviour
             float raw = pulse * pulseGain;
             float load = 0.22f + 0.78f * curThr;
             float rpmFrac = Mathf.Clamp01(rpmNow / red);
-            float e = tone.Run(raw * 0.55f + body1.Run(raw) * b1W * (0.8f + 0.35f * curThr + 0.3f * vView) + body2.Run(raw) * b2W * (0.4f + 0.7f * curThr));
-            e += subF.Run(raw) * (0.12f + 0.38f * vView) * (0.5f + 0.5f * curThr);    // the firing fundamental: chest thump onboard
-            // under load the exhaust note hardens (soft saturation adds harmonics; level kept about the same)
-            float drive = 1f + 1.6f * curThr * rpmFrac, ed = e * drive;
-            e = Mathf.Lerp(e, ed / (1f + Mathf.Abs(ed)) * 1.35f, 0.6f * curThr);
+            sg += (pulseGain - sg) * kSg;
+            // the pulse train (transients, noisy edge) plus the tonal stack on the firing orders
+            float e = tone.Run(raw * 0.4f + body1.Run(raw) * b1W * (0.6f + 0.3f * curThr + 0.3f * vView) + body2.Run(raw) * b2W * (0.3f + 0.6f * curThr));
+            e += Stack((float)halfPh * 6.2831853f, wt) * (0.3f + 0.7f * sg) * 0.26f;
+            e += subF.Run(raw) * (0.10f + 0.34f * vView) * (0.5f + 0.5f * curThr);    // the firing fundamental: chest thump onboard
+            // under load the exhaust note hardens: asymmetric soft clip adds the even and odd harmonics (rasp)
+            float drive = 1f + 2.4f * curThr * (0.3f + rpmFrac), ed = e * drive + 0.12f * e * e * curThr;
+            e = Mathf.Lerp(e, ed / (1f + Mathf.Abs(ed)) * 1.45f, 0.7f * curThr);
+            // raspy top: the sharp edge of each pulse through a 2.7 kHz band, strong on throttle, more in the chase view
+            e += raspF.Run(raw) * raspC * curThr * (0.3f + 0.7f * rpmFrac) * (1f - 0.45f * vView);
             // induction: noise breathed in with each firing, through the airbox resonance
             float breath = 1 - ph; breath *= breath; breath *= breath;
             e += indF.Run(Noise() * (0.25f + breath)) * curThr * (0.35f + 0.65f * rpmFrac) * 0.09f * intake * (0.7f + 0.9f * vView);
-            float engine = e * load * cut * ign * engGain * (1 + bark) * (1f + 0.15f * vView);
+            float engine = e * load * cut * ign * engGain * (1 + bark) * (1f + 0.2f * vView);
             bark *= barkDecay;
             crackle *= crackDecay;
             if (crackle > 1e-4f) { float pn = Noise() * crackle; engine += popF.Run(pn) * 0.5f + popLoF.Run(pn) * 0.45f; }
@@ -476,6 +534,8 @@ public class EngineAudio : MonoBehaviour
                 engine += Mathf.Sin((float)whistlePh * 6.2831853f) * boost * boost * whLvl * tv1;
                 float hs = boost * curThr;
                 if (hs > 0.02f) engine += compF.Run(Noise()) * hs * whLvl * 1.6f * tv1;
+                // wastegate / blow-off "chuff" after a lift (no MGU-H to soak up the boost any more)
+                if (chuff > 1e-4f) { engine += chuffF.Run(Noise()) * chuff * whLvl * 6f * tv1; chuff *= chuffDecay; }
                 // bypass valve after a lift
                 if (bovG > 1e-4f) { engine += bovF.Run(Noise()) * bovG * whLvl * 4.5f; bovG *= bovDecay; }
                 // wastegate / bypass flutter while the boost bleeds off after a lift
@@ -485,6 +545,13 @@ public class EngineAudio : MonoBehaviour
                     float gate = chatPh < 0.35 ? 1f : 0.15f;
                     engine += chatF.Run(Noise()) * gate * chatG * boost * 4f;
                 }
+            }
+            // ---- gearbox whine: pitched by road speed, loud onboard ----
+            if (gearG > 1e-5f)
+            {
+                gearPh += gearF0 / fs; if (gearPh >= 1) gearPh -= 1;
+                float ga = (float)gearPh * 6.2831853f;
+                engine += (Mathf.Sin(ga) + 0.5f * Mathf.Sin(3 * ga)) * gearG;
             }
             // ---- MGU-K whine (F1) ----
             if (ersG > 1e-5f)

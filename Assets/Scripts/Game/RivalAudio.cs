@@ -33,7 +33,7 @@ public class RivalAudio
         public volatile float level;             // audio thread -> game thread: current loudness (slot reusable when ~0)
         public int lastGear = 1;                 // game thread only
         // audio thread only
-        public double ph; public int cyl, seenUp, seenDown, cutN, popsLeft, popWait;
+        public double ph, hph; public float rateK = 1, sg = 1; public readonly float[] wt = new float[6]; public int cyl, seenUp, seenDown, cutN, popsLeft, popWait;
         public float cRpm = 4000, cThr, cG, cL = 1, cR = 1, cDopp = 1, cWh, cTone = 6000, pulseG = 1, crackle, cut = 1;
         public uint seed = 1;
         public readonly EngineAudio.Biquad body = new EngineAudio.Biquad(), toneF = new EngineAudio.Biquad(), wh = new EngineAudio.Biquad();
@@ -140,6 +140,7 @@ public class RivalAudio
         if (cc < 0 || cc > 2) cc = 0;
         float kR = 1 - Mathf.Exp(-1f / (0.012f * fs)), kG = 1 - Mathf.Exp(-1f / (0.04f * fs)), crDecay = 1 - 1f / (0.012f * fs);
         float[] cylG = EngineAudio.CylGainC[cc];
+        float uneven = EngineAudio.UnevenC[cc], tJit = EngineAudio.TimeJitC[cc];
         float jitter = EngineAudio.JitterC[cc], b1Mul = EngineAudio.Body1MulC[cc], b1Q = EngineAudio.Body1QC[cc], b1W = EngineAudio.Body1WC[cc];
         float toneBase = EngineAudio.ToneBaseC[cc], toneThr = EngineAudio.ToneThrC[cc], toneRpm = EngineAudio.ToneRpmC[cc], engGain = EngineAudio.EngGainC[cc];
         float crThr = EngineAudio.CrackleThrC[cc], crFrac = EngineAudio.CrackleRpmC[cc];
@@ -163,7 +164,7 @@ public class RivalAudio
             if (us != vo.seenUp) { vo.seenUp = us; vo.cutN = (int)(0.04f * fs); }
             if (ds != vo.seenDown) { vo.seenDown = ds; vo.cutN = (int)(0.02f * fs); if (tT < 0.3f) { vo.popsLeft = EngineAudio.DownPopsC[cc]; vo.popWait = (int)(0.03f * fs); } }
             // locals for speed
-            double ph = vo.ph; int cyl = vo.cyl, cutN = vo.cutN, popsLeft = vo.popsLeft, popWait = vo.popWait;
+            double ph = vo.ph, hph = vo.hph; float rateK = vo.rateK, sg = vo.sg; var wt = vo.wt; int cyl = vo.cyl, cutN = vo.cutN, popsLeft = vo.popsLeft, popWait = vo.popWait;
             float cRpm = vo.cRpm, cThr = vo.cThr, cG = vo.cG, cL = vo.cL, cR = vo.cR, cDopp = vo.cDopp, cWh = vo.cWh, cTone = vo.cTone, pulseG = vo.pulseG, crackle = vo.crackle, cut = vo.cut;
             uint sd = vo.seed; if (sd == 0) sd = 1;
             var body = vo.body; var toneF = vo.toneF; var whf = vo.wh;
@@ -178,15 +179,19 @@ public class RivalAudio
                 {
                     float f0c = cRpm / 20f * cDopp;
                     body.BandPass(Mathf.Clamp(f0c * b1Mul, 120, 900), b1Q, fs);
-                    toneF.LowPass(Mathf.Min(cTone, toneBase + cThr * toneThr + cRpm * toneRpm), 0.8f, fs);
+                    float fcT = Mathf.Min(cTone, toneBase + cThr * toneThr + cRpm * toneRpm);
+                    toneF.LowPass(fcT, 0.8f, fs);
+                    EngineAudio.Weigh(cc, f0c * 0.5f, fcT * 1.2f, fs, cThr, 0f, wt);
                     if (cWh > 1e-5f) whf.BandPass(whF, 0.9f, fs);
                 }
                 float f0 = cRpm / 20f * cDopp;
-                ph += f0 / fs;
+                ph += f0 * rateK / fs;
+                hph += f0 * 0.5f / fs; if (hph >= 1) hph -= 1;
                 if (ph >= 1)
                 {
                     ph -= 1; cyl = (cyl + 1) % 6;
                     sd ^= sd << 13; sd ^= sd >> 17; sd ^= sd << 5; float nz = (sd & 0xFFFFFF) / 8388608f - 1f;
+                    rateK = ((cyl & 1) == 0 ? 1f / (1f + uneven) : 1f / (1f - uneven)) * (1f + tJit * nz);
                     pulseG = cylG[cyl] * (1 + jitter * nz);
                     if (cThr < 0.05f && cRpm > crRpm && nz > crThr) crackle = 0.5f;
                 }
@@ -195,12 +200,17 @@ public class RivalAudio
                 float raw = p * pulseG;
                 sd ^= sd << 13; sd ^= sd >> 17; sd ^= sd << 5; float noise = (sd & 0xFFFFFF) / 8388608f - 1f;
                 crackle *= crDecay;
-                float e = toneF.Run((raw * 0.55f + body.Run(raw) * b1W) * cut + noise * crackle * 1.2f) * (0.25f + 0.75f * cThr) * engGain;
+                sg += (pulseG - sg) * 0.02f;
+                // same recipe as the player's engine, cheaper: pulse + body + tonal stack, soft-clipped on throttle
+                float x = raw * 0.4f + body.Run(raw) * b1W * 0.7f + EngineAudio.Stack((float)hph * 6.2831853f, wt) * (0.3f + 0.7f * sg) * 0.26f;
+                float xd = x * (1f + 2f * cThr);
+                x = x + (xd / (1f + Mathf.Abs(xd)) * 1.4f - x) * 0.6f * cThr;
+                float e = toneF.Run(x * cut + noise * crackle * 1.2f) * (0.2f + 0.8f * cThr) * engGain;
                 float s = e * cG * vEng;
                 if (cWh > 1e-5f) s += whf.Run(noise) * cWh * WhooshLevel * vFx;
                 L[i] += s * cL; R[i] += s * cR;
             }
-            vo.ph = ph; vo.cyl = cyl; vo.cutN = cutN; vo.popsLeft = popsLeft; vo.popWait = popWait;
+            vo.ph = ph; vo.hph = hph; vo.rateK = rateK; vo.sg = sg; vo.cyl = cyl; vo.cutN = cutN; vo.popsLeft = popsLeft; vo.popWait = popWait;
             vo.cRpm = cRpm; vo.cThr = cThr; vo.cG = cG; vo.cL = cL; vo.cR = cR; vo.cDopp = cDopp; vo.cWh = cWh; vo.cTone = cTone;
             vo.pulseG = pulseG; vo.crackle = crackle; vo.cut = cut; vo.seed = sd;
             vo.level = cG + cWh;

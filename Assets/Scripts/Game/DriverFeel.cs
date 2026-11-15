@@ -111,7 +111,9 @@ public class DriverFeel
     // Steering wheel and shift lights of the player's car. The wheel shows the real front-wheel angle times a fixed
     // ratio (full lock = half a turn), so it always agrees with the front tyres seen over the nose, and at speed,
     // where the car uses only a few degrees of lock, the hands barely move, as in a real onboard.
-    public void Cockpit(CarModel model, FormulaCar car, float time)
+    // delta: the front-wheel angle to show (rad); GameManager passes it drawn between the last two physics steps, like
+    // the car itself; NaN = the car's latest step.
+    public void Cockpit(CarModel model, FormulaCar car, float time, double delta = double.NaN)
     {
         if (model == null) return;
         if (model != bound)
@@ -121,7 +123,7 @@ public class DriverFeel
             leds = ShiftLights.Attach(model.SteerWheel);
         }
         float lockDeg = Mathf.Max(1f, (float)car.cfg.maxLockDeg);
-        float deg = (float)(car.delta * 57.29578) * (WheelLockDeg / lockDeg);
+        float deg = (float)((double.IsNaN(delta) ? car.delta : delta) * 57.29578) * (WheelLockDeg / lockDeg);
         if (!float.IsNaN(deg)) model.SetSteerDeg(Mathf.Clamp(deg, -WheelLockDeg, WheelLockDeg));
         if (leds != null) leds.Set((float)car.rpm, (float)car.cfg.redline, time);
     }
