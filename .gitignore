@@ -116,3 +116,4 @@ Tools/__pycache__/
 
 # keep the tool projects (Unity ignores *.csproj above)
 !Tools/**/*.csproj
+__pycache__/
