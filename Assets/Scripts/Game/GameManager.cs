@@ -59,6 +59,7 @@ public partial class GameManager : MonoBehaviour
         liveryIdx = Livery.PlayerIndex;
         rivalIdx = Mathf.Clamp(PlayerPrefs.GetInt("rivals", 1), 0, RivalCounts.Length - 1); diffIdx = Mathf.Clamp(PlayerPrefs.GetInt("diff", 0), 0, DiffNames.Length - 1);
         ui = new MenuUI(MapNames, PlaygroundIdx, RivalCounts, DiffNames); // the start menu is up (game paused) until a session starts
+        ShotsBoot(); // WebGL ?shot=1 only: automatic screenshots (DebugShots.cs); does nothing in normal play
 
         LoadMap();
         car = new FormulaCar(PlayerConfig());
@@ -288,6 +289,7 @@ public partial class GameManager : MonoBehaviour
         foreach (var m in rivalFar) if (m != null) Destroy(m.gameObject);
         rivals.Clear(); rivalModels.Clear(); rivalSpin.Clear(); rivalFar.Clear(); rivalNear.Clear();
         int count = playground || line == null || raceLaps == 0 ? 0 : RivalCounts[rivalIdx]; // free practice: alone
+        if (shotCars >= 0 && !playground && line != null && raceLaps > 0) count = shotCars; // screenshot mode (DebugShots.cs)
         var field = SessionField(ref count); // weekend / championship / qualifying field in grid order, null = quick race (Qualifying.cs)
         var grid = DriverProfile.Grid;
         rivalSet = Weather.BestSet(); // the rivals start on the right tyres for the weather
@@ -986,7 +988,7 @@ public partial class GameManager : MonoBehaviour
 
     // ---------------------------------------------------------------- front end (MenuUI.cs): start menu, loading, results
     MenuUI ui; int raceLaps; int lineFor = -1; // raceLaps 0 = free practice (no rivals, no finish)
-    bool Paused => menuOpen || (ui != null && ui.Showing);
+    bool Paused => menuOpen || (ui != null && ui.Showing) || shotFreeze; // shotFreeze: screenshot mode (DebugShots.cs)
 
     // called once the menu's "Loading…" frame is on screen: build the chosen circuit and start the session
     void StartSession()
@@ -1035,6 +1037,7 @@ public partial class GameManager : MonoBehaviour
             else if (choice != MenuUI.Choice.None) SessionChoice(choice); // weekend flow (Qualifying.cs)
             return;
         }
+        if (ShotsHideHud) return; // screenshot mode: clean frames (DebugShots.cs)
         HudInit(); HudLayout();
         if (replaying)
         {
