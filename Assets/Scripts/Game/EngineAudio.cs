@@ -310,7 +310,6 @@ public class EngineAudio : MonoBehaviour
         float chuffDecay = Mathf.Exp(-1f / (0.12f * fs)), kRfall = 1 - Mathf.Exp(-1f / (0.045f * fs)), kWob = 1 - Mathf.Exp(-1f / (0.03f * fs)), kSg = 1 - Mathf.Exp(-1f / (0.004f * fs));
         float crackDecay = 1 - 1f / (0.012f * fs), gravDecay = Mathf.Exp(-1f / (0.004f * fs)), bovDecay = Mathf.Exp(-1f / (0.18f * fs)), barkDecay = Mathf.Exp(-1f / (0.05f * fs));
         float chunkSec = frames / fs;
-        float uneven = UnevenC[cc], timeJit = TimeJitC[cc], raspC = RaspC[cc];
         float tRpm = Mathf.Clamp(Fin(rpm, 4000), 1500, 16000), tThr = Mathf.Clamp01(Fin(throttle, 0)), sp = Mathf.Max(0, Fin(speed, 0)), red = Mathf.Max(3000, Fin(redline, 12000));
         bool mute = muted;
         float vMaster = Mathf.Clamp01(masterVol) * Volume, vEng = Mathf.Clamp01(engineVol), vTyre = Mathf.Clamp01(tyreVol), vFx = Mathf.Clamp01(fxVol);
@@ -320,6 +319,7 @@ public class EngineAudio : MonoBehaviour
         float tLive = !fed || staleN < (int)(0.35f * fs) ? 1f : 0f;
         // per-class parameters, read once per buffer
         int cc = carClass; if (cc < 0 || cc > 2) cc = 0;
+        float uneven = UnevenC[cc], timeJit = TimeJitC[cc], raspC = RaspC[cc];
         float[] cylG = CylGainC[cc];
         float jitter = JitterC[cc], b1Mul = Body1MulC[cc], b1Q = Body1QC[cc], b1W = Body1WC[cc], b2Mul = Body2MulC[cc], b2Q = Body2QC[cc], b2W = Body2WC[cc];
         float toneBase = ToneBaseC[cc], toneThr = ToneThrC[cc], toneRpm = ToneRpmC[cc], engGain = EngGainC[cc], spool = 1f / SpoolRpmC[cc];
