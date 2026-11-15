@@ -317,6 +317,30 @@ public static class WorldBuilder
         }
         Height = t.h != null || t.bank != null ? new HeightField(t) : null; // banked corners tilt the road (HeightField)
         Waterfront.Prepare(t);
+        // the real surroundings (Resources/World/<Name>.bytes: terrain, land use, buildings, roads, trees), if this
+        // circuit has them; they then replace the fake hills, town rows and generic trees (RealWorld.cs)
+        RealWorld.Load(t);
+        if (RealWorld.Active)
+        {
+            // the flat sheet only round the real terrain (a frame), just below the level of its edge
+            var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
+            var rg = RealWorld.Region; float yy = RealWorld.SheetLevel, o = 2f;
+            float ox0 = Mathf.Min(cx - gsize / 2, rg.xMin - 1500), ox1 = Mathf.Max(cx + gsize / 2, rg.xMax + 1500);
+            float oz0 = Mathf.Min(cy - 400 - gsize / 2, rg.yMin - 1500), oz1 = Mathf.Max(cy - 400 + gsize / 2, rg.yMax + 1500);
+            void Sheet(float x0, float z0, float x1, float z1)
+            {
+                if (x1 <= x0 || z1 <= z0) return;
+                int k = v.Count;
+                v.Add(new Vector3(x0, yy, z0)); v.Add(new Vector3(x1, yy, z0)); v.Add(new Vector3(x0, yy, z1)); v.Add(new Vector3(x1, yy, z1));
+                uv.Add(new Vector2(x0, z0)); uv.Add(new Vector2(x1, z0)); uv.Add(new Vector2(x0, z1)); uv.Add(new Vector2(x1, z1));
+                tri.Add(k); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k + 1); tri.Add(k + 2); tri.Add(k + 3);
+            }
+            Sheet(ox0, oz0, ox1, rg.yMin + o); Sheet(ox0, rg.yMax - o, ox1, oz1);
+            Sheet(ox0, rg.yMin + o, rg.xMin + o, rg.yMax - o); Sheet(rg.xMax - o, rg.yMin + o, ox1, rg.yMax - o);
+            MeshObj("EnvGroundFrame", v, uv, tri, grass).transform.SetParent(root); // ("Env": built at its final height, not draped)
+            if (Waterfront.HasWater) Waterfront.BuildWater(root, 1.0f);
+        }
+        else
         {
             // ground: one big flat sheet; the fine grid round the track that follows the hills is made further down
             // (BuildTerrain), once the trackside buildings are known
@@ -335,6 +359,7 @@ public static class WorldBuilder
         // own relief away from the track (Environment.Lift), coloured in patches through the vertex tint
         void BuildTerrain()
         {
+            if (RealWorld.Active) { RealWorld.Prepare(t); return; } // real terrain heights (meshes made after Drape)
             if (Height == null) return;
             float m = 400, w = (float)(bb.maxX - bb.minX) + 2 * m, hg = (float)(bb.maxY - bb.minY) + 2 * m, cell = Mathf.Max(Gfx <= 1 ? 12f : 8f, ext / 180f);
             float x0 = (float)bb.minX - m, y0 = (float)bb.minY - m; int nx = Mathf.CeilToInt(w / cell), ny = Mathf.CeilToInt(hg / cell);
@@ -606,6 +631,8 @@ public static class WorldBuilder
         Drape(root.gameObject);
         var late = Trackside.Late; // fences and ground decals: lit by the bake, but kept out of its shadow map
         if (late != null) Drape(late);
+        // the real surroundings' meshes, at their final heights (after Drape), lit by the bake below like the rest
+        RealWorld.Build(t, root);
         // lighting baked into the vertices (LightBake.cs); if the phone can't run that shader, the sun and
         // real-time shadows are used as before
         if (LightBake.Begin(t, -sunGo.transform.forward))

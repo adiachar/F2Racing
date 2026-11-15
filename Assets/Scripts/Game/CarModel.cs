@@ -268,7 +268,9 @@ public class CarModel : MonoBehaviour
     // ------------------------------------------------------------------ imported car (Resources/Car/car.bytes)
     // Made by Tools/convert_car_model.py from "2026 Ferrari SF-26" by Tyler_Dave (Sketchfab, CC BY 4.0):
     // logos, decals, numbers and cockpit interior removed, reduced to ~53k triangles, own red/white paint.
-    public const string Credit = "Car model based on \"2026 Ferrari SF-26\" by Tyler_Dave (Sketchfab), CC BY 4.0. Modified: logos removed, simplified, repainted.";
+    public const string CarCredit = "Car model based on \"2026 Ferrari SF-26\" by Tyler_Dave (Sketchfab), CC BY 4.0. Modified: logos removed, simplified, repainted.";
+    // the credits line the menu and the race start show: the car model's licence and the map data's (ODbL / CDLA)
+    public const string Credit = CarCredit + "  \u00b7  " + RealWorld.Attribution;
     static readonly System.Collections.Generic.Dictionary<string, Mesh[]> meshCache = new System.Collections.Generic.Dictionary<string, Mesh[]>();
     Material lightMat, stripeMat; bool braking;
     public void SetStripe(Color c) { stripeCol = c; hasStripe = true; if (stripeMat != null) stripeMat.color = c; if (merged) { mpb.SetColor(StripeId, c); Flush(); } }

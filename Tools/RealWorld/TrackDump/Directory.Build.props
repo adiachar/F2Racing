@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- build output outside the repo -->
+    <BaseIntermediateOutputPath>/home/claude/rw-cache/trackdump-obj/</BaseIntermediateOutputPath>
+    <BaseOutputPath>/home/claude/rw-cache/trackdump-bin/</BaseOutputPath>
+  </PropertyGroup>
+</Project>

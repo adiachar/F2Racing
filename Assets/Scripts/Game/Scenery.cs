@@ -57,7 +57,7 @@ public static class Scenery
         // the distant land: hills, mountains, a far tree line or the sea, from the circuit's environment (one mesh)
         TownMat = null;
         Environment.Backdrop(parent, cx, cy, ext);
-        if (street) Town(t, parent);
+        if (street && !RealWorld.HasBuildings) Town(t, parent); // (real buildings: RealWorld.cs)
     }
 
     // the town's wall material and window texture, shared with the environment's apartment blocks (one draw call)

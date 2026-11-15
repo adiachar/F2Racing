@@ -337,7 +337,7 @@ public static class Environment
     // Extra height of the open land at (x, z), on top of the circuit's own height field. 0 near the road.
     public static float Lift(float x, float z)
     {
-        if (dist == null) return 0;
+        if (dist == null || RealWorld.Active) return 0; // (real terrain: RealWorld.cs)
         var e = Cur; float d = Clear(x, z);
         if (d <= e.flatTo) return 0;
         float f = Mathf.SmoothStep(0, 1, (d - e.flatTo) / e.ramp) * Rim(x, z);
@@ -351,7 +351,7 @@ public static class Environment
     // 0 = open land .. 1 = inside a wood (the raised, tree-top coloured part of the terrain)
     public static float Canopy(float x, float z)
     {
-        var e = Cur; if (dist == null || e.canopy <= 0) return 0;
+        var e = Cur; if (dist == null || e.canopy <= 0 || RealWorld.Active) return 0;
         float d = Clear(x, z); if (d <= e.canopyAt) return 0;
         float thr = 0.5f + (0.5f - e.cover) * 0.5f;
         float m = Mathf.SmoothStep(0, 1, (Fbm(x / 210f, z / 210f, 91) - thr + 0.05f) / 0.1f) * Mathf.SmoothStep(0, 1, (d - e.canopyAt) / 7f) * Rim(x, z);
@@ -361,7 +361,7 @@ public static class Environment
         return m;
     }
     // the ground itself (landmarks and blocks stand on it), without the tree tops
-    public static float GroundY(float x, float z) => WorldBuilder.H(x, z) + Lift(x, z);
+    public static float GroundY(float x, float z) => RealWorld.Ready ? RealWorld.GroundY(x, z) : WorldBuilder.H(x, z) + Lift(x, z);
     // the terrain mesh: ground plus the canopy of the woods
     public static float Surface(float x, float z, float lift)
     {
@@ -457,7 +457,8 @@ public static class Environment
     {
         var e = Cur; var b = new Buf();
         var haze = RenderSettings.fogColor;
-        bool sea = !float.IsNaN(e.seaDir);
+        bool sea = !float.IsNaN(e.seaDir) && !RealWorld.HasWaterAreas;
+        bool real = RealWorld.Active && RealWorld.HasTerrain;
         Vector3 seaD = sea ? Dir(e.seaDir) : Vector3.zero; float shore = ext * 0.5f + e.seaAt;
         var mid = new Vector3(cx, 0, cy);
         const int Seg = 96;
@@ -466,6 +467,12 @@ public static class Environment
             {
                 var g = e.rings[r]; int seed = 3 + r * 8;
                 float radius = ext * 0.5f + g.dist;
+                if (real)
+                {
+                    // the real terrain covers the near land: low tree lines go, hills and mountains stand beyond it
+                    if (g.hMin + g.hVar + (float.IsNaN(g.peakDir) ? 0 : g.peakGain) < 45f) continue;
+                    radius = Mathf.Max(radius, RealWorld.Reach + 150f + 300f * r);
+                }
                 // aerial perspective: further rings lean more towards the haze colour, so they separate and melt into the horizon
                 // (strong, bright aerial perspective: distant land is a soft, light blue-grey that melts into the sky, never a
                 // dark wall. The tint is a linear multiplier of the baked light, which is about 1.6 on these up-turned faces,
@@ -556,7 +563,7 @@ public static class Environment
     public static void Trees(Track t, Transform root, float ext)
     {
         var e = Cur; var bb = t.Bounds();
-        if (e.tree == TreeKind.None) return;
+        if (e.tree == TreeKind.None || RealWorld.HasVegetation) return; // (real woods and trees: RealWorld.cs)
         float dens = t.def != null ? (float)t.def.forest : 0.3f;
         var rnd = new System.Random(7); int placed = 0, tries = 0;
         int want = Mathf.Clamp((int)((t.length * 0.4f * dens + ext / 6) * e.treeMul), 120, 2500);
@@ -643,6 +650,8 @@ public static class Environment
         for (int k = 0; k < marks.Count; k++) { float dx = x - marks[k].c.x, dz = z - marks[k].c.z, rr = marks[k].r + r; if (marks[k].r > 0 && dx * dx + dz * dz < rr * rr) return true; }
         return false;
     }
+    // free of landmarks and the ground they claimed (RealWorld's trees keep out)
+    public static bool Free(float x, float z, float r) => !Taken(x, z, r) && !Reserved(x, z, r);
     static bool Taken(float x, float z, float r)
     {
         for (int k = 0; k < spots.Count; k++) { var s = spots[k]; float dx = x - s.x, dz = z - s.z, rr = s.r + r; if (dx * dx + dz * dz < rr * rr) return true; }
@@ -656,6 +665,8 @@ public static class Environment
         if (e.marks == null) return;
         foreach (var m in e.marks)
             {
+                // the real buildings stand there already (RealWorld.cs)
+                if (RealWorld.HasBuildings && (m.kind == MarkKind.Casino || m.kind == MarkKind.Hotel || m.kind == MarkKind.Blocks)) continue;
                 // where: the track point at s, then out to the chosen side
                 int i = ((Mathf.RoundToInt(m.s / (float)t.ds) % t.N) + t.N) % t.N; var p = t.pts[i];
                 Vector3 T = new Vector3((float)p.tx, 0, (float)p.ty).normalized, Nl = new Vector3((float)p.nx, 0, (float)p.ny).normalized;
@@ -753,7 +764,7 @@ public static class Environment
             }
 
         // apartment blocks climbing the slope behind the town rows (Monaco)
-        if (e.blocks > 0 && dist != null)
+        if (e.blocks > 0 && dist != null && !RealWorld.HasBuildings)
         {
             int want = low ? e.blocks * 3 / 5 : e.blocks, placed = 0, tries = 0;
             while (placed < want && tries++ < want * 60)

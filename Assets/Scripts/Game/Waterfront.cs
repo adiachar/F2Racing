@@ -18,7 +18,7 @@ public static class Waterfront
 
     public static void Prepare(Track t)
     {
-        poly = null; trk = t;
+        poly = null; trk = t; waterMat = null;
         var d = t.def;
         if (d == null || d.waterTo <= d.waterFrom) return;
         var pts = new List<Vector2>();
@@ -59,6 +59,22 @@ public static class Waterfront
         return inside;
     }
 
+    // the water look (car-paint shader: sky reflections growing towards the horizon), one material per circuit load,
+    // shared by the harbour and the real lakes, rivers and sea (RealWorld.cs) so they draw together
+    static Material waterMat;
+    public static Material WaterMaterial()
+    {
+        if (waterMat != null) return waterMat;
+        var sh = Resources.Load<Shader>("CarPaint");
+        if (sh != null && sh.isSupported)
+        {
+            waterMat = new Material(sh) { color = new Color(0.03f, 0.13f, 0.16f) };
+            waterMat.SetFloat("_Coat", 1f); waterMat.SetFloat("_Gloss", 0.93f); waterMat.SetFloat("_Metal", 0f);
+        }
+        else waterMat = WorldBuilder.Mat(new Color(0.08f, 0.25f, 0.32f), null, 0.9f, 0f);
+        return waterMat;
+    }
+
     public static void BuildWater(Transform root, float level)
     {
         if (poly == null) return;
@@ -83,15 +99,7 @@ public static class Waterfront
                 }
             }
         }
-        var sh = Resources.Load<Shader>("CarPaint");
-        Material m;
-        if (sh != null && sh.isSupported)
-        {
-            m = new Material(sh) { color = new Color(0.03f, 0.13f, 0.16f) };
-            m.SetFloat("_Coat", 1f); m.SetFloat("_Gloss", 0.93f); m.SetFloat("_Metal", 0f);
-        }
-        else m = WorldBuilder.Mat(new Color(0.08f, 0.25f, 0.32f), null, 0.9f, 0f);
-        var go = WorldBuilder.MeshObj("Harbour", v, uv, tri, m, false);
+        var go = WorldBuilder.MeshObj("Harbour", v, uv, tri, WaterMaterial(), false);
         go.transform.SetParent(root);
         go.GetComponent<MeshRenderer>().receiveShadows = false;
     }

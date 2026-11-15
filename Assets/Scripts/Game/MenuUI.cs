@@ -327,7 +327,8 @@ public sealed class MenuUI
         UiKit.PopAlpha(); // panel
 
         // licence credit for the car model (CC BY): always on the start menu
-        UiKit.Text(new Rect(x0, safe.yMax - U(20), W, U(14)), CarModel.Credit, UiKit.Regular, 8f, UiKit.A(UiKit.Faint, 0.85f * e));
+        UiKit.Text(new Rect(x0, safe.yMax - U(29), W, U(12)), CarModel.CarCredit, UiKit.Regular, 7.5f, UiKit.A(UiKit.Faint, 0.85f * e));
+        UiKit.Text(new Rect(x0, safe.yMax - U(18), W, U(12)), RealWorld.Attribution, UiKit.Regular, 7.5f, UiKit.A(UiKit.Faint, 0.85f * e));
 
         BuildThumbnails(loaded, loadedFor);
         return openSettings;
