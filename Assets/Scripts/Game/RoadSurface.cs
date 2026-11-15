@@ -2,7 +2,8 @@
 // GameManager.ApplyGraphics turns anisotropic filtering off only on Low, so that is read here (a property read per
 // frame, no allocation): Low -> the cheap SubShader (LOD 150, one texture read, no sheen), Medium/High -> the full one.
 // It also hands Road.shader its fine aggregate texture (EnvTex.RoadFine, 256 x 256, made once and cached) as the
-// global _F2RoadFine, read by the Medium/High SubShader only. Set before the road is first drawn.
+// global _F2RoadFine, read by the Medium/High SubShader only. Set before the road is first drawn. It also clears the
+// sharp shadow mask (RoadShadow.cs builds it after the light bake; both levels read it).
 using UnityEngine;
 
 public class RoadSurface : MonoBehaviour
@@ -13,6 +14,7 @@ public class RoadSurface : MonoBehaviour
     public static void Attach(GameObject root, Shader roadShader)
     {
         Shader.SetGlobalTexture(FineId, EnvTex.RoadFine());
+        RoadShadow.Reset(); // no shadow mask until RoadShadow.Build (after the bake) makes one
         var rs = root.AddComponent<RoadSurface>();
         rs.shader = roadShader;
         rs.Apply();

@@ -9,6 +9,11 @@
 // HQ also reads _F2RoadFine (global, EnvTex.RoadFine, set by RoadSurface.cs), 1.4 m per tile, close up only:
 //   R aggregate albedo, G polish of the stone tops, BA stone slope (0.5 = flat). The slope tilts the normal of the sun
 //   sheen, so single stones glint near the car; all four channels are 0.5 = neutral and the mips average them away.
+// Sharp sun shadows (RoadShadow.cs, both levels, one extra read): when the mask is built the vertex colour holds the
+// sky/ambient light only and its alpha the bake's sun visibility; the sun comes back as _F2SunLin x N.L x alpha x mask.
+// The mask (_F2RoadShadow, R8) is in track space: U across (_F2RoadShadowP.w either side of the centreline), V along,
+// the lap cut into strips laid side by side; read with gradients of the continuous coordinates (no seam at a strip
+// change). Without a mask _F2SunLin = 0 and the vertex colour is the whole baked light, as before.
 #ifndef F2_ROAD_INCLUDED
 #define F2_ROAD_INCLUDED
 #include "UnityCG.cginc"
@@ -26,8 +31,9 @@ struct v2f
 {
     float4 pos : SV_POSITION;
     float4 uv : TEXCOORD0;    // lateral m, along m, macro uv
-    float4 misc : TEXCOORD1;  // x: lateral distance to the racing line (m) or kerb across, y: rubber amount (or -1 = kerb), z: detail fade, w: sun visibility
-    half3 color : TEXCOORD2;  // baked light
+    float4 misc : TEXCOORD1;  // x: lateral distance to the racing line (m) or kerb across, y: rubber amount (or -1 = kerb), z: detail fade, w: bake's sun visibility (vertex alpha)
+    half3 color : TEXCOORD2;  // baked light (sky/ambient only when the shadow mask is on)
+    half3 sunc : TEXCOORD6;   // full sun on this vertex (_F2SunLin x N.L); 0 without the mask
     UNITY_FOG_COORDS(3)
 #ifdef ROAD_HQ
     float3 view : TEXCOORD4;  // surface -> camera (world)
@@ -42,6 +48,9 @@ sampler2D _MainTex;
 sampler2D _F2RoadFine; // global (RoadSurface.cs)
 #endif
 fixed4 _Asphalt, _Dust, _Paint, _KerbRed, _SunCol;
+sampler2D _F2RoadShadow; // global (RoadShadow.cs)
+float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: 1 / width covered (m), w: half width (m)
+half4 _F2SunLin;         // the sun's linear colour x intensity, as baked (0: no mask, the vertex colour is all the light)
 float _HalfWidth, _MipBias;
 float4 _Grid, _SunDir;
 half _Wet; // global (Weather.cs)
@@ -60,16 +69,16 @@ v2f vert (appdata v)
     float3 toCam = _WorldSpaceCameraPos - wp;
     float dist = length(toCam);
     o.misc.z = saturate((95.0 - dist) / 70.0); // full grain up to 25 m, gone by 95 m (the mips have averaged it anyway)
-    half3 lit = v.color.rgb * 2.0;             // stored light 0.5 = full brightness (LightBake)
-    o.color = lit;
-    // baked light is ~0.9 in shade and ~1.75 in the sun: how much sun reaches this vertex
-    o.misc.w = saturate((dot(lit, half3(0.3, 0.59, 0.11)) - 1.0) * 1.5);
+    o.color = v.color.rgb * 2.0;               // stored light 0.5 = full brightness (LightBake)
+    half3 nw = UnityObjectToWorldNormal(v.normal);
+    o.sunc = _F2SunLin.rgb * saturate(dot(nw, _SunDir.xyz));
+    o.misc.w = v.color.a;                      // the bake's sun visibility (RoadShadow; 1 without the mask)
     UNITY_TRANSFER_FOG(o, o.pos);
 #ifdef ROAD_HQ
     o.view = toCam;
-    o.n = UnityObjectToWorldNormal(v.normal);
+    o.n = nw;
 #else
-    half fv = 1.0 - saturate(dot(toCam / max(dist, 1e-3), UnityObjectToWorldNormal(v.normal)));
+    half fv = 1.0 - saturate(dot(toCam / max(dist, 1e-3), nw));
     half fv2 = fv * fv; o.fres = fv2 * fv2 * fv;
 #endif
     return o;
@@ -96,6 +105,21 @@ fixed4 frag (v2f i) : SV_Target
     float wl = max(fwidth(lat), 1e-4), wa = max(fwidth(along), 1e-4), wk = max(fwidth(i.misc.x), 1e-4);
     bool kerb = i.misc.y < -0.5;
     half kerbF = kerb ? 1.0 : 0.0;
+
+    // ---- light: ambient + sun x the sharp shadow mask (tree dapples, stands, bridges, fences)
+    float2 sp = float2(lat * _F2RoadShadowP.z + 0.5, along * _F2RoadShadowP.x); // across 0..1, strips along
+    float2 sgx = ddx(sp), sgy = ddy(sp);
+    float strip = floor(sp.y);
+    float2 suv = float2((strip + saturate(sp.x)) * _F2RoadShadowP.y, sp.y - strip);
+#ifdef ROAD_HQ
+    float2 gsc = float2(_F2RoadShadowP.y, 1.0) * 1.5; // a touch of blur: softer penumbrae, no crawling far away
+#else
+    float2 gsc = float2(_F2RoadShadowP.y, 1.0);
+#endif
+    half shade = tex2Dgrad(_F2RoadShadow, suv, sgx * gsc, sgy * gsc).r;
+    half3 light = i.color + i.sunc * (i.misc.w * shade);
+    // ~0.9 in shade, ~1.75 in the sun: how much sun reaches this point (sheen, wet glints)
+    half sunVis = saturate((dot(light, half3(0.3, 0.59, 0.11)) - 1.0) * 1.5);
 
 #ifdef ROAD_HQ
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy * 0.2, 0, _MipBias));
@@ -233,9 +257,9 @@ fixed4 frag (v2f i) : SV_Target
     half darken = kerb ? 0.28 : 0.45 - 0.23 * paint;
     col *= (1.0 - wet * darken) * (1.0 - 0.3 * pool);
 
-    col *= i.color;
+    col *= light;
     // the sky over the road is seen in the wet surface: as bright as the open sky, less in tunnels and deep shade
-    half skyVis = saturate(dot(i.color, half3(0.3, 0.59, 0.11)) * 1.4);
+    half skyVis = saturate(dot(light, half3(0.3, 0.59, 0.11)) * 1.4);
 
 #ifdef ROAD_HQ
     // ---- sheen: low sun glints off the asphalt (polished rubber and paint more), the sky at grazing angles
@@ -258,12 +282,12 @@ fixed4 frag (v2f i) : SV_Target
                + 0.5 * (fn.g - 0.5) * fineFade;
     // polished stone tops (G above 0.5) give tiny, sharp glints close to the car (gone past ~4 texels per pixel)
     half spark = saturate(fn.g * 2.0 - 1.0) * fineFade * (1.0 - kerbF) * (1.0 - paint) * saturate(2.0 - fineTexels * 0.25);
-    half3 spec = _SunCol.rgb * ((lobe * 0.55 + s32 * 0.7) * gloss + s128 * spark * 1.6) * i.misc.w;
+    half3 spec = _SunCol.rgb * ((lobe * 0.55 + s32 * 0.7) * gloss + s128 * spark * 1.6) * sunVis;
     half f = 1.0 - saturate(dot(V, N)); half f2 = f * f; half fres = f2 * f2 * f;
     // wet: a water film mirrors the sky (Schlick, F0 = 0.02 for water) and the sun in a sharp, bright glint
     // (s^128), dimmed by the overcast; rubber and puddles are the smoothest, so they shine most
     half wetG = saturate(wet * (0.75 + 0.25 * paint + 0.3 * rub + 0.3 * tar) + pool);
-    spec += _SunCol.rgb * ((s32 * 0.8 + s128 * 3.0) * wetG * (1.0 - 0.7 * _Wet) * (0.3 + 0.7 * i.misc.w));
+    spec += _SunCol.rgb * ((s32 * 0.8 + s128 * 3.0) * wetG * (1.0 - 0.7 * _Wet) * (0.3 + 0.7 * sunVis));
     col = lerp(col, unity_FogColor.rgb * skyVis, saturate((0.02 + 0.98 * fres) * wetG * 0.95));
     col += spec + unity_FogColor.rgb * (fres * 0.22 * (0.6 + 0.4 * gloss) * (1.0 - wetG));
 #else

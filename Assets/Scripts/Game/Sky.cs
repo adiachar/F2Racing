@@ -63,8 +63,8 @@ public class Sky : MonoBehaviour
                 k.fog = new Color(0.68f, 0.77f, 0.88f); k.fogStart = 380; k.fogEnd = 1800;
                 break;
             case "monza": // Po valley: warm, a little hazy, clear
-                k.cover = 0.25f; k.haze = 0.85f; k.tint = new Color(0.42f, 0.54f, 0.78f); k.atmosphere = 1.0f; k.exposure = 1.95f;
-                k.fog = new Color(0.74f, 0.79f, 0.86f); k.fogStart = 340; k.fogEnd = 1750;
+                k.cover = 0.25f; k.haze = 0.85f; k.tint = new Color(0.30f, 0.58f, 0.80f); k.atmosphere = 1.25f; k.exposure = 2.2f;
+                k.fog = new Color(0.76f, 0.84f, 0.93f); k.fogStart = 340; k.fogEnd = 1750;
                 break;
             case "suzuka":
                 k.cover = 0.38f; k.fog = new Color(0.68f, 0.78f, 0.90f);

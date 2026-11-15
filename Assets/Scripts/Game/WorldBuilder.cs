@@ -653,6 +653,7 @@ public static class WorldBuilder
         Trackside.AfterBake(root.gameObject);
         // the road is lit now (vertex colours): hand it to Road.shader
         if (roadR != null) { if (LightBake.Active) roadR.sharedMaterial = roadMat; else RoadShaded = false; }
+        if (roadR != null && LightBake.Active) RoadShadow.Build(t, root.gameObject, roadR, sun); // sharp sun shadows on the road (before batching)
         EnvSurface.Attach(root.gameObject, GroundShaded ? groundSh : null, FoliageShader); // Low: LOD 150 (mip bias, no sway)
         StaticBatchingUtility.Combine(root.gameObject);
 

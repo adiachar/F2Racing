@@ -123,10 +123,13 @@ public static class EnvTex
     // ---------------------------------------------------------------- ground
     public static bool IsGreen(Color c) => c.g > c.r * 1.12f && c.g > c.b * 1.2f;
 
+    // RR3 reference: sunlit lawns are warm yellow-olive, not neon green (linear multipliers on the circuit's grass mean)
+    static readonly Vector3 GrassTint = new Vector3(1.09f, 0.80f, 1.25f);
     public static Texture2D GroundDetail(Color albedo)
     {
         if (IsGreen(albedo))
         {
+            albedo = new Color(albedo.r * GrassTint.x, albedo.g * GrassTint.y, albedo.b * GrassTint.z, albedo.a);
             var gp = LoadPhoto("grass");
             if (gp != null) // real turf: photo structure, the circuit's green; softened chroma keeps it from going patchy
                 return Count(Albedo(gp.W, gp.H, albedo, (u, v, x, y) =>

@@ -9,8 +9,9 @@
 // shimmer far away, whatever the screen resolution.
 //
 // Two levels: LOD 300 (Medium/High) = 3 texture reads (5 m detail, 43 m macro, 1.4 m fine aggregate from the global
-//                                     _F2RoadFine), sun sheen with glinting stones, tar seams, rubber streaks, Fresnel;
-//             LOD 150 (Low)         = 1 texture read, no sheen; section shades, patches and kerb relief are maths only.
+//                                     _F2RoadFine) + the shadow mask, sun sheen with glinting stones, tar seams, rubber streaks, Fresnel;
+//             LOD 150 (Low)         = 1 texture read + the shadow mask, no sheen; section shades, patches and kerb relief are maths only.
+// Both levels also read the sharp sun-shadow mask (_F2RoadShadow, RoadShadow.cs): trees, stands, bridges, fences.
 // RoadSurface.cs picks one from the graphics level and sets _F2RoadFine.
 Shader "F2/Road"
 {
@@ -20,7 +21,7 @@ Shader "F2/Road"
         _Asphalt ("Asphalt colour", Color) = (0.34, 0.34, 0.35, 1)
         _Dust ("Dusty edge colour", Color) = (0.50, 0.48, 0.45, 1)
         _Paint ("Paint", Color) = (0.93, 0.93, 0.90, 1)
-        _KerbRed ("Kerb red", Color) = (0.80, 0.11, 0.13, 1)
+        _KerbRed ("Kerb red", Color) = (0.70, 0.14, 0.13, 1)
         _HalfWidth ("Half track width (m)", Float) = 6
         _Grid ("Grid: first slot (m), pitch (m), slots, slot offset (m)", Vector) = (0, 8, 0, 1.8)
         _SunDir ("Towards the sun", Vector) = (0, 1, 0, 0)

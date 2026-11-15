@@ -53,7 +53,7 @@ public static class Grade
             case "zandvoort":   // North Sea dunes: bright, airy, clean
                 return G(1.04f, 1.04f, 1.03f, V(1.00f, 1.00f, 1.00f), V(0.004f, 0.006f, 0.010f), V(0.02f, 0.02f, 0.02f), V(1.00f, 1.00f, 1.01f));
             case "monza":       // Po valley summer: warm, sunny
-                return G(1.01f, 1.02f, 1.03f, V(1.04f, 1.00f, 0.94f), V(0.006f, 0.005f, 0.002f), V(0.02f, 0.01f, -0.02f), V(1.00f, 0.99f, 0.97f));
+                return G(1.22f, 0.85f, 1.04f, V(1.08f, 1.00f, 1.05f), V(0.006f, 0.005f, 0.002f), V(0.02f, 0.01f, -0.02f), V(1.00f, 1.01f, 1.01f)); // RR3 reference: light neutral asphalt, olive grass (docs/reference/rr3-colour-targets.md)
             case "suzuka":      // crisp, vivid greens
                 return G(1.00f, 1.06f, 1.05f, V(1.01f, 1.00f, 0.98f), V(0.002f, 0.004f, 0.008f), V(0.00f, 0.03f, 0.00f), V(1.00f, 1.00f, 1.00f));
             case "budapest":    // summer heat: warm
