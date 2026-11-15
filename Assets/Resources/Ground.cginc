@@ -1,6 +1,6 @@
 // Ground.cginc — shared code of Ground.shader (grass, terrain, verges, gravel traps). Lighting is baked into the vertex
 // colours (LightBake.cs) like Baked.shader. Two texture reads per pixel:
-//   _MainTex  detail (grass blades / gravel stones), world space, a few metres per tile
+//   _MainTex  detail (photo grass / gravel, CC0, see Textures/CREDITS.txt), world space, a few metres per tile; Medium/High read it a second time at ~3.4x the scale, turned, and average the two
 //   _MacroTex linear data at ~100 m per tile, turned 37 degrees: R brightness drift, G dry patches, B clumps
 // Mesh data: uv0 = world (x, z) in metres; uv2 = (distance from the track centreline m, distance along the lap m) on
 // verges and gravel traps, (0, 0) on the open land, where the track-relative terms below are all zero.
@@ -53,6 +53,9 @@ fixed4 frag (v2f i) : SV_Target
     float wl = max(fwidth(lat), 1e-3); // outside any branch
 #ifdef GROUND_HQ
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, max(_MipBias, 0.0))); // never sharper than the mips: no crawling grass
+    // second, larger and turned copy of the same photo detail, averaged in: the 4.5 m tile never shows a repeat
+    float2 u2 = float2(i.uv.x * 0.8 - i.uv.y * 0.6, i.uv.x * 0.6 + i.uv.y * 0.8) * 0.29;
+    d.rgb = lerp(d.rgb, tex2Dbias(_MainTex, float4(u2, 0, max(_MipBias, 0.0))).rgb, 0.4);
 #else
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.6)); // Low: blurrier mips, kinder to the texture cache
 #endif

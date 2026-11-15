@@ -1,0 +1,7 @@
+Photo-scanned textures, all CC0 (public domain), source: Poly Haven (https://polyhaven.com), 1K diffuse maps, resized.
+Files are JPEG data stored with the .bytes extension (loaded as TextAsset, decoded with ImageConversion.LoadImage so they are CPU-readable without import settings).
+asphalt.bytes  512  Poly Haven "asphalt_track"       CC0
+grass.bytes    512  Poly Haven "leafy_grass"         CC0  (also used as the leaf-cluster detail of the tree cards)
+gravel.bytes   512  Poly Haven "gravel_floor_02"     CC0
+concrete.bytes 512  Poly Haven "concrete_floor_01"   CC0
+bark.bytes     256  Poly Haven "pine_bark"           CC0

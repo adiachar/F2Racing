@@ -1,4 +1,6 @@
-// EnvTex.cs — the scenery's surface textures, painted procedurally at load (no third-party art, see Docs/ASSETS.md).
+// EnvTex.cs — the scenery's surface textures, painted procedurally at load; where a CC0 photo is present in
+// Resources/Textures (asphalt, grass, gravel, concrete, bark; see CREDITS.txt) its real structure is used instead of / on top of the
+// procedural detail (LoadPhoto), tinted to the circuit's palette. Missing photo = procedural fallback.
 // All tile seamlessly and carry full mip chains; sizes are powers of two so they compress and filter cleanly.
 //   GroundDetail  256  grass (blades, clover, tips) or, for sandy / paved circuits, fine sand and grit; mean colour = the
 //                      circuit's ground albedo, so Environment's palettes still decide the look. 4.5 m per tile.
@@ -61,6 +63,60 @@ public static class EnvTex
         return Make(w, h, px, false, aniso);
     }
 
+
+    // ---------------------------------------------------------------- photo-scanned CC0 textures (Resources/Textures/*.bytes, see CREDITS.txt)
+    // JPEG data in .bytes files: decoded here with ImageConversion.LoadImage, so the pixels are CPU-readable with no
+    // import settings. Anything missing returns null and the procedural texture below is used instead. The photos are
+    // never shown raw: each is turned into "relative to its own mean" detail, so the circuit's palette still decides
+    // the colour and only the real-world structure (stones, blades, grain) is added.
+    public sealed class Photo
+    {
+        public int W, H; public Color[] lin; public Color mean; public float[] rel; // rel: luminance / mean luminance
+        public Color At(int x, int y) => lin[((y % H + H) % H) * W + ((x % W + W) % W)];
+        public float L(int x, int y) => rel[((y % H + H) % H) * W + ((x % W + W) % W)];
+        // bilinear, wrapping, u / v in tiles
+        public float L(float u, float v)
+        {
+            float fx = u * W - 0.5f, fy = v * H - 0.5f; int x = Mathf.FloorToInt(fx), y = Mathf.FloorToInt(fy); float tx = fx - x, ty = fy - y;
+            return Mathf.Lerp(Mathf.Lerp(L(x, y), L(x + 1, y), tx), Mathf.Lerp(L(x, y + 1), L(x + 1, y + 1), tx), ty);
+        }
+        // colour relative to the mean colour, chroma softened by "chroma" (0 = grey detail only)
+        public Color Rel(int x, int y, float chroma)
+        {
+            var c = At(x, y); float l = rel[((y % H + H) % H) * W + ((x % W + W) % W)];
+            float rr = c.r / Mathf.Max(1e-4f, mean.r), rg = c.g / Mathf.Max(1e-4f, mean.g), rb = c.b / Mathf.Max(1e-4f, mean.b);
+            return new Color(l * (1f + (rr / l - 1f) * chroma), l * (1f + (rg / l - 1f) * chroma), l * (1f + (rb / l - 1f) * chroma));
+        }
+    }
+    static readonly System.Collections.Generic.Dictionary<string, Photo> photos = new System.Collections.Generic.Dictionary<string, Photo>();
+    public static Photo LoadPhoto(string name)
+    {
+        Photo p;
+        if (photos.TryGetValue(name, out p)) return p;
+        photos[name] = null;
+        try
+        {
+            var ta = Resources.Load<TextAsset>("Textures/" + name);
+            if (ta == null) return null;
+            var t = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+            if (!ImageConversion.LoadImage(t, ta.bytes, false)) { Object.Destroy(t); return null; }
+            var px = t.GetPixels32(); p = new Photo { W = t.width, H = t.height };
+            Object.Destroy(t);
+            p.lin = new Color[px.Length]; p.rel = new float[px.Length];
+            double sr = 0, sg = 0, sb = 0;
+            for (int i = 0; i < px.Length; i++)
+            {
+                var c = new Color(Mathf.Pow(px[i].r / 255f, 2.2f), Mathf.Pow(px[i].g / 255f, 2.2f), Mathf.Pow(px[i].b / 255f, 2.2f));
+                p.lin[i] = c; sr += c.r; sg += c.g; sb += c.b;
+            }
+            float n = px.Length; p.mean = new Color((float)(sr / n), (float)(sg / n), (float)(sb / n));
+            float ml = Mathf.Max(1e-4f, 0.299f * p.mean.r + 0.587f * p.mean.g + 0.114f * p.mean.b);
+            for (int i = 0; i < px.Length; i++) p.rel[i] = Mathf.Clamp((0.299f * p.lin[i].r + 0.587f * p.lin[i].g + 0.114f * p.lin[i].b) / ml, 0.05f, 4f);
+            return photos[name] = p;
+        }
+        catch (System.Exception) { return null; }
+    }
+
     public static int Bytes; // texture memory made here (RGBA32 + mips), for the performance notes
     static Texture2D Count(Texture2D t) { Bytes += t.width * t.height * 4 * 4 / 3; return t; }
 
@@ -69,6 +125,17 @@ public static class EnvTex
 
     public static Texture2D GroundDetail(Color albedo)
     {
+        if (IsGreen(albedo))
+        {
+            var gp = LoadPhoto("grass");
+            if (gp != null) // real turf: photo structure, the circuit's green; softened chroma keeps it from going patchy
+                return Count(Albedo(gp.W, gp.H, albedo, (u, v, x, y) =>
+                {
+                    var r = gp.Rel(x, y, 0.45f);
+                    float k = 1f + 0.8f * (gp.L(x, y) - 1f);
+                    return new Color(Mathf.Max(0.05f, r.r * 0.5f + k * 0.5f), Mathf.Max(0.05f, r.g * 0.5f + k * 0.5f), Mathf.Max(0.05f, r.b * 0.5f + k * 0.5f));
+                }));
+        }
         if (IsGreen(albedo))
             return Count(Albedo(256, 256, albedo, (u, v, x, y) =>
             {
@@ -116,6 +183,8 @@ public static class EnvTex
     public static Texture2D Gravel() => cGravel != null ? cGravel : (cGravel = MakeGravel());
     static Texture2D MakeGravel()
     {
+        var gp = LoadPhoto("gravel");
+        if (gp != null) return Count(Albedo(gp.W, gp.H, new Color(0.50f, 0.45f, 0.36f), (u, v, x, y) => gp.Rel(x, y, 0.7f)));
         return Count(Albedo(256, 256, new Color(0.50f, 0.45f, 0.36f), (u, v, x, y) =>
         {
             // jittered cells (20 per tile = 12 cm stones), nearest and second-nearest for the gaps
@@ -160,6 +229,7 @@ public static class EnvTex
     public static Texture2D Paving() => cPaving != null ? cPaving : (cPaving = MakePaving());
     static Texture2D MakePaving()
     {
+        var cp = LoadPhoto("concrete");
         return Count(Albedo(256, 256, new Color(0.46f, 0.45f, 0.42f), (u, v, x, y) =>
         {
             float sx = u * 4, sy = v * 7; int i = Mathf.FloorToInt(sx), j = Mathf.FloorToInt(sy);
@@ -167,6 +237,7 @@ public static class EnvTex
             float joint = Mathf.Clamp01(Mathf.Min(ex, ey) / 1.6f);
             float slab = 0.9f + 0.2f * Hash(i, j, 81), stain = Fbm(u, v, 8, 3, 83);
             float k = slab * (0.85f + 0.3f * stain) * (0.9f + 0.1f * Hash(x, y, 85)) * (0.55f + 0.45f * joint);
+            if (cp != null) k *= Mathf.Clamp(1f + 0.9f * (cp.L(u * 2f, v * 2f) - 1f), 0.5f, 1.6f); // real concrete grain and stains
             return new Color(k, k * 0.99f, k * 0.95f);
         }));
     }
@@ -200,8 +271,19 @@ public static class EnvTex
         const int N = 256, C = 48;
         var alb = new float[N * N]; var px = new Color32[N * N]; double sum = 0;
         var gl = new float[N * N]; var sx = new float[N * N]; var sz = new float[N * N];
+        var ap = LoadPhoto("asphalt"); // real racing asphalt: albedo, polish and slopes come from the photo's luminance
         for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
         {
+            if (ap != null)
+            {
+                int k0 = y * N + x; float u0 = (x + 0.5f) / N, v0 = (y + 0.5f) / N, e = 1f / N;
+                float l = ap.L(u0, v0);
+                alb[k0] = 0.4f * Mathf.Clamp(1f + 1.3f * (l - 1f), 0.15f, 2.2f);
+                gl[k0] = Mathf.Clamp01(0.3f + 1.0f * (l - 1f));
+                sx[k0] = Mathf.Clamp((ap.L(u0 + e, v0) - ap.L(u0 - e, v0)) * 0.9f, -1f, 1f);
+                sz[k0] = Mathf.Clamp((ap.L(u0, v0 + e) - ap.L(u0, v0 - e)) * 0.9f, -1f, 1f);
+                sum += alb[k0]; continue;
+            }
             float fx = (x + 0.5f) / N * C, fy = (y + 0.5f) / N * C; int ci = Mathf.FloorToInt(fx), cj = Mathf.FloorToInt(fy);
             float best = 9f, bdx = 0, bdy = 0; int bi = 0, bj = 0;
             for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++)
@@ -580,6 +662,7 @@ public static class EnvTex
         cr[i] = Mathf.Lerp(cr[i], c.r, a); cg[i] = Mathf.Lerp(cg[i], c.g, a); cb[i] = Mathf.Lerp(cb[i], c.b, a); ca[i] = Mathf.Max(ca[i], a);
     }
     static int ox, oy;
+    static Photo leafPh, barkPh;
     // a leaf cluster: a disc with a ragged rim and holes, lit from above (lighter top, darker underside)
     static void Leaves(float cx, float cy, float r, Color col, float holes = 0.12f)
     {
@@ -594,6 +677,7 @@ public static class EnvTex
             if (d > 0.45f && Hash(x, y, seed) < holes) continue;
             float lit = 0.72f + 0.42f * (dy / r * 0.5f + 0.5f) - 0.18f * d * d;
             lit *= 0.85f + 0.3f * Hash(x >> 1, y >> 1, seed + 3);
+            if (leafPh != null) lit *= Mathf.Clamp(1f + 0.6f * (leafPh.L((ox + x) / 128f, (oy + y) / 128f) - 1f), 0.55f, 1.5f); // real leaf structure
             Put(x, y, col * lit, 1f);
         }
     }
@@ -609,6 +693,7 @@ public static class EnvTex
                 float dx = xx - x; if (Mathf.Abs(dx) > w || Mathf.Abs(yy - y) > w) continue;
                 float lit = 0.75f + 0.45f * (dx / Mathf.Max(w, 0.5f) * 0.5f + 0.5f); // round: one side catches the light
                 float bark = 0.85f + 0.3f * Hash(xx, yy >> 1, 131);
+                if (barkPh != null) bark = Mathf.Clamp(1f + 0.9f * (barkPh.L((ox + xx) / 64f, (oy + yy) / 128f) - 1f), 0.5f, 1.6f); // real bark grooves
                 Put(xx, yy, col * lit * bark, 1f);
             }
         }
@@ -618,6 +703,7 @@ public static class EnvTex
     public static Texture2D Foliage()
     {
         if (foliage != null) return foliage;
+        leafPh = LoadPhoto("grass"); barkPh = LoadPhoto("bark");
         cr = new float[AN * AN]; cg = new float[AN * AN]; cb = new float[AN * AN]; ca = new float[AN * AN];
         rnd = new System.Random(5);
         Color bark = new Color(0.20f, 0.14f, 0.10f), barkGrey = new Color(0.30f, 0.27f, 0.24f), palmBark = new Color(0.36f, 0.30f, 0.22f);
