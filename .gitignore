@@ -113,3 +113,6 @@ Tools/**/bin/
 Tools/**/obj/
 Tools/**/golden.csv
 Tools/__pycache__/
+
+# keep the tool projects (Unity ignores *.csproj above)
+!Tools/**/*.csproj
