@@ -311,7 +311,8 @@ public static class Trackside
 
         // ---------------------------------------------------------------- pit straight: extent and side
         int pitSide = 0, pitA = 0, pitB = -1; // pit run from track index offset pitA to pitB (relative to 0), on pitSide
-        float laneW = 12f, garD = 15f, garH = 9f, bay = 8f;
+        bool monza = t.def != null && t.def.id == "monza";
+        float laneW = 12f, garD = 15f, garH = monza ? 10.5f : 9f, bay = 8f; // (Monza: the taller pit building with the hospitality floor)
         {
             float kS = street ? 1f / 300f : 1f / 800f;
             int fwd = 0, back = 0, lim = Mathf.RoundToInt(350f / ds);
@@ -421,6 +422,29 @@ public static class Trackside
                     Box(A, c + up * 1.35f, T, up, D, 1.8f, 0.08f, 0.9f, TracksideArt.RoofWhite, true);
                 }
                 AddFoot((ca + cb) * 0.5f + D * ((laneIn + backL) * 0.5f), T, bay * 0.5f + 0.5f, (backL - laneIn) * 0.5f + 0.5f);
+            }
+            // Monza: the podium cantilevered from the pit building's roof out over the pit lane, the pit wall and part of
+            // the track, just past the line: slab with an advertiser fascia and glass balustrade, the three steps, a light roof
+            if (monza && !low)
+            {
+                int ip = W(Mathf.RoundToInt(28f / ds));
+                if (InPit(ip, sg))
+                {
+                    SetChunk(ip);
+                    var p = t.pts[ip]; Vector3 T = Tan(p), D = Nrm(p) * sg, up = Vector3.up, c = P(p);
+                    float y = garH + 2.4f, latIn = hw - 3.5f, latOut = laneOut + 3f, hlP = 9f, hd = (latOut - latIn) * 0.5f;
+                    Vector3 mid = c + D * ((latIn + latOut) * 0.5f), front = c + D * latIn;
+                    Box(A, mid + up * y, T, up, D, hlP, 0.45f, hd, TracksideArt.BuildWhite, true);
+                    for (int s2 = -1; s2 <= 1; s2 += 2) Box(A, mid + T * (s2 * (hlP - 1.2f)) + up * (y - 0.9f), T, up, D, 0.3f, 0.45f, hd, TracksideArt.Steel, true);
+                    Panel(A, front - D * 0.02f, -D, hlP, y - 0.45f, y + 0.45f, TracksideArt.Ad(7));
+                    Panel(A, front + D * 0.15f, -D, hlP, y + 0.45f, y + 1.5f, TracksideArt.Sw(TracksideArt.GlassDark));
+                    float[] stepH = { 0.9f, 0.6f, 0.45f }, stepAt = { 0f, -1.9f, 1.9f };
+                    for (int q = 0; q < 3; q++)
+                        Box(A, front + D * 3.5f + T * stepAt[q] + up * (y + 0.45f + stepH[q] * 0.5f), T, up, D, 0.9f, stepH[q] * 0.5f, 0.8f, TracksideArt.PaintWhite);
+                    Box(A, mid + up * (y + 4.6f), T, up, D, hlP + 0.5f, 0.15f, hd + 0.5f, TracksideArt.RoofWhite, true);
+                    for (int s2 = -1; s2 <= 1; s2 += 2) for (int s3 = -1; s3 <= 1; s3 += 2)
+                        Box(A, mid + T * (s2 * hlP) + D * (s3 * hd) + up * (y + 2.5f), T, up, D, 0.1f, 2.05f, 0.1f, TracksideArt.Steel);
+                }
             }
             // paddock motorhomes behind the garages (High, parkland)
             if (high && !street)
@@ -911,6 +935,41 @@ public static class Trackside
                         Vector3 Da = Nrm(pa) * sg, Db = Nrm(pb) * sg;
                         SetChunk(i);
                         Decal(G, P(pa) + Da * l0, P(pa) + Da * l1, P(pb) + Db * l0, P(pb) + Db * l1, 0.055f, 0, 2.5f, TracksideArt.GrimeCol(TracksideArt.GrimeDirt));
+                    }
+                }
+        }
+
+        // ---------------------------------------------------------------- Monza: asphalt run-offs with a painted edge
+        // the real run-offs at the Rettifilo, the Roggia, Ascari and outside the Parabolica, between the astroturf and the
+        // barrier where the layout has grass (the gravel traps stay); in the atlas mesh, so no extra draw call. (Visual:
+        // the tyres still read the layout's surface there.)
+        if (monza && t.runL != null)
+        {
+            float[,] zones = { { 790, 1070, 0 }, { 2030, 2270, 0 }, { 3850, 4200, 0 }, { 5050, 5430, 1 } }; // m along the lap, side (0 both, 1 left)
+            int st = Mathf.Max(1, Mathf.RoundToInt(4f / ds));
+            for (int zn = 0; zn < zones.GetLength(0); zn++)
+                for (int sg = -1; sg <= 1; sg += 2)
+                {
+                    if (zones[zn, 2] != 0f && sg != (int)zones[zn, 2]) continue;
+                    var run = sg > 0 ? t.runL : t.runR;
+                    int i0 = Mathf.RoundToInt(zones[zn, 0] / ds), i1 = Mathf.RoundToInt(zones[zn, 1] / ds);
+                    bool have = false; Vector3 pIn = Vector3.zero, pOut = Vector3.zero, pD = Vector3.zero;
+                    for (int i = i0; i <= i1; i += st)
+                    {
+                        int k = W(i); var p = t.pts[k]; Vector3 D = Nrm(p) * sg, c = P(p), up = Vector3.up;
+                        float a = hw + (sg > 0 ? t.kerbL[k] : t.kerbR[k]) + 2f, o = Off(k, sg) - 1.2f;
+                        Vector3 qi = c + D * a, qo = c + D * o;
+                        bool ok = run[k] != SurfaceType.Gravel && o - a > 1.5f && !InPit(k, sg) && grid.MinDist(qo) >= o - 0.6f && !Waterfront.InWater(qo.x, qo.z);
+                        if (ok && have && Vector3.Dot(qo - pOut, Tan(p)) < 0.3f * st * ds) ok = false; // folds back inside a bend
+                        if (ok && have)
+                        {
+                            SetChunk(k);
+                            Vector3 y1 = up * 0.032f, y2 = up * 0.038f;
+                            Quad(A, pIn + y1, qi + y1, qo + y1, pOut + y1, up, TracksideArt.Sw(TracksideArt.PitAsphalt));
+                            Quad(A, pOut - pD * 0.35f + y2, qo - D * 0.35f + y2, qo - D * 0.05f + y2, pOut - pD * 0.05f + y2, up, TracksideArt.Sw(TracksideArt.LineWhite));
+                        }
+                        have = ok;
+                        if (ok) { pIn = qi; pOut = qo; pD = D; }
                     }
                 }
         }

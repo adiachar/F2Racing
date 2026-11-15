@@ -826,9 +826,9 @@ public static class RealWorld
     // ---------------------------------------------------------------- buildings
     // atlas cells (EnvTex.BuildingAtlas) and the size in metres one tile covers (bay width, floor height)
     const int CShutter = 0, CHouse = 1, CBrick = 2, COffice = 3, CIndustry = 4, CFlats = 5, CTower = 6, CShed = 7,
-              CTiles = 8, CFlatRoof = 9, CMetal = 10, CStone = 11, CConcrete = 12, CPlaster = 13;
+              CTiles = 8, CFlatRoof = 9, CMetal = 10, CStone = 11, CConcrete = 12, CPlaster = 13, CCrowd = 14;
     static readonly float[] CellW = { 3.1f, 3.0f, 3.0f, 3.0f, 6f, 3.4f, 3.0f, 3f, 2f, 8f, 4f, 4f, 5f, 4f, 4f, 4f };
-    static readonly float[] CellH = { 3.2f, 3.0f, 3.0f, 3.8f, 6f, 3.0f, 3.4f, 3f, 2f, 8f, 4f, 6f, 4f, 4f, 4f, 4f };
+    static readonly float[] CellH = { 3.2f, 3.0f, 3.0f, 3.8f, 6f, 3.0f, 3.4f, 3f, 2f, 8f, 4f, 6f, 4f, 4f, 3.6f, 4f };
     static Vector2 CellUv(int c) => new Vector2(c % 4, c / 4);
 
     static float[] px = new float[256], pz = new float[256];
@@ -839,7 +839,7 @@ public static class RealWorld
         for (int q = 0; q < selB.Count; q++)
         {
             float d = selBd[q];
-            Building(selB[q], d < 250f ? 0 : d < 700f ? 1 : 2);
+            Building(selB[q], d < 250f ? 0 : d < 700f ? 1 : 2, d);
         }
     }
 
@@ -893,7 +893,7 @@ public static class RealWorld
         return new Color(c.r * k, c.g * k, c.b * k, 1f);
     }
 
-    static void Building(int b, int lod)
+    static void Building(int b, int lod, float dist)
     {
         int n0 = D.bCnt[b], o = D.bOff[b];
         if (n0 > px.Length) { px = new float[n0]; pz = new float[n0]; }
@@ -916,11 +916,13 @@ public static class RealWorld
         float h0 = Hash(b, 1), h1 = Hash(b, 2), h2 = Hash(b, 3);
         int kind = D.bKind[b];
         float H = D.bH[b]; if (H <= 0.5f) H = EstimateHeight(kind, area, h0);
+        else H = Mathf.Max(H, MinHeight(kind, area)); // (the ML heights run low: a two-storey house reads as a shed)
         H = Mathf.Min(H, 400f);
         float minH = D.bMinH[b]; if (minH >= H - 1f) minH = 0f;
         float gmin = float.MaxValue, gmax = float.MinValue, cx = 0, cz = 0;
         for (int k = 0; k < n; k++) { float g = Ground(px[k], pz[k]); gmin = Mathf.Min(gmin, g); gmax = Mathf.Max(gmax, g); cx += px[k]; cz += pz[k]; }
         cx /= n; cz /= n;
+        if (kind == 4 && dist < 260f && lod < 2 && fill > 0.6f && hl >= 8f && hs >= 3.5f && Stand(b, ocx, ocz, ax, az, hl, hs, gmin, gmax)) return;
         float top = gmin + H;
         // roof shape: the data's, or a pitched roof on houses where the data has none (most houses in Europe)
         int roof = D.bRoof[b];
@@ -975,6 +977,81 @@ public static class RealWorld
             case 3: FlatRoof(mb, n, eave, roofC, CFlatRoof); Dome(mb, cen, A, Bv, hl * 0.97f, hs * 0.97f, eave, roofH, roofC); break;
             default: FlatRoof(mb, n, roof == 0 ? eave : top, roofC, roof == 0 ? (cell == CIndustry || cell == CShed ? CMetal : CFlatRoof) : CTiles); break;
         }
+    }
+
+    // lowest believable height of a mapped building of this kind and footprint (m)
+    static float MinHeight(int kind, float area)
+    {
+        switch (kind)
+        {
+            case 1: case 8: return area > 150f ? 6.2f : area > 60f ? 4.5f : 3f;
+            case 2: case 3: return area > 400f ? 7f : 4.5f;
+            case 4: return 8f;
+            case 5: case 6: return 7f;
+            case 7: return 2.4f;
+            default: return area > 300f ? 5.5f : 3f;
+        }
+    }
+
+    // direction from (x, z) to the nearest centreline point within lim (false if none)
+    static bool TrackDir(float x, float z, float lim, out Vector3 dir)
+    {
+        dir = Vector3.zero;
+        int r = Mathf.CeilToInt(lim / TBK), ci = Mathf.FloorToInt(x / TBK), cj = Mathf.FloorToInt(z / TBK);
+        float best = lim * lim; bool found = false;
+        for (int dj = -r; dj <= r; dj++) for (int di = -r; di <= r; di++)
+        {
+            if (!tbk.TryGetValue(Key(ci + di, cj + dj), out var l)) continue;
+            for (int q = 0; q < l.Count; q += 2)
+            {
+                var p = trk.pts[l[q]]; float dx = (float)p.x - x, dz = (float)p.y - z, d2 = dx * dx + dz * dz;
+                if (d2 < best) { best = d2; dir = new Vector3(dx, 0f, dz); found = true; }
+            }
+        }
+        if (found) dir.Normalize();
+        return found;
+    }
+
+    // a grandstand from the map whose long side faces the track: low front wall, raked seating with the crowd (atlas
+    // cell CCrowd, shared with the buildings: no extra draw call), end walls, back wall and a cantilever roof
+    static bool Stand(int b, float ocx, float ocz, float ax, float az, float hl, float hs, float gmin, float gmax)
+    {
+        if (!TrackDir(ocx, ocz, 300f, out var toT)) return false;
+        Vector3 A = new Vector3(ax, 0f, az), F = new Vector3(-az, 0f, ax);
+        float f = Vector3.Dot(F, toT); if (Mathf.Abs(f) < 0.55f) return false; // the track is off an end
+        if (f < 0) F = -F;
+        Vector3 up = Vector3.up, cen = new Vector3(ocx, 0f, ocz);
+        float depth = 2f * hs, frontY = gmin + 2.6f, rise = Mathf.Min(depth * 0.52f, 22f), topY = frontY + rise, roofY = topY + 3.4f;
+        float foot = gmin - 0.7f - (gmax - gmin);
+        Vector3 FL = cen + F * hs - A * hl, FR = cen + F * hs + A * hl, BL = cen - F * hs - A * hl, BR = cen - F * hs + A * hl;
+        var mb = Buf(SBuild, Block(ocx, ocz), 96);
+        Color conc = C(0.80f, 0.80f, 0.78f), dark = C(0.62f, 0.62f, 0.61f), white = Color.white;
+        float k = 0.95f + 0.1f * Hash(b, 77); conc *= k; conc.a = 1f; dark.a = 1f;
+        var cc = CellUv(CConcrete); var pl = CellUv(CPlaster); float bw = CellW[CConcrete], fh = CellH[CConcrete];
+        float bays = Mathf.Max(1f, Mathf.Round(2f * hl / bw));
+        // front wall up to the first row, back wall (outside and the part above the top row)
+        Wall(mb, FL.x, FL.z, FR.x, FR.z, foot, frontY, F, bays, gmin, fh, cc, dark, conc);
+        Wall(mb, BR.x, BR.z, BL.x, BL.z, foot, roofY + 0.3f, -F, bays, gmin, fh, cc, dark, conc);
+        Wall(mb, BL.x, BL.z, BR.x, BR.z, topY, roofY, F, bays, gmin, fh, cc, conc, conc);
+        // raked seating: one tile = 4 rows (3.6 m of slope) x 4 m
+        float slope = Mathf.Sqrt(depth * depth + rise * rise) / CellH[CCrowd], across = 2f * hl / CellW[CCrowd];
+        Quad(mb, FL + up * frontY, FR + up * frontY, BR + up * topY, BL + up * topY, (F * rise / depth + up).normalized,
+             new Vector2(0, 0), new Vector2(across, 0), new Vector2(across, slope), new Vector2(0, slope), CellUv(CCrowd), white, white, white, white);
+        // end walls: up to the front row at the front, to the roof at the back
+        for (int e = -1; e <= 1; e += 2)
+        {
+            Vector3 fe = e < 0 ? FL : FR, be = e < 0 ? BL : BR;
+            Quad(mb, fe + up * foot, be + up * foot, be + up * (roofY + 0.3f), fe + up * frontY, A * e, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, dark, dark, conc, conc);
+        }
+        // cantilever roof over the back three quarters, rising a little towards the track, with a fascia
+        Vector3 rf = F * (hs - depth * 0.78f), lift = up * 0.8f, ov = A * 0.5f;
+        Vector3 r0 = BL - ov + up * (roofY + 0.3f), r1 = BR + ov + up * (roofY + 0.3f), r2 = cen + rf + A * hl + ov + up * (roofY + 0.3f) + lift, r3 = cen + rf - A * hl - ov + up * (roofY + 0.3f) + lift;
+        Color roofC = C(0.86f, 0.87f, 0.88f); roofC.a = 1f; Color under = C(0.5f, 0.5f, 0.5f); under.a = 1f;
+        float ru = 2f * hl / CellW[CMetal], rv = depth * 0.78f / CellW[CMetal];
+        Quad(mb, r0, r1, r2, r3, up, new Vector2(0, 0), new Vector2(ru, 0), new Vector2(ru, rv), new Vector2(0, rv), CellUv(CMetal), roofC, roofC, roofC, roofC);
+        Quad(mb, r0 - up * 0.35f, r1 - up * 0.35f, r2 - up * 0.35f, r3 - up * 0.35f, -up, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, under, under, under, under);
+        Quad(mb, r3 - up * 0.6f, r2 - up * 0.6f, r2, r3, F, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, roofC, roofC, roofC, roofC);
+        return true;
     }
 
     // one wall quad from height y0 to y1 along an edge; uv in tiles (bays across, floors up from the ground gmin)
@@ -1102,7 +1179,7 @@ public static class RealWorld
                 int k = j * gnx + i;
                 switch (kind)
                 {
-                    case 1: { float cn = gCan[k]; p = cn < 0.55f ? (d < 200f ? 1.6f : 1.0f) : 0f; src = 1; break; }
+                    case 1: { float cn = gCan[k]; p = cn < 0.55f ? (d < 200f ? 1.6f * (d < 150f ? Mathf.Max(1f, env.treeMul) : 1f) : 1.0f) : 0f; src = 1; break; }
                     case 8: p = 0.45f; break;
                     case 3: p = 0.16f; break;
                     case 0: p = 0.05f; break;
@@ -1140,11 +1217,16 @@ public static class RealWorld
             else tk = env.tree == TreeKind.Scrub && r < 0.5f ? TreeKind.Scrub : TreeKind.Broadleaf;
             if (tk == TreeKind.None) tk = TreeKind.Broadleaf;
             float bh = BaseH(tk), sz;
-            if (t.h > 0f) sz = t.h / bh;
+            if (t.h > 0f)
+            {
+                sz = t.h / bh;
+                // the data's default height (no tag: 10 m, Monaco 8 m): as big as the circuit's trees are (Monza: 20-30 m park trees)
+                if (Mathf.Abs(t.h - 10f) < 0.05f || Mathf.Abs(t.h - 8f) < 0.05f) sz = Mathf.Max(sz, (0.75f + 0.5f * (float)rnd.NextDouble()) * env.treeSize);
+            }
             else if (t.src == 1 && tk != TreeKind.Scrub) sz = ch / bh * (0.9f + 0.35f * (float)rnd.NextDouble());
             else sz = (0.7f + 0.8f * (float)rnd.NextDouble()) * env.treeSize;
             sz = Mathf.Clamp(sz, 0.4f, 2.6f);
-            if (tk != TreeKind.Scrub && d < near + 14f) sz = Mathf.Min(sz, 1.25f * Mathf.Max(1f, env.treeSize * 0.75f)); // no giant right at the fence
+            if (tk != TreeKind.Scrub && d < near + 14f) sz = Mathf.Min(sz, 1.25f * Mathf.Max(1f, env.treeSize * 0.95f)); // no giant right at the fence
             float y = Mathf.Min(Ground(x, z), MeshY(x, z)) - 0.35f;
             Card(Buf(STree, Block(x, z), 12), new Vector3(x, y, z), tk, sz, (float)rnd.NextDouble() * 6.28f, (float)rnd.NextDouble() * 6.28f, t.src == 1, rnd, cards);
             TreeCount++;
@@ -1163,7 +1245,7 @@ public static class RealWorld
             case TreeKind.Pine: w = 9.5f * sz; h = 9.6f * sz; sway = 0.6f; break;
             case TreeKind.Palm: w = 8.4f * sz; h = 9.4f * sz; sway = 1.2f; break;
             case TreeKind.Scrub: w = 3.8f * sz; h = 2.2f * sz; vFrom = 0.42f; sway = 0.25f; foot += Vector3.down * 0.2f; break;
-            default: w = 8.6f * sz; h = 10f * sz; sway = 0.8f; break;
+            default: w = 8.6f * (sz > 1.2f ? 1.2f + (sz - 1.2f) * 0.6f : sz); h = 10f * sz; sway = 0.8f; break; // (tall park trees: crowns grow up more than out)
         }
         var card = kind == TreeKind.Spruce ? EnvTex.Card.Spruce : kind == TreeKind.Pine ? EnvTex.Card.Pine : kind == TreeKind.Palm ? EnvTex.Card.Palm : EnvTex.Card.Broadleaf;
         var rc = EnvTex.CardRect(card); var painted = EnvTex.CardLeaf[(int)card];

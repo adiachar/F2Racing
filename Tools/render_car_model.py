@@ -181,11 +181,15 @@ def mats(new):
             4:(L(.085,.085,.09),.22,.38,0,.45),6:(L(.2,.21,.23),.3,.75,.85,.7),8:(lin([1,.15,.12]),.5,.8,0,0),
             9:(lin([.85,.08,.08]),.25,.5,0,0),10:(lin([1,.82,.18]),1,.93,.1,0),11:(L(.2,.21,.23),.3,.75,.85,.5)}
 
-def fit_tyre(P,F,front):
+def fit_tyre(P,F,front,N=None):
     u=np.unique(F); r=np.hypot(P[u,1],P[u,2]); R=r.max(); rb=r.min(); Rt=(0.705 if front else 0.710)*0.5/ROOT
-    if R>=Rt or rb>=R-0.02: return P
-    rr=np.hypot(P[:,1],P[:,2]); s=np.where((rr>=rb)&(rr>1e-5),(rb+(rr-rb)*(Rt-rb)/(R-rb))/np.maximum(rr,1e-5),1.0)
-    P=P.copy(); P[:,1]*=s; P[:,2]*=s; return P
+    if R>=Rt or rb>=R-0.02: return P if N is None else (P,N)
+    k=(Rt-rb)/(R-rb); rr=np.hypot(P[:,1],P[:,2]); on=(rr>=rb)&(rr>1e-5); s=np.where(on,(rb+(rr-rb)*k)/np.maximum(rr,1e-5),1.0)
+    if N is not None:   # CarModel.FitTyre: normals by the inverse transpose of the stretch
+        N=N.copy(); cy=P[:,1]/np.maximum(rr,1e-5); cz=P[:,2]/np.maximum(rr,1e-5); nr=N[:,1]*cy+N[:,2]*cz
+        ty=(N[:,1]-nr*cy)/s; tz=(N[:,2]-nr*cz)/s; nr=nr/k
+        M=np.stack([N[:,0],nr*cy+ty,nr*cz+tz],1); M/=np.linalg.norm(M,axis=1)[:,None]+1e-12; N=np.where(on[:,None],M,N)
+    P=P.copy(); P[:,1]*=s; P[:,2]*=s; return P if N is None else (P,N)
 def lower_body(P,N):
     D,Y0,Y1=0.045,0.30,0.52; P=P.copy(); N=N.copy()
     fy=np.clip((Y1-P[:,1])/(Y1-Y0),0,1); xs=np.clip((np.abs(P[:,0])-0.20)/0.36,0,1); keep=np.zeros(len(P))
@@ -209,7 +213,7 @@ def shade_parts(path,new):
             front=nm[6]=='F'
             if new: piv[1]=(0.705 if front else 0.710)*0.5/ROOT-0.004
             if nm.endswith('_tyre'):
-                if new: P=fit_tyre(P,F,front)
+                if new: P,N=fit_tyre(P,F,front,N)
                 pid=4
             else: pid=6
         elif nm.startswith('steer_'): P=P@rotx(float(nm[6:])).T; N=N@rotx(float(nm[6:])).T; pid=11; front=False
@@ -219,7 +223,7 @@ def shade_parts(path,new):
         used=np.unique(F)
         if len(used)*2<=len(P):
             mp=-np.ones(len(P),int); mp[used]=np.arange(len(used)); P,N,C,F=P[used],N[used],C[used],mp[F]
-        if mid in (1,2,3,6) or nm.startswith('steer_'):
+        if mid in (1,2,3,6) or nm.startswith('steer_') or (new and mid==4):   # new: tyres twinned too (CarModel.TwoSided)
             C2=C.copy(); C2[:,0]=C[:,2]
             P=np.concatenate([P,P]); N=np.concatenate([N,-N]); F=np.concatenate([F,F[:,::-1]+len(P)//2]); C=np.concatenate([C,C2])
         res.append((P+piv,N,F,C,pid,front))
@@ -308,7 +312,9 @@ def render_shaded(parts,view,new,W=960,H=540):
     # per-part details: wing undersides carbon, tyre tread sheen, discs, helmet visor (approx)
     under=(pid==1)*smooth(0.25,0.6,-Nn[:,1]); cb=np.array([.022,.024,.028]) if new else np.array([.06,.065,.075])
     base=base*(1-under[:,None])+cb*under[:,None]; coatK=coatK+(( .35 if new else .6)-coatK)*under
-    tread=(pid==4)*(1-smooth(0.35,0.8,np.abs(Nn[:,0]))); coatK=coatK*np.where(pid==4,1+0.7*tread,1)
+    tread=(pid==4)*(1-smooth(0.35,0.8,np.abs(Nn[:,0]))); coatK=coatK*np.where(pid==4,1+(0.15 if new else 0.7)*tread,1)
+    if new:   # mirror glass: the metal faces at |x| > 0.45 (CarPaint _Mirror)
+        mir=(pid==3)&(np.abs(Pp[:,0])>0.45); base[mir]=(0.05,0.052,0.056); metal[mir]=0; coatK[mir]=0.6; gloss[mir]=0.92
     disc=(pid==6)*np.clip(gm,0,1); base=base*(1-disc[:,None])+(np.array([.06,.06,.065]) if new else np.array([.1,.1,.105]))*disc[:,None]
     L=SUN_L; nl=Nn@L; ndl=np.clip(nl,0,1)
     R=2*(Nn*V).sum(1)[:,None]*Nn-V
@@ -328,9 +334,11 @@ def render_shaded(parts,view,new,W=960,H=540):
         sp=16+(512-16)*gloss; sm=0.5+5.5*gloss
     env=env*(0.3+0.7*ao)[:,None]
     coat=np.clip(fz*coatK,0,1)
+    if new: coat=np.where((pid==3)&(np.abs(Pp[:,0])>0.45),np.maximum(coat,0.22),coat)
     H_=L[None,:]+V; H_/=np.linalg.norm(H_,axis=1)[:,None]; nh=np.clip((Nn*H_).sum(1),0,1)
     spec=nh**sp*ndl*sm+nh**2048*ndl*14*np.clip((gloss-0.8)*6,0,1); spec*=ao
-    if new: spec*=np.where(pid==4,2.0,1.0)
+    if not new: spec*=np.where(pid==4,2.0,1.0)   # (old: doubled rubber sheen; new: none, and mirror glass half)
+    else: spec*=np.where((pid==3)&(np.abs(Pp[:,0])>0.45),0.5,1.0)
     col=diff*(1-coat)[:,None]+env*(coat[:,None]+metal[:,None]*base)+spec[:,None]*SUN_C*(coatK+metal)[:,None]
     col=np.where((pid==8)[:,None],np.array([0.25,0.02,0.02])+col,col)
     img[msk]=col

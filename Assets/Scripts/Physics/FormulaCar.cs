@@ -97,6 +97,14 @@ namespace FormulaSim
         // engine inertia x rev jump x ratio / wheel radius x downshiftKick (N s), brakes the rear axle for ~0.06 s
         public double downshiftKick = 0.3;
         public double clutchEngage = 13;     // m/s (47 km/h) by which the launch clutch is fully engaged
+        // launch: the clutch slips (anti-stall) until the wheels reach clutchBite rpm at full pedal, so the engine is
+        // not dragged down into the turbo hole (~4200 rpm at 45 km/h: the acceleration fell from 1.3 to 0.45 g and
+        // then kicked back at 50 km/h). 0 = old behaviour (revs fall to idle by clutchEngage).
+        public double clutchBite = 4800;     // rpm (est.)
+        public double launchRpm = 9000;         // rpm the launch map holds at rest at full pedal (0 = idle + half the redline)
+        // s over which the MGU-K comes in at ersStartKmh after a standing start (eased in: at 50 km/h a tenth of its
+        // 350 kW is already as much force as the rear tyres can take, so a step was a 0.6 g kick)
+        public double ersStartRamp = 1.2;
         public double brakeForce = 46000;    // N total at full pedal (enough for ~5 g with downforce)
         public double brakeBias = 0.57;      // front share
         // carbon-carbon brakes (Brembo: working window about 350-1000 C): weak when cold, fading when far too hot
@@ -256,7 +264,7 @@ namespace FormulaSim
                 peakTorque = 360, torqueRpm = new double[] { 3000, 5000, 6500, 7500, 8000, 8500 }, torqueFrac = new[] { 0.55, 0.82, 0.97, 1.0, 0.97, 0.88 },
                 redline = 8500, idleRpm = 2500, gearTopSpeeds = new double[] { 115, 150, 182, 212, 248, 302 }, driveEff = 0.88,
                 ersPower = 0, shiftTime = 0.05, brakeForce = 17000, brakeBias = 0.58, maxLockDeg = 18, speedSens = 0.5,
-                fuelFlow = 75, sideCyA = 3.5, turboLag = 0, relaxLen = 0.30, // naturally aspirated
+                fuelFlow = 75, sideCyA = 3.5, turboLag = 0, relaxLen = 0.30, clutchBite = 0, // naturally aspirated (no turbo hole to bridge)
             };
             return new CarConfig();
         }
@@ -271,7 +279,7 @@ namespace FormulaSim
             redline = 8750, idleRpm = 3000, gearTopSpeeds = new double[] { 128, 168, 207, 245, 283, 320 }, driveEff = 0.80,
             ersPower = 0, shiftTime = 0.05, brakeForce = 22500, brakeBias = 0.60, maxLockDeg = 18,
             fuel = false, tyreSurface = false, kerbTransfer = false, bbw = false, brakeFullGrip = false, frontSlipHeat = false, // the JS prototype had none of these (golden test)
-            turboLag = 0, relaxLen = 0, downshiftKick = 0,
+            turboLag = 0, relaxLen = 0, downshiftKick = 0, clutchBite = 0,
         };
     }
 
@@ -369,6 +377,10 @@ namespace FormulaSim
         public double boost = double.NaN;   // 0..1 turbo boost now
         double relF = double.NaN, relR, kick; // relaxed slip angles (rad), downshift impulse left (N s)
         public bool standingStart;          // pulling away from rest: no MGU-K drive until ersStartKmh (FIA 2026)
+        public double ersStart = 1;         // 0..1 MGU-K drive let in after a standing start (ramps over cfg.ersStartRamp)
+        // held on the grid before the start (set by the game every step until the car may go): holding the brake at
+        // rest does not select reverse (it did after 0.6 s, so every car reversed off its slot before lights out)
+        public bool gridHold;
         public double deployMap = 1;        // -1..2 deploy map here (set by the game / AI from RacingLine.deploy; see CarConfig.ersMapSoc)
         public void NewLap() { ersHarvested = 0; fuelLastLap = fuelThisLap; fuelThisLap = 0; }
 
@@ -662,7 +674,8 @@ namespace FormulaSim
             if (c.bbw) bias = Math.Min(0.8, bias + c.bbwShift * Clamp(1 - Math.Abs(vx) * 3.6 / c.bbwShiftKmh, 0, 1));
 
             // ---------- reverse: hold brake when stopped ----------
-            if (!reverse)
+            if (gridHold) { reverse = false; stopTimer = 0; }
+            else if (!reverse)
             {
                 if (speed < 0.5 && brk > 0.1 && thr < 0.05) { stopTimer += dt; if (stopTimer > 0.6) { reverse = true; gear = 1; } }
                 else stopTimer = 0;
@@ -822,7 +835,7 @@ namespace FormulaSim
             double wheelRpm = Math.Abs(wR) * 60 / (2 * Math.PI);
             double rpmT = wheelRpm * ratio;
             double engage = Clamp(1 - Math.Abs(vx) / c.clutchEngage, 0, 1);
-            double launch = c.idleRpm + thr * 0.5 * c.redline * engage;
+            double launch = c.idleRpm + thr * (0.5 * c.redline * engage + Math.Max(0, c.clutchBite - c.idleRpm) * (1 - engage));
             if (gear == 1 && rpmT < launch) rpmT = launch;
             rpmT = Math.Max(rpmT, c.idleRpm);
             rpm += (Math.Min(rpmT, c.redline + 200) - rpm) * Math.Min(1, dt * 30);
@@ -868,8 +881,12 @@ namespace FormulaSim
                 if (double.IsNaN(ersEnergy)) ersEnergy = c.ersCapacity;
                 double room = Math.Min(c.ersCapacity - ersEnergy, c.ersHarvestLap - ersHarvested);
                 if (Math.Abs(vx) < 0.5) standingStart = true; else if (Math.Abs(vx) * 3.6 >= c.ersStartKmh) standingStart = false;
+                // the MGU-K comes in smoothly at 50 km/h instead of 350 kW in one step
+                ersStart = standingStart ? 0 : c.ersStartRamp > 0 ? Math.Min(1, ersStart + dt / c.ersStartRamp) : 1;
                 bool managed = c.ersManage && !standingStart && !reverse && shiftTimer <= 0 && thr > 0.05 && rpm < c.redline && vx > 5 && !dry;
                 double pK = managed ? ErsFull(c, vx, ersEnergy / c.ersCapacity, deployMap) : 0, vK = Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
+                double kStart = ersStart * ersStart;
+                if (pK > 0) pK *= kStart;
                 double pMax = managed ? pIce / thr : 0;     // ICE crank power available now (with the boost there is)
                 if (managed && thr >= 0.9 && pK < 0)
                 {
@@ -894,7 +911,7 @@ namespace FormulaSim
                 else if (managed && thr >= 0.9 && pK <= 0) { }
                 else if (!standingStart && !reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && ersEnergy > 0)
                 {
-                    fK = thr * c.driveEff * (managed ? pK : ErsPowerAt(c, vx)) / Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
+                    fK = thr * c.driveEff * (managed ? pK : ErsPowerAt(c, vx) * kStart) / Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
                     fdrive += fK;
                 }
                 else if (!reverse && vx > 5 && room > 0)
@@ -1110,12 +1127,24 @@ namespace FormulaSim
             }
             ax = Fx / m; ay = Fy / m;
 
+            double vx0 = vx;
             vx += (ax + r * vy) * dt;
             vy += (ay - r * vx) * dt;
             r += Mz / Iz * dt;
 
             if (dir != 0 && Math.Sign(vx) != dir && fdrive == 0) vx = 0;
-            if (brk > 0 && Math.Abs(vx) < 0.3 && Math.Abs(fdrive) < 1) vx *= 0.5;
+            if (brk > 0 && Math.Abs(vx0) < 0.3)
+            {
+                // brakes at (nearly) rest act as static friction: they hold the car against the slope (and the drive)
+                // as long as the discs and the tyres can, instead of a pull that only follows the wheels' motion (the
+                // car crept down a slope; the front brakes did nothing below 5 cm/s): Coulomb friction, up to what
+                // the discs and the tyres can take, against everything else (slope, drive, the rest of the motion)
+                double capF = Math.Min(Bd * bias * kBF, DF), capR = Math.Min(Bd * (1 - bias) * kBR, DRl);
+                double fFree = Fx - FxF * cd - FxRl + Math.Max(0, fdrive);  // all but the tyres' longitudinal forces
+                vx = Approach(vx0 + fFree / m * dt, 0, (capF + capR) / m * dt);
+                ax = (vx - vx0) / dt;
+                if (vx == 0) wR = 0;
+            }
             // rolling resistance keeps acting until the car stands still (below 5 cm/s `dir` is 0 and it did not, so an
             // unbraked car crept on at a few cm/s for ever, turning slowly with the wheels on lock)
             if (dir == 0 && Math.Abs(fdrive) < 1) vx = Approach(vx, 0, roll / m * dt);

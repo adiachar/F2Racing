@@ -430,6 +430,26 @@ public static class EnvTex
                 if (y % 32 < 2 || x % 64 < 1) k *= 0.8f;
                 return new Color(k, k * 0.99f, k * 0.96f);
             }
+            case 14:
+            {
+                // grandstand rows with a seated crowd: 4 rows x 16 people per tile (RealWorld's map grandstands), many red shirts
+                int row = y / 32, ry = y % 32, man = x / 8, mx = x % 8;
+                var c = new Color(0.56f, 0.56f, 0.55f) * (0.93f + 0.07f * Hash(x, y, s));
+                if (ry < 3) return c * 0.62f;  // riser in shadow
+                if (ry < 11) return c;         // tread
+                if (Hash(man, row, s + 5) < 0.08f) return ry < 19 && mx > 0 && mx < 7 ? new Color(0.18f, 0.30f, 0.58f) : c * 0.75f; // empty seat
+                float hc = Hash(man, row, s + 7);
+                Color shirt = hc < 0.42f ? new Color(0.78f, 0.10f, 0.08f) : hc < 0.6f ? new Color(0.92f, 0.92f, 0.90f) : hc < 0.68f ? new Color(0.95f, 0.80f, 0.15f)
+                            : hc < 0.8f ? new Color(0.16f, 0.24f, 0.46f) : hc < 0.9f ? new Color(0.13f, 0.13f, 0.14f) : new Color(0.46f, 0.52f, 0.56f);
+                int top = 23 + (int)(Hash(man, row, s + 9) * 3f);
+                if (ry < top) return mx >= 1 && mx <= 6 ? shirt * (mx == 1 || mx == 6 ? 0.8f : 1f) : c * 0.7f;
+                if (ry < top + 5 && mx >= 2 && mx <= 5)
+                {
+                    if (ry >= top + 3 && Hash(man, row, s + 11) < 0.5f) return Hash(man, row, s + 13) < 0.4f ? new Color(0.75f, 0.1f, 0.08f) : new Color(0.2f, 0.16f, 0.12f); // cap / hair
+                    return Hash(man, row, s + 15) < 0.8f ? new Color(0.86f, 0.67f, 0.54f) : new Color(0.55f, 0.38f, 0.27f);
+                }
+                return c * 0.7f;
+            }
             default: return Plaster(u, v, x, y, s);
         }
     }

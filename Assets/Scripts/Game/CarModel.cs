@@ -442,6 +442,7 @@ public class CarModel : MonoBehaviour
         // own copies (wear, dirt, brake glow and dust differ per axle): every wheel part is its own renderer anyway,
         // so this adds no draw calls.
         Kind(mats[2], "_CARBON"); Kind(mats[1], "_CARBON"); mats[1].SetFloat("_Under", 1); // wing undersides: bare carbon
+        if (mats[3].HasProperty("_Mirror")) mats[3].SetFloat("_Mirror", 1); // the metal part's faces at the mirrors: plain dark glass (no chrome, no render texture)
         var tyreF = Kind(mats[4], "_TYRE"); var tyreR = Kind(new Material(tyreF), "_TYRE");
         var hubF = Kind(mats[5], "_WHEEL"); var hubR = Kind(new Material(hubF), "_WHEEL");
         var steerMat = Paint(Lin(0.03f, 0.03f, 0.033f), 0.5f, 0.7f, 0.1f, 0.6f, 0.2f); // dark carbon rim (CarPaint MMat id 11)
@@ -477,7 +478,7 @@ public class CarModel : MonoBehaviour
                 for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
                 if (hasCol) { col = new Color32[nv]; for (int i = 0; i < nv; i++) { col[i] = new Color32(d[o], d[o + 1], d[o + 2], d[o + 3]); o += 4; } }
                 for (int i = 0; i < ni; i++) idx[i] = I();
-                if (name.EndsWith("_tyre")) FitTyre(pos, idx, name[6] == 'F');
+                if (name.EndsWith("_tyre")) FitTyre(pos, nrm, idx, name[6] == 'F');
                 if (cached != null) mesh = cached[p];
                 else
                 {
@@ -579,7 +580,8 @@ public class CarModel : MonoBehaviour
         IdLight = 8, IdStripe = 9, IdHelmet = 10, IdSteer = 11;
     static readonly Vector3 HelmetPos = new Vector3(0, 0.72f, 0.05f), HelmetScale = new Vector3(0.26f, 0.28f, 0.3f);
     static readonly string[] WheelKeys = { "FL", "FR", "RL", "RR" };
-    static readonly int LivAId = Shader.PropertyToID("_LivA"), LivBId = Shader.PropertyToID("_LivB"), LivCId = Shader.PropertyToID("_LivC"),
+    static readonly int LivAId = Shader.PropertyToID("_Color"), // livery primary: CarPaint _MERGED reads it as an instanced _Color
+        LivBId = Shader.PropertyToID("_LivB"), LivCId = Shader.PropertyToID("_LivC"),
         GlowFId = Shader.PropertyToID("_GlowF"), GlowRId = Shader.PropertyToID("_GlowR"), LightColId = Shader.PropertyToID("_LightCol"),
         StripeId = Shader.PropertyToID("_StripeCol"), AxleId = Shader.PropertyToID("_Axle"), TyreWDId = Shader.PropertyToID("_TyreWD");
     sealed class RivalSet
@@ -643,7 +645,7 @@ public class CarModel : MonoBehaviour
             for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
             if (hasCol) { col = new Color32[nv]; for (int i = 0; i < nv; i++) { col[i] = new Color32(d[o], d[o + 1], d[o + 2], d[o + 3]); o += 4; } }
             for (int i = 0; i < ni; i++) idx[i] = I();
-            if (name.EndsWith("_tyre")) FitTyre(pos, idx, name[6] == 'F');
+            if (name.EndsWith("_tyre")) FitTyre(pos, nrm, idx, name[6] == 'F');
             Compact(ref pos, ref nrm, ref col, idx);
             if (!name.StartsWith("wheel_") && !name.StartsWith("steer_")) LowerBody(pos, nrm);
             if (TwoSided(mid, name)) Twin(ref pos, ref nrm, ref col, ref idx);
@@ -684,6 +686,7 @@ public class CarModel : MonoBehaviour
         for (int w = 0; w < 4; w++) { set.spin[w] = spin[w].Build(res + "|spin" + w); set.steerOnly[w] = stat[w].Build(res + "|steer" + w); }
         var m = new Material(paintShader) { name = "RivalPaint " + res, enableInstancing = true };
         m.EnableKeyword("_MERGED");
+        m.SetColor("_Color", new Color(0.5f, 0.5f, 0.52f)); // (every car sets its own _Color; never the shader's default red)
         m.SetVector("_TyreRad", new Vector4(set.tyreR[0], set.tyreR[1], 0, 0)); m.SetFloat("_Far", set.far ? 1f : 0f);
         set.mat = m;
         return set;
@@ -813,7 +816,8 @@ public class CarModel : MonoBehaviour
     static readonly Vector2[] AxleZY = { new Vector2(1.724f, 0.32f), new Vector2(-1.411f, 0.32f) };
     static float TyreTarget(bool front) => (front ? 0.705f : 0.710f) * 0.5f / RootScale;
     static float WheelY(bool front) => TyreTarget(front) - TyreSquash;
-    static void FitTyre(Vector3[] pos, int[] idx, bool front)
+    // (the normals follow the stretch, so the shoulder keeps its soft roll instead of a lighting kink)
+    static void FitTyre(Vector3[] pos, Vector3[] nrm, int[] idx, bool front)
     {
         float R = 0f, rb = float.MaxValue;
         foreach (int i in idx) { float r = new Vector2(pos[i].y, pos[i].z).magnitude; R = Mathf.Max(R, r); rb = Mathf.Min(rb, r); }
@@ -823,7 +827,15 @@ public class CarModel : MonoBehaviour
         for (int i = 0; i < pos.Length; i++)
         {
             float r = new Vector2(pos[i].y, pos[i].z).magnitude; if (r < rb || r < 1e-5f) continue;
-            float s = (rb + (r - rb) * k) / r; pos[i].y *= s; pos[i].z *= s;
+            float s = (rb + (r - rb) * k) / r;
+            if (nrm != null && i < nrm.Length)
+            {
+                // inverse transpose of the stretch: radial part / k, round-the-wheel part / s, axle part unchanged
+                var n = nrm[i]; float cy = pos[i].y / r, cz = pos[i].z / r, nr = n.y * cy + n.z * cz;
+                float ty = (n.y - nr * cy) / s, tz = (n.z - nr * cz) / s; nr /= k;
+                nrm[i] = new Vector3(n.x, nr * cy + ty, nr * cz + tz).normalized;
+            }
+            pos[i].y *= s; pos[i].z *= s;
         }
     }
     static void LowerBody(Vector3[] pos, Vector3[] nrm)
@@ -847,7 +859,9 @@ public class CarModel : MonoBehaviour
         }
     }
 
-    static bool TwoSided(int mid, string name) => mid == 1 || mid == 2 || mid == 3 || mid == 6 || name.StartsWith("steer_");
+    // tyres (mid 4) too: the source tyre has folded, inward-wound slivers along both shoulders; drawn one-sided they
+    // are holes through which the sky showed as white patches on the tyre edge
+    static bool TwoSided(int mid, string name) => mid == 1 || mid == 2 || mid == 3 || mid == 4 || mid == 6 || name.StartsWith("steer_");
     // a twin of every triangle facing the other way (thin single-skin parts)
     static void Twin(ref Vector3[] pos, ref Vector3[] nrm, ref Color32[] col, ref int[] idx)
     {

@@ -114,15 +114,15 @@ public static class Environment
         {
             grass = C(0.27f, 0.42f, 0.17f), dry = C(0.37f, 0.44f, 0.20f), patch = 0.35f,
             rough = 1.2f, roughScale = 300,
-            tree = TreeKind.Broadleaf, tree2 = TreeKind.Broadleaf, tree2Share = 0.4f, treeMul = 1.25f, treeNear = 9, treeFar = 380, treeSize = 2.0f,
-            canopy = 19, canopyAt = 36, cover = 0.72f,
+            tree = TreeKind.Broadleaf, tree2 = TreeKind.Broadleaf, tree2Share = 0.4f, treeMul = 1.25f, treeNear = 9, treeFar = 380, treeSize = 2.2f,
+            canopy = 24, canopyAt = 36, cover = 0.72f,
             leaf = C(0.19f, 0.38f, 0.16f), leaf2 = C(0.27f, 0.42f, 0.15f),
             rings = new[]
             {
                 new EnvRing { dist = 430, depth = 60, hMin = 22, hVar = 12, jag = 0.5f, low = C(0.16f, 0.30f, 0.15f), top = C(0.22f, 0.37f, 0.18f) },
                 new EnvRing { dist = 900, depth = 300, hMin = 20, hVar = 30, jag = 0.6f, low = C(0.40f, 0.46f, 0.48f), top = C(0.55f, 0.59f, 0.63f), peakDir = 0, peakGain = 230, peakWidth = 70 },
             },
-            marks = new[] { new EnvMark { kind = MarkKind.Bridge, s = 3420, side = 1, off = 0 } }, // the old banked oval crosses over the track before Ascari
+            marks = new[] { new EnvMark { kind = MarkKind.Bridge, s = 3580, side = 1, off = 0 } }, // the old banked oval crosses over the Serraglio (where the map data has the bridge)
         },
         // Silverstone: a wartime airfield plateau. Open, windswept fields, hedgerow lines, hardly a tree; the winged pit building.
         ["silverstone"] = new EnvDef

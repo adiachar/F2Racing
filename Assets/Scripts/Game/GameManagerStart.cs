@@ -5,6 +5,8 @@
 //  * launch: at lights out launch control lets the clutch in over LaunchRamp s (drive = throttle x clutch); wheelspin
 //    is the physics' own, so too much throttle with TC off spins the rears
 //  * rivals react 0.18-0.35 s after lights out (better drivers quicker), then let their clutch in the same way
+//  * every car held on the grid has FormulaCar.gridHold set: the brakes hold it (static friction) and holding the
+//    brake at rest does not select reverse (it did after 0.6 s: all cars reversed off the grid before lights out)
 //  * jump start: the player's car more than 0.5 m from its slot before lights out = 5 s added to the race time
 //    (the same time penalty a pit stop adds: pitLoss)
 using FormulaSim;
@@ -69,6 +71,7 @@ public partial class GameManager
     // the input the physics gets this step: held on the brakes before lights out, the launch clutch just after
     CarInput StartInput(CarInput input)
     {
+        car.gridHold = GridStart && raceTime < Countdown; // on the brakes without selecting reverse (FormulaCar.gridHold)
         if (!GridStart) return input;
         if (raceTime < Countdown) { gridThr = input.throttle; return new CarInput(input.steer, 0, 1); }
         double c = Clutch(raceTime - Countdown);
@@ -103,9 +106,14 @@ public partial class GameManager
     // rival i's input this step: held until lights out plus his reaction time, then his launch clutch
     CarInput RivalStartInput(int i, AiDriver d)
     {
-        if (raceTime < Countdown) return new CarInput(0, 0, 1);
         double t = raceTime - Countdown - (i < rivalReact.Count ? rivalReact[i] : 0.25);
-        if (t < 0) return new CarInput(0, 0, 1);
+        d.car.gridHold = t < 0; // held on the brakes (no reverse) until lights out + reaction time
+        if (d.car.gridHold)
+        {
+            // the slope under the slot (StepRivals only updates it once the race runs), so the brakes hold against it
+            d.car.grade = WorldBuilder.Height != null ? WorldBuilder.Height.Grade(d.car.x, d.car.y, d.car.heading) : 0;
+            return new CarInput(0, 0, 1);
+        }
         var li = d.LastInput; double c = Clutch(t);
         return c >= 1 ? li : new CarInput(li.steer, li.throttle * c, li.brake);
     }

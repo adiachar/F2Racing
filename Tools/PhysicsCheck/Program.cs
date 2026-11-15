@@ -129,6 +129,127 @@ if (args.Length > 0 && args[0] == "standstill")
     return;
 }
 
+// ---- race start check: dotnet run -- start [csv dir] ----
+// (1) Grid hold: every grid slot of every circuit (the game's StartGrid layout, slope from the HeightField), the car
+// held as GameManagerStart holds it (brake 1, throttle 0, ~8 s; rivals the same plus their reaction time) and with no
+// input at all. A car must not move: prints the worst roll (cm), whether reverse got selected, the slope.
+// (2) Launch: from rest (grid clutch ramp and a plain stop) and from a rolling stop, full and part throttle: speed
+// and the drive force over time, so a dead gap ("power drops, then kicks in") shows as a dip in the acceleration.
+if (args.Length > 0 && args[0] == "start")
+{
+    var inv = CultureInfo.InvariantCulture;
+    string csvDir = args.Length > 1 ? args[1] : null; if (csvDir != null) Directory.CreateDirectory(csvDir);
+    const double LaunchRamp = 0.35;
+    double Clutch(double t) => t <= 0 ? 0 : t >= LaunchRamp ? 1 : t / LaunchRamp;
+    // the game's slot pose (StartGrid.Pose; Offset = CircuitDef.gridOffset like Track.GridIndex)
+    (double x, double y, double h) SlotPose(Track t, int k, bool useDef)
+    {
+        double side = 1; int n = Math.Min(t.N, (int)(1500 / t.ds));
+        for (int i = 0; i < n; i++) { double c = t.pts[i].curv; if (Math.Abs(c) > 1.0 / 300) { side = c > 0 ? -1 : 1; break; } }
+        double off = useDef && t.def != null ? t.def.gridOffset : 0;   // the game: StartGrid.Offset = 0 for now
+        double s = t.length - off - k * 8 - 2.5, f = s / t.ds;
+        int i0 = (int)Math.Floor(f); double a = f - i0; i0 = ((i0 % t.N) + t.N) % t.N; int i1 = (i0 + 1) % t.N;
+        var p = t.pts[i0]; var q = t.pts[i1]; double lat = (k % 2 == 0 ? 1 : -1) * side * 2.5;
+        return (p.x + (q.x - p.x) * a + (p.nx + (q.nx - p.nx) * a) * lat, p.y + (q.y - p.y) * a + (p.ny + (q.ny - p.ny) * a) * lat, Math.Atan2(p.ty + (q.ty - p.ty) * a, p.tx + (q.tx - p.tx) * a));
+    }
+    // (1) grid hold
+    Console.WriteLine("Grid hold (8 s on the brakes as GameManagerStart holds the cars, then lights out):");
+    double worstHold = 0, worstFree = 0, worstSlope = 0; int reverses = 0;
+    var tracks = Circuits();
+    for (int ti = 0; ti < tracks.Length; ti++)
+    {
+        var t = tracks[ti]; var hf = t.h != null || t.bank != null ? new HeightField(t) : null;
+        double tHold = 0, tFree = 0, maxG = 0; int rev = 0; string worstSlot = "";
+        for (int k = 0; k < 44; k++)
+        {
+            var (x, y, hd) = SlotPose(t, k % 22, k >= 22);
+            double gr = hf != null ? hf.Grade(x, y, hd) : 0; maxG = Math.Max(maxG, Math.Abs(gr));
+            foreach (var held in new[] { true, false })
+            {
+                var car = new FormulaCar(new CarConfig { fuelStart = 70 }) { x = x, y = y, heading = hd };
+                bool sawRev = false; double maxV = 0;
+                for (int i = 0; i < (int)(8.0 / H); i++)
+                {
+                    car.grade = hf != null ? hf.Grade(car.x, car.y, car.heading) : 0;
+                    car.gridHold = held;
+                    car.Step(held ? new CarInput(0, 0, 1) : new CarInput(0, 0, 0), H);
+                    sawRev |= car.reverse; maxV = Math.Max(maxV, Math.Abs(car.vx));
+                }
+                double d = Math.Sqrt((car.x - x) * (car.x - x) + (car.y - y) * (car.y - y));
+                if (held) { if (d > tHold) worstSlot = $"slot {k % 22}{(k >= 22 ? " (gridOffset)" : "")} grade {gr * 100:+0.00;-0.00}%: {d * 100:F1} cm max {maxV:F2} m/s"; tHold = Math.Max(tHold, d); if (sawRev) rev++; }
+                else tFree = Math.Max(tFree, d);
+            }
+        }
+        worstHold = Math.Max(worstHold, tHold); worstFree = Math.Max(worstFree, tFree); worstSlope = Math.Max(worstSlope, maxG); reverses += rev;
+        Console.WriteLine($"  {FormulaSim.Circuits.All[ti].name,-14} grid slope up to {maxG * 100:F2}%: held on brakes worst {tHold * 100:F2} cm ({worstSlot}), reverse selected in {rev}/44 slots (game layout + CircuitDef.gridOffset layout); no input worst {tFree * 100:F1} cm");
+    }
+    // steep test: the brakes must hold on any slope the tyres can (static friction)
+    foreach (var gr in new[] { 0.05, 0.10, 0.20, -0.10 })
+    {
+        var car = new FormulaCar(new CarConfig()) { grade = gr };
+        for (int i = 0; i < (int)(6.0 / H); i++) { car.gridHold = true; car.Step(new CarInput(0, 0, 1), H); }
+        var car2 = new FormulaCar(new CarConfig()) { grade = gr };
+        for (int i = 0; i < (int)(6.0 / H); i++) car2.Step(new CarInput(0, 0, i * H < 0.5 ? 1 : 0), H);
+        Console.WriteLine($"  slope {gr * 100,4:F0}%: brake held 6 s -> moved {car.x * 100:F2} cm; brake 0.5 s then released -> {car2.x * 100:F0} cm");
+    }
+    Console.WriteLine($"GRID worst: held {worstHold * 100:F2} cm, reverse selected {reverses}x, steepest grid slope {worstSlope * 100:F2}%");
+
+    // (2) launch
+    Console.WriteLine("Launch (flat, race fuel 70 kg):");
+    void Launch(string name, TcMode tc, double thrSet, bool gridClutch, double startKmh, double brakeHold)
+    {
+        var car = new FormulaCar(new CarConfig { fuelStart = 70, tc = tc }) { vx = startKmh / 3.6 };
+        if (startKmh > 0) { car.gear = 2; car.standingStart = false; }
+        StreamWriter w = csvDir != null ? new StreamWriter(Path.Combine(csvDir, $"launch_{new string(name.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray())}.csv")) : null;
+        w?.WriteLine("t,kmh,wheel_kmh,kap,rpm,gear,boost,thr,fdrive,FxR,ax_g,ersKw,tc,reverse");
+        double t = 0, tGo = double.NaN, t100 = double.NaN, minAx = 99, peakAx = 0, axPrev = 0; int dips = 0; double worstDrop = 0, dropAt = 0;
+        var trace = new List<string>();
+        bool going = false; double axMaxSoFar = 0, minAxMid = 99, kick = 0; var axHist = new Queue<double>();
+        for (int i = 0; i < (int)(12.0 / H); i++, t += H)
+        {
+            // phase: brake to rest (rolling stop) or hold, then go
+            double thr = 0, brk = 0;
+            if (!going)
+            {
+                if (startKmh > 0 && car.vx > (brakeHold < 0 ? 5 / 3.6 : 0.4) && double.IsNaN(tGo)) brk = 1;
+                else { if (double.IsNaN(tGo)) tGo = t + Math.Max(0, brakeHold); brk = t < tGo ? 1 : 0; if (t >= tGo) going = true; }
+            }
+            if (going)
+            {
+                double tg = t - tGo;
+                thr = gridClutch ? thrSet * Clutch(tg) : thrSet;
+            }
+            car.Step(new CarInput(0, thr, brk), H);
+            if (!going) continue;
+            double tg2 = t - tGo, kmh = car.vx * 3.6, axg = car.ax / 9.81;
+            if (double.IsNaN(t100) && kmh >= 100) t100 = tg2;
+            // the acceleration should rise and then fall smoothly; a drop of more than 0.25 g below the best so far
+            // before 100 km/h, that later recovers, is a power hole
+            axHist.Enqueue(axg); if (axHist.Count > 24) axHist.Dequeue();   // 0.1 s window
+            if (tg2 > 0.5 && kmh < 100) { kick = Math.Max(kick, axg - axHist.Min()); minAxMid = Math.Min(minAxMid, axg); }
+            if (tg2 > 0.4 && kmh < 100) { axMaxSoFar = Math.Max(axMaxSoFar, axg); double drop = axMaxSoFar - axg; if (drop > worstDrop) { worstDrop = drop; dropAt = kmh; } }
+            if (i % 12 == 0) w?.WriteLine(string.Join(",", new[] { tg2, kmh, car.wR * car.cfg.wheelRadius * 3.6, car.slipRatioR, car.rpm, car.gear, car.boost, thr, car.Fdrive, car.FxR, axg, car.ersKw, car.tcActive ? 1 : 0, car.reverse ? 1 : 0 }.Select(v => v.ToString("G5", inv))));
+            if (Math.Abs(tg2 - Math.Round(tg2 / 0.25) * 0.25) < H / 2 && tg2 <= 3.01) trace.Add($"{kmh,3:F0}/{axg:F2}");
+            if (tg2 > 6) break;
+        }
+        w?.Dispose();
+        Console.WriteLine($"  {name,-34} 0-100 {t100,5:F2}s  min {minAxMid:F2} g, kick {kick:F2} g/0.1s | km/h/g every 0.25 s: {string.Join(" ", trace)}");
+    }
+    foreach (var tc in new[] { TcMode.Low, TcMode.High, TcMode.Off })
+    {
+        Launch($"grid clutch full TC {tc}", tc, 1.0, true, 0, 0.5);
+        Launch($"stop then full TC {tc}", tc, 1.0, false, 0, 1.0);
+    }
+    Launch("stop then 60% TC Low", TcMode.Low, 0.6, false, 0, 1.0);
+    Launch("stop then 30% TC Low", TcMode.Low, 0.3, false, 0, 1.0);
+    Launch("stop (0.2 s) then full TC Low", TcMode.Low, 1.0, false, 0, 0.2);
+    Launch("60 km/h, brake to rest, full", TcMode.Low, 1.0, false, 60, 0.3);
+    Launch("60 km/h, brake to rest 2 s, full", TcMode.Low, 1.0, false, 60, 2.0);
+    Launch("60 km/h, brake to rest, 50%", TcMode.Low, 0.5, false, 60, 0.3);
+    Launch("60 km/h, brake to 5 km/h, full", TcMode.Low, 1.0, false, 60, -1);
+    return;
+}
+
 // ---- AI trainer: dotnet run -- train ----
 // Evolution search (cross-entropy method) over the controller gains. Every candidate drives full laps in the
 // real physics; the score is the flying-lap time, and leaving the track disqualifies it.

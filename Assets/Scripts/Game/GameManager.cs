@@ -615,6 +615,7 @@ public partial class GameManager : MonoBehaviour
         audioEngine.wheelspin = car.throttle > 0.05 ? Mathf.Clamp01(((float)car.slipRatioR - 0.14f) / 0.4f) : 0;
         audioEngine.lockup = car.lockR ? 1 : car.brake > 0.05 ? Mathf.Clamp01((-(float)car.slipRatioR - 0.2f) / 0.4f) : 0; // rears; the fronts have their own squeal
         DriverFeel.FeedAudio(audioEngine, car, audioEngine.speed); // slip angles against the limit, front lock-up, plank scrape, slipstream
+        audioEngine.Feed(car, cam.transform, camMode == TvMode ? 2 : camMode == 2 || camMode == 3 ? 1 : 0, rivals, Paused); // tyre loads, shifts, boost, surfaces, view, rival cars (EngineAudio.cs)
         if (Paused) { audioEngine.throttle = 0; audioEngine.speed = 0; audioEngine.slide = 0; }
         if (flashT > 0) flashT -= dt;
     }
