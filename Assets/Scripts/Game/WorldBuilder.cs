@@ -642,7 +642,7 @@ public static class WorldBuilder
             LightBake.Apply(root.gameObject);
             sun.shadows = LightShadows.None; sun.cullingMask = ~(1 << LightBake.CarLayer);
             var carSunGo = new GameObject("CarSun"); carSunGo.transform.SetParent(root); carSunGo.transform.rotation = sunGo.transform.rotation;
-            var cs2 = carSunGo.AddComponent<Light>(); cs2.type = LightType.Directional; cs2.color = sun.color; cs2.intensity = sun.intensity;
+            var cs2 = carSunGo.AddComponent<Light>(); cs2.type = LightType.Directional; cs2.color = sun.color; cs2.intensity = sun.intensity * Sky.CarSunK; // (GameManager drives it from Sky.CarSunShare)
             cs2.shadows = LightShadows.None; cs2.cullingMask = 1 << LightBake.CarLayer;
             LightBake.CarSun = cs2;
         }

@@ -154,25 +154,29 @@ public class Sky : MonoBehaviour
     // LightBake's gain: sunlit white is neutral-warm (it was blue-tinted: the old sky fill was as strong as the sun and
     // bluer), shade is a clean blue-grey at ~0.36 of the sun side in linear (0.58 on screen; it was 0.69: flat).
     // The bake gets the sun colour in linear, like the real-time light the cars get, so world and cars match.
+    // The CARS have their own sun (LightBake.CarSun) and are the only things lit by the trilight ambient. Their sun is
+    // NOT the bake's: Unity's real-time light intensity is gamma-encoded (lightsUseLinearIntensity off), so it acts ~^2.2
+    // in linear and the world's 1.45 -> 1.78 (+22 % in the bake) was +57 % on the paint: blown sun side, dark shade side.
+    // carSun keeps the cars ~+15 % over their earlier tuned balance (same direction as the world, same depth).
     static void SunAt(Light sun, TimeOfDay.Kind t)
     {
-        float ambGain = 1.32f;
+        float ambGain = 1.32f, carSun = -1f;
         Color sky = new Color(0.37f, 0.45f, 0.58f); // the bake's sky light, linear (blue from above; LightBake scales it)
         switch (t)
         {
             case TimeOfDay.Kind.Morning: // low, cool-gold sun
-                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.85f;
+                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.85f; carSun = 1.50f;
                 sky = new Color(0.36f, 0.44f, 0.60f);
-                RenderSettings.ambientSkyColor = new Color(0.50f, 0.58f, 0.72f); RenderSettings.ambientEquatorColor = new Color(0.46f, 0.46f, 0.46f);
+                RenderSettings.ambientSkyColor = new Color(0.60f, 0.68f, 0.80f); RenderSettings.ambientEquatorColor = new Color(0.54f, 0.55f, 0.56f);
                 break;
             case TimeOfDay.Kind.Afternoon:
-                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.78f; ambGain = 0.80f;
-                RenderSettings.ambientSkyColor = new Color(0.52f, 0.60f, 0.74f); RenderSettings.ambientEquatorColor = new Color(0.46f, 0.46f, 0.46f);
+                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.78f; ambGain = 0.80f; carSun = 1.55f;
+                RenderSettings.ambientSkyColor = new Color(0.62f, 0.69f, 0.81f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.56f, 0.57f);
                 break;
             case TimeOfDay.Kind.Evening: // golden hour: a strong, low, warm sun lights every wall that faces it
-                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 2.0f; ambGain = 1.0f;
+                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 2.0f; ambGain = 1.0f; carSun = 1.72f;
                 sky = new Color(0.29f, 0.32f, 0.45f);
-                RenderSettings.ambientSkyColor = new Color(0.46f, 0.50f, 0.62f); RenderSettings.ambientEquatorColor = new Color(0.50f, 0.45f, 0.40f);
+                RenderSettings.ambientSkyColor = new Color(0.53f, 0.57f, 0.69f); RenderSettings.ambientEquatorColor = new Color(0.58f, 0.52f, 0.46f);
                 RenderSettings.ambientGroundColor *= new Color(1f, 0.85f, 0.7f);
                 break;
             case TimeOfDay.Kind.Night:   // the "sun" is the moon; the cars get the floodlights (Create)
@@ -183,8 +187,9 @@ public class Sky : MonoBehaviour
                 break;
         }
         // warm ground bounce under the blue sky (the cars' trilight ambient: sky above, bounce below)
-        if (t != TimeOfDay.Kind.Night && t != TimeOfDay.Kind.Evening) RenderSettings.ambientGroundColor *= new Color(0.85f, 0.72f, 0.55f);
-        todSun = t == TimeOfDay.Kind.Night ? 0.5f : sun.intensity / 1.25f; // GameManager: car sun = 1.25 x SunShare
+        if (t != TimeOfDay.Kind.Night && t != TimeOfDay.Kind.Evening) RenderSettings.ambientGroundColor *= new Color(0.92f, 0.85f, 0.75f);
+        todSun = t == TimeOfDay.Kind.Night ? 0.5f : sun.intensity / 1.25f; // GameManager: car sun = 1.25 x CarSunShare
+        CarSunK = carSun > 0f && sun.intensity > 0.01f ? carSun / sun.intensity : 1f;
         bool night = t == TimeOfDay.Kind.Night;
         // night keeps its tuned (non-linear) moon value: the floodlights do the work there
         LightBake.SetLight(night ? sun.color * sun.intensity : sun.color.linear * sun.intensity, sky, night, ambGain);
@@ -195,6 +200,9 @@ public class Sky : MonoBehaviour
     public static Sky Current;                                         // the live sky (null before the first build)
     // 0..1: how much of the sun reaches the ground through the cloud (the cars' sun light follows this)
     public static float SunShare => (1f - 0.55f * Weather.Wetness) * todSun;
+    // the cars' sun relative to the world's (SunAt: carSun); GameManager drives LightBake.CarSun with CarSunShare
+    public static float CarSunK { get; private set; } = 1f;
+    public static float CarSunShare => SunShare * CarSunK;
 
     // Re-applies the sky, fog, clouds, sun and glare for a new weather without rebuilding the world, and re-renders
     // the cars' sky reflection once (a one-off, like at the build).
