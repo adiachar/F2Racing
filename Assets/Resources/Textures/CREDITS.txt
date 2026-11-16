@@ -5,3 +5,11 @@ grass.bytes    512  Poly Haven "leafy_grass"         CC0  (also used as the leaf
 gravel.bytes   512  Poly Haven "gravel_floor_02"     CC0
 concrete.bytes 512  Poly Haven "concrete_floor_01"   CC0
 bark.bytes     256  Poly Haven "pine_bark"           CC0
+Building materials (EnvTex.BuildingAtlas: box-filtered into 128 px atlas tiles, so stored at 256 px):
+plaster.bytes    256  Poly Haven "plastered_wall"            CC0  (Amal Kumar)
+brick.bytes      256  Poly Haven "red_brick"                 CC0  (Rob Tuytel)
+rooftiles.bytes  256  Poly Haven "clay_roof_tiles_02"        CC0  (Amal Kumar)  Italian barrel tiles (coppi)
+panels.bytes     256  Poly Haven "concrete_slab_wall"        CC0  (Dimitrios Savva)
+cladding.bytes   256  Poly Haven "box_profile_metal_sheet"   CC0  (Amal Kumar)
+corrugated.bytes 256  Poly Haven "corrugated_iron_02"        CC0  (Sergej Majboroda, Jenelle van Heerden)
+shutter.bytes    256  Poly Haven "painted_metal_shutter"     CC0  (Charlotte Baglioni, Rico Cilliers, Dario Barresi)

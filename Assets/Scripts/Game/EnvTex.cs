@@ -1,5 +1,6 @@
 // EnvTex.cs — the scenery's surface textures, painted procedurally at load; where a CC0 photo is present in
-// Resources/Textures (asphalt, grass, gravel, concrete, bark; see CREDITS.txt) its real structure is used instead of / on top of the
+// Resources/Textures (asphalt, grass, gravel, concrete, bark; for buildings plaster, brick, rooftiles, panels, cladding,
+// corrugated, shutter; see CREDITS.txt) its real structure is used instead of / on top of the
 // procedural detail (LoadPhoto), tinted to the circuit's palette. Missing photo = procedural fallback.
 // All tile seamlessly and carry full mip chains; sizes are powers of two so they compress and filter cleanly.
 //   GroundDetail  256  grass (blades, clover, tips) or, for sandy / paved circuits, fine sand and grit; mean colour = the
@@ -367,159 +368,313 @@ public static class EnvTex
     }
 
     // ---------------------------------------------------------------- real-world buildings (RealWorld.cs)
-    // Atlas 512 x 512: 4 x 4 cells of 128 px, each one tile that repeats over a wall or roof (Baked.shader F2_ATLAS
-    // wraps inside the cell; uv2 = the cell). Walls are pale and neutral where the plaster is, so the building's colour
-    // rides in the vertex tint (BakeTint); brick and stone carry their own colour.
-    //   0 town house bay with shutters   1 plain house bay        2 brick house bay        3 office curtain wall
-    //   4 industrial cladding             5 block of flats bay     6 glass tower bay        7 shed / garage cladding
-    //   8 roof tiles                      9 flat roof membrane    10 standing-seam metal   11 stone with an arched window
-    //  12 precast concrete panels        13 plain plaster (parapets, gables)   14, 15 plaster
+    // Atlas 1024 x 512: 8 x 4 cells of 128 px, each one tile that repeats over a wall or roof (Baked.shader F2_ATLAS
+    // wraps inside the cell, 2 px margin). uv2.x = the cell index, uv2.y = an alternative cell + its share: the shader
+    // swaps single bays to it (closed shutters, a door among the shop windows), so a facade does not repeat one bay.
+    // Alpha = tint mask: 1 where the building's own colour applies (plaster, brick, cladding, roofing: tinted per
+    // building by uv3, a Lombardy palette in RealWorld), 0 where the pixel keeps its colour (glass, frames, shutters,
+    // stone surrounds, doors). The base materials are CC0 photos (Resources/Textures, see CREDITS.txt) box-filtered
+    // to the tile; missing photos fall back to flat colour. Wall tiles are one bay x one storey (3.0 x 3.2 m homes).
+    //   row 0 upper floors: 0 green shutters  1 brown shutters  2 roller blind (tapparella)  3 brick + shutters
+    //                       4 flats with balcony  5 office ribbon window  6 glass curtain wall  7 stone, arched window
+    //   row 1 ground floors: 8 barred window on a rusticated base  9 front door  10 shop front  11 roller garage door
+    //                       12 office lobby  13 industrial loading door  14 metal cladding, strip window  15 corrugated shed
+    //   row 2 materials:    16 clay barrel tiles (coppi)  17 gravel roof  18 corrugated metal roof  19 skylight
+    //                       20 precast concrete panels  21 plaster  22 grandstand crowd  23 rooftop unit (louvres, fan)
+    //   row 3:              24 brick  25 eave soffit (rafters, terracotta tavelle)  26 light stone trim
+    //                       27 concrete panel with a window  28 plaster  29, 30 shutters closed  31 blind down
+    public const int AtlasCols = 8, AtlasRows = 4;
     static Texture2D bAtlas;
+    static Color[] dPl, dBr, dTi, dPa, dCl, dCo, dSh, dGr; // photo detail per tile (128 x 128, linear, relative to the photo's mean)
+    static float mk; // tint mask of the pixel being painted
     public static Texture2D BuildingAtlas()
     {
         if (bAtlas != null) return bAtlas;
-        const int C = 128, N = 512; var px = new Color32[N * N];
-        for (int cell = 0; cell < 16; cell++)
+        const int C = 128, W = C * AtlasCols, H = C * AtlasRows; var px = new Color32[W * H];
+        dPl = Det("plaster", 1, 0.3f, 3f); dBr = Det("brick", 2, 1f, 1f); dTi = Det("rooftiles", 1, 0.55f, 0.75f);
+        dPa = Det("panels", 2, 0.3f, 1f); dCl = Det("cladding", 3, 0f, 2.5f); dCo = Det("corrugated", 1, 0.2f, 1.6f);
+        dSh = Det("shutter", 1, 0f, 1.3f); dGr = Det("gravel", 2, 0.2f, 0.6f);
+        for (int cell = 0; cell < AtlasCols * AtlasRows; cell++)
         {
-            int ox0 = (cell % 4) * C, oy0 = (cell / 4) * C;
+            int ox0 = (cell % AtlasCols) * C, oy0 = (cell / AtlasCols) * C;
             for (int y = 0; y < C; y++) for (int x = 0; x < C; x++)
             {
-                float u = (x + 0.5f) / C, v = (y + 0.5f) / C;
-                px[(oy0 + y) * N + ox0 + x] = Col(BCell(cell, u, v, x, y, ox0, oy0));
+                // the tile spans pixels 2 .. 126 (the shader's margin); the margin repeats the opposite edge
+                float u = ((x - 2 + 0.5f) / 124f + 1f) % 1f, v = ((y - 2 + 0.5f) / 124f + 1f) % 1f;
+                mk = 1f;
+                var c = BCell(cell, u, v, Mathf.Min(127, (int)(u * C)), Mathf.Min(127, (int)(v * C)));
+                px[(oy0 + y) * W + ox0 + x] = new Color32(B(c.r), B(c.g), B(c.b), B(mk));
             }
         }
-        var t = new Texture2D(N, N, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
+        dPl = dBr = dTi = dPa = dCl = dCo = dSh = dGr = null;
+        var t = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
         t.SetPixels32(px); t.Apply(true, true);
         return bAtlas = Count(t);
     }
+    // a photo box-filtered to 128 x 128 per tile with "rep" repeats, as colour relative to its mean (luminance ~1):
+    // chroma 0 = grey detail only, contrast scales the deviation from 1. Null if the photo is missing.
+    static Color[] Det(string name, int rep, float chroma, float contrast)
+    {
+        var p = LoadPhoto(name); if (p == null) return null;
+        const int N = 128; var d = new Color[N * N];
+        float step = (float)p.W * rep / N; int k = Mathf.Max(1, Mathf.RoundToInt(step));
+        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
+        {
+            float r = 0, g = 0, b = 0; int x0 = (int)(x * step), y0 = (int)(y * p.H * rep / (float)N);
+            for (int j = 0; j < k; j++) for (int i = 0; i < k; i++) { var c = p.Rel(x0 + i, y0 + j, chroma); r += c.r; g += c.g; b += c.b; }
+            float s = 1f / (k * k);
+            d[y * N + x] = new Color(1f + (r * s - 1f) * contrast, 1f + (g * s - 1f) * contrast, 1f + (b * s - 1f) * contrast);
+        }
+        photos.Remove(name); // (the atlas is kept; the decoded photo is not needed again)
+        return d;
+    }
     static Color32 Col(Color c) => new Color32(B(c.r), B(c.g), B(c.b), 255);
-    static Color Plaster(float u, float v, int x, int y, int s) { float p = 0.86f + 0.08f * Fbm(u, v, 8, 3, s) + 0.04f * Hash(x, y, s + 2); return new Color(p, p, p * 0.98f); }
+    static Color Dt(Color[] d, int x, int y) => d == null ? Color.white : d[(y & 127) * 128 + (x & 127)];
+    // linear albedo x photo detail -> sRGB colour
+    static Color Lin(Color[] d, int x, int y, Color lin)
+    {
+        var k = Dt(d, x, y);
+        return new Color(Mathf.Pow(Mathf.Clamp01(lin.r * k.r), 1f / 2.2f), Mathf.Pow(Mathf.Clamp01(lin.g * k.g), 1f / 2.2f), Mathf.Pow(Mathf.Clamp01(lin.b * k.b), 1f / 2.2f));
+    }
+    static readonly Color PlasterLin = new Color(0.80f, 0.79f, 0.77f), StoneS = new Color(0.88f, 0.86f, 0.80f), FrameW = new Color(0.92f, 0.92f, 0.90f);
+    static readonly Color ShutG = new Color(0.25f, 0.40f, 0.27f), ShutB = new Color(0.40f, 0.27f, 0.17f), BlindS = new Color(0.74f, 0.72f, 0.66f);
+    static Color Plaster(int x, int y) => Lin(dPl, x, y, PlasterLin);
+    static Color Stone(int x, int y) { mk = 0f; return Lin(dPa, x, y, new Color(0.72f, 0.69f, 0.60f)); }
     // glass reflecting the sky: darker low down, lighter at the top, a streak of reflection
     static Color Glass(float t, float u, float v)
     {
-        var c = Color.Lerp(new Color(0.20f, 0.27f, 0.34f), new Color(0.55f, 0.66f, 0.76f), t * t);
+        var c = Color.Lerp(new Color(0.16f, 0.21f, 0.27f), new Color(0.50f, 0.60f, 0.70f), t * t);
         if (u + v * 0.6f > 0.85f && u + v * 0.6f < 0.9f) c += new Color(0.1f, 0.1f, 0.1f);
         return c;
     }
-    // a framed window in [u0, u1] x [v0, v1], with a sill and a lintel shadow; false outside it
-    static bool Window(ref Color c, float u, float v, float u0, float u1, float v0, float v1)
+    // slatted panel (shutter leaf, roller blind): a slat every 3 px, a darker border
+    static Color Slats(Color col, int y, bool edge) => col * (edge ? 0.72f : y % 3 == 0 ? 0.68f : 1f);
+    // a window opening [u0, u1] x [v0, v1] with a stone surround "sur" wide (0: none), a sill with a rain stain under
+    // it, the reveal's shadow, a sash frame with a mullion and a transom, and a roller blind covering "blind" of the
+    // height from the top. False outside it (plaster: stain only).
+    static bool Window(ref Color c, float u, float v, int y, float u0, float u1, float v0, float v1, float sur, float blind, Color frame)
     {
-        if (u > u0 - 0.02f && u < u1 + 0.02f && v > v0 - 0.05f && v <= v0 - 0.01f) { c = new Color(0.95f, 0.95f, 0.93f); return true; } // sill
-        if (u > u0 - 0.02f && u < u1 + 0.02f && v > v0 - 0.09f && v <= v0 - 0.05f) { c *= 0.62f; return true; }                   // under the sill
-        if (u > u0 && u < u1 && v >= v1 && v < v1 + 0.05f) { c *= 0.72f; return true; }                                             // lintel shadow
+        float s0 = u0 - sur - 0.025f, s1 = u1 + sur + 0.025f;
+        if (u > s0 && u < s1 && v < v0 - 0.045f && v > v0 - 0.30f) c *= 1f - 0.09f * (v - v0 + 0.30f) / 0.255f; // rain stain
+        if (u > s0 && u < s1 && v >= v0 - 0.045f && v < v0 - 0.02f) { c *= 0.6f; return true; }              // under the sill
+        if (u > s0 && u < s1 && v >= v0 - 0.02f && v < v0 + 0.012f) { c = StoneS * 1.04f; mk = 0f; return true; } // sill
+        if (sur > 0 && u > u0 - sur && u < u1 + sur && v >= v0 && v < v1 + sur && (u < u0 || u > u1 || v > v1)) { c = StoneS; mk = 0f; return true; }
         if (u < u0 || u > u1 || v < v0 || v > v1) return false;
-        if (u < u0 + 0.035f || u > u1 - 0.035f || v < v0 + 0.035f || v > v1 - 0.035f) { c = new Color(0.93f, 0.93f, 0.91f); return true; } // frame
-        float t = (v - v0) / (v1 - v0);
-        c = Glass(t, u, v);
-        if (Mathf.Abs(u - (u0 + u1) * 0.5f) < 0.012f || Mathf.Abs(t - 0.6f) < 0.02f) c = new Color(0.9f, 0.9f, 0.88f); // glazing bars
+        mk = 0f;
+        float w = u1 - u0, h = v1 - v0, t = (v - v0) / h;
+        if (v > v1 - 0.03f || u < u0 + 0.018f) { c = new Color(0.10f, 0.10f, 0.11f); return true; }          // reveal in shadow
+        if (t > 1f - blind) { c = Slats(BlindS, y, false); return true; }
+        bool fr = u < u0 + 0.04f || u > u1 - 0.022f || v < v0 + 0.03f || Mathf.Abs(u - (u0 + w * 0.5f)) < 0.014f || Mathf.Abs(t - 0.74f) < 0.018f;
+        c = fr ? frame : Glass(t, u, v) * 0.85f;
         return true;
     }
-    static Color BCell(int cell, float u, float v, int x, int y, int ox0, int oy0)
+    static bool Shutters(ref Color c, float u, float v, int y, float u0, float u1, float v0, float v1, float sur, Color col, bool closed)
+    {
+        float lw = (u1 - u0) * 0.5f;
+        if (closed)
+        {
+            if (u < u0 || u > u1 || v < v0 || v > v1) return false;
+            mk = 0f; c = Slats(col, y, Mathf.Abs(u - u0 - lw) < 0.012f || u < u0 + 0.012f || u > u1 - 0.012f || v > v1 - 0.015f); return true;
+        }
+        float a0 = u0 - sur - lw, a1 = u0 - sur, b0 = u1 + sur, b1 = u1 + sur + lw;
+        if (v < v0 || v > v1 || !(u > a0 && u < a1 || u > b0 && u < b1)) return false;
+        mk = 0f; c = Slats(col, y, u < a0 + 0.012f || u > b1 - 0.012f || v > v1 - 0.015f); return true;
+    }
+    // a string course at floor level: a light band with its shadow under it
+    static void Course(ref Color c, float v) { if (v < 0.018f) c *= 0.78f; else if (v < 0.05f) c *= 1.08f; }
+    static Color BCell(int cell, float u, float v, int x, int y)
     {
         int s = 300 + cell * 13;
         switch (cell)
         {
-            case 0:
+            case 0: case 1: case 29: case 30: // shuttered bay (persiane), open or closed
             {
-                var c = Plaster(u, v, x, y, s);
-                if (v < 0.035f) c *= 0.86f; // string course
-                if ((u > 0.13f && u < 0.26f || u > 0.74f && u < 0.87f) && v > 0.25f && v < 0.83f)
-                    return new Color(0.5f, 0.5f, 0.48f) * ((y / 3) % 2 == 0 ? 0.85f : 1f); // shutters
-                Window(ref c, u, v, 0.27f, 0.73f, 0.24f, 0.84f);
+                var c = Plaster(x, y); Course(ref c, v);
+                Color sc = cell == 0 || cell == 29 ? ShutG : ShutB;
+                if (Shutters(ref c, u, v, y, 0.34f, 0.66f, 0.28f, 0.80f, 0.025f, sc, cell >= 29)) return c;
+                Window(ref c, u, v, y, 0.34f, 0.66f, 0.28f, 0.80f, 0.025f, 0f, FrameW);
                 return c;
             }
-            case 1:
+            case 2: case 31: // stone surround, roller blind part or all the way down
             {
-                var c = Plaster(u, v, x, y, s);
-                Window(ref c, u, v, 0.3f, 0.7f, 0.3f, 0.82f);
+                var c = Plaster(x, y); Course(ref c, v);
+                Window(ref c, u, v, y, 0.33f, 0.67f, 0.28f, 0.80f, 0.03f, cell == 2 ? 0.36f : 0.9f, FrameW);
                 return c;
             }
-            case 2:
+            case 3: // brick, stone sill and lintel, brown shutters (farmhouse)
             {
-                // stretcher bond: 16 courses, bricks 32 px long; light mortar
-                int row = y / 8; int bx = (x + (row % 2) * 16) / 32;
-                bool mortar = y % 8 == 0 || (x + (row % 2) * 16) % 32 == 0;
-                float h = Hash(bx, row, s), k = 0.85f + 0.3f * h;
-                var c = mortar ? new Color(0.72f, 0.70f, 0.66f) : new Color(0.56f * k, 0.30f * k, 0.22f * k) * (0.92f + 0.12f * Hash(x, y, s + 1));
-                Window(ref c, u, v, 0.3f, 0.7f, 0.3f, 0.8f);
+                var c = Lin(dBr, x, y, new Color(0.30f, 0.15f, 0.09f) * 1.25f);
+                if (u > 0.31f && u < 0.69f && v > 0.80f && v < 0.85f) { mk = 0f; return StoneS * 0.95f; }
+                if (Shutters(ref c, u, v, y, 0.34f, 0.66f, 0.28f, 0.80f, 0f, ShutB, false)) return c;
+                Window(ref c, u, v, y, 0.34f, 0.66f, 0.28f, 0.80f, 0f, 0f, FrameW);
                 return c;
             }
-            case 3:
+            case 4: // block of flats: balcony slab, railing, French window with a blind, the slab above in shadow
             {
-                // curtain wall: spandrel panel at the floor line, glass above, aluminium mullions and transom
-                if (x < 3 || x > 124 || (v > 0.25f && v < 0.28f)) return new Color(0.72f, 0.74f, 0.76f);
-                if (v <= 0.25f) return new Color(0.34f, 0.37f, 0.41f) * (0.95f + 0.1f * Fbm(u, v, 8, 2, s));
-                return Glass((v - 0.28f) / 0.72f, u, v) * 0.9f;
-            }
-            case 4:
-            {
-                // ribbed steel cladding, a high strip window, concrete plinth
-                if (v < 0.08f) return new Color(0.62f, 0.61f, 0.58f) * (0.9f + 0.15f * Hash(x, y, s));
-                if (v > 0.78f && v < 0.86f) return x % 32 < 2 ? new Color(0.7f, 0.7f, 0.7f) : Glass((v - 0.78f) / 0.08f, u, v) * 0.85f;
-                float rib = (x % 8) < 2 ? 1.08f : (x % 8) < 4 ? 0.9f : 1f;
-                float k = rib * (0.95f + 0.06f * Fbm(u, v, 4, 2, s)) * (v < 0.2f ? 0.93f : 1f);
-                return new Color(0.84f * k, 0.84f * k, 0.82f * k);
-            }
-            case 5:
-            {
-                var c = Plaster(u, v, x, y, s) * 0.97f;
-                if (v > 0.12f && v < 0.19f) return new Color(0.93f, 0.93f, 0.91f);       // balcony slab
-                if (v >= 0.06f && v <= 0.12f) return c * 0.6f;                           // its shadow
-                Window(ref c, u, v, 0.18f, 0.82f, 0.36f, 0.86f);
-                if (v >= 0.19f && v < 0.36f && (x % 6 < 1 || v > 0.33f)) c = new Color(0.45f, 0.46f, 0.47f); // railing
+                var c = Plaster(x, y);
+                if (v > 0.94f) return c * 0.62f;
+                if (v < 0.055f) { mk = 0f; return StoneS * (v < 0.015f ? 0.8f : 1f); }
+                bool rail = v < 0.36f && (v > 0.335f || x % 5 == 0);
+                if (rail) { mk = 0f; return new Color(0.22f, 0.23f, 0.24f); }
+                if (u > 0.2f && u < 0.8f && v < 0.84f)
+                {
+                    mk = 0f; float t = (v - 0.055f) / 0.785f;
+                    if (v > 0.81f) return new Color(0.1f, 0.1f, 0.11f);
+                    if (t > 0.62f) return Slats(BlindS, y, false);
+                    bool fr = u < 0.225f || u > 0.775f || Mathf.Abs(u - 0.5f) < 0.012f;
+                    var g = fr ? FrameW : Glass(t, u, v) * 0.8f;
+                    return v < 0.36f ? g * 0.75f : g; // behind the railing: in the balcony's shade
+                }
+                if (v < 0.36f) return c * 0.8f;
                 return c;
             }
-            case 6:
+            case 5: // office: ribbon window between precast spandrels
             {
-                if (v < 0.1f) return new Color(0.88f, 0.88f, 0.87f) * (v < 0.03f ? 0.8f : 1f); // floor slab
-                if (x % 32 < 2) return new Color(0.62f, 0.64f, 0.66f);                      // mullion
+                if (v < 0.30f || v > 0.94f) { var c = Lin(dPa, x, y, new Color(0.70f, 0.69f, 0.66f)); return v < 0.03f ? c * 0.8f : c; }
+                mk = 0f;
+                if (u < 0.02f || u > 0.98f || Mathf.Abs(u - 0.5f) < 0.012f || v < 0.32f || v > 0.925f) return new Color(0.55f, 0.57f, 0.60f);
+                var gl = Glass((v - 0.3f) / 0.64f, u, v) * 0.9f;
+                if (u < 0.5f && v > 0.76f) gl = Slats(new Color(0.78f, 0.78f, 0.76f), y, false); // venetian blind
+                return gl;
+            }
+            case 6: // glass curtain wall
+            {
+                mk = 0f;
+                if (v < 0.1f) return new Color(0.30f, 0.32f, 0.35f) * (v < 0.03f ? 0.8f : 1f);
+                if (x % 32 < 2) return new Color(0.62f, 0.64f, 0.66f);
                 return Glass((v - 0.1f) / 0.9f, u, v) * 0.95f;
             }
-            case 7:
+            case 7: // dressed stone, tall window with a round top
             {
-                float rib = (x % 6) < 2 ? 1.1f : 0.95f;
-                float k = rib * (0.9f + 0.1f * Fbm(u, v, 4, 2, s)) * (v < 0.1f ? 0.82f : 1f);
-                return new Color(0.80f * k, 0.80f * k, 0.78f * k);
-            }
-            case 8:
-            {
-                // clay tiles: 8 courses, each lit at the top and shaded where the next course overlaps
-                int row = y / 16; float f = (y % 16) / 16f; int tx = (x + (row % 2) * 8) / 16;
-                float k = (0.8f + 0.25f * f) * (0.88f + 0.2f * Hash(tx, row, s)) * (f < 0.12f ? 0.65f : 1f) * ((x + (row % 2) * 8) % 16 == 0 ? 0.8f : 1f);
-                return new Color(0.86f * k, 0.86f * k, 0.86f * k);
-            }
-            case 9:
-            {
-                float k = 0.78f + 0.1f * Fbm(u, v, 8, 3, s) + 0.06f * Hash(x, y, s);
-                if (x % 64 == 0 || y % 64 == 0) k *= 0.85f;
-                return new Color(k, k * 0.99f, k * 0.97f);
-            }
-            case 10:
-            {
-                float k = (x % 16 < 2 ? 1.1f : 0.95f) * (0.95f + 0.06f * Fbm(u, v, 4, 2, s));
-                return new Color(0.82f * k, 0.83f * k, 0.84f * k);
-            }
-            case 11:
-            {
-                int row = y / 16; int bx = (x + (row % 2) * 20) / 40;
-                bool joint = y % 16 == 0 || (x + (row % 2) * 20) % 40 == 0;
-                float k = (0.82f + 0.18f * Hash(bx, row, s)) * (0.92f + 0.1f * Fbm(u, v, 16, 2, s + 1));
-                var c = joint ? new Color(0.6f, 0.58f, 0.54f) : new Color(0.86f * k, 0.82f * k, 0.74f * k);
-                // tall window with a round top
-                float du = (u - 0.5f) / 0.13f, dv = (v - 0.62f) / 0.13f;
-                bool win = (Mathf.Abs(u - 0.5f) < 0.13f && v > 0.18f && v < 0.62f) || (v >= 0.62f && du * du + dv * dv < 1f);
-                if (win) c = Glass((v - 0.18f) / 0.57f, u, v) * 0.8f;
+                int row = y / 16; bool joint = y % 16 == 0 || (x + (row % 2) * 20) % 40 == 0;
+                var c = Plaster(x, y) * (0.94f + 0.08f * Hash((x + (row % 2) * 20) / 40, row, s));
+                if (joint) c *= 0.82f;
+                float du = (u - 0.5f) / 0.15f, dv = (v - 0.62f) / 0.15f;
+                bool arch = v >= 0.62f && du * du + dv * dv < 1f, win = Mathf.Abs(u - 0.5f) < 0.15f && v > 0.18f && v < 0.62f || arch;
+                bool sur = Mathf.Abs(u - 0.5f) < 0.18f && v > 0.16f && v < 0.62f || v >= 0.62f && du * du * 0.69f + dv * dv * 0.69f < 1f;
+                if (win) { mk = 0f; return Mathf.Abs(u - 0.5f) < 0.012f ? new Color(0.3f, 0.3f, 0.3f) : Glass((v - 0.18f) / 0.6f, u, v) * 0.75f; }
+                if (sur) { mk = 0f; return StoneS; }
                 return c;
             }
-            case 12:
+            case 8: // ground floor: rusticated plaster over a stone plinth, a barred window
             {
-                float k = 0.8f + 0.08f * Fbm(u, v, 8, 3, s) + 0.04f * Hash(x, y, s);
-                if (y % 32 < 2 || x % 64 < 1) k *= 0.8f;
-                return new Color(k, k * 0.99f, k * 0.96f);
+                if (v < 0.13f) { var p = Stone(x, y); return v > 0.115f ? p * 1.1f : p; }
+                var c = Plaster(x, y);
+                if ((y % 14) < 1) c *= 0.74f; // rustication grooves
+                if (Window(ref c, u, v, y, 0.35f, 0.65f, 0.32f, 0.76f, 0.03f, 0f, FrameW))
+                {
+                    if (u > 0.35f && u < 0.65f && v > 0.32f && v < 0.76f && (x % 7 == 0 || Mathf.Abs(v - 0.45f) < 0.008f || Mathf.Abs(v - 0.64f) < 0.008f)) c = new Color(0.12f, 0.12f, 0.12f);
+                    return c;
+                }
+                return c;
             }
-            case 14:
+            case 9: // ground floor: panelled wooden front door in a stone frame, a step
+            {
+                if (v < 0.13f && (u < 0.29f || u > 0.71f)) { var p = Stone(x, y); return v > 0.115f ? p * 1.1f : p; }
+                var c = Plaster(x, y);
+                if ((y % 14) < 1) c *= 0.74f;
+                if (u > 0.29f && u < 0.71f && v < 0.84f)
+                {
+                    mk = 0f;
+                    if (v < 0.04f) return StoneS * 0.9f;
+                    if (u < 0.32f || u > 0.68f || v > 0.81f) return StoneS;
+                    if (v > 0.70f) return v > 0.80f || Mathf.Abs(u - 0.5f) < 0.01f ? new Color(0.25f, 0.18f, 0.12f) : Glass((v - 0.7f) / 0.1f, u, v) * 0.7f; // fanlight
+                    var wood = new Color(0.36f, 0.24f, 0.15f) * (0.92f + 0.08f * Hash(x, y / 4, s));
+                    bool panel = (u > 0.35f && u < 0.47f || u > 0.53f && u < 0.65f) && (v > 0.08f && v < 0.36f || v > 0.42f && v < 0.66f);
+                    if (Mathf.Abs(u - 0.5f) < 0.008f) return wood * 0.5f;
+                    return panel ? wood * 0.82f : wood;
+                }
+                return c;
+            }
+            case 10: // ground floor: shop window, sign fascia, plaster above
+            {
+                if (v > 0.84f) return Plaster(x, y);
+                mk = 0f;
+                if (v < 0.035f) return Stone(x, y) * 0.8f;
+                if (v > 0.68f) // fascia with the shop's name
+                {
+                    var f = new Color(0.16f, 0.30f, 0.26f);
+                    if (v > 0.715f && v < 0.80f && u > 0.18f && u < 0.82f && Hash(x / 3, (int)(v * 40f), s) > 0.45f) return new Color(0.93f, 0.90f, 0.82f);
+                    return v < 0.695f || v > 0.825f ? f * 0.6f : f;
+                }
+                if (u < 0.05f || u > 0.95f) { mk = 1f; return Plaster(x, y) * 0.95f; }
+                if (u < 0.07f || u > 0.93f || v < 0.06f || v > 0.65f || Mathf.Abs(u - 0.66f) < 0.012f) return new Color(0.20f, 0.21f, 0.22f);
+                if (u > 0.66f && v < 0.12f) return new Color(0.20f, 0.21f, 0.22f);
+                float t = (v - 0.06f) / 0.59f;
+                var gl = Glass(t, u, v) * 0.8f;
+                if (t < 0.6f) // lit shop interior: shelves and goods
+                {
+                    float hk = Hash(x / 6, (int)(t * 7f), s);
+                    var goods = new Color(0.55f + 0.35f * hk, 0.48f + 0.3f * Hash(x / 6, (int)(t * 7f), s + 1), 0.38f + 0.25f * hk);
+                    gl = Color.Lerp(gl, goods, 0.45f * (1f - t));
+                }
+                return gl;
+            }
+            case 11: // roller garage door (also a shop with its shutter down)
+            {
+                var c = Plaster(x, y);
+                if ((y % 14) < 1) c *= 0.74f; // rustication grooves, as on the other ground-floor bays
+                if (v < 0.08f && (u < 0.1f || u > 0.9f)) return Stone(x, y);
+                if (u > 0.08f && u < 0.92f && v < 0.76f)
+                {
+                    mk = 0f;
+                    if (v > 0.72f || u < 0.1f || u > 0.9f) return StoneS * 0.92f;
+                    var sh = Lin(dSh, x, y, new Color(0.42f, 0.44f, 0.46f));
+                    return v > 0.68f ? sh * 0.7f : sh;
+                }
+                return c;
+            }
+            case 12: // office lobby: glazing between concrete piers, a door in the middle
+            {
+                if (u < 0.07f || u > 0.93f || v > 0.86f) return Lin(dPa, x, y, new Color(0.70f, 0.69f, 0.66f)) * (v > 0.86f && v < 0.88f ? 0.75f : 1f);
+                mk = 0f;
+                if (v < 0.02f || u < 0.09f || u > 0.91f || v > 0.84f || (v < 0.62f && Mathf.Abs(u - 0.5f) < 0.01f) || Mathf.Abs(u - 0.34f) < 0.008f || Mathf.Abs(u - 0.66f) < 0.008f || Mathf.Abs(v - 0.62f) < 0.01f)
+                    return new Color(0.22f, 0.23f, 0.25f);
+                return Glass(v / 0.84f, u, v) * 0.8f + new Color(0.06f, 0.05f, 0.03f) * (1f - v);
+            }
+            case 13: // industrial bay with a sectional loading door
+            {
+                if (v < 0.07f && (u < 0.14f || u > 0.86f)) { mk = 0f; return Lin(dPa, x, y, new Color(0.50f, 0.49f, 0.46f)); }
+                if (u > 0.13f && u < 0.87f && v < 0.74f)
+                {
+                    mk = 0f;
+                    if (u < 0.15f || u > 0.85f || v > 0.715f) return new Color(0.28f, 0.29f, 0.30f);
+                    if (v > 0.50f && v < 0.56f && (x % 16) > 3) return Glass(0.5f, u, v) * 0.8f;
+                    float f = (v * 11f) % 1f;
+                    return new Color(0.82f, 0.83f, 0.84f) * (f < 0.08f ? 0.7f : 1f - 0.08f * f);
+                }
+                return Lin(dCl, x, y, new Color(0.62f, 0.62f, 0.62f));
+            }
+            case 14: // ribbed metal cladding, a strip window high up, concrete plinth
+            {
+                if (v < 0.07f) { mk = 0f; return Lin(dPa, x, y, new Color(0.50f, 0.49f, 0.46f)) * (v > 0.06f ? 0.8f : 1f); }
+                if (v > 0.72f && v < 0.80f) { mk = 0f; return x % 16 < 2 || v < 0.73f || v > 0.79f ? new Color(0.62f, 0.63f, 0.64f) : Glass((v - 0.72f) / 0.08f, u, v) * 0.85f; }
+                var c = Lin(dCl, x, y, new Color(0.62f, 0.62f, 0.62f));
+                return v > 0.97f ? c * 0.85f : c;
+            }
+            case 15: // corrugated sheet shed
+            {
+                if (v < 0.06f) { mk = 0f; return Lin(dPa, x, y, new Color(0.48f, 0.47f, 0.44f)); }
+                return Lin(dCo, x, y, new Color(0.60f, 0.60f, 0.58f));
+            }
+            case 16: return Lin(dTi, x, y, new Color(0.62f, 0.62f, 0.62f));               // coppi: the roof colour rides in the tint
+            case 17:
+            {
+                var c = Lin(dGr, x, y, new Color(0.46f, 0.45f, 0.43f));
+                return x % 64 == 0 || y % 64 == 0 ? c * 0.86f : c;                           // gravel ballast, membrane seams
+            }
+            case 18: return Lin(dCo, x, y, new Color(0.66f, 0.66f, 0.66f));                 // corrugated roof sheets
+            case 19: // ribbed polycarbonate skylight in a frame
+            {
+                mk = 0f;
+                if (x < 6 || x > 121 || y < 4 || y > 123) return new Color(0.55f, 0.56f, 0.57f);
+                return new Color(0.78f, 0.83f, 0.86f) * (x % 10 < 2 ? 0.86f : 1f - 0.1f * Hash(x / 10, 0, s));
+            }
+            case 20: return Lin(dPa, x, y, new Color(0.62f, 0.61f, 0.58f));                 // precast concrete panels
+            case 22:
             {
                 // grandstand rows with a seated crowd: 4 rows x 16 people per tile (RealWorld's map grandstands), many red shirts
+                mk = 0f;
                 int row = y / 32, ry = y % 32, man = x / 8, mx = x % 8;
                 var c = new Color(0.56f, 0.56f, 0.55f) * (0.93f + 0.07f * Hash(x, y, s));
                 if (ry < 3) return c * 0.62f;  // riser in shadow
@@ -537,7 +692,33 @@ public static class EnvTex
                 }
                 return c * 0.7f;
             }
-            default: return Plaster(u, v, x, y, s);
+            case 23: // rooftop unit: louvred casing, a fan grille
+            {
+                mk = 0f;
+                var cs = new Color(0.80f, 0.80f, 0.78f);
+                if (x < 5 || x > 122 || y < 5 || y > 122) return cs * 0.85f;
+                float du = u - 0.5f, dv = v - 0.52f, r = Mathf.Sqrt(du * du + dv * dv);
+                if (r < 0.31f) return r < 0.05f ? cs * 0.6f : new Color(0.18f, 0.18f, 0.19f) * ((int)(r * 60f) % 2 == 0 ? 1.4f : 1f);
+                if (r < 0.33f) return cs * 0.7f;
+                return cs * (y % 6 < 2 ? 0.72f : 1f);
+            }
+            case 24: return Lin(dBr, x, y, new Color(0.30f, 0.15f, 0.09f) * 1.25f);           // brick
+            case 25: // eave soffit: wooden rafters with terracotta tavelle between them (4 per tile)
+            {
+                mk = 0f;
+                float f = (u * 4f) % 1f;
+                if (f < 0.16f) return new Color(0.34f, 0.23f, 0.15f) * (f < 0.03f || f > 0.13f ? 0.75f : 1f);
+                return new Color(0.74f, 0.52f, 0.40f) * (y % 21 < 1 ? 0.8f : 0.95f + 0.05f * Hash(x, y / 3, s));
+            }
+            case 26: { var c = Stone(x, y); return new Color(c.r * 1.12f, c.g * 1.12f, c.b * 1.12f); } // light stone trim
+            case 27: // concrete panel with a window and a blind (1970s offices)
+            {
+                var c = Lin(dPa, x, y, new Color(0.66f, 0.65f, 0.62f));
+                if (y % 64 < 1) c *= 0.8f;
+                Window(ref c, u, v, y, 0.2f, 0.8f, 0.30f, 0.84f, 0f, 0.28f, new Color(0.30f, 0.31f, 0.33f));
+                return c;
+            }
+            default: return Plaster(x, y);
         }
     }
 

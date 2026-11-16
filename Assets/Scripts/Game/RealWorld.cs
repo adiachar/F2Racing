@@ -14,7 +14,13 @@
 //  * water: lakes, rivers and sea as flat surfaces with the harbour's look, the ground carved below them.
 //  * roads, paths and railways: flat ribbons on the terrain (one atlas), kept level over water like a bridge.
 //  * buildings: extruded footprints with flat roofs and parapets, gabled, hipped, pyramidal or domed roofs; facades
-//    from a 4 x 4 tile atlas by building kind; colours per circuit (Monaco cream and ochre, Zandvoort brick ...).
+//    from an 8 x 4 tile atlas (EnvTex.BuildingAtlas: CC0 photo plaster, brick, coppi, cladding, panels) by building
+//    class: homes with shutters or roller blinds over a ground floor of barred windows, doors, shops or garages; flats,
+//    offices, metal-clad industrial sheds with skylights, garages. Storeys snap to whole floors (homes 3.2 m) so the
+//    window grid is regular; single bays vary (closed shutters, doors) in the shader. Colour per building from the
+//    circuit's palette (Monza: Lombardy plaster colours) in uv3, so glass, frames and shutters keep their own. Within
+//    NearTier of the track (400 m on High): split ground floor, projecting cornice, eave soffits with rafters,
+//    rooftop units; light corner trims everywhere (shader). Farther: one quad per wall, footprint rectangles.
 // Cost: one mesh per material per 1 km block (land, water, roads, buildings, trees), static batched; buildings,
 // roads and trees switched off by distance with LODGroups (no script per frame). Budgets per graphics level keep the
 // vertex count (and so the light bake) small; see Budget().
@@ -61,7 +67,7 @@ public static class RealWorld
         public Color[] brick = { C(1f, 1f, 1f), C(0.92f, 0.88f, 0.86f), C(1.04f, 0.96f, 0.92f), C(0.84f, 0.8f, 0.78f) };
         public Color[] tiles = { C(0.55f, 0.30f, 0.22f), C(0.48f, 0.27f, 0.20f), C(0.36f, 0.33f, 0.32f) };
         public Color flat = C(0.58f, 0.57f, 0.55f);
-        public int house = 1;          // facade cell of houses: 0 shutters, 1 plain plaster
+        public int house = 1;          // homes: 0 mostly shutters (persiane), 1 more roller blinds
         public float brickShare;       // share of houses in brick
         public float pitched = 0.55f;  // share of houses without roof data that get a pitched roof
     }
@@ -87,8 +93,11 @@ public static class RealWorld
                 s.walls = new[] { C(0.93f, 0.92f, 0.89f), C(0.80f, 0.78f, 0.74f), C(0.88f, 0.85f, 0.78f), C(0.72f, 0.70f, 0.67f) };
                 s.brickShare = 0.2f; s.pitched = 0.9f; s.tiles = new[] { C(0.25f, 0.26f, 0.29f), C(0.30f, 0.30f, 0.32f), C(0.22f, 0.22f, 0.24f) }; break;
             case "monza":
-                s.walls = new[] { C(0.93f, 0.84f, 0.66f), C(0.92f, 0.76f, 0.62f), C(0.95f, 0.91f, 0.82f), C(0.86f, 0.74f, 0.58f), C(0.90f, 0.88f, 0.84f) };
-                s.pitched = 0.55f; s.tiles = new[] { C(0.60f, 0.33f, 0.24f), C(0.54f, 0.30f, 0.22f), C(0.50f, 0.34f, 0.27f) }; break;
+                // Lombardy: cream, ochre, Milan yellow, salmon, faded brick red, white and grey plaster; terracotta coppi
+                s.walls = new[] { C(0.95f, 0.88f, 0.70f), C(0.93f, 0.74f, 0.44f), C(0.96f, 0.86f, 0.56f), C(0.90f, 0.63f, 0.49f), C(0.80f, 0.50f, 0.36f),
+                                  C(0.90f, 0.89f, 0.85f), C(0.88f, 0.80f, 0.66f), C(0.95f, 0.93f, 0.88f), C(0.92f, 0.80f, 0.60f) };
+                s.house = 0; s.brickShare = 0.08f; s.pitched = 0.6f;
+                s.tiles = new[] { C(0.80f, 0.37f, 0.21f), C(0.74f, 0.36f, 0.22f), C(0.68f, 0.40f, 0.28f), C(0.60f, 0.38f, 0.30f) }; break;
             case "suzuka":
                 s.walls = new[] { C(0.92f, 0.92f, 0.90f), C(0.86f, 0.85f, 0.82f), C(0.80f, 0.78f, 0.74f), C(0.88f, 0.84f, 0.76f) };
                 s.pitched = 0.75f; s.tiles = new[] { C(0.28f, 0.30f, 0.34f), C(0.34f, 0.36f, 0.40f), C(0.42f, 0.30f, 0.24f) }; break;
@@ -580,6 +589,7 @@ public static class RealWorld
         public readonly List<Vector3> v = new List<Vector3>(), n = new List<Vector3>();
         public readonly List<Vector2> uv = new List<Vector2>(), uv2 = new List<Vector2>();
         public readonly List<Color> col = new List<Color>();
+        public readonly List<Vector4> t4 = new List<Vector4>(); // uv3 of building vertices: colour + wall length (Baked.shader F2_ATLAS)
         public readonly List<int> tri = new List<int>();
     }
     const int SLand = 0, SWater = 1, SRoad = 2, SBuild = 3, STree = 4;
@@ -825,22 +835,37 @@ public static class RealWorld
 
     // ---------------------------------------------------------------- buildings
     // atlas cells (EnvTex.BuildingAtlas) and the size in metres one tile covers (bay width, floor height)
-    const int CShutter = 0, CHouse = 1, CBrick = 2, COffice = 3, CIndustry = 4, CFlats = 5, CTower = 6, CShed = 7,
-              CTiles = 8, CFlatRoof = 9, CMetal = 10, CStone = 11, CConcrete = 12, CPlaster = 13, CCrowd = 14;
-    static readonly float[] CellW = { 3.1f, 3.0f, 3.0f, 3.0f, 6f, 3.4f, 3.0f, 3f, 2f, 8f, 4f, 4f, 5f, 4f, 4f, 4f };
-    static readonly float[] CellH = { 3.2f, 3.0f, 3.0f, 3.8f, 6f, 3.0f, 3.4f, 3f, 2f, 8f, 4f, 6f, 4f, 4f, 3.6f, 4f };
-    static Vector2 CellUv(int c) => new Vector2(c % 4, c / 4);
+    // atlas cells (EnvTex.BuildingAtlas, 8 x 4; see there)
+    const int CShutG = 0, CShutB = 1, CBlind = 2, CBrickWin = 3, CFlats = 4, COffice = 5, CTower = 6, CStone = 7,
+              GBarred = 8, GDoor = 9, GShop = 10, GGarage = 11, GLobby = 12, GLoading = 13, CIndustry = 14, CShed = 15,
+              CTiles = 16, CFlatRoof = 17, CMetal = 18, CSkylight = 19, CConcrete = 20, CPlaster = 21, CCrowd = 22, CUnit = 23,
+              CBrick = 24, CSoffit = 25, CTrim = 26, CPanelWin = 27, CShutGx = 29, CShutBx = 30, CBlindx = 31;
+    // size of one tile of the material cells (m): across, up
+    static float TileW(int c) => c == CTiles ? 2.5f : c == CFlatRoof ? 4f : c == CMetal ? 2.7f : c == CConcrete ? 4.6f : c == CCrowd ? 4f : c == CSoffit ? 2.4f : c == CBrick ? 2.8f : 3f;
+    static float TileH(int c) => c == CCrowd ? 3.6f : c == CBrick ? 3.2f : TileW(c);
+    // uv2: the cell, and an alternative cell for "share" of the bays (Baked.shader F2_ATLAS)
+    static Vector2 CellUv(int c) => new Vector2(c, c + 0.05f);
+    static Vector2 CellUv(int c, int alt, float share) => new Vector2(c, alt + 0.05f + 0.9f * share);
+    // uv3 of the vertices made next: the building's colour where the atlas' alpha is 1, w = wall length in tiles (corner trims)
+    static Vector4 curTint = new Vector4(1f, 1f, 1f, 0f);
+    static bool trimOn;
+    static readonly Color Grey1 = new Color(1f, 1f, 1f, 1f);
+    static Color G(float k) => new Color(k, k, k, 1f);
 
-    static float[] px = new float[256], pz = new float[256];
+    static float[] px = new float[256], pz = new float[256], ox = new float[256], oz = new float[256];
     static readonly List<int> roofTri = new List<int>();
 
+    // the best treatment (ground floors, cornices, eave soffits, rooftop units) within this distance of the track
+    static float NearTier => gfx <= 1 ? 220f : gfx == 2 ? 320f : 400f;
     static void Buildings()
     {
+        float near = NearTier;
         for (int q = 0; q < selB.Count; q++)
         {
             float d = selBd[q];
-            Building(selB[q], d < 250f ? 0 : d < 700f ? 1 : 2, d);
+            Building(selB[q], d < near ? 0 : d < 800f ? 1 : 2, d);
         }
+        curTint = new Vector4(1f, 1f, 1f, 0f);
     }
 
     static float EstimateHeight(int kind, float area, float h)
@@ -858,31 +883,65 @@ public static class RealWorld
             default: return area < 40f ? 3f + h : area < 250f ? 6f + 3f * h : 8f + 6f * h;
         }
     }
-    static int Cell(int kind, float H, float area, float h)
+
+    // ---------------------------------------------------------------- the look of one building's walls
+    // classes: 0 home, 1 flats, 2 office, 3 industrial, 4 shed / garages, 5 stand, 6 civic / church
+    static int fClass, fPal; // palette: 0 plaster colours, 1 brick, 2 greys, 3 stone
+    static Vector2 fUpC, fGfC; static float fBw, fFh, fGfH, fCap, fCornice;
+    static void Facade(int kind, float H, float area, float h, float h2, float h3)
     {
-        int house = h < sty.brickShare ? CBrick : sty.house;
-        switch (kind)
+        fBw = 3f; fFh = 3.2f; fGfH = 3.4f; fPal = 0; fCap = 0.75f; fCornice = 0.28f;
+        // upper floors of a home: green or brown shutters (persiane), or roller blinds (tapparelle) behind a stone surround
+        Vector2 home;
+        float shut = sty.house == 0 ? 0.8f : 0.62f;
+        if (h < sty.brickShare) { home = CellUv(CBrickWin); fPal = 1; }
+        else if (h2 < shut * 0.6f) home = CellUv(CShutG, CShutGx, 0.3f);
+        else if (h2 < shut) home = CellUv(CShutB, CShutBx, 0.3f);
+        else home = CellUv(CBlind, CBlindx, 0.3f);
+        Vector2 gfHome = CellUv(GBarred, GDoor, 0.22f), gfShop = CellUv(GShop, GGarage, 0.25f);
+        if (kind == 7 || kind == 0 && area < 40f)
         {
-            case 1: return H > 14f ? CFlats : house;
-            case 2: return H > 11f || h > 0.5f ? COffice : CHouse;
-            case 3: return CIndustry;
-            case 4: return CConcrete;
-            case 5: case 6: return CStone;
-            case 7: return CShed;
-            case 8: return H > 26f ? CTower : CFlats;
-            default: return area < 40f ? CShed : H > 14f ? CFlats : area > 1500f ? CIndustry : house;
+            fClass = 4; fPal = 2; fBw = 3f; fFh = fGfH = 3f;
+            fUpC = fGfC = kind == 7 && area < 90f ? CellUv(GGarage) : CellUv(CShed);
+            if (kind == 7 && area < 90f) { fPal = 0; fGfH = 2.8f; }
+        }
+        else if (kind == 3 || kind == 0 && area > 1500f && H <= 14f)
+        {
+            fClass = 3; fPal = 2; fBw = 6f; fFh = fGfH = 6f; fCap = 0.6f; fCornice = 0f;
+            fUpC = CellUv(CIndustry); fGfC = CellUv(CIndustry, GLoading, 0.18f);
+        }
+        else if (kind == 4) { fClass = 5; fPal = 2; fBw = fFh = fGfH = 4.6f; fUpC = fGfC = CellUv(CConcrete); fCornice = 0f; }
+        else if (kind == 5 || kind == 6) { fClass = 6; fPal = 3; fFh = fGfH = 4f; fUpC = fGfC = CellUv(CStone); fCornice = 0.4f; fCap = 0.9f; }
+        else if (kind == 8 && H > 26f) { fClass = 2; fPal = 2; fFh = 3.4f; fGfH = 4.2f; fUpC = CellUv(CTower); fGfC = CellUv(GLobby); fCornice = 0f; fCap = 0.9f; }
+        else if (kind == 2 && (H > 11f || h > 0.5f))
+        {
+            fClass = 2; fPal = 2; fFh = 3.6f; fGfH = 4.2f; fCornice = 0.15f; fCap = 0.9f;
+            fUpC = h2 < 0.5f ? CellUv(COffice) : CellUv(CPanelWin); fGfC = CellUv(GLobby, GShop, 0.3f);
+        }
+        else if (H > 14f)
+        {
+            fClass = 1; fUpC = h2 < 0.55f ? CellUv(CFlats) : CellUv(CBlind, CBlindx, 0.3f);
+            if (h3 < 0.5f || kind == 2) { fGfC = gfShop; fGfH = 3.8f; } else fGfC = gfHome;
+        }
+        else
+        {
+            fClass = 0; fUpC = home; fGfC = gfHome;
+            if (kind == 2 || h3 < 0.15f && area > 120f) { fGfC = gfShop; fGfH = 3.8f; }
+            else if (h3 > 0.85f) fGfC = CellUv(GGarage, GBarred, 0.5f);
+            if (fPal == 1) fGfC = CellUv(CBrickWin);
         }
     }
-    static Color WallColour(int b, int cell, float h)
+    // Lombardy palette (StyleFor) for plaster; brick and stone carry their own colour; greys for offices and sheds
+    static Color WallColour(int b, int pal, float h)
     {
         Color c;
         int pick = (int)(h * 9973f);
-        if (cell == CBrick) c = sty.brick[pick % sty.brick.Length];
-        else if (cell == COffice || cell == CIndustry || cell == CTower || cell == CShed || cell == CConcrete) c = Greys[pick % Greys.Length];
-        else if (cell == CStone) c = C(0.97f, 0.95f, 0.90f);
+        if (pal == 1) c = sty.brick[pick % sty.brick.Length];
+        else if (pal == 2) c = Greys[pick % Greys.Length];
+        else if (pal == 3) c = C(0.97f, 0.94f, 0.88f);
         else c = sty.walls[pick % sty.walls.Length];
         uint rgba = D.bRgba[b];
-        if ((rgba >> 24) != 0 && cell != CBrick && cell != CStone)
+        if ((rgba >> 24) != 0 && pal != 1 && pal != 3)
         {
             var oc = new Color((rgba & 255) / 255f, ((rgba >> 8) & 255) / 255f, ((rgba >> 16) & 255) / 255f);
             float lum = 0.3f * oc.r + 0.59f * oc.g + 0.11f * oc.b;
@@ -892,11 +951,12 @@ public static class RealWorld
         float k = 0.93f + 0.1f * Hash(b, 77);
         return new Color(c.r * k, c.g * k, c.b * k, 1f);
     }
+    static Vector4 Tint(Color c) => new Vector4(c.r, c.g, c.b, 0f);
 
     static void Building(int b, int lod, float dist)
     {
         int n0 = D.bCnt[b], o = D.bOff[b];
-        if (n0 > px.Length) { px = new float[n0]; pz = new float[n0]; }
+        if (n0 > px.Length) { px = new float[n0]; pz = new float[n0]; ox = new float[n0]; oz = new float[n0]; }
         System.Array.Copy(D.bX, o, px, 0, n0); System.Array.Copy(D.bZ, o, pz, 0, n0);
         int n = WorldGeo.Clean(px, pz, n0); if (n < 3) return;
         n = WorldGeo.Simplify(px, pz, n, lod == 0 ? 0.25f : lod == 1 ? 0.7f : 1.8f, true);
@@ -913,7 +973,7 @@ public static class RealWorld
             px[3] = ocx - ax * hl + bx * hs; pz[3] = ocz - az * hl + bz * hs;
             n = WorldGeo.Clean(px, pz, 4); if (n < 3) return; fill = 1f;
         }
-        float h0 = Hash(b, 1), h1 = Hash(b, 2), h2 = Hash(b, 3);
+        float h0 = Hash(b, 1), h1 = Hash(b, 2), h2 = Hash(b, 3), h3 = Hash(b, 4);
         int kind = D.bKind[b];
         float H = D.bH[b]; if (H <= 0.5f) H = EstimateHeight(kind, area, h0);
         else H = Mathf.Max(H, MinHeight(kind, area)); // (the ML heights run low: a two-storey house reads as a shed)
@@ -922,60 +982,180 @@ public static class RealWorld
         float gmin = float.MaxValue, gmax = float.MinValue, cx = 0, cz = 0;
         for (int k = 0; k < n; k++) { float g = Ground(px[k], pz[k]); gmin = Mathf.Min(gmin, g); gmax = Mathf.Max(gmax, g); cx += px[k]; cz += pz[k]; }
         cx /= n; cz /= n;
+        curTint = new Vector4(1f, 1f, 1f, 0f);
         if (kind == 4 && dist < 260f && lod < 2 && fill > 0.6f && hl >= 8f && hs >= 3.5f && Stand(b, ocx, ocz, ax, az, hl, hs, gmin, gmax)) return;
         float top = gmin + H;
+        Facade(kind, H, area, h0, h2, h3);
+        bool home = fClass <= 1 || fClass == 6;
         // roof shape: the data's, or a pitched roof on houses where the data has none (most houses in Europe)
         int roof = D.bRoof[b];
         bool rectish = fill > 0.72f && n <= 14;
-        if (roof == 0 && rectish && area < 450f && H < 16f && minH <= 0f && (kind == 1 || kind == 0) && h1 < sty.pitched) roof = h2 < 0.55f ? 1 : 2;
+        if (roof == 0 && rectish && area < 450f && H < 16f && minH <= 0f && (kind == 1 || kind == 0) && fClass == 0 && h1 < sty.pitched) roof = h2 < 0.45f ? 1 : 2;
         if ((roof == 1 || roof == 2 || roof == 4) && !rectish) roof = 5;
         if (roof == 3 && fill < 0.6f) roof = 5;
-        float roofH = roof == 1 ? hs * 0.62f : roof == 2 ? hs * 0.55f : roof == 4 ? hs * 0.7f : roof == 3 ? hs * 0.85f : 0f;
+        bool metal = fClass == 3 || fClass == 4 && fGfC.x != GGarage;
+        float roofH = roof == 1 ? hs * (metal ? 0.3f : 0.55f) : roof == 2 ? hs * 0.5f : roof == 4 ? hs * 0.7f : roof == 3 ? hs * 0.85f : 0f;
         roofH = Mathf.Min(roofH, (H - minH) * 0.5f);
         if (roof >= 1 && roof <= 4 && roofH < 0.6f) { roof = 5; roofH = 0f; }
         float eave = top - roofH;
-        float foot = minH > 0.5f ? gmin + minH : gmin - 0.7f - (gmax - gmin); // walls reach into the slope
-        int cell = Cell(kind, H, area, h0);
-        float bw = CellW[cell], fh = CellH[cell];
-        Color wall = WallColour(b, cell, h1);
-        Color roofC = roof == 0 ? sty.flat * (0.9f + 0.15f * h2) : roof == 3 ? (h2 < 0.5f ? C(0.42f, 0.58f, 0.52f) : C(0.55f, 0.56f, 0.58f)) : sty.tiles[(int)(h2 * 7919f) % sty.tiles.Length] * (0.92f + 0.12f * h1);
+        bool hasGf = minH <= 0.5f;
+        float baseY = hasGf ? gmin : gmin + minH;
+        // whole storeys: the eave snaps to the ground floor + n upper floors, so the window grid is regular
+        int nUp = 0;
+        if (hasGf && eave - gmin > fGfH)
+        {
+            nUp = Mathf.RoundToInt((eave - gmin - fGfH) / fFh);
+            eave = gmin + fGfH + nUp * fFh; top = eave + roofH;
+        }
+        float foot = hasGf ? gmin - 0.7f - (gmax - gmin) : baseY; // walls reach into the slope
+        Color wall = WallColour(b, fPal, h1);
+        Color roofC = roof == 0 ? sty.flat * (0.9f + 0.15f * h2) : roof == 3 ? (h2 < 0.5f ? C(0.42f, 0.58f, 0.52f) : C(0.55f, 0.56f, 0.58f))
+                    : metal ? C(0.68f, 0.69f, 0.70f) * (0.88f + 0.16f * h1) : sty.tiles[(int)(h2 * 7919f) % sty.tiles.Length] * (0.92f + 0.12f * h1);
         roofC.a = 1f;
-        var mb = Buf(SBuild, Block(cx, cz), n * 28 + 64);
-        var cuv = CellUv(cell); var plaster = CellUv(CPlaster);
-        bool split = lod == 0 && minH <= 0.5f && eave - gmin > 4f;
-        Color footC = new Color(wall.r * 0.74f, wall.g * 0.74f, wall.b * 0.74f, 1f);
-        bool parapet = roof == 0 && lod < 2 && cell != CShed && H > 4f;
-        Color cornice = Color.Lerp(wall, Color.white, 0.35f); cornice.a = 1f;
+        var mb = Buf(SBuild, Block(cx, cz), n * 40 + 160);
+        trimOn = home && fPal != 1;
+        Color ao = G(lod == 2 ? 1f : 0.72f);
+        bool parapet = roof == 0 && lod < 2 && fClass != 4 && H > 4f;
+        float cap = parapet ? fCap : 0f;
+        float roofY = roof == 0 ? eave + (parapet ? cap - 0.1f : 0f) : top;
+        var wallT = Tint(wall);
+        Color light = Color.Lerp(wall, Color.white, 0.4f); var lightT = Tint(light);
+        // offset outline for the cornice (mitred, so the corners close)
+        float co = lod == 0 && parapet ? fCornice : 0f;
+        if (co > 0f) Offset(n, co);
         for (int k = 0; k < n; k++)
         {
             int k2 = (k + 1) % n;
             float x0 = px[k], z0 = pz[k], x1 = px[k2], z1 = pz[k2], dx = x1 - x0, dz = z1 - z0, len = Mathf.Sqrt(dx * dx + dz * dz);
             if (len < 0.05f) continue;
             var outw = new Vector3(dz / len, 0f, -dx / len); // right of the edge: outside of a counter-clockwise ring
-            float bays = len < bw * 0.55f ? 0f : Mathf.Max(1f, Mathf.Round(len / bw));
-            var c2 = bays > 0 ? cuv : plaster; float uu = bays > 0 ? bays : 0f;
-            if (split)
+            float bays = len < fBw * 0.7f ? 0f : Mathf.Max(1f, Mathf.Round(len / fBw));
+            curTint = wallT;
+            if (bays == 0f) Wall(mb, x0, z0, x1, z1, foot, eave, outw, len / 3f, gmin, 3f, CellUv(fPal == 1 ? CBrick : CPlaster), ao, Grey1, false);
+            else if (lod == 0 && nUp > 0)
             {
-                Wall(mb, x0, z0, x1, z1, foot, gmin + 2f, outw, uu, gmin, fh, c2, footC, wall);
-                Wall(mb, x0, z0, x1, z1, gmin + 2f, eave, outw, uu, gmin, fh, c2, wall, wall);
+                Wall(mb, x0, z0, x1, z1, foot, gmin + fGfH, outw, bays, gmin, fGfH, fGfC, ao, Grey1, trimOn);
+                Wall(mb, x0, z0, x1, z1, gmin + fGfH, eave, outw, bays, gmin + fGfH, fFh, fUpC, Grey1, Grey1, trimOn);
             }
-            else Wall(mb, x0, z0, x1, z1, foot, eave, outw, uu, gmin, fh, c2, lod == 2 ? wall : footC, wall);
+            else if (hasGf && nUp == 0) Wall(mb, x0, z0, x1, z1, foot, eave, outw, bays, gmin, fGfH, fGfC, ao, Grey1, trimOn);
+            else
+            {
+                float org = eave - Mathf.Max(1, Mathf.RoundToInt((eave - baseY) / fFh)) * fFh; // grid aligned with the eave
+                Wall(mb, x0, z0, x1, z1, foot, eave, outw, bays, org, fFh, fUpC, hasGf ? ao : Grey1, Grey1, trimOn);
+            }
             if (parapet)
             {
-                Wall(mb, x0, z0, x1, z1, eave, eave + 0.8f, outw, 0f, gmin, fh, plaster, cornice, cornice);
-                if (lod == 0) Wall(mb, x0, z0, x1, z1, eave + 0.05f, eave + 0.8f, -outw, 0f, gmin, fh, plaster, wall * 0.8f, cornice);
+                curTint = fClass == 3 ? wallT : lightT;
+                int pc = fClass == 2 || fClass == 3 ? CConcrete : CPlaster;
+                if (co > 0f)
+                {
+                    // projecting cornice: soffit (in shade under it) and the band up to the parapet's top
+                    Vector3 a0 = new Vector3(x0, eave, z0), a1 = new Vector3(x1, eave, z1), b0 = new Vector3(ox[k], eave, oz[k]), b1 = new Vector3(ox[k2], eave, oz[k2]);
+                    float lu = len / TileW(pc);
+                    Quad(mb, a0, a1, b1, b0, Vector3.down, new Vector2(0, 0), new Vector2(lu, 0), new Vector2(lu, 0.08f), new Vector2(0, 0.08f), CellUv(pc), G(0.8f), G(0.8f), G(0.8f), G(0.8f));
+                    float cv = (cap) / TileH(pc);
+                    Quad(mb, b0, b1, b1 + Vector3.up * cap, b0 + Vector3.up * cap, outw, new Vector2(0, 0), new Vector2(lu, 0), new Vector2(lu, cv), new Vector2(0, cv), CellUv(pc), Grey1, Grey1, Grey1, Grey1);
+                }
+                else Wall(mb, x0, z0, x1, z1, eave, eave + cap, outw, len / TileW(pc), eave, TileH(pc), CellUv(pc), Grey1, Grey1, false);
             }
         }
+        curTint = new Vector4(1f, 1f, 1f, 0f);
         float bx2 = -az, bz2 = ax; // short axis of the rectangle
         var A = new Vector3(ax, 0f, az); var Bv = new Vector3(bx2, 0f, bz2); var cen = new Vector3(ocx, 0f, ocz);
-        float ov = lod < 2 ? 0.35f : 0f;
+        float ov = lod == 0 ? (metal ? 0.35f : 0.6f) : lod == 1 ? 0.4f : 0f;
+        int roofCell = metal ? CMetal : CTiles;
+        bool extras = lod == 0 && gfx >= 2;
         switch (roof)
         {
-            case 1: Gabled(mb, cen, A, Bv, hl, hs, eave, top, ov, roofC, wall, cuv, bw, fh, gmin); break;
-            case 2: Hipped(mb, cen, A, Bv, hl, hs, eave, top, ov, roofC); break;
-            case 4: Hipped(mb, cen, A, Bv, hs, hs, eave, top, ov, roofC, hl); break;
+            case 1:
+                Gabled(mb, cen, A, Bv, hl, hs, eave, top, ov, roofC, roofCell, wall, fPal == 1 ? CBrick : CPlaster, gmin, lod == 0);
+                if (extras && metal) Skylights(mb, cen, A, Bv, hl, hs, eave, top, b);
+                break;
+            case 2: Hipped(mb, cen, A, Bv, hl, hs, eave, top, ov, roofC, roofCell, lod == 0); break;
+            case 4: Hipped(mb, cen, A, Bv, hs, hs, eave, top, ov, roofC, roofCell, lod == 0, hl); break;
             case 3: FlatRoof(mb, n, eave, roofC, CFlatRoof); Dome(mb, cen, A, Bv, hl * 0.97f, hs * 0.97f, eave, roofH, roofC); break;
-            default: FlatRoof(mb, n, roof == 0 ? eave : top, roofC, roof == 0 ? (cell == CIndustry || cell == CShed ? CMetal : CFlatRoof) : CTiles); break;
+            default:
+                FlatRoof(mb, n, roofY, roofC, roof == 0 ? (fClass == 3 || fClass == 4 ? CMetal : CFlatRoof) : CTiles);
+                if (extras && roof == 0 && rectish && fill > 0.75f && hl > 3f && hs > 2.5f)
+                {
+                    if (fClass == 3 && area > 300f) Skylights(mb, cen, A, Bv, hl, hs, roofY, roofY, b);
+                    else if (fClass != 4 && fClass != 5 && area > 90f) Units(mb, cen, A, Bv, hl, hs, roofY, b, fClass == 1 && H > 14f ? wall : default);
+                }
+                break;
+        }
+        curTint = new Vector4(1f, 1f, 1f, 0f);
+    }
+
+    // the footprint pushed out by d (mitred corners, capped at sharp ones) into ox / oz
+    static void Offset(int n, float d)
+    {
+        for (int k = 0; k < n; k++)
+        {
+            int kp = (k + n - 1) % n, kn = (k + 1) % n;
+            float ex = px[k] - px[kp], ez = pz[k] - pz[kp], fx = px[kn] - px[k], fz = pz[kn] - pz[k];
+            float le = Mathf.Max(1e-4f, Mathf.Sqrt(ex * ex + ez * ez)), lf = Mathf.Max(1e-4f, Mathf.Sqrt(fx * fx + fz * fz));
+            float n0x = ez / le, n0z = -ex / le, n1x = fz / lf, n1z = -fx / lf;
+            float k1 = Mathf.Max(0.35f, 1f + n0x * n1x + n0z * n1z);
+            ox[k] = px[k] + (n0x + n1x) / k1 * d; oz[k] = pz[k] + (n0z + n1z) / k1 * d;
+        }
+    }
+
+    // a box on a roof: four sides and a lid (rooftop units, stair and lift housings)
+    static void Box(MB b, Vector3 c, Vector3 A, Vector3 Bv, float ha, float hb, float y0, float y1, int side, Color col, Vector4 tint)
+    {
+        var up = Vector3.up; var prev = curTint; curTint = tint;
+        Vector3 p0 = c - A * ha - Bv * hb, p1 = c + A * ha - Bv * hb, p2 = c + A * ha + Bv * hb, p3 = c - A * ha + Bv * hb;
+        Vector3[] q = { p0, p1, p2, p3 }; Vector3[] nrm = { -Bv, A, Bv, -A };
+        var cu = CellUv(side); float tv = side == CUnit ? 1f : (y1 - y0) / TileH(side);
+        for (int s = 0; s < 4; s++)
+        {
+            Vector3 a = q[s], e = q[(s + 1) % 4]; float tu = side == CUnit ? 1f : (a - e).magnitude / TileW(side);
+            Quad(b, a + up * y0, e + up * y0, e + up * y1, a + up * y1, nrm[s], new Vector2(0, 0), new Vector2(tu, 0), new Vector2(tu, tv), new Vector2(0, tv), cu, col * 0.85f, col * 0.85f, col, col);
+        }
+        Quad(b, p0 + up * y1, p1 + up * y1, p2 + up * y1, p3 + up * y1, up, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), CellUv(CFlatRoof), col, col, col, col);
+        curTint = prev;
+    }
+    // rooftop clutter on a flat roof: air-conditioning units, a lift / stair housing on blocks of flats
+    static void Units(MB b, Vector3 c, Vector3 A, Vector3 Bv, float hl, float hs, float y, int id, Color housing)
+    {
+        var white = new Vector4(1f, 1f, 1f, 0f);
+        if (housing.a > 0f && hl > 5f && hs > 4f)
+        {
+            float f = Hash(id, 21) - 0.5f;
+            Box(b, c + A * (f * (hl - 3f)), A, Bv, 1.6f, 1.8f, y, y + 2.7f, CPlaster, Grey1, Tint(Color.Lerp(housing, Color.white, 0.2f)));
+        }
+        int count = 1 + (int)(Hash(id, 22) * Mathf.Clamp(hl * hs / 40f, 1f, 3f));
+        for (int u = 0; u < count; u++)
+        {
+            float fa = (Hash(id, 30 + u) - 0.5f) * 2f * (hl - 1.6f), fb = (Hash(id, 40 + u) - 0.5f) * 2f * (hs - 1.4f);
+            bool big = Hash(id, 50 + u) < 0.35f && hl > 6f;
+            float ha = big ? 1.4f : 0.6f, hb = big ? 0.9f : 0.45f, hh = big ? 1.5f : 1.0f;
+            Box(b, c + A * fa + Bv * fb, A, Bv, ha, hb, y, y + hh, CUnit, G(0.95f), white);
+        }
+    }
+    // skylight strips on an industrial roof: across a flat roof, or patches up both slopes of a pitched one
+    static void Skylights(MB b, Vector3 c, Vector3 A, Vector3 Bv, float hl, float hs, float eave, float top, int id)
+    {
+        var up = Vector3.up; var cu = CellUv(CSkylight); var w = G(1f);
+        int cnt = Mathf.Clamp((int)(hl / 7f), 1, 6);
+        for (int s = 0; s < cnt; s++)
+        {
+            float a = -hl + (s + 0.5f) * 2f * hl / cnt, wa = 0.8f;
+            if (top <= eave + 0.01f)
+            {
+                float lb = hs * 0.75f, y = eave + 0.12f;
+                Quad(b, c + A * (a - wa) - Bv * lb + up * y, c + A * (a + wa) - Bv * lb + up * y, c + A * (a + wa) + Bv * lb + up * y, c + A * (a - wa) + Bv * lb + up * y, up,
+                     new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, lb * 2f / 3f), new Vector2(0, lb * 2f / 3f), cu, w, w, w, w);
+                continue;
+            }
+            for (int sd = -1; sd <= 1; sd += 2)
+            {
+                var nrm = (Bv * (sd * (top - eave)) + up * hs).normalized * 0.06f;
+                Vector3 lo = c + Bv * (sd * hs * 0.8f) + up * (eave + (top - eave) * 0.2f) + nrm, hi = c + Bv * (sd * hs * 0.15f) + up * (eave + (top - eave) * 0.85f) + nrm;
+                float tv = (hi - lo).magnitude / 3f;
+                Quad(b, lo + A * (a - wa), lo + A * (a + wa), hi + A * (a + wa), hi + A * (a - wa), Bv * sd + up,
+                     new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, tv), new Vector2(0, tv), cu, w, w, w, w);
+            }
         }
     }
 
@@ -1027,14 +1207,14 @@ public static class RealWorld
         var mb = Buf(SBuild, Block(ocx, ocz), 96);
         Color conc = C(0.80f, 0.80f, 0.78f), dark = C(0.62f, 0.62f, 0.61f), white = Color.white;
         float k = 0.95f + 0.1f * Hash(b, 77); conc *= k; conc.a = 1f; dark.a = 1f;
-        var cc = CellUv(CConcrete); var pl = CellUv(CPlaster); float bw = CellW[CConcrete], fh = CellH[CConcrete];
+        var cc = CellUv(CConcrete); var pl = CellUv(CPlaster); float bw = TileW(CConcrete), fh = TileH(CConcrete);
         float bays = Mathf.Max(1f, Mathf.Round(2f * hl / bw));
         // front wall up to the first row, back wall (outside and the part above the top row)
         Wall(mb, FL.x, FL.z, FR.x, FR.z, foot, frontY, F, bays, gmin, fh, cc, dark, conc);
         Wall(mb, BR.x, BR.z, BL.x, BL.z, foot, roofY + 0.3f, -F, bays, gmin, fh, cc, dark, conc);
         Wall(mb, BL.x, BL.z, BR.x, BR.z, topY, roofY, F, bays, gmin, fh, cc, conc, conc);
         // raked seating: one tile = 4 rows (3.6 m of slope) x 4 m
-        float slope = Mathf.Sqrt(depth * depth + rise * rise) / CellH[CCrowd], across = 2f * hl / CellW[CCrowd];
+        float slope = Mathf.Sqrt(depth * depth + rise * rise) / TileH(CCrowd), across = 2f * hl / TileW(CCrowd);
         Quad(mb, FL + up * frontY, FR + up * frontY, BR + up * topY, BL + up * topY, (F * rise / depth + up).normalized,
              new Vector2(0, 0), new Vector2(across, 0), new Vector2(across, slope), new Vector2(0, slope), CellUv(CCrowd), white, white, white, white);
         // end walls: up to the front row at the front, to the roof at the back
@@ -1047,20 +1227,23 @@ public static class RealWorld
         Vector3 rf = F * (hs - depth * 0.78f), lift = up * 0.8f, ov = A * 0.5f;
         Vector3 r0 = BL - ov + up * (roofY + 0.3f), r1 = BR + ov + up * (roofY + 0.3f), r2 = cen + rf + A * hl + ov + up * (roofY + 0.3f) + lift, r3 = cen + rf - A * hl - ov + up * (roofY + 0.3f) + lift;
         Color roofC = C(0.86f, 0.87f, 0.88f); roofC.a = 1f; Color under = C(0.5f, 0.5f, 0.5f); under.a = 1f;
-        float ru = 2f * hl / CellW[CMetal], rv = depth * 0.78f / CellW[CMetal];
+        float ru = 2f * hl / TileW(CMetal), rv = depth * 0.78f / TileW(CMetal);
         Quad(mb, r0, r1, r2, r3, up, new Vector2(0, 0), new Vector2(ru, 0), new Vector2(ru, rv), new Vector2(0, rv), CellUv(CMetal), roofC, roofC, roofC, roofC);
         Quad(mb, r0 - up * 0.35f, r1 - up * 0.35f, r2 - up * 0.35f, r3 - up * 0.35f, -up, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, under, under, under, under);
         Quad(mb, r3 - up * 0.6f, r2 - up * 0.6f, r2, r3, F, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, roofC, roofC, roofC, roofC);
         return true;
     }
 
-    // one wall quad from height y0 to y1 along an edge; uv in tiles (bays across, floors up from the ground gmin)
-    static void Wall(MB b, float x0, float z0, float x1, float z1, float y0, float y1, Vector3 outw, float bays, float gmin, float fh, Vector2 cell, Color c0, Color c1)
+    // one wall quad from height y0 to y1 along an edge; uv in tiles (bays across, storeys of fh up from "org");
+    // trim: lighter corner strips at both ends (the shader reads the wall's length in tiles from uv3.w)
+    static void Wall(MB b, float x0, float z0, float x1, float z1, float y0, float y1, Vector3 outw, float bays, float org, float fh, Vector2 cell, Color c0, Color c1, bool trim = false)
     {
         if (y1 <= y0) return;
         Vector3 p0 = new Vector3(x0, y0, z0), p1 = new Vector3(x1, y0, z1), p2 = new Vector3(x1, y1, z1), p3 = new Vector3(x0, y1, z0);
-        float v0 = bays > 0 ? (y0 - gmin) / fh : 0.5f, v1 = bays > 0 ? (y1 - gmin) / fh : 0.5f, u1 = bays > 0 ? bays : 0.5f, ua = bays > 0 ? 0f : 0.5f;
+        float v0 = bays > 0 ? (y0 - org) / fh : 0.5f, v1 = bays > 0 ? (y1 - org) / fh : 0.5f, u1 = bays > 0 ? bays : 0.5f, ua = bays > 0 ? 0f : 0.5f;
+        float w = curTint.w; curTint.w = trim && bays > 0 ? bays : 0f;
         Quad(b, p0, p1, p2, p3, outw, new Vector2(ua, v0), new Vector2(u1, v0), new Vector2(u1, v1), new Vector2(ua, v1), cell, c0, c0, c1, c1);
+        curTint.w = w;
     }
     // quad wound so its face points along "outward"
     static void Quad(MB b, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 outward, Vector2 t0, Vector2 t1, Vector2 t2, Vector2 t3, Vector2 cell, Color c0, Color c1, Color c2, Color c3)
@@ -1072,7 +1255,7 @@ public static class RealWorld
         int i = b.v.Count;
         b.v.Add(p0); b.v.Add(p1); b.v.Add(p2); b.v.Add(p3);
         b.uv.Add(t0); b.uv.Add(t1); b.uv.Add(t2); b.uv.Add(t3);
-        for (int k = 0; k < 4; k++) b.uv2.Add(cell);
+        for (int k = 0; k < 4; k++) { b.uv2.Add(cell); b.t4.Add(curTint); }
         b.col.Add(c0); b.col.Add(c1); b.col.Add(c2); b.col.Add(c3);
         b.tri.Add(i); b.tri.Add(i + 1); b.tri.Add(i + 2); b.tri.Add(i); b.tri.Add(i + 2); b.tri.Add(i + 3);
     }
@@ -1082,7 +1265,7 @@ public static class RealWorld
         int i = b.v.Count;
         b.v.Add(p0); b.v.Add(p1); b.v.Add(p2);
         b.uv.Add(t0); b.uv.Add(t1); b.uv.Add(t2);
-        for (int k = 0; k < 3; k++) { b.uv2.Add(cell); b.col.Add(c); }
+        for (int k = 0; k < 3; k++) { b.uv2.Add(cell); b.col.Add(c); b.t4.Add(curTint); }
         b.tri.Add(i); b.tri.Add(i + 1); b.tri.Add(i + 2);
     }
     // flat roof over the (cleaned, counter-clockwise) footprint in px / pz
@@ -1090,44 +1273,64 @@ public static class RealWorld
     {
         roofTri.Clear();
         WorldGeo.Triangulate(px, pz, n, roofTri);
-        int start = b.v.Count; var cu = CellUv(cell); float s = 1f / CellW[cell];
-        for (int k = 0; k < n; k++) { b.v.Add(new Vector3(px[k], y, pz[k])); b.uv.Add(new Vector2(px[k] * s, pz[k] * s)); b.uv2.Add(cu); b.col.Add(c); }
+        int start = b.v.Count; var cu = CellUv(cell); float s = 1f / TileW(cell);
+        for (int k = 0; k < n; k++) { b.v.Add(new Vector3(px[k], y, pz[k])); b.uv.Add(new Vector2(px[k] * s, pz[k] * s)); b.uv2.Add(cu); b.col.Add(c); b.t4.Add(curTint); }
         for (int k = 0; k + 2 < roofTri.Count; k += 3) { b.tri.Add(start + roofTri[k]); b.tri.Add(start + roofTri[k + 2]); b.tri.Add(start + roofTri[k + 1]); }
     }
+    // the underside of an overhanging roof (rafters and tavelle, in the shade) and the gutter line along the eaves
+    const float RoofThick = 0.14f;
+    static readonly Color SoffitC = new Color(0.85f, 0.85f, 0.85f, 1f), GutterC = new Color(0.62f, 0.60f, 0.56f, 1f);
+    static void SoffitQuad(MB b, Vector3 e0, Vector3 e1, Vector3 r1, Vector3 r0, Vector3 faceUp)
+    {
+        var d = Vector3.down * RoofThick; float lu = (e1 - e0).magnitude / TileW(CSoffit), lv = (r0 - e0).magnitude / TileW(CSoffit);
+        Quad(b, e0 + d, e1 + d, r1 + d, r0 + d, -faceUp, new Vector2(0, 0), new Vector2(lu, 0), new Vector2(lu, lv), new Vector2(0, lv), CellUv(CSoffit), SoffitC, SoffitC, SoffitC, SoffitC);
+        Quad(b, e0 + d, e1 + d, e1, e0, new Vector3(faceUp.x, 0f, faceUp.z), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), CellUv(CTrim), GutterC, GutterC, GutterC, GutterC);
+    }
     // gabled roof over the footprint's rectangle: ridge along the long axis A, gable walls at the ends
-    static void Gabled(MB b, Vector3 c, Vector3 A, Vector3 Bv, float hl, float hs, float eave, float top, float ov, Color roofC, Color wall, Vector2 wallCell, float bw, float fh, float gmin)
+    static void Gabled(MB b, Vector3 c, Vector3 A, Vector3 Bv, float hl, float hs, float eave, float top, float ov, Color roofC, int roofCell, Color wall, int gableCell, float gmin, bool soffit)
     {
         float rh = top - eave, drop = ov * rh / Mathf.Max(hs, 0.1f), L = hl + ov, S = hs + ov, slope = Mathf.Sqrt(S * S + (rh + drop) * (rh + drop));
         Vector3 up = Vector3.up, ye = up * (eave - drop), yt = up * top;
-        var tc = CellUv(CTiles); float tw = 1f / CellW[CTiles];
+        var tc = CellUv(roofCell); float tw = 1f / TileW(roofCell);
         for (int sd = -1; sd <= 1; sd += 2)
         {
             Vector3 e0 = c - A * L + Bv * (S * sd) + ye, e1 = c + A * L + Bv * (S * sd) + ye, r1 = c + A * L + yt, r0 = c - A * L + yt;
             Quad(b, e0, e1, r1, r0, Bv * sd + up, new Vector2(0, 0), new Vector2(2 * L * tw, 0), new Vector2(2 * L * tw, slope * tw), new Vector2(0, slope * tw), tc, roofC, roofC, roofC, roofC);
+            if (soffit && ov > 0f) SoffitQuad(b, e0, e1, r1, r0, Bv * sd + up);
         }
-        // gable triangles in the end walls
+        // gable triangles in the end walls: plain plaster (or brick) in the building's colour
+        var prev = curTint; curTint = Tint(wall);
+        float gw = 1f / TileW(gableCell), gh = 1f / TileH(gableCell);
         for (int sd = -1; sd <= 1; sd += 2)
         {
             Vector3 g0 = c + A * (hl * sd) - Bv * hs + up * eave, g1 = c + A * (hl * sd) + Bv * hs + up * eave, ap = c + A * (hl * sd) + yt;
-            float uw = Mathf.Max(1f, Mathf.Round(2f * hs / bw));
-            Tri(b, g0, g1, ap, A * sd, new Vector2(0, (eave - gmin) / fh), new Vector2(uw, (eave - gmin) / fh), new Vector2(uw * 0.5f, (top - gmin) / fh), wallCell, wall);
+            Tri(b, g0, g1, ap, A * sd, new Vector2(0, (eave - gmin) * gh), new Vector2(2f * hs * gw, (eave - gmin) * gh), new Vector2(hs * gw, (top - gmin) * gh), CellUv(gableCell), Grey1);
         }
+        curTint = prev;
     }
     // hipped roof (ridge = long half-size minus short half-size); a pyramid when the ridge is that short. hlPyr: the
     // real long half-size for a pyramidal roof on a long rectangle (called with hl = hs, so the ridge is a point)
-    static void Hipped(MB b, Vector3 c, Vector3 A, Vector3 Bv, float hl, float hs, float eave, float top, float ov, Color roofC, float hlPyr = -1f)
+    static void Hipped(MB b, Vector3 c, Vector3 A, Vector3 Bv, float hl, float hs, float eave, float top, float ov, Color roofC, int roofCell, bool soffit, float hlPyr = -1f)
     {
         float baseL = hlPyr > 0 ? hlPyr : hl;
         float rh = top - eave, drop = ov * rh / Mathf.Max(hs, 0.1f), L = baseL + ov, S = hs + ov, rl = Mathf.Max(0f, hl - hs);
         Vector3 up = Vector3.up, ye = up * (eave - drop), yt = up * top;
         Vector3 e00 = c - A * L - Bv * S + ye, e10 = c + A * L - Bv * S + ye, e11 = c + A * L + Bv * S + ye, e01 = c - A * L + Bv * S + ye;
         Vector3 r0 = c - A * rl + yt, r1 = c + A * rl + yt;
-        var tc = CellUv(CTiles); float tw = 1f / CellW[CTiles];
+        var tc = CellUv(roofCell); float tw = 1f / TileW(roofCell);
         float sl = Mathf.Sqrt(S * S + (rh + drop) * (rh + drop)) * tw, el = Mathf.Sqrt((L - rl) * (L - rl) + (rh + drop) * (rh + drop)) * tw;
         Quad(b, e00, e10, r1, r0, -Bv + up, new Vector2(0, 0), new Vector2(2 * L * tw, 0), new Vector2((L + rl) * tw, sl), new Vector2((L - rl) * tw, sl), tc, roofC, roofC, roofC, roofC);
         Quad(b, e11, e01, r0, r1, Bv + up, new Vector2(0, 0), new Vector2(2 * L * tw, 0), new Vector2((L + rl) * tw, sl), new Vector2((L - rl) * tw, sl), tc, roofC, roofC, roofC, roofC);
         Tri(b, e01, e00, r0, -A + up, new Vector2(0, 0), new Vector2(2 * S * tw, 0), new Vector2(S * tw, el), tc, roofC);
         Tri(b, e10, e11, r1, A + up, new Vector2(0, 0), new Vector2(2 * S * tw, 0), new Vector2(S * tw, el), tc, roofC);
+        if (soffit && ov > 0f)
+        {
+            SoffitQuad(b, e00, e10, r1, r0, -Bv + up); SoffitQuad(b, e11, e01, r0, r1, Bv + up);
+            // hip ends: the underside as a triangle, the gutter as a quad
+            var d = Vector3.down * RoofThick; float ts = 1f / TileW(CSoffit);
+            Tri(b, e01 + d, e00 + d, r0 + d, A - up, new Vector2(0, 0), new Vector2(2 * S * ts, 0), new Vector2(S * ts, el / tw * ts), CellUv(CSoffit), SoffitC);
+            Tri(b, e10 + d, e11 + d, r1 + d, -A - up, new Vector2(0, 0), new Vector2(2 * S * ts, 0), new Vector2(S * ts, el / tw * ts), CellUv(CSoffit), SoffitC);
+        }
     }
     // a low dome over the ellipse inside the rectangle (smooth: shared vertices)
     static void Dome(MB b, Vector3 c, Vector3 A, Vector3 Bv, float ra, float rb, float eave, float rh, Color col)
@@ -1141,7 +1344,7 @@ public static class RealWorld
             {
                 float a = s * Mathf.PI * 2f / Seg;
                 b.v.Add(c + A * (Mathf.Cos(a) * ra * k) + Bv * (Mathf.Sin(a) * rb * k) + Vector3.up * y);
-                b.uv.Add(new Vector2(s * 0.5f, r * 0.5f)); b.uv2.Add(cu); b.col.Add(col);
+                b.uv.Add(new Vector2(s * 0.5f, r * 0.5f)); b.uv2.Add(cu); b.col.Add(col); b.t4.Add(curTint);
             }
         }
         // (A, Bv) is a right-handed pair seen from above, so the ring runs counter-clockwise: wind for Unity
@@ -1455,6 +1658,7 @@ public static class RealWorld
         if (b.n.Count == b.v.Count) mesh.SetNormals(b.n);
         mesh.SetUVs(0, b.uv);
         if (b.uv2.Count == b.v.Count) mesh.SetUVs(2, b.uv2); // (channel 2: static batching may use channel 1 for lightmaps)
+        if (b.t4.Count == b.v.Count) mesh.SetUVs(3, b.t4);
         mesh.SetTriangles(b.tri, 0, true);
         if (b.n.Count != b.v.Count) mesh.RecalculateNormals();
         var go = new GameObject(name); go.transform.SetParent(parent, false);

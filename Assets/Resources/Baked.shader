@@ -5,9 +5,13 @@
 //           (alpha picks the ground detail: 0 paved, 1/3 grass, 2/3 rough ground, 1 tree canopy seen from above),
 //           _MainTex the fine detail (EnvTex.LandDetail, 4.5 m per tile), _LandMacro the crowns of the woods and a
 //           slow brightness drift (EnvTex.LandMacro, ~48 m per tile). Three texture reads.
-//  F2_ATLAS buildings: _MainTex is a 4 x 4 atlas of repeating facade / roof tiles (EnvTex.BuildingAtlas); uv0 counts
-//           tiles (window bays across, floors up), uv2 = the atlas cell. The tile repeats inside its cell, with the
-//           mip level worked out from the unwrapped uv (no seams) and capped so neighbouring cells do not bleed.
+//  F2_ATLAS buildings: _MainTex is an 8 x 4 atlas of repeating facade / roof tiles (EnvTex.BuildingAtlas); uv0 counts
+//           tiles (window bays across, floors up). uv2.x = the cell index; uv2.y = an alternative cell + 0.05 + 0.9 x
+//           its share: a hash of the bay (floor(uv0)) swaps that share of the bays to it (closed shutters, doors among
+//           shop windows). The tile repeats inside its cell, with the mip level worked out from the unwrapped uv (no
+//           seams) and capped so neighbouring cells do not bleed. uv3 = the building's colour (rgb), applied where the
+//           texture's alpha is 1 (plaster, brick, cladding; glass and frames keep theirs), and w = the wall's length in
+//           tiles (0: none): the last 0.075 tile at each end is a lighter corner trim (quoins / pilasters).
 Shader "F2/Baked"
 {
     Properties
@@ -41,6 +45,7 @@ Shader "F2/Baked"
                 float2 uv : TEXCOORD0;
             #if defined(F2_ATLAS)
                 float2 uv2 : TEXCOORD2;
+                float4 uv3 : TEXCOORD3;
             #endif
                 float4 color : COLOR;
             };
@@ -52,6 +57,7 @@ Shader "F2/Baked"
                 UNITY_FOG_COORDS(2)
             #if defined(F2_ATLAS)
                 float2 cell : TEXCOORD3;
+                half4 tint : TEXCOORD4;
             #endif
             };
 
@@ -70,7 +76,7 @@ Shader "F2/Baked"
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.uv = TRANSFORM_TEX(v.uv, _MainTex);
             #if defined(F2_ATLAS)
-                o.cell = v.uv2;
+                o.cell = v.uv2; o.tint = v.uv3;
             #endif
                 o.color = v.color * _Color * 2.0; // stored light 0.5 = full brightness, so sunlit areas can go above 1
                 UNITY_TRANSFER_FOG(o, o.pos);
@@ -92,8 +98,16 @@ Shader "F2/Baked"
                 float2 g = i.uv * 128.0;                       // texels of one 128 px cell
                 float2 dx = ddx(g), dy = ddy(g);
                 float lod = clamp(0.5 * log2(max(dot(dx, dx), dot(dy, dy))), 0.0, 4.0);
-                float2 a = i.cell * 0.25 + 0.004 + frac(i.uv) * 0.242;
+                float h = frac(sin(dot(floor(i.uv), float2(12.9898, 78.233))) * 43758.5453);
+                float alt = frac(i.cell.y);
+                float idx = h < (alt - 0.05) * 1.1111 ? floor(i.cell.y) : floor(i.cell.x + 0.5);
+                float cy = floor(idx * 0.125 + 0.01);
+                float2 a = (float2(idx - cy * 8.0, cy) + (2.0 + frac(i.uv) * 124.0) / 128.0) * float2(0.125, 0.25);
                 fixed4 c = tex2Dlod(_MainTex, float4(a, 0, lod));
+                half3 tc = i.tint.rgb;
+                half e = min(i.uv.x, i.tint.w - i.uv.x);
+                if (i.tint.w > 0.5 && e < 0.075) tc = lerp(tc, half3(1.0, 0.97, 0.9), 0.5);
+                c.rgb *= lerp(half3(1, 1, 1), tc, c.a);
             #else
                 fixed4 c = tex2D(_MainTex, i.uv);
             #endif
