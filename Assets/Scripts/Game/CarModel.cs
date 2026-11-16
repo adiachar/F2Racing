@@ -265,7 +265,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localPosition = new Vector3(0, 0.035f, -0.15f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
         sh.transform.localScale = new Vector3(2.5f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = WorldBuilder.ShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        AddSunShadow(root);
+        AddSunShadow(root, null);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
         return cm;
     }
@@ -585,7 +585,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
         // soft blob + a tighter, darker occlusion core under the floor + the four tyre contact patches, in one texture
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = ContactShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        AddSunShadow(root);
+        AddSunShadow(root, res);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
         return cm;
     }
@@ -771,7 +771,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localPosition = new Vector3(0, 0.035f, 0.3f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
         sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = ContactShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        AddSunShadow(root);
+        AddSunShadow(root, res);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer;
         cm.blockBase = cm.blockR.Count;
         cm.Flush();
@@ -1036,62 +1036,135 @@ public class CarModel : MonoBehaviour
         faces.Add(r);
     }
 
-    // ---- sun-projected shadow: ONE extra quad per car (alpha-darken only), laid on the road along the sun's ground
-    // direction, as long as the car's silhouette projected by the sun's height. Soft-edged texture, shared material.
-    static Material sunShadowMat; static Texture2D sunShadowTex;
-    static readonly int ColorId = Shader.PropertyToID("_Color");
-    static void AddSunShadow(GameObject root)
+    // ---- sun shadow: a PLANAR PROJECTED SHADOW of the car's own silhouette. A low-poly copy of the car (car_far's
+    // shape: body, wings, halo, tyres and the driver's helmet; ~12k triangles, positions only, built once and shared)
+    // is drawn with CarShadow.shader, which pushes every vertex along the sun's rays onto the ground plane under the
+    // car (the root's plane: Apply sets the root on the ground, leaning with it) and fills it with one flat shade.
+    // A stencil bit stops overlapping triangles (and two cars' overlapping shadows) darkening twice. Its length
+    // follows the sun's height by itself. One draw per near car (the player, near rivals); far rivals (car_far) keep
+    // only the contact blob. Off at night, in heavy rain, with the sun near the horizon and in baked shade.
+    static Mesh shadowMesh; static bool shadowMeshTried;
+    static Material planarMat; static bool planarTried;
+    static Mesh ShadowMesh()
     {
-        if (sunShadowMat == null)
+        if (shadowMeshTried) return shadowMesh;
+        shadowMeshTried = true;
+        var ta = Resources.Load<TextAsset>("Car/car_far");
+        if (ta == null) return null;
+        var d = ta.bytes; Resources.UnloadAsset(ta);
+        if (d.Length < 8 || d[0] != 'F' || d[1] != '2' || d[2] != 'M' || (d[3] != '1' && d[3] != '2')) return null;
+        bool hasCol = d[3] == '2'; int o = 4;
+        int I() { int x = System.BitConverter.ToInt32(d, o); o += 4; return x; }
+        float F() { float x = System.BitConverter.ToSingle(d, o); o += 4; return x; }
+        int n = I(); var buf = new MergeBuf();
+        for (int p = 0; p < n; p++)
         {
-            var bm = ContactShadowMat();
-            sunShadowMat = new Material(bm);
-            sunShadowTex = WorldBuilder.Tex(64, 64, (u, v, px, py) =>
-            {
-                // rounded box with a soft edge, a little darker towards the car end (v = 0 is the car side)
-                float dx = Mathf.Abs(u - 0.5f) * 2f, dy = Mathf.Abs(v - 0.5f) * 2f;
-                float e = Mathf.Pow(Mathf.Pow(dx, 4f) + Mathf.Pow(dy, 4f), 0.25f);
-                float a = Mathf.Clamp01((1f - e) / 0.35f); a = a * a * (3f - 2f * a);
-                a *= Mathf.Lerp(1f, 0.65f, v);
-                return new Color32(0, 0, 0, (byte)(a * 255));
-            });
-            sunShadowTex.wrapMode = TextureWrapMode.Clamp;
-            sunShadowMat.mainTexture = sunShadowTex;
+            int len = I(); string name = System.Text.Encoding.UTF8.GetString(d, o, len); o += len;
+            int mid = I(); var piv = new Vector3(F(), F(), F());
+            int nv = I(), ni = I();
+            bool wheel = name.StartsWith("wheel_");
+            // the lights, the steering wheel and the rims / uprights (inside the tyres' outline) add nothing to the outline
+            if (mid == 6 || name.StartsWith("steer_") || (wheel && !name.EndsWith("_tyre"))) { o += nv * 24 + (hasCol ? nv * 4 : 0) + ni * 4; continue; }
+            if (wheel) piv.y = WheelY(name[6] == 'F'); // as CreateFromAsset
+            var pos = new Vector3[nv]; var nrm = new Vector3[nv]; var idx = new int[ni]; Color32[] col = null;
+            for (int i = 0; i < nv; i++) pos[i] = new Vector3(F(), F(), F());
+            for (int i = 0; i < nv; i++) nrm[i] = new Vector3(F(), F(), F());
+            if (hasCol) o += nv * 4;
+            for (int i = 0; i < ni; i++) idx[i] = I();
+            if (wheel) FitTyre(pos, null, idx, name[6] == 'F');
+            Compact(ref pos, ref nrm, ref col, idx);
+            if (!wheel) LowerBody(pos, null);
+            buf.Add(pos, null, null, idx, Matrix4x4.Translate(piv), 0, 0f);
         }
-        var go = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(go.GetComponent<Collider>());
-        go.name = "SunShadow"; go.transform.SetParent(root.transform, false);
-        var r = go.GetComponent<MeshRenderer>(); r.sharedMaterial = sunShadowMat;
-        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false; r.enabled = false;
+        {
+            // the driver's helmet (the far detail level: only the helmet), as on the rivals
+            DriverGeo.RestWheel(DriverGeo.WheelPivotBody, DriverGeo.WheelPitch, out var wp, out var wr);
+            var pose = new DriverGeo.Pose(); DriverGeo.Solve(pose, wp, wr, 0, 0, 0);
+            buf.AddDriver(DriverGeo.Build(0, pose));
+        }
+        var full = buf.Build("CarShadowSrc");
+        if (full == null) return null;
+        var m = new Mesh { name = "CarShadow", indexFormat = full.indexFormat };
+        m.vertices = full.vertices; m.triangles = full.triangles; // positions only: the shader needs nothing else
+        Destroy(full);
+        // the shadow reaches up to ~6 m past the car (low sun): wider bounds, or it vanishes as soon as the car is off screen
+        m.RecalculateBounds(); var bb = m.bounds; bb.Expand(new Vector3(13f, 2f, 13f) / RootScale); m.bounds = bb;
+        m.UploadMeshData(true);
+        return shadowMesh = m;
+    }
+    static Material PlanarMat()
+    {
+        if (planarTried) return planarMat;
+        planarTried = true;
+        var s = Resources.Load<Shader>("CarShadow");
+        if (s == null || !s.isSupported) return null;
+        return planarMat = new Material(s) { name = "CarShadow" };
+    }
+    // res: the car's model (null: the built-from-code fallback car)
+    static void AddSunShadow(GameObject root, string res)
+    {
+        if (res != null && res.EndsWith("_far")) return; // far rivals: the contact blob only
+        var mesh = ShadowMesh(); var mat = PlanarMat();
+        if (mesh == null || mat == null) return;
+        var go = new GameObject("SunShadow"); go.transform.SetParent(root.transform, false);
+        float rs = root.transform.localScale.x; go.transform.localScale = Vector3.one * (rs > 1e-4f ? RootScale / rs : 1f);
+        go.AddComponent<MeshFilter>().sharedMesh = mesh;
+        var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mat;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
+        r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off; r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+        r.enabled = false;
         go.AddComponent<SunShadowFollow>();
     }
     sealed class SunShadowFollow : MonoBehaviour
     {
-        MeshRenderer r; MaterialPropertyBlock pb; Transform car; bool hasColor;
-        void Awake() { r = GetComponent<MeshRenderer>(); car = transform.parent; pb = new MaterialPropertyBlock(); hasColor = r.sharedMaterial.HasProperty(ColorId); }
+        static readonly int PlaneId = Shader.PropertyToID("_ShadowPlane"), SunId = Shader.PropertyToID("_ShadowSun"),
+            AwayId = Shader.PropertyToID("_ShadowAway"), CarLitId = Shader.PropertyToID("_CarLit");
+        MeshRenderer r; MaterialPropertyBlock pb; Transform car, body; bool isRival, litSet; float lit = 1f; int phase;
+        void Awake()
+        {
+            // (CreateFromAsset / CreateMergedRival set body and rival before the shadow is added)
+            r = GetComponent<MeshRenderer>(); car = transform.parent; pb = new MaterialPropertyBlock();
+            var cm = car != null ? car.GetComponent<CarModel>() : null;
+            if (cm != null) { body = cm.body; isRival = cm.rival; }
+            phase = Random.Range(0, 4);
+        }
+        void OnDisable() { litSet = false; }
         void LateUpdate()
         {
             if (!LightBake.Active || LightBake.Night || car == null) { r.enabled = false; return; }
-            Vector3 s = LightBake.ToSun; float hl = Mathf.Sqrt(s.x * s.x + s.z * s.z);
-            if (s.y < 0.12f || hl < 0.05f) { r.enabled = false; return; }
+            Vector3 s = LightBake.ToSun;
+            // sun height: none right on the horizon (metres long, and the car's own sun is grazing), a little softer low down
+            float a = Mathf.Clamp01((s.y - 0.08f) / 0.12f) * Mathf.Lerp(0.40f, 0.52f, Mathf.Clamp01((s.y - 0.2f) / 0.5f));
+            // cloud and rain: the sun through the cloud (Sky.SunShare ~1.4 on a clear day), none in heavy rain
+            a *= Mathf.Clamp01(Sky.SunShare / 1.1f) * Mathf.Clamp01((0.95f - Weather.Wetness) / 0.95f);
             var cam = Camera.main;
-            if (cam != null && (cam.transform.position - car.position).sqrMagnitude > 140f * 140f) { r.enabled = false; return; }
-            r.enabled = true;
-            Vector2 aw = new Vector2(-s.x, -s.z) / hl;                       // away from the sun, on the ground
-            Vector3 f = car.forward; Vector2 f2 = new Vector2(f.x, f.z).normalized;
-            float cosP = Mathf.Abs(f2.x * aw.x + f2.y * aw.y), sinP = Mathf.Sqrt(Mathf.Max(0f, 1f - cosP * cosP));
-            const float Len = 4.6f, Wid = 1.7f, Hgt = 0.95f;
-            float throwLen = Mathf.Min(Hgt * hl / s.y, 3.5f);                // how far the roof's shadow lands past the car
-            float ext = Len * cosP + Wid * sinP, across = (Len * sinP + Wid * cosP) * 0.92f + 0.25f;
-            float length = ext * 0.95f + throwLen + 0.5f;
-            var t = transform;
-            t.position = car.position + Vector3.up * 0.04f + new Vector3(aw.x, 0, aw.y) * (throwLen * 0.5f + 0.05f);
-            t.rotation = Quaternion.Euler(90f, Mathf.Atan2(aw.x, aw.y) * Mathf.Rad2Deg, 0f);
-            t.localScale = new Vector3(across, length, 1f);
-            if (hasColor)
+            if (a < 0.01f || (cam != null && (cam.transform.position - car.position).sqrMagnitude > 130f * 130f)) { r.enabled = false; litSet = false; return; }
+            Vector3 cp = car.position, n = car.up;
+            // the ground under the car (Apply keeps the root on it; anything that lifts the car or its body off it
+            // fades the shadow out instead of letting it float, and the plane stays on the ground)
+            float gy = WorldBuilder.Height != null ? WorldBuilder.H(cp.x, cp.z) : cp.y;
+            float lift = Mathf.Max(0f, cp.y - gy);
+            if (body != null) lift += Mathf.Max(0f, Vector3.Dot(body.position - cp, n));
+            a *= 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.06f, 0.4f, lift));
+            // the car in baked shade (bridges, stands, trees): the player's car has its own (_CarLit, smoothed by
+            // GameManager); a rival samples the bake itself, every 4th frame, smoothed
+            if (!isRival) lit = Shader.GetGlobalFloat(CarLitId);
+            else if (!litSet || (Time.frameCount + phase) % 4 == 0)
             {
-                float k = Mathf.Clamp01(Sky.SunShare * 0.7f) * Shader.GetGlobalFloat("_CarLit") * 0.62f;
-                pb.SetColor(ColorId, new Color(1f, 1f, 1f, k)); r.SetPropertyBlock(pb);
+                float l = LightBake.Sun(cp.x, cp.z, cp.y + 0.6f);
+                lit = !litSet ? l : lit + (l - lit) * Mathf.Min(1f, Time.deltaTime * 16f);
+                litSet = true;
             }
+            a *= Mathf.Clamp01(lit);
+            if (a < 0.01f) { r.enabled = false; return; }
+            r.enabled = true;
+            Vector3 g = new Vector3(cp.x, Mathf.Min(cp.y, gy), cp.z);
+            float hl = Mathf.Sqrt(s.x * s.x + s.z * s.z);
+            Vector3 aw = hl > 1e-4f ? new Vector3(-s.x, 0f, -s.z) / hl : Vector3.zero;
+            pb.SetVector(PlaneId, new Vector4(n.x, n.y, n.z, -Vector3.Dot(n, g)));
+            pb.SetVector(SunId, new Vector4(s.x, s.y, s.z, a));
+            pb.SetVector(AwayId, new Vector4(aw.x, aw.y, aw.z, Vector3.Dot(aw, cp)));
+            r.SetPropertyBlock(pb);
         }
     }
 
