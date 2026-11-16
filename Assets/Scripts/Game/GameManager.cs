@@ -414,7 +414,7 @@ public partial class GameManager : MonoBehaviour
                 else if (BrakeRect.Contains(p)) brakeFinger = t.fingerId;
             }
             if (t.fingerId == gasFinger) { if (!ended) { gasT = gasMode == 1 ? 1f : PedalAmount(GasRect, p); gasSeen = true; } continue; }
-            if (t.fingerId == brakeFinger) { if (!ended) { brkT = brakeMode == 1 ? 1f : PedalAmount(BrakeRect, p); brakeSeen = true; } continue; }
+            if (t.fingerId == brakeFinger) { if (!ended) { brkT = brakeMode == 1 ? 1f : PedalAmount(BrakeRect, p, 1.5f); brakeSeen = true; } continue; }
             if (!tilt && p.x < Screen.width * 0.42f && p.y > S(60))
             {
                 if (t.phase == TouchPhase.Began || steerFinger < 0) { steerFinger = t.fingerId; steerAnchorX = p.x; }
@@ -442,7 +442,13 @@ public partial class GameManager : MonoBehaviour
         steer = AssistSteer(steer);
         return new CarInput(steer, pedalGas, pedalBrake);
     }
-    static float PedalAmount(Rect r, Vector2 p) => Mathf.Clamp01(0.2f + 0.8f * (r.yMax - p.y) / r.height); // low on the pedal = light, high = full
+    // low on the pedal = light, high = full. The bottom 10% is a soft zone (0%), the top 8% is full, and in between a
+    // progressive curve gives fine control at small openings (before: any touch gave 20% and the bottom half was too strong)
+    static float PedalAmount(Rect r, Vector2 p, float curve = 1.8f)
+    {
+        float x = Mathf.Clamp01(((r.yMax - p.y) / r.height - 0.10f) / 0.82f);
+        return Mathf.Pow(x, curve);
+    }
 
     // ---------------------------------------------------------------- tilt steering
     // The phone is the steering wheel: its turn angle is the direction of gravity within the screen plane.
