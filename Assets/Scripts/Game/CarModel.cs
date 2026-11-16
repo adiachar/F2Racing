@@ -17,7 +17,11 @@ public class CarModel : MonoBehaviour
     public void SetSteerDeg(float deg) { if (steerWheel != null) steerWheel.localRotation = Quaternion.Euler(steerPitch, 0, deg); }
     public Transform SteerWheel => steerWheel; // null on the code-built fallback car (it has no steering wheel)
     public Transform[] frontPivots = new Transform[2], frontSpin = new Transform[2], rearSpin = new Transform[2];
-    public Transform helmet;
+    public Transform helmet; // GameManager hides it in the cockpit view (with a driver: a stand-in that hides the driver's head)
+    DriverModel driver;      // the player's driver (DriverModel.cs); rivals have theirs merged into the body mesh
+    // pose the player's driver: hands on the steering wheel as it is turned now, head from DriverFeel.Head. Call after the
+    // wheel is turned for the frame (the driver poses itself late in the frame when nobody calls this).
+    public void PoseDriver(DriverFeel f) { if (driver != null && f != null) driver.Pose(f.headPitch, f.headYaw, f.headRoll); }
 
     // ------------------------------------------------------------------ mesh building helpers
     class MeshBuf
@@ -292,9 +296,13 @@ public class CarModel : MonoBehaviour
     public void SetLivery(Livery l)
     {
         lastLivery = l; hasLivery = true;
+        // the driver: suit in the team colour, trim and gloves in the second one; a rival's helmet in the team's colours,
+        // the player's in their own yellow with a band and stripe in the team colour
+        if (driver != null) driver.SetColours(l.primary, l.secondary, PlayerHelmet, l.primary);
         if (merged)
         {
             mpb.SetVector(LivAId, LinV(l.primary)); mpb.SetVector(LivBId, LinV(l.secondary));
+            mpb.SetVector(HelmAId, LinV(l.secondary)); mpb.SetVector(HelmBId, LinV(l.primary));
             var acc = l.accent; acc.a = 1f; mpb.SetVector(LivCId, LinV(acc)); // a = 1: livery split on
             Flush(); return;
         }
@@ -547,7 +555,17 @@ public class CarModel : MonoBehaviour
         cm.Res = res;
         cm.lightMat = mats[6]; cm.stripeMat = mats[7]; cm.liveryBody = mats[0]; cm.liverySecond = mats[1];
         cm.tyreMat[0] = tyreF; cm.tyreMat[1] = tyreR; cm.hubMat[0] = hubF; cm.hubMat[1] = hubR; cm.rival = rival;
-        // the model has no driver: add a helmet in the cockpit (hidden in cockpit view)
+        // the model has no driver: the player's own (DriverModel: skinned, hands on the wheel, one draw call; its head is
+        // hidden in the cockpit view through the helmet stand-in). A rival built part by part (no paint shader) and the
+        // fallback keep the plain helmet below.
+        if (!rival && PaintShader() != null)
+        {
+            Vector3 wPiv = cm.steerWheel != null ? cm.steerWheel.localPosition : DriverGeo.WheelPivotBody;
+            float wPitch = cm.steerWheel != null ? cm.steerPitch : DriverGeo.WheelPitch;
+            cm.driver = DriverModel.Attach(cm.body, cm.steerWheel, wPiv, wPitch, paintShader, out cm.helmet);
+            if (cm.driver != null) cm.driver.SetColours(paint ?? new Color(0.78f, 0.05f, 0.07f), new Color(0.93f, 0.93f, 0.94f), PlayerHelmet, paint ?? new Color(0.78f, 0.05f, 0.07f));
+        }
+        if (cm.driver == null)
         {
             var h = GameObject.CreatePrimitive(PrimitiveType.Sphere); Destroy(h.GetComponent<Collider>());
             h.name = "Helmet"; h.transform.SetParent(cm.body, false);
@@ -580,13 +598,15 @@ public class CarModel : MonoBehaviour
     // shares ONE material, and what differs per car goes through a MaterialPropertyBlock with GPU-instanced properties.
     // The wing pieces for the damage are split off the merged body only when a wing is actually hit (MergedSplit).
     public const byte IdPaint = 0, IdWing = 1, IdCarbon = 2, IdMetal = 3, IdTyreF = 4, IdTyreR = 5, IdHubF = 6, IdHubR = 7,
-        IdLight = 8, IdStripe = 9, IdHelmet = 10, IdSteer = 11;
-    static readonly Vector3 HelmetPos = new Vector3(0, 0.72f, 0.05f), HelmetScale = new Vector3(0.26f, 0.28f, 0.3f);
+        IdLight = 8, IdStripe = 9, IdHelmet = 10 /* (the old sphere helmet; unused) */, IdSteer = 11; // driver: 12..17 (DriverGeo)
+    static readonly Vector3 HelmetPos = DriverGeo.HelmetCentre / DriverGeo.K; // body frame
+    static readonly Color PlayerHelmet = new Color(1f, 0.82f, 0.18f);
     static readonly string[] WheelKeys = { "FL", "FR", "RL", "RR" };
     static readonly int LivAId = Shader.PropertyToID("_Color"), // livery primary: CarPaint _MERGED reads it as an instanced _Color
         LivBId = Shader.PropertyToID("_LivB"), LivCId = Shader.PropertyToID("_LivC"),
         GlowFId = Shader.PropertyToID("_GlowF"), GlowRId = Shader.PropertyToID("_GlowR"), LightColId = Shader.PropertyToID("_LightCol"),
-        StripeId = Shader.PropertyToID("_StripeCol"), AxleId = Shader.PropertyToID("_Axle"), TyreWDId = Shader.PropertyToID("_TyreWD");
+        StripeId = Shader.PropertyToID("_StripeCol"), AxleId = Shader.PropertyToID("_Axle"), TyreWDId = Shader.PropertyToID("_TyreWD"),
+        HelmAId = Shader.PropertyToID("_HelmA"), HelmBId = Shader.PropertyToID("_HelmB");
     sealed class RivalSet
     {
         public Mesh body; public readonly Mesh[] spin = new Mesh[4], steerOnly = new Mesh[4];
@@ -614,6 +634,13 @@ public class CarModel : MonoBehaviour
             }
             foreach (var i in idx) t.Add(o + i);
         }
+        // the driver (DriverGeo, driver frame in metres -> body frame): its colours already carry AO (R) and part ID (A)
+        public void AddDriver(DriverGeo.Data d)
+        {
+            int o = v.Count; float k = 1f / DriverGeo.K;
+            for (int i = 0; i < d.v.Count; i++) { v.Add(d.v[i] * k); n.Add(d.n[i]); c.Add(d.c[i]); }
+            foreach (var i in d.t) t.Add(o + i);
+        }
         public int Count => v.Count;
         public Mesh Build(string name)
         {
@@ -636,6 +663,7 @@ public class CarModel : MonoBehaviour
         int n = I();
         var set = new RivalSet { far = res.EndsWith("_far") };
         var body = new MergeBuf(); var spin = new MergeBuf[4]; var stat = new MergeBuf[4];
+        Vector3 wPiv = DriverGeo.WheelPivotBody; float wPitch = DriverGeo.WheelPitch; // (the driver's hands go on the wheel)
         for (int w = 0; w < 4; w++) { spin[w] = new MergeBuf(); stat[w] = new MergeBuf(); }
         for (int p = 0; p < n; p++)
         {
@@ -674,6 +702,7 @@ public class CarModel : MonoBehaviour
                 // rivals never turn it: baked in at its rest pose
                 float.TryParse(name.Substring(6), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float pitch);
                 body.Add(pos, nrm, col, idx, Matrix4x4.TRS(piv, Quaternion.Euler(pitch, 0, 0), Vector3.one), IdSteer, 0.5f);
+                wPiv = piv; wPitch = pitch;
             }
             else
             {
@@ -682,9 +711,13 @@ public class CarModel : MonoBehaviour
                 body.Add(pos, nrm, col, idx, at, id, k);
             }
         }
-        // the driver's helmet (a Unity sphere, as on the player's car), in the body mesh
-        sphere ??= prim(PrimitiveType.Sphere);
-        body.Add(sphere.vertices, sphere.normals, null, sphere.triangles, Matrix4x4.TRS(HelmetPos, Quaternion.identity, HelmetScale), IdHelmet, 0f);
+        // the driver (DriverModel.cs) in the body mesh, hands on the wheel at its rest angle (a rival's wheel never turns):
+        // helmet, HANS, suit and arms near (~0.7k triangles, as many as the old sphere helmet), only the helmet far away
+        {
+            DriverGeo.RestWheel(wPiv, wPitch, out var wp, out var wr);
+            var pose = new DriverGeo.Pose(); DriverGeo.Solve(pose, wp, wr, 0, 0, 0);
+            body.AddDriver(DriverGeo.Build(set.far ? 0 : 1, pose));
+        }
         set.body = body.Build(res + "|rival_body");
         for (int w = 0; w < 4; w++) { set.spin[w] = spin[w].Build(res + "|spin" + w); set.steerOnly[w] = stat[w].Build(res + "|steer" + w); }
         var m = new Material(paintShader) { name = "RivalPaint " + res, enableInstancing = true };
@@ -728,6 +761,7 @@ public class CarModel : MonoBehaviour
         cm.mpb.SetVector(StripeId, LinV(stripe ?? StripeFor(FormulaSim.Compound.Soft))); cm.mpb.SetVector(LightColId, LinV(new Color(0.25f, 0.02f, 0.02f)));
         cm.mpb.SetVector(GlowFId, LinV(Color.black)); cm.mpb.SetVector(GlowRId, LinV(Color.black));
         cm.mpb.SetVector(AxleId, Vector4.zero); cm.mpb.SetVector(TyreWDId, Vector4.zero);
+        cm.mpb.SetVector(HelmAId, LinV(new Color(0.93f, 0.93f, 0.94f))); cm.mpb.SetVector(HelmBId, LinV(paint ?? new Color(0.78f, 0.05f, 0.07f)));
         cm.lightState = 0;
         var sh = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(sh.GetComponent<Collider>());
         sh.name = "ContactShadow"; sh.transform.SetParent(root.transform, false);

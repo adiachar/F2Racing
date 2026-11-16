@@ -3,12 +3,14 @@
 //    is pushed and tilted to the outside by cornering force, shakes on kerbs / rough ground / when the floor hits
 //    the road, buzzes finely at high speed, kicks a little on every gear change, and turns slightly into the corner.
 //    Everything force-driven runs through critically damped springs, so nothing snaps or oscillates.
+//  * the driver's head as the outside cameras see it (DriverModel): nods, tilts and looks with the same forces
 //  * the steering wheel in the cockpit, turned by the real front-wheel angle through a fixed steering ratio,
 //    and the shift lights on it
 //  * what the tyre / wind / plank sounds in EngineAudio need (slip angle against the angle of peak grip, locked
 //    fronts, floor on the road, slipstream)
 // It only reads the car; the physics is untouched. Nothing here allocates after start-up.
-// GameManager calls Step + Cockpit from its camera block and FeedAudio from its audio block.
+// GameManager calls Step + Cockpit from its camera block, Head where it poses the car's visuals and FeedAudio from its
+// audio block.
 using FormulaSim;
 using UnityEngine;
 
@@ -29,6 +31,15 @@ public class DriverFeel
     const float BottomShake = 0.5f;                                             // shake level while the floor is on the road
     // spring speeds (rad/s): about 3 Hz for the head, slower for the eyes, quick for the shake level
     const float WHead = 19f, WLook = 9f, WShake = 30f;
+
+    // ---- the driver's head (DriverModel), in every view (the cockpit view hides it): the neck is slower than the eye
+    // spring above and the head is heavier, so it lags a little; a few degrees at 4-5 g
+    const float HeadNodPerG = 1.3f, HeadNodBrakeMax = 6f, HeadNodPowerMax = 2.5f; // deg per g: forward under braking, back under power
+    const float HeadTiltPerG = 1.5f, HeadTiltMax = 6f;                          // deg per g: pushed over to the outside of the corner
+    const float HeadLookPerYaw = 9f, HeadLookMax = 8f;                         // deg per rad/s of yaw rate: looks into the corner
+    const float WNeck = 10f;
+    public float headPitch, headYaw, headRoll; // degrees for the head bone: nod down +, look right +, tilt left +
+    Spring hNod, hTilt, hLook;
 
     // the real wheel: half a turn each way at full lock (360 degrees lock to lock)
     const float WheelLockDeg = 180f;
@@ -55,6 +66,7 @@ public class DriverFeel
     void Reset()
     {
         sPitch = sRoll = sYaw = sSway = sSurge = sShake = new Spring();
+        hNod = hTilt = hLook = new Spring(); headPitch = headYaw = headRoll = 0;
         offset = Vector3.zero; pitch = yaw = roll = 0; lastGear = -1;
     }
 
@@ -106,6 +118,27 @@ public class DriverFeel
         pitch = (sPitch.x + shake * ShakePitch * nB + buzz * BuzzPitch * nA) * k;
         roll = (sRoll.x + shake * ShakeRoll * nC) * k;
         yaw = sYaw.x * k;
+    }
+
+    // The driver's head under the car's forces, for DriverModel (CarModel.PoseDriver). Runs in every view, replays and
+    // the TV camera included; car = null (a replay: the car's state is not the one shown) eases the head back to centre.
+    // gLon / gLat as in Step; dt = 0 (paused) holds it.
+    public void Head(FormulaCar car, float gLon, float gLat, float dt)
+    {
+        if (dt <= 0) return;
+        if (dt > 0.05f) dt = 0.05f;
+        float lonG = 0, latG = 0, yawRate = 0;
+        if (car != null && !float.IsNaN(gLon) && !float.IsNaN(gLat))
+        {
+            lonG = gLon / 9.81f; latG = gLat / 9.81f;
+            yawRate = (float)car.r; if (float.IsNaN(yawRate)) yawRate = 0;
+            float moving = Mathf.Clamp01((float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy) / 8f);
+            yawRate *= moving;
+        }
+        hNod.Step(Mathf.Clamp(-lonG * HeadNodPerG, -HeadNodPowerMax, HeadNodBrakeMax), WNeck, dt);
+        hTilt.Step(Mathf.Clamp(-latG * HeadTiltPerG, -HeadTiltMax, HeadTiltMax), WNeck, dt);
+        hLook.Step(Mathf.Clamp(-yawRate * HeadLookPerYaw, -HeadLookMax, HeadLookMax), WNeck * 0.6f, dt);
+        headPitch = hNod.x; headRoll = hTilt.x; headYaw = hLook.x;
     }
 
     // Steering wheel and shift lights of the player's car. The wheel shows the real front-wheel angle times a fixed

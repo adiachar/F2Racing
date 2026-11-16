@@ -204,6 +204,9 @@ public static class Trackside
     // objects that must not go into the light bake's shadow map (see-through fence, ground decals): WorldBuilder parents
     // this holder to the world only after LightBake.AddOccluders
     public static GameObject Late;
+    // pit boxes (one per garage bay): where a car stops in the working lane. Used by PitCrew.cs. Rebuilt with the circuit.
+    public struct PitBay { public Vector3 centre, fwd, side; public float garageDist; public int idx; } // side = towards the garage; garageDist = from centre to the garage front
+    public static readonly List<PitBay> Bays = new List<PitBay>();
     static Material fenceMat;
     static readonly List<Renderer> fenceRs = new List<Renderer>(), optional = new List<Renderer>(), postRs = new List<Renderer>();
 
@@ -215,7 +218,7 @@ public static class Trackside
     // ================================================================ build
     public static void Build(Track t, Transform root, bool street)
     {
-        feet.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
+        Bays.Clear(); feet.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
         if (t == null || t.N < 8 || root == null) return;
         int N = t.N; float ds = (float)t.ds;
         float hw = (float)t.width * 0.5f, kerb = WorldBuilder.Kerb;
@@ -400,6 +403,15 @@ public static class Trackside
                 Quad(A, ca + Da * laneIn + up * 0.03f, cb + Db * laneIn + up * 0.03f, cb + Db * laneOut + up * 0.03f, ca + Da * laneOut + up * 0.03f, up, TracksideArt.Sw(TracksideArt.PitAsphalt));
                 float lineL = laneIn + 6.5f;
                 Quad(A, ca + Da * lineL + up * 0.04f, cb + Db * lineL + up * 0.04f, cb + Db * (lineL + 0.15f) + up * 0.04f, ca + Da * (lineL + 0.15f) + up * 0.04f, up, TracksideArt.Sw(TracksideArt.LineWhite));
+                // the pit box: a white rectangle on the working lane where the car stops (centre 8.6 m out from the wall lane edge)
+                {
+                    float boxLat = laneIn + 8.6f; Vector3 mid = (ca + cb) * 0.5f + D * boxLat;
+                    float lw = 0.1f, hf = 3.0f, hs = 1.45f;
+                    void Strip(float g0, float g1, float h0, float h1) { Vector3 bq = mid + up * 0.045f; Quad(A, bq + T * g0 + D * h0, bq + T * g1 + D * h0, bq + T * g1 + D * h1, bq + T * g0 + D * h1, up, TracksideArt.Sw(TracksideArt.LineWhite)); }
+                    Strip(-hf, hf, -hs, -hs + lw); Strip(-hf, hf, hs - lw, hs); Strip(-hf, -hf + lw, -hs, hs); Strip(hf - lw, hf, -hs, hs);
+                    Strip(-0.05f, 0.05f, -hs - 0.5f, -hs); // nose mark: where the front axle stops
+                    Bays.Add(new PitBay { centre = new Vector3(mid.x, 0, mid.z), fwd = T, side = D, garageDist = laneOut - boxLat, idx = ia });
+                }
                 // garage front: door below, glass above, parapet with an advertiser on top
                 Vector3 fa = ca + Da * laneOut, fb = cb + Db * laneOut, ba = ca + Da * backL, bk = cb + Db * backL;
                 Vector3 fwdFace = -D;

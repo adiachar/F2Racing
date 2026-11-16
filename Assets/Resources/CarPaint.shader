@@ -19,7 +19,7 @@
 //           with _Under = 1 only down-facing surfaces become carbon (wing undersides of painted parts)
 //  _TYRE    wheel frame (x = axle): tread sheen that dulls with _Wear and _Dirt, subtle moulded sidewall bands
 //  _WHEEL   rims, discs, calipers: brake dust darkening (_Dust) and disc glow (_Glow, from the brake temperature)
-//  _HELMET  Unity sphere: a mirrored visor band and a thin accent stripe (_Color3) over the top
+//  _HELMET  Unity sphere: a mirrored visor band and a thin accent stripe (_Color3) over the top (fallback helmet only)
 //  _MERGED  rival cars (CarModel.CreateMergedRival): the whole car in one mesh (car_far) or body + 4 wheels (car_lod),
 //           ONE material shared by every rival. Vertex colour A = part ID (see MMat below), R = baked AO with its
 //           strength already applied, G = brake-disc mask. Everything that differs per car (livery, stripe, brake
@@ -27,6 +27,8 @@
 //           properties (multi_compile_instancing): on GLES3/Vulkan/Metal equal meshes of all rivals draw as one
 //           instanced call; on GLES2 (no instancing) the same properties are plain uniforms and each renderer is one
 //           draw call with the shared material (no material switch between cars).
+//           The driver (DriverModel.cs) uses this path too: merged into a rival's body, or as the player's own skinned
+//           mesh with one non-instanced material (part IDs 12..17: matte suit and gloves, glossy helmet, dark visor).
 Shader "F2/CarPaint"
 {
     Properties
@@ -80,6 +82,8 @@ Shader "F2/CarPaint"
             UNITY_DEFINE_INSTANCED_PROP(float4, _StripeCol)// tyre compound stripe
             UNITY_DEFINE_INSTANCED_PROP(float4, _Axle)     // brake dust front, rear
             UNITY_DEFINE_INSTANCED_PROP(float4, _TyreWD)   // tyre wear front, dirt front, wear rear, dirt rear
+            UNITY_DEFINE_INSTANCED_PROP(float4, _HelmA)    // driver's helmet: shell colour
+            UNITY_DEFINE_INSTANCED_PROP(float4, _HelmB)    // driver's helmet: design colour (brow band, centre stripe)
         UNITY_INSTANCING_BUFFER_END(CarProps)
         #define MP(n) UNITY_ACCESS_INSTANCED_PROP(CarProps, n)
         half4 _TyreRad; half _Far;
@@ -102,7 +106,8 @@ Shader "F2/CarPaint"
             return lerp(lerp(c1, c2, sec), c3, acc);
         }
         // part IDs (CarModel.Id*): 0 body paint, 1 wings (secondary), 2 carbon, 3 metal, 4/5 tyre front/rear,
-        // 6/7 rim + brake front/rear, 8 rear lights, 9 tyre stripe, 10 helmet, 11 steering wheel.
+        // 6/7 rim + brake front/rear, 8 rear lights, 9 tyre stripe, 11 steering wheel; the driver (DriverModel): 12 suit
+        // (livery primary), 13 suit trim and gloves (secondary), 14 / 15 helmet shell / design, 16 visor, 17 dark fabric.
         // base colour and (clear coat, gloss, metal): the values the per-part materials had (CarModel.CreateFromAsset)
         void MMat(half id, out half3 base, out half3 cgm)
         {
@@ -117,15 +122,11 @@ Shader "F2/CarPaint"
             k = MIs(id, 11); base = lerp(base, half3(0.03, 0.03, 0.033), k); cgm = lerp(cgm, half3(0.5, 0.7, 0.1), k);
             k = MIs(id, 8); base = lerp(base, half3(1.0, 0.15, 0.12), k); cgm = lerp(cgm, half3(0.5, 0.8, 0.0), k);
             k = MIs(id, 9); base = lerp(base, MP(_StripeCol).rgb, k); cgm = lerp(cgm, half3(0.25, 0.5, 0.0), k);
-            k = MIs(id, 10); base = lerp(base, half3(1.0, 0.64, 0.027), k); cgm = lerp(cgm, half3(1.0, 0.93, 0.1), k);
-        }
-        // helmet visor / stripe from the body-space position (the helmet sphere sits at (0, 0.72, 0.05), scale 0.26/0.28/0.3)
-        half MVisor(float3 op, out half stripe)
-        {
-            float3 p = (op - float3(0.0, 0.72, 0.05)) / float3(0.26, 0.28, 0.3);
-            half visor = saturate((p.z - 0.12) * 25.0) * saturate((p.y + 0.06) * 40.0) * saturate((0.16 - p.y) * 40.0);
-            stripe = (1.0 - visor) * step(abs(p.x), 0.045) * step(0.0, p.y);
-            return visor;
+            // the driver: fabric is matte (a faint broad sheen), the helmet a glossy clear coat, the visor dark smoked glass
+            k = step(11.5, id) * step(id, 13.5); base = lerp(base, lerp(MP(_Color).rgb, MP(_LivB).rgb, MIs(id, 13)) * 0.8, k); cgm = lerp(cgm, half3(0.06, 0.3, 0.0), k);
+            k = step(13.5, id) * step(id, 15.5); base = lerp(base, lerp(MP(_HelmA).rgb, MP(_HelmB).rgb, MIs(id, 15)), k); cgm = lerp(cgm, half3(1.0, 0.95, 0.08), k);
+            k = MIs(id, 16); base = lerp(base, half3(0.012, 0.013, 0.017), k); cgm = lerp(cgm, half3(1.0, 0.97, 0.3), k);
+            k = MIs(id, 17); base = lerp(base, half3(0.025, 0.025, 0.028), k); cgm = lerp(cgm, half3(0.08, 0.3, 0.0), k);
         }
     #endif
     ENDCG
@@ -222,6 +223,7 @@ Shader "F2/CarPaint"
                 half ao = lerp(1.0, i.col.r, _AO);
                 half coatK = _Coat, metal = _Metal, specK = 1.0, glossAdd = 0.0, gloss0 = _Gloss;
                 half3 emis = 0, envTint = 1;
+                half visorK = 0.0;
                 #if defined(_MERGED)
                 {
                     // one mesh, many parts: the part ID picks the material (see MMat)
@@ -262,11 +264,8 @@ Shader "F2/CarPaint"
                     base = lerp(base * (1.0 - 0.55 * dust) + half3(0.012, 0.009, 0.006) * dust, half3(0.06, 0.06, 0.065), disc);
                     coatK *= 1.0 - 0.6 * dust; metal *= 1.0 - 0.5 * dust; glossAdd += -0.25 * dust;
                     emis = lerp(MP(_GlowR).rgb, MP(_GlowF).rgb, front) * disc + MP(_LightCol).rgb * MIs(id, 8);
-                    // helmet
-                    half hs; half visor = MVisor(i.op, hs) * MIs(id, 10); hs *= MIs(id, 10);
-                    base = lerp(lerp(base, half3(0.08, 0.08, 0.1), hs), half3(0.015, 0.015, 0.02), visor);
-                    coatK = lerp(coatK, 1.0, visor); metal = lerp(metal, 0.9, visor); specK *= 1.0 + visor;
-                    envTint = lerp(half3(1, 1, 1), half3(1.0, 0.72, 0.38), visor);
+                    // the driver's visor: smoked glass shows a little more of the sky than a clear coat would
+                    visorK = MIs(id, 16);
                 }
                 #elif defined(_CARBON)
                 {
@@ -320,7 +319,7 @@ Shader "F2/CarPaint"
                 half mir = _Mirror;
                 #endif
                 mir *= step(0.45, abs(i.op.x));
-                half coatMin = 0.0;
+                half coatMin = 0.1 * visorK;
                 if (mir > 0.5)
                 {
                     base = half3(0.05, 0.052, 0.056); metal = 0.0; coatK = 0.6; gloss0 = 0.92; glossAdd = 0.0; specK = 0.5;
@@ -365,7 +364,7 @@ Shader "F2/CarPaint"
     }
     // Low graphics level (GameManagerPerf.cs sets this shader's maximumLOD to 100): sun, sky, clear coat and the sun
     // highlight are worked out per vertex (no reflection-probe read, no per-pixel pow); per pixel only the livery
-    // split, the baked AO, the helmet visor and the brake dust / disc glow. Carbon weave and tyre sheen are left out.
+    // split, the baked AO, the helmet visor (fallback helmet) and the brake dust / disc glow. Carbon weave and tyre sheen are left out.
     SubShader
     {
         Tags { "RenderType"="Opaque" }
@@ -483,8 +482,6 @@ Shader "F2/CarPaint"
                     half dust = lerp(MP(_Axle).y, MP(_Axle).x, front) * hub, disc = i.col.g * hub;
                     base = lerp(base * (1.0 - 0.55 * dust), half3(0.06, 0.06, 0.065), disc);
                     emis = lerp(MP(_GlowR).rgb, MP(_GlowF).rgb, front) * disc + MP(_LightCol).rgb * MIs(id, 8);
-                    half hs; half visor = MVisor(i.op, hs) * MIs(id, 10); hs *= MIs(id, 10);
-                    base = lerp(lerp(base, half3(0.08, 0.08, 0.1), hs), half3(0.3, 0.22, 0.12), visor);
                 #elif defined(_WHEEL)
                     half disc = i.col.g;
                     base = lerp(base * (1.0 - 0.55 * _Dust), half3(0.06, 0.06, 0.065), disc);

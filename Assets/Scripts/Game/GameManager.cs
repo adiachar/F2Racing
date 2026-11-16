@@ -316,6 +316,7 @@ public partial class GameManager : MonoBehaviour
             rivalFar.Add(far); rivalNear.Add(true);
         }
         RcSetup(); // flags and safety car, rival tyre stripes (GameManagerRaceControl.cs)
+        PitCrewSetup(); // the pit crew of this circuit (PitCrew.cs)
         AfterSetupRivals(); // qualifying: the show cars spread round the lap (Qualifying.cs)
         ClearRecording();
     }
@@ -745,6 +746,7 @@ public partial class GameManager : MonoBehaviour
     bool boxArmed; double pitLoss; int pitStops;
     void PitStop()
     {
+        Color oldTyre = Weather.Stripe(carSet); // (the crew shows the stop: PitCrew.cs)
         carSet = NextSet; var next = Weather.PhysicsCompound(carSet);
         car.cfg.compound = next;
         car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0;
@@ -754,6 +756,7 @@ public partial class GameManager : MonoBehaviour
         double wing = car.damage.WingsDamaged ? AiDriver.WingChange : 0; car.RepairWings(); car.FixPunctures();
         double loss = RcPitLoss(PitLoss); // cheaper under the safety car / VSC
         pitLoss += loss + wing; pitStops++;
+        PitCrewPlayerStop(oldTyre, Weather.Stripe(carSet), wing);
         Flash($"Pit stop: {Weather.TyreName(carSet)}  +{loss + wing:0}s");
     }
     // the next tyre set: the one for the weather first (a wet race boxes for wets), then round the rest
@@ -840,6 +843,9 @@ public partial class GameManager : MonoBehaviour
         model.helmet.gameObject.SetActive(!cockpit);
         if (model.haloPillar != null) model.haloPillar.SetActive(!cockpit);
         if (model.cockpitFloor) model.cockpitFloor.SetActive(cockpit);
+        // the driver: head under the car's forces (DriverFeel), hands on the wheel as turned this frame (DriverModel)
+        feel.Head(replaying ? null : car, gLon, gLat, Paused ? 0 : Time.deltaTime);
+        model.PoseDriver(feel);
     }
 
     // ---------------------------------------------------------------- TV camera (camMode 4, and replays)
