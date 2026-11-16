@@ -14,6 +14,7 @@
 // Vertex budgets per graphics level keep the cost at a handful of draw calls (static batching merges them by material).
 using System.Collections.Generic;
 using UnityEngine;
+using FormulaSim;
 
 public static class ModelLib
 {
