@@ -162,11 +162,21 @@ public static class RoadShadow
             var v = mesh.vertices; var m = mf.transform.localToWorldMatrix;
             if (!m.isIdentity) for (int k = 0; k < v.Length; k++) v[k] = m.MultiplyPoint3x4(v[k]);
             if (mf.name == "Trees") { trees += TreeCards(v, mesh.uv); continue; }
+            // model trees: NOT their triangles. A tree that fell back to its impostor (two crossed 20 m cards) threw the
+            // cards' whole rectangles on the road: a big dark box with nothing box-shaped beside the track; and 850 leaf
+            // quads per tree at 70 % made a heavy grey slab. They get the same dappled crowns as the card trees (below).
+            if (mf.name == "EnvModelTrees") continue;
             float T = 0f, minH = 0.5f;
             if (sn == "F2/BakedCutout") T = 0.5f;                       // chain-link fences
             else if (sn == "F2/Foliage") T = 0.3f;                      // hedges, bushes
             else if (sn == "F2/Ground" || mf.name == "Terrain" || mf.name.StartsWith("EnvRealLand")) minH = 3f; // only where it rises
             tris += Solid(v, mesh.triangles, T, minH);
+        }
+
+        for (int k = 0; k < ModelLib.TreeFeet.Count; k++)
+        {
+            var f = ModelLib.TreeFeet[k];
+            if (Tree(new Vector3(f.x, f.y, f.z), ModelLib.TreeWidth[k], f.w, 1)) trees++;
         }
 
         // read the world grid into the track-space texture

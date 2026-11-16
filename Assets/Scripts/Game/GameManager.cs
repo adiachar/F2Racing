@@ -898,13 +898,19 @@ public partial class GameManager : MonoBehaviour
             cv /= 2 * span + 1;
             double side = System.Math.Abs(cv) > 0.002 ? (cv > 0 ? -1 : 1) : (c % 2 == 0 ? 1 : -1);
             double off = hw + 25 + rnd.NextDouble() * 15; float up = 4 + (float)rnd.NextDouble() * 4;
+            // Circuits with a catch fence a few metres off the track (Trackside.cs: up to 4.8 m high at the barrier line,
+            // leaning in): a camera 25-40 m out and 4-8 m up looked THROUGH the mesh (and, at the pits, stood inside the pit
+            // building). Real TV cameras stand on platforms right behind the fence and shoot over it: 1.2 m behind the
+            // barrier line, 6.6-8.2 m up, which clears the fence top for a car anywhere on the road.
+            double wall = Traffic.WallOffset(track); bool over = wall - hw > 4;
+            if (over) { off = wall + 1.2; up = 6.6f + (up - 4f) * 0.4f; }
             // keep clear of other parts of the circuit (hairpins, parallel straights): other side, then the minimum offset
             bool ok = false; double cx = 0, cy = 0;
             for (int t = 0; t < 4 && !ok; t++)
             {
-                double sd = t % 2 == 0 ? side : -side, o = t < 2 ? off : hw + 25;
+                double sd = t % 2 == 0 ? side : -side, o = t < 2 || over ? off : hw + 25;
                 cx = tp.x + tp.nx * sd * o; cy = tp.y + tp.ny * sd * o;
-                ok = track.Nearest(cx, cy).dist > hw + 20;
+                ok = track.Nearest(cx, cy).dist > (over ? wall - 0.5 : hw + 20);
             }
             if (!ok) continue;
             tvPts.Add(new Vector3((float)cx, WorldBuilder.H(cx, cy) + up, (float)cy)); tvAt.Add(at);

@@ -1206,7 +1206,7 @@ public static class RealWorld
         float depth = 2f * hs, frontY = gmin + 2.6f, rise = Mathf.Min(depth * 0.52f, 22f), topY = frontY + rise, roofY = topY + 3.4f;
         float foot = gmin - 0.7f - (gmax - gmin);
         Vector3 FL = cen + F * hs - A * hl, FR = cen + F * hs + A * hl, BL = cen - F * hs - A * hl, BR = cen - F * hs + A * hl;
-        var mb = Buf(SBuild, Block(ocx, ocz), 96);
+        var mb = Buf(SBuild, Block(ocx, ocz), 220 + 28 * (Mathf.RoundToInt(2f * hl / 9f) + 3));
         Color conc = C(0.80f, 0.80f, 0.78f), dark = C(0.62f, 0.62f, 0.61f), white = Color.white;
         float k = 0.95f + 0.1f * Hash(b, 77); conc *= k; conc.a = 1f; dark.a = 1f;
         var cc = CellUv(CConcrete); var pl = CellUv(CPlaster); float bw = TileW(CConcrete), fh = TileH(CConcrete);
@@ -1214,25 +1214,69 @@ public static class RealWorld
         // front wall up to the first row, back wall (outside and the part above the top row)
         Wall(mb, FL.x, FL.z, FR.x, FR.z, foot, frontY, F, bays, gmin, fh, cc, dark, conc);
         Wall(mb, BR.x, BR.z, BL.x, BL.z, foot, roofY + 0.3f, -F, bays, gmin, fh, cc, dark, conc);
-        Wall(mb, BL.x, BL.z, BR.x, BR.z, topY, roofY, F, bays, gmin, fh, cc, conc, conc);
+        // inside, above the top row: the glazed fronts of the boxes and the press room under the roof
+        Wall(mb, BL.x, BL.z, BR.x, BR.z, topY, roofY, F, Mathf.Max(1f, Mathf.Round(2f * hl / 3.4f)), topY, roofY - topY, CellUv(COffice), white, white);
         // raked seating: one tile = 4 rows (3.6 m of slope) x 4 m
         float slope = Mathf.Sqrt(depth * depth + rise * rise) / TileH(CCrowd), across = 2f * hl / TileW(CCrowd);
-        Quad(mb, FL + up * frontY, FR + up * frontY, BR + up * topY, BL + up * topY, (F * rise / depth + up).normalized,
+        Vector3 rakeN = (F * rise / depth + up).normalized;
+        Quad(mb, FL + up * frontY, FR + up * frontY, BR + up * topY, BL + up * topY, rakeN,
              new Vector2(0, 0), new Vector2(across, 0), new Vector2(across, slope), new Vector2(0, slope), CellUv(CCrowd), white, white, white, white);
-        // end walls: up to the front row at the front, to the roof at the back
+        // stair aisles up the rake every ~9 m (bare concrete between the seat blocks), a dark vomitory mouth on every
+        // other one, and a white rail along the front: the seating reads as blocks of people, not one noisy slab
+        Vector2 flat = new Vector2(0.5f, 0.5f);
+        int aisles = Mathf.Max(2, Mathf.RoundToInt(2f * hl / 9f)); float slopeLen = Mathf.Sqrt(depth * depth + rise * rise);
+        Color step = C(0.74f, 0.74f, 0.72f), mouth = C(0.10f, 0.10f, 0.11f), rail = C(0.93f, 0.93f, 0.92f);
+        Vector3 upRake = (BL - FL + up * (topY - frontY)) / slopeLen; // unit vector up the slope
+        for (int q = 0; q <= aisles; q++)
+        {
+            float a = -hl + 2f * hl * q / aisles, hwA = q == 0 || q == aisles ? 0.35f : 0.6f;
+            a = Mathf.Clamp(a, -hl + hwA, hl - hwA);
+            Vector3 f0 = cen + F * hs + A * a + up * frontY + rakeN * 0.07f;
+            Quad(mb, f0 - A * hwA, f0 + A * hwA, f0 + A * hwA + upRake * slopeLen, f0 - A * hwA + upRake * slopeLen, rakeN,
+                 new Vector2(0, 0), new Vector2(0.25f, 0), new Vector2(0.25f, slopeLen / fh), new Vector2(0, slopeLen / fh), cc, step, step, step, step);
+            if (q > 0 && q < aisles && (q & 1) == 1 && slopeLen > 9f)
+            {
+                Vector3 v0 = f0 + rakeN * 0.04f + upRake * (slopeLen * 0.36f);
+                Quad(mb, v0 - A * 1.5f, v0 + A * 1.5f, v0 + A * 1.5f + upRake * 2.6f, v0 - A * 1.5f + upRake * 2.6f, rakeN, flat, flat, flat, flat, pl, mouth, mouth, mouth, mouth);
+                Quad(mb, v0 - A * 1.7f + upRake * 2.6f, v0 + A * 1.7f + upRake * 2.6f, v0 + A * 1.7f + upRake * 3.0f, v0 - A * 1.7f + upRake * 3.0f, rakeN, flat, flat, flat, flat, pl, rail, rail, rail, rail);
+            }
+        }
+        Quad(mb, FL + F * 0.06f + up * (frontY - 0.1f), FR + F * 0.06f + up * (frontY - 0.1f), FR + F * 0.06f + up * (frontY + 0.55f), FL + F * 0.06f + up * (frontY + 0.55f), F, flat, flat, flat, flat, pl, rail, rail, rail, rail);
+        // ends: the space under the rake closed with ribbed steel in the stand's own colour (no white wedge up to the roof:
+        // above the rake the end is open), a white raker beam along the slope
+        Color[] liv = { C(0.44f, 0.54f, 0.72f), C(0.42f, 0.58f, 0.48f), C(0.66f, 0.68f, 0.72f), C(0.72f, 0.50f, 0.44f) };
+        Color clad = liv[(int)(Hash(b, 78) * 3.999f)]; clad.a = 1f; Color cladLo = clad * 0.8f; cladLo.a = 1f;
+        float tw = TileW(CMetal);
         for (int e = -1; e <= 1; e += 2)
         {
             Vector3 fe = e < 0 ? FL : FR, be = e < 0 ? BL : BR;
-            Quad(mb, fe + up * foot, be + up * foot, be + up * (roofY + 0.3f), fe + up * frontY, A * e, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, dark, dark, conc, conc);
+            Quad(mb, fe + up * foot, be + up * foot, be + up * topY, fe + up * frontY, A * e,
+                 new Vector2(0, 0), new Vector2(depth / tw, 0), new Vector2(depth / tw, (topY - foot) / tw), new Vector2(0, (frontY - foot) / tw), CellUv(CMetal), cladLo, cladLo, clad, clad);
+            Vector3 o = A * (e * 0.07f);
+            Quad(mb, fe + o + up * (frontY - 0.5f), be + o + up * (topY - 0.5f), be + o + up * (topY + 0.05f), fe + o + up * (frontY + 0.05f), A * e, flat, flat, flat, flat, pl, rail, rail, rail, rail);
+            // the back wall's return above the rake (a slim pier up to the roof)
+            Quad(mb, be + up * topY, be + F * 1.2f + up * (topY + 1.2f * rise / depth), be + F * 1.2f + up * (roofY + 0.3f), be + up * (roofY + 0.3f), A * e, flat, flat, flat, flat, pl, conc, conc, conc, conc);
         }
-        // cantilever roof over the back three quarters, rising a little towards the track, with a fascia
+        // cantilever roof over the back three quarters, rising a little towards the track: metal sheets, a deep white
+        // fascia, tapered steel beams under it every ~9 m
         Vector3 rf = F * (hs - depth * 0.78f), lift = up * 0.8f, ov = A * 0.5f;
         Vector3 r0 = BL - ov + up * (roofY + 0.3f), r1 = BR + ov + up * (roofY + 0.3f), r2 = cen + rf + A * hl + ov + up * (roofY + 0.3f) + lift, r3 = cen + rf - A * hl - ov + up * (roofY + 0.3f) + lift;
-        Color roofC = C(0.86f, 0.87f, 0.88f); roofC.a = 1f; Color under = C(0.5f, 0.5f, 0.5f); under.a = 1f;
+        Color roofC = C(0.80f, 0.82f, 0.85f); roofC.a = 1f; Color under = C(0.5f, 0.5f, 0.5f); under.a = 1f;
         float ru = 2f * hl / TileW(CMetal), rv = depth * 0.78f / TileW(CMetal);
         Quad(mb, r0, r1, r2, r3, up, new Vector2(0, 0), new Vector2(ru, 0), new Vector2(ru, rv), new Vector2(0, rv), CellUv(CMetal), roofC, roofC, roofC, roofC);
-        Quad(mb, r0 - up * 0.35f, r1 - up * 0.35f, r2 - up * 0.35f, r3 - up * 0.35f, -up, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, under, under, under, under);
-        Quad(mb, r3 - up * 0.6f, r2 - up * 0.6f, r2, r3, F, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), pl, roofC, roofC, roofC, roofC);
+        Quad(mb, r0 - up * 0.35f, r1 - up * 0.35f, r2 - up * 0.35f, r3 - up * 0.35f, -up, flat, flat, flat, flat, pl, under, under, under, under);
+        Quad(mb, r3 - up * 1.0f, r2 - up * 1.0f, r2, r3, F, flat, flat, flat, flat, pl, rail, rail, rail, rail);
+        Quad(mb, r3 - up * 1.0f, r2 - up * 1.0f, r2 - F * 0.5f - up * 0.35f, r3 - F * 0.5f - up * 0.35f, -up, flat, flat, flat, flat, pl, under, under, under, under);
+        Color beam = C(0.86f, 0.87f, 0.88f), beamLo = C(0.6f, 0.61f, 0.63f);
+        for (int q = 0; q <= aisles; q++)
+        {
+            float a = Mathf.Clamp(-hl + 2f * hl * q / aisles, -hl + 0.3f, hl - 0.3f);
+            Vector3 bt = cen - F * hs + A * a + up * (roofY - 0.05f), ft = cen + rf - F * 0.6f + A * a + up * (roofY - 0.05f) + lift * 0.96f;
+            Vector3 bb = bt - up * 1.7f, fb = ft - up * 0.3f, hb = A * 0.16f;
+            Quad(mb, bb + hb, fb + hb, ft + hb, bt + hb, A, flat, flat, flat, flat, pl, beamLo, beam, beam, beam);
+            Quad(mb, bb - hb, fb - hb, ft - hb, bt - hb, -A, flat, flat, flat, flat, pl, beamLo, beam, beam, beam);
+            Quad(mb, bb - hb, bb + hb, fb + hb, fb - hb, -up, flat, flat, flat, flat, pl, beamLo, beamLo, beamLo, beamLo);
+        }
         return true;
     }
 

@@ -120,6 +120,14 @@ public static class LightBake
                 }
             }
         }
+        // model trees (ModelLib.cs): the far ones are two upright impostor cards, thin lines in this map; give every one
+        // the round crown the card trees get
+        for (int k = 0; k < ModelLib.TreeFeet.Count; k++)
+        {
+            var f = ModelLib.TreeFeet[k]; float rad = ModelLib.TreeWidth[k] * 0.33f, h = f.y + f.w * 0.8f;
+            for (float z = f.z - rad; z <= f.z + rad; z += cell * 0.5f) for (float x = f.x - rad; x <= f.x + rad; x += cell * 0.5f)
+                if ((x - f.x) * (x - f.x) + (z - f.z) * (z - f.z) <= rad * rad) Put(x, z, h);
+        }
     }
     // tree cards (Environment.Trees: quads of foot-left, foot-right, top-right, top-left): the upright cards would only
     // mark thin lines in the map, so each card stands for a round crown instead, a third of its width across, at

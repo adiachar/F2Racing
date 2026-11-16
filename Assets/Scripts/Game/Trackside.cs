@@ -10,6 +10,8 @@
 //   * grandstands on the main straight and at the big braking corners: stepped rows, crowd (coloured-noise texture,
 //     per-section vertex-colour variety), end walls, back wall and cantilever roofs with advertising fascias
 //   * marshal posts, advertising boards (invented names only), a paddock of motorhomes (High)
+//   * circuit furniture: TV camera towers at the corners, big screens by the stands, a recovery crane behind the
+//     barrier at the slow corners, floodlight masts; lock-up marks into the braking zones and dirt over the exit kerbs
 //   * vertex-colour ambient occlusion at the base of everything, dirt/scuffs and tyre marks at likely impact points
 // Everything opaque shares ONE atlas material (TracksideArt): the colour lives in the texture, the light and the
 // AO/dirt tint in the vertex colours (BakeTint). The rest is crowd, fence and ground decals: four materials in all.
@@ -489,13 +491,51 @@ public static class Trackside
                 bool aFirst = Vector3.Dot(Vector3.Cross(fwdFace, up), fb - fa) > 0; // a on the viewer's left?
                 Vector3 L0 = aFirst ? fa : fb, R0 = aFirst ? fb : fa;
                 if (skirt < 0f) Wall(A, L0, R0, skirt, 0.04f, fwdFace, TracksideArt.Sw(TracksideArt.BuildGrey)); // open front: the garage inside is PitGarage.cs
-                Wall(A, L0, R0, 4.5f, garH - 0.2f, fwdFace, TracksideArt.Glass);
-                Wall(A, L0, R0, garH - 0.2f, garH + 1.6f, fwdFace, TracksideArt.Ad(b));
+                // above the garages: a lintel, a glass curtain wall, a balcony slab cantilevered over the lane with a glass
+                // balustrade, the hospitality floor set back behind it, and a deep roof slab on slim columns whose fascia
+                // carries the circuit's name and a few advertisers (not a billboard on every bay)
+                float roofY = garH + 1.6f, y1 = 4.5f, fascia = 0.9f, y2 = y1 + (roofY - fascia - y1) * 0.5f;
+                const float setB = 1.4f, balc = 1.1f, eave = 1.7f;
+                Vector3 oB = -D * balc, oS = D * setB, oE = -D * eave;
+                Wall(A, L0, R0, y1, y1 + 0.5f, fwdFace, TracksideArt.Sw(TracksideArt.BuildWhite));
+                aoOn = false;
+                Wall(A, L0, R0, y1 + 0.5f, y2, fwdFace, TracksideArt.GlassWall);
+                Wall(A, L0 + oS, R0 + oS, y2 + 0.3f, roofY - fascia, fwdFace, TracksideArt.GlassWall);
+                Pieces(A, L0 + oB, R0 + oB, y2 + 0.3f, y2 + 1.35f, fwdFace, TracksideArt.Balustrade, 2f);
+                aoOn = true;
+                Wall(A, L0 + oB, R0 + oB, y2, y2 + 0.3f, fwdFace, TracksideArt.Sw(TracksideArt.BuildWhite));
+                Quad(A, fa + oB + up * y2, fb + oB + up * y2, fb + up * y2, fa + up * y2, -up, TracksideArt.Sw(TracksideArt.RoofUnder));
+                Quad(A, fa + oB + up * (y2 + 0.3f), fb + oB + up * (y2 + 0.3f), fb + oS + up * (y2 + 0.3f), fa + oS + up * (y2 + 0.3f), up, TracksideArt.Sw(TracksideArt.Concrete));
+                // white fin between the bays (first floor) and the slim roof column on the balcony edge
+                Box(A, fa - D * 0.16f + up * ((y1 + y2) * 0.5f), T, up, D, 0.16f, (y2 - y1) * 0.5f, 0.16f, TracksideArt.BuildWhite);
+                Box(A, fa - D * (balc - 0.12f) + up * ((y2 + 0.3f + roofY - fascia) * 0.5f), T, up, D, 0.08f, (roofY - fascia - y2 - 0.3f) * 0.5f, 0.08f, TracksideArt.Steel);
+                // roof slab: fascia, soffit
+                aoOn = false;
+                Wall(A, L0 + oE, R0 + oE, roofY - fascia, roofY, fwdFace,
+                     monza && b % 6 == 3 ? TracksideArt.NameSign : b % 6 == 0 ? TracksideArt.Ad(b / 6 * 5 + 2) : TracksideArt.Sw(TracksideArt.RoofWhite));
+                aoOn = true;
+                Quad(A, fa + oE + up * (roofY - fascia), fb + oE + up * (roofY - fascia), fb + oS + up * (roofY - fascia), fa + oS + up * (roofY - fascia), -up, TracksideArt.Sw(TracksideArt.RoofUnder));
+                // guests on the balcony
+                if (!low && Rand(b, 91) < 0.45f)
+                    Standing(L0 + oB * 0.45f + (R0 - L0) * 0.08f, R0 + oB * 0.45f - (R0 - L0) * 0.08f, y2 + 0.3f, 1.7f, D, Rand(b, 92) < 0.5f ? 0 : 1, 9100 + b);
                 // back, roof
                 tint = new Color(0.94f, 0.96f, 1f);
                 Pieces(A, ba, bk, skirt, garH + 1.6f, D, TracksideArt.Cladding, 4f);
                 tint = Color.white;
-                Quad(A, fa + up * (garH + 1.6f), fb + up * (garH + 1.6f), bk + up * (garH + 1.6f), ba + up * (garH + 1.6f), up, TracksideArt.Sw(TracksideArt.RoofUnder));
+                Quad(A, fa + oE + up * roofY, fb + oE + up * roofY, bk + up * roofY, ba + up * roofY, up, TracksideArt.Sw(TracksideArt.RoofUnder));
+                // roof-top: a glazed penthouse at both ends (race control, the stair heads), louvred plant in between
+                if (b == 0 || b == bays - 1 || b % 5 == 2)
+                {
+                    bool pent = b == 0 || b == bays - 1;
+                    Vector3 rc = (fa + fb + ba + bk) * 0.25f + D * (pent ? -1.5f : 2f);
+                    float ph = pent ? 1.7f : 0.9f, pl = pent ? bay * 0.5f - 0.5f : 2.2f, pd = pent ? 3.6f : 1.6f;
+                    Box(A, rc + up * (roofY + ph), T, up, D, pl, ph, pd, pent ? TracksideArt.BuildWhite : TracksideArt.BuildGrey);
+                    aoOn = false;
+                    if (pent) Panel(A, rc - D * (pd + 0.02f), -D, pl - 0.3f, roofY + 0.9f, roofY + 2.9f, TracksideArt.GlassWall);
+                    else Panel(A, rc - D * (pd + 0.02f), -D, pl - 0.15f, roofY + 0.15f, roofY + 1.65f, TracksideArt.Louvre);
+                    aoOn = true;
+                    if (pent) Box(A, rc + up * (roofY + 2f * ph + 0.12f), T, up, D, pl + 0.5f, 0.12f, pd + 0.6f, TracksideArt.RoofWhite, true);
+                }
                 // ends of the building
                 if (b == 0) Pieces(A, fa, ba, skirt, garH + 1.6f, -T, TracksideArt.PanelWall, 4f);
                 if (b == bays - 1) Pieces(A, fb, bk, skirt, garH + 1.6f, T, TracksideArt.PanelWall, 4f);
@@ -593,7 +633,36 @@ public static class Trackside
         const float RowD = 0.85f, RowH = 0.45f;
         int[] seatCols = { TracksideArt.SeatBlue, TracksideArt.SeatGrey, TracksideArt.SeatRed, TracksideArt.SeatGreen };
         Color[] crowdTints = { new Color(1f, 1f, 1f), new Color(1.08f, 0.94f, 0.82f), new Color(0.9f, 0.96f, 1.08f), new Color(1.05f, 1.02f, 0.84f), new Color(0.86f, 0.86f, 0.88f) };
-        int standNo = 0;
+        Color[] standClad = { new Color(0.50f, 0.58f, 0.74f), new Color(0.72f, 0.73f, 0.76f), new Color(0.46f, 0.62f, 0.52f), new Color(0.78f, 0.56f, 0.48f) };
+        int standNo = 0, screenNo = 0; bool endScreens = true; // (false: stands in a row, no screen between them)
+        // a big screen on two lattice legs behind the barrier at track point qi, side qs, "behind" m beyond the barrier
+        // line and "along" m down the track, facing the track
+        bool BigScreen(int qi, int qs, float behind, float along)
+        {
+            int qk = W(qi + Mathf.RoundToInt(along / ds));
+            if (InPit(qk, qs) || curvAbs[qk] > 1f / 60f) return false;
+            var qp = t.pts[qk];
+            Vector3 qT = Tan(qp), qD = Nrm(qp) * qs, qu = Vector3.up;
+            float lat = Off(qk, qs) + behind;
+            Vector3 qc = P(qp) + qD * lat;
+            if (!Free(qc, lat - 1.5f) || !Free(qc + qT * 4.5f, lat - 1.5f) || !Free(qc - qT * 4.5f, lat - 1.5f)) return false;
+            SetChunk(qk);
+            const float y0 = 3.4f, y1 = 8.2f, hwS = 4.6f;
+            for (int e = -1; e <= 1; e += 2)
+            {
+                Vector3 leg = qc + qT * (e * 3.2f) + qD * 0.45f;
+                Pieces(A, leg - qT * 0.35f - qD * 0.31f, leg + qT * 0.35f - qD * 0.31f, skirt, y0, -qD, TracksideArt.ScaffoldR, 2f);
+                Box(A, leg + qu * (y0 * 0.5f + skirt * 0.5f), qT, qu, qD, 0.35f, y0 * 0.5f - skirt * 0.5f, 0.3f, TracksideArt.Scaffold);
+            }
+            Box(A, qc + qD * 0.35f + qu * ((y0 + y1) * 0.5f), qT, qu, qD, hwS, (y1 - y0) * 0.5f, 0.35f, TracksideArt.GantryDark, true);
+            aoOn = false;
+            Panel(A, qc - qD * 0.02f, -qD, hwS - 0.15f, y0 + 0.15f, y1 - 0.15f, TracksideArt.Screen);
+            aoOn = true;
+            Panel(A, qc - qD * 0.03f, -qD, hwS, y1, y1 + 0.9f, TracksideArt.Ad(BoldAds[screenNo % BoldAds.Length]));
+            screenNo++;
+            AddFoot(qc + qD * 0.4f, qT, hwS + 0.5f, 1.2f);
+            return true;
+        }
         bool Stand(int i, int sg, float halfL, int rows, bool roof)
         {
             var p = t.pts[i];
@@ -613,16 +682,18 @@ public static class Trackside
                 if (!ok) continue;
                 SetChunk(i);
                 int id = standNo++;
-                int seat = seatCols[id % seatCols.Length];
                 float topY = baseH + (rows - 1) * RowH;
-                // front wall of the stand with advertisers
+                float backTop = roof ? topY + 4.4f : topY + 1.1f;
+                // each stand has its own cladding colour (tint over the ribbed steel): blue, grey, green, terracotta
+                Color cladC = street ? new Color(0.4f, 0.41f, 0.44f) : standClad[id % standClad.Length];
+                // front: a low poured-concrete wall, the advertisers' band on top of it
                 int panels = Mathf.Max(1, Mathf.RoundToInt(halfL * 2f / 8f));
                 float pw = halfL * 2f / panels;
                 for (int k = 0; k < panels; k++)
                 {
                     Vector3 c = O + T * (-halfL + (k + 0.5f) * pw);
-                    tint = street ? new Color(0.4f, 0.41f, 0.44f) : new Color(0.62f, 0.64f, 0.68f); // dark cladding under the stand
-                    Panel(A, c, -D, pw * 0.5f, skirt, baseH - 0.9f, TracksideArt.Cladding);
+                    tint = new Color(0.86f, 0.86f, 0.86f);
+                    Panel(A, c, -D, pw * 0.5f, skirt, baseH - 0.9f, TracksideArt.ConcreteWall);
                     tint = Color.white;
                     Panel(A, c, -D, pw * 0.5f, baseH - 0.9f, baseH, TracksideArt.Ad(id * 3 + k));
                 }
@@ -630,43 +701,73 @@ public static class Trackside
                 for (int k = 0; k <= panels; k++)
                     Box(A, O + T * (-halfL + k * pw) - D * 0.12f + up * (baseH * 0.5f + skirt * 0.5f), T, up, D, 0.1f, baseH * 0.5f - skirt * 0.5f, 0.1f, TracksideArt.GantryDark);
                 Box(A, O - D * 0.12f + up * (baseH + 0.05f), T, up, D, halfL, 0.08f, 0.12f, TracksideArt.GantryDark);
-                // rows: riser, tread and the crowd sitting on it
+                // rows: riser, concrete tread, then per section (between two stair aisles) the seats and the crowd on them
+                int secs = Mathf.Max(1, Mathf.RoundToInt(halfL * 2f / 9f));
+                float sl = halfL * 2f / secs; const float aisle = 0.55f;
                 for (int r = 0; r < rows; r++)
                 {
                     float y = baseH + r * RowH, d0 = r * RowD, d1 = d0 + RowD;
                     Vector3 l0 = O - T * halfL + D * d0, r0 = O + T * halfL + D * d0, l1 = O - T * halfL + D * d1, r1 = O + T * halfL + D * d1;
                     if (r > 0) Quad(A, l0 + up * (y - RowH), r0 + up * (y - RowH), r0 + up * y, l0 + up * y, -D, TracksideArt.Sw(TracksideArt.ConcreteDark));
-                    // crowd: sections of ~10 m with their own band, offset and colour mood
-                    int secs = Mathf.Max(1, Mathf.RoundToInt(halfL * 2f / 10f));
-                    float sl = halfL * 2f / secs;
+                    Quad(A, l0 + up * y, r0 + up * y, r1 + up * y, l1 + up * y, up, TracksideArt.Sw(TracksideArt.Concrete)); // the aisles' steps show between the seat blocks
                     for (int s = 0; s < secs; s++)
                     {
+                        float x0 = -halfL + s * sl + aisle, x1 = -halfL + (s + 1) * sl - aisle, wSec = x1 - x0;
                         // coloured seat blocks, striped every two rows
-                        Vector3 ta = O + T * (-halfL + s * sl) + D * d0, tb = ta + T * sl;
+                        Vector3 ta = O + T * x0 + D * d0, tb = O + T * x1 + D * d0;
                         int sc2 = seatCols[(id + s + (((r >> 1) & 1) == 0 ? 0 : 1)) % seatCols.Length];
-                        Quad(A, ta + up * y, tb + up * y, tb + D * RowD + up * y, ta + D * RowD + up * y, up, TracksideArt.Sw(sc2));
+                        Quad(A, ta + up * (y + 0.012f), tb + up * (y + 0.012f), tb + D * RowD + up * (y + 0.012f), ta + D * RowD + up * (y + 0.012f), up, TracksideArt.Sw(sc2));
                         int h = id * 997 + r * 31 + s;
                         int band = Rand(h, 1) < 0.78f ? (Rand(h, 2) < (monza ? 0.35f : 0.5f) ? 0 : 1) : (Rand(h, 3) < 0.7f ? 2 : 3);
-                        float u0 = Rand(h, 4), len = sl / (32f * 0.55f);
+                        float u0 = Rand(h, 4), len = wSec / (32f * 0.55f);
                         Color ct = crowdTints[(int)(Rand(h, 5) * crowdTints.Length) % crowdTints.Length] * (0.9f + 0.2f * Rand(h, 6));
                         tint = ct; aoOn = false;
-                        Vector3 sa = O + T * (-halfL + s * sl) + D * (d0 + 0.2f), sb = sa + T * sl;
+                        Vector3 sa = ta + D * 0.2f, sb = tb + D * 0.2f;
                         Vector3 back = D * 0.3f;
                         Quad(C, sa + up * y, sb + up * y, sb + back + up * (y + 1.0f), sa + back + up * (y + 1.0f), -D + up * 0.3f,
                              new Vector4(u0, band * 0.25f + 0.01f, u0 + len, band * 0.25f + 0.24f));
                         tint = Color.white; aoOn = true;
                         // fans standing at the front rail
                         if (r == 0 && Rand(h, 7) < 0.45f)
-                            Standing(O + T * (-halfL + s * sl + sl * 0.1f) - D * 0.15f, O + T * (-halfL + (s + 1) * sl - sl * 0.1f) - D * 0.15f, baseH, 1.5f, D, Rand(h, 8) < 0.5f ? 0 : 1, h);
+                            Standing(O + T * (x0 + wSec * 0.1f) - D * 0.15f, O + T * (x1 - wSec * 0.1f) - D * 0.15f, baseH, 1.5f, D, Rand(h, 8) < 0.5f ? 0 : 1, h);
                     }
-                    // stepped end walls
+                    // stepped infill under the rows at both ends, in the stand's cladding
                     for (int e = -1; e <= 1; e += 2)
                     {
                         Vector3 en = T * e, ea = O + T * (e * halfL) + D * d0, eb = O + T * (e * halfL) + D * d1;
-                        tint = new Color(0.55f, 0.57f, 0.6f);
+                        tint = cladC;
                         Wall(A, ea, eb, skirt, y, en, TracksideArt.Sub(TracksideArt.Cladding, 0f, 0.25f, 0f, 1f));
                         tint = Color.white;
                     }
+                }
+                // vomitories: concrete "dog houses" on the rake at every other aisle, their dark mouths facing the track
+                if (rows >= 9)
+                    for (int s = 1; s < secs; s += 2)
+                    {
+                        int vr = rows / 2 - 1;
+                        Vector3 vc = O + T * (-halfL + s * sl) + D * (vr * RowD + 1.0f);
+                        float vy = baseH + vr * RowH;
+                        Box(A, vc + up * (vy + 1.15f), T, up, D, 1.45f, 1.15f, 1.0f, TracksideArt.Concrete);
+                        aoOn = false;
+                        Panel(A, vc - D * 1.02f, -D, 1.45f, vy, vy + 2.3f, TracksideArt.Vomitory);
+                        aoOn = true;
+                    }
+                // ends: a white raker beam along the rake and a glazed wind screen above it (seen from both sides)
+                for (int e = -1; e <= 1; e += 2)
+                {
+                    Vector3 en = T * e, ef = O + T * (e * (halfL + 0.03f)), eb = ef + D * depth;
+                    float yf = baseH - 0.1f, yb = topY + RowH - 0.1f;
+                    Quad(A, ef + up * (yf - 0.32f), eb + up * (yb - 0.32f), eb + up * yb, ef + up * yf, en, TracksideArt.Sw(TracksideArt.GantryWhite));
+                    int gp = Mathf.Max(1, Mathf.RoundToInt(depth / 2.2f));
+                    aoOn = false;
+                    for (int k = 0; k < gp; k++)
+                    {
+                        float f0 = (float)k / gp, f1 = (float)(k + 1) / gp;
+                        Vector3 g0 = Vector3.Lerp(ef, eb, f0) + up * Mathf.Lerp(yf, yb, f0), g1 = Vector3.Lerp(ef, eb, f1) + up * Mathf.Lerp(yf, yb, f1);
+                        Quad(A, g0, g1, g1 + up * 1.5f, g0 + up * 1.5f, en, TracksideArt.Balustrade);
+                        Quad(A, g0 - en * 0.03f, g1 - en * 0.03f, g1 - en * 0.03f + up * 1.5f, g0 - en * 0.03f + up * 1.5f, -en, TracksideArt.Balustrade);
+                    }
+                    aoOn = true;
                 }
                 // standing row along the top rail, and a few big flags
                 {
@@ -689,37 +790,79 @@ public static class Trackside
                         else Flag(fc, T, D, fy, 2.4f, 1.5f, TracksideArt.StripeYellow, TracksideArt.StripeYellow, TracksideArt.StripeYellow);
                     }
                 }
-                // back wall (outside and the part seen above the top row), railing height
+                // back wall: coloured cladding outside; inside, above the top row, a strip of cladding and (roofed stands)
+                // the glazed fronts of the boxes under the roof
                 Vector3 bl = O - T * halfL + D * depth, br = O + T * halfL + D * depth;
-                float backTop = roof ? topY + 3.6f : topY + 1.1f;
-                if (street) tint = new Color(0.4f, 0.41f, 0.44f);
+                tint = cladC;
                 Pieces(A, br, bl, skirt, backTop, D, TracksideArt.Cladding, 4f);
                 tint = Color.white;
-                Pieces(A, bl, br, topY, backTop, -D, TracksideArt.Sub(TracksideArt.Cladding, 0f, 1f, 0.5f, 1f), 4f);
                 if (roof)
                 {
-                    // cantilever roof, sloping slightly up towards the track, advertiser fascia along its front edge
-                    float ry = backTop, rFront = -1.2f;
-                    Vector3 fl = O - T * (halfL + 0.6f) + D * rFront, fr = O + T * (halfL + 0.6f) + D * rFront;
-                    Vector3 bl2 = bl - T * 0.6f, br2 = br + T * 0.6f;
-                    Vector3 lift = up * 0.6f;
-                    Quad(A, fl + up * ry + lift, fr + up * ry + lift, br2 + up * ry, bl2 + up * ry, up, TracksideArt.Sw(TracksideArt.RoofWhite));
-                    Quad(A, fl + up * (ry - 0.25f) + lift, fr + up * (ry - 0.25f) + lift, br2 + up * (ry - 0.25f), bl2 + up * (ry - 0.25f), -up, TracksideArt.Sw(TracksideArt.RoofUnder));
-                    int fp = Mathf.Max(1, Mathf.RoundToInt(halfL * 2f / 6f));
-                    float fw = (halfL * 2f + 1.2f) / fp;
+                    Pieces(A, bl, br, topY, topY + 1.1f, -D, TracksideArt.Sub(TracksideArt.Cladding, 0f, 1f, 0.5f, 1f), 4f);
+                    aoOn = false;
+                    Pieces(A, bl, br, topY + 1.1f, backTop - 0.3f, -D, TracksideArt.Glass, 3f);
+                    aoOn = true;
+                }
+                else Pieces(A, bl, br, topY, backTop, -D, TracksideArt.Sub(TracksideArt.Cladding, 0f, 1f, 0.5f, 1f), 4f);
+                if (roof)
+                {
+                    // steel cantilever roof rising towards the track: standing-seam sheets on top, a lattice girder along the
+                    // front edge (an advertiser on every third bay), tapered beams from the back columns, floodlights
+                    float ry = backTop, rFront = -1.6f, rise = 1.1f, ov = 0.8f;
+                    Vector3 fl = O - T * (halfL + ov) + D * rFront + up * (ry + rise), fr = O + T * (halfL + ov) + D * rFront + up * (ry + rise);
+                    Vector3 bl2 = bl - T * ov + D * 0.5f + up * ry, br2 = br + T * ov + D * 0.5f + up * ry;
+                    int fp = Mathf.Max(1, Mathf.RoundToInt((halfL * 2f + 2f * ov) / 6f));
+                    tint = new Color(0.9f, 0.93f, 0.98f);
                     for (int k = 0; k < fp; k++)
                     {
-                        Vector3 c = fl + T * ((k + 0.5f) * fw) + lift;
-                        Panel(A, c, -D, fw * 0.5f, ry - 0.9f, ry + 0.05f, TracksideArt.Ad(id + k * 5 + 1));
+                        float f0 = (float)k / fp, f1 = (float)(k + 1) / fp;
+                        Quad(A, Vector3.Lerp(fl, fr, f0), Vector3.Lerp(fl, fr, f1), Vector3.Lerp(bl2, br2, f1), Vector3.Lerp(bl2, br2, f0), up, TracksideArt.RoofSeam);
                     }
-                    // slim back columns and diagonal-looking struts
-                    int cols = Mathf.Max(2, Mathf.RoundToInt(halfL / 8f) + 1);
+                    tint = Color.white;
+                    Quad(A, fl - up * 0.22f, fr - up * 0.22f, br2 - up * 0.22f, bl2 - up * 0.22f, -up, TracksideArt.Sw(TracksideArt.RoofUnder));
+                    Vector3 rightF = Vector3.Cross(-D, up).normalized; // the viewer's right, looking at the front edge from the track
+                    bool flF = Vector3.Dot(fr - fl, rightF) > 0f; Vector3 eL = flF ? fl : fr, eR = flF ? fr : fl;
+                    aoOn = false;
+                    for (int k = 0; k < fp; k++)
+                    {
+                        Vector3 g0 = Vector3.Lerp(eL, eR, (float)k / fp), g1 = Vector3.Lerp(eL, eR, (float)(k + 1) / fp);
+                        Quad(A, g0 - up * 0.95f, g1 - up * 0.95f, g1 + up * 0.05f, g0 + up * 0.05f, -D, k % 3 == 1 ? TracksideArt.Ad(id + k * 5 + 1) : TracksideArt.Truss);
+                    }
+                    for (int e = -1; e <= 1; e += 2)
+                    {
+                        Vector3 f2 = e < 0 ? fl : fr, b2 = e < 0 ? bl2 : br2;
+                        Quad(A, f2 - up * 0.95f, b2 - up * 0.5f, b2 + up * 0.05f, f2 + up * 0.05f, T * e, TracksideArt.Sw(TracksideArt.RoofWhite));
+                    }
+                    aoOn = true;
+                    int cols = Mathf.Max(2, Mathf.RoundToInt(halfL / 4f) + 1);
                     for (int k = 0; k < cols; k++)
                     {
-                        Vector3 c = bl + T * (2f * halfL * k / (cols - 1)) + D * 0.25f;
-                        Box(A, c + up * (ry * 0.5f), T, up, D, 0.18f, ry * 0.5f, 0.18f, TracksideArt.Steel);
+                        float f = (float)k / (cols - 1);
+                        Vector3 cb = bl + T * (2f * halfL * f) + D * 0.25f;
+                        Box(A, cb + up * (ry * 0.5f), T, up, D, 0.2f, ry * 0.5f, 0.2f, TracksideArt.Steel);
+                        // tapered cantilever beam: deep at the column, slim at the roof's edge
+                        Vector3 bt = cb + up * (ry - 0.22f), ft = O + T * (-halfL + 2f * halfL * f) + D * (rFront + 0.3f) + up * (ry + rise - 0.24f);
+                        Vector3 bb = bt - up * 1.25f, fb = ft - up * 0.3f, hwB = T * 0.13f;
+                        Quad(A, bb + hwB, fb + hwB, ft + hwB, bt + hwB, T, TracksideArt.Sw(TracksideArt.GantryWhite));
+                        Quad(A, bb - hwB, fb - hwB, ft - hwB, bt - hwB, -T, TracksideArt.Sw(TracksideArt.GantryWhite));
+                        Quad(A, bb - hwB, bb + hwB, fb + hwB, fb - hwB, -up - D * 0.1f, TracksideArt.Sw(TracksideArt.Steel));
+                        // a floodlight bar under the front edge
+                        aoOn = false;
+                        Box(A, ft - up * 0.5f + D * 0.4f, T, up, D, 0.7f, 0.1f, 0.14f, TracksideArt.GantryDark, true);
+                        Panel(A, ft - up * 0.5f + D * 0.25f, -D, 0.6f, -0.07f, 0.07f, TracksideArt.Sw(TracksideArt.LampYellow));
+                        aoOn = true;
+                    }
+                    // flags along the back edge of the roof
+                    int rf = Mathf.Max(2, Mathf.RoundToInt(halfL / 8f));
+                    for (int k = 0; k < rf; k++)
+                    {
+                        Vector3 fc = bl + T * ((k + 0.5f) * 2f * halfL / rf) + D * 0.3f;
+                        if (monza || (k & 1) == 0) Flag(fc, T, D, ry, 2.7f, 1.7f, TracksideArt.SeatGreen, TracksideArt.PaintWhite, TracksideArt.StripeRed);
+                        else Flag(fc, T, D, ry, 2.7f, 1.7f, TracksideArt.StripeBlue, TracksideArt.StripeYellow, TracksideArt.StripeBlue);
                     }
                 }
+                // a big screen for this stand: across the track if there is room, else just past the stand's far end
+                if (!low && !BigScreen(i, -sg, 4f, 0f) && endScreens) BigScreen(i, sg, front + 2.5f - Off(i, sg), halfL + 9f);
                 // a catch fence and a few metres of it either side, in front of the stand (parkland)
                 if (!street)
                 {
@@ -738,11 +881,14 @@ public static class Trackside
             float mhl = street ? 18f : 24f;
             int mrows = low ? 9 : 13;
             float[] at = { 0f, -(2f * mhl + 6f), 2f * mhl + 6f };
+            endScreens = false;
             for (int k = 0; k < mainN; k++)
             {
                 int i = W(Mathf.RoundToInt((at[k] - 30f) / ds));
                 if (!Stand(i, ms, mhl, mrows, true) && k == 0) Stand(i, -ms, mhl, mrows, true);
             }
+            endScreens = true;
+            if (!low) BigScreen(W(Mathf.RoundToInt((at[mainN > 2 ? 2 : 0] - 30f) / ds)), ms, 6f, mhl + 11f); // one screen past the last main stand
             // big corners: braking corners score by tightness and how long the run into them is
             int cornerN = low ? 1 : high ? 5 : 3;
             var scored = new List<KeyValuePair<float, int>>();
@@ -797,6 +943,107 @@ public static class Trackside
                     sideT++;
                     break;
                 }
+            }
+        }
+
+        // ---------------------------------------------------------------- circuit furniture behind the barriers
+        // What a real circuit is cluttered with, all in the atlas mesh (no draw calls): TV camera towers on the outside of
+        // the corners (scaffold wrapped in mesh, a platform with a banner, the camera), a recovery crane parked behind the
+        // barrier at the slow corners, and tall floodlight masts along the lap.
+        if (!low)
+        {
+            var camAt = new List<int>();
+            int maxCam = high ? 9 : 6, camNo = 0;
+            foreach (int apex in corners)
+            {
+                if (camAt.Count >= maxCam) break;
+                if (curvAbs[apex] < 1f / 220f) continue;
+                bool near = false; foreach (int u in camAt) if (Gap(u, apex) < Mathf.RoundToInt(170f / ds)) near = true;
+                if (near) continue;
+                int sg = Outside(apex), i = W(apex + Mathf.RoundToInt(28f / ds));
+                if (InPit(i, sg)) continue;
+                var p = t.pts[i]; Vector3 T = Tan(p), D = Nrm(p) * sg, up = Vector3.up;
+                float lat = Off(i, sg) + 3.4f; Vector3 c = P(p) + D * lat;
+                if (!Free(c, lat - 1.6f) || !Free(c + T * 1.6f, lat - 1.6f) || !Free(c - T * 1.6f, lat - 1.6f)) continue;
+                camAt.Add(apex);
+                SetChunk(i);
+                const float th = 5.2f, hf = 1.0f;
+                Vector3[] nn = { -D, D, T, -T };
+                for (int f = 0; f < 4; f++)
+                {
+                    Vector3 n = nn[f], sd = Vector3.Cross(n, up).normalized * hf, fc = c + n * hf;
+                    Wall(A, fc - sd, fc + sd, skirt, th * 0.5f, n, TracksideArt.ScaffoldR);
+                    Wall(A, fc - sd, fc + sd, th * 0.5f, th, n, TracksideArt.ScaffoldR);
+                }
+                Box(A, c + up * (th + 0.06f), T, up, D, hf + 0.4f, 0.06f, hf + 0.4f, TracksideArt.Steel, true);
+                for (int f = 0; f < 4; f++)
+                {
+                    Vector3 n = nn[f], sd = Vector3.Cross(n, up).normalized;
+                    Box(A, c + n * (hf + 0.38f) + up * (th + 1.1f), sd, up, n, hf + 0.4f, 0.03f, 0.03f, TracksideArt.PostDark, true);
+                    Post(A, c + n * (hf + 0.38f) + sd * (hf + 0.38f), n, sd, 0.03f, th, th + 1.1f, TracksideArt.PostDark);
+                }
+                aoOn = false;
+                Panel(A, c - D * (hf + 0.42f), -D, hf + 0.4f, th + 0.12f, th + 1.0f, TracksideArt.Ad(BoldAds[camNo % BoldAds.Length]));
+                aoOn = true;
+                // the camera on its pedestal, pointed back up the road at the cars coming out of the corner
+                Box(A, c - D * 0.5f + up * (th + 0.75f), T, up, D, 0.06f, 0.65f, 0.06f, TracksideArt.PostDark);
+                Box(A, c - D * 0.5f - T * 0.2f + up * (th + 1.55f), T, up, D, 0.5f, 0.17f, 0.15f, TracksideArt.GantryDark, true);
+                Box(A, c - D * 0.5f - T * 0.78f + up * (th + 1.55f), T, up, D, 0.1f, 0.12f, 0.12f, TracksideArt.GlassDark, true);
+                AddFoot(c, T, hf + 1f, hf + 1f);
+                camNo++;
+            }
+            // recovery cranes: yellow carrier, cab, outriggers, the boom raised over the barrier
+            int cranes = 0, maxCr = high ? 4 : 2;
+            foreach (int apex in tyreCorners)
+            {
+                if (cranes >= maxCr) break;
+                int sg = Outside(apex), i = W(apex - Mathf.RoundToInt(22f / ds));
+                if (InPit(i, sg)) continue;
+                var p = t.pts[i]; Vector3 T = Tan(p), D = Nrm(p) * sg, up = Vector3.up;
+                float lat = Off(i, sg) + 5.2f; Vector3 c = P(p) + D * lat;
+                bool ok = true;
+                for (int q = -1; q <= 1 && ok; q++) ok = Free(c + T * (q * 4f), lat - 2f);
+                if (!ok) continue;
+                SetChunk(i);
+                Box(A, c + up * 1.25f, T, up, D, 3.6f, 0.55f, 1.2f, TracksideArt.PaintYellow, true);
+                Box(A, c + T * 2.5f + up * 2.45f, T, up, D, 0.9f, 0.65f, 1.15f, TracksideArt.PaintYellow);
+                aoOn = false;
+                Panel(A, c + T * 2.5f - D * 1.17f, -D, 0.7f, 2.1f, 2.95f, TracksideArt.Sw(TracksideArt.GlassDark));
+                Panel(A, c - T * 1.2f - D * 1.22f, -D, 1.6f, 0.8f, 1.7f, TracksideArt.Hazard);
+                aoOn = true;
+                for (int q = -1; q <= 1; q++)
+                    Box(A, c + T * (q * 2.4f) + up * 0.5f, T, up, D, 0.5f, 0.5f, 1.25f, TracksideArt.TyreBlack);
+                // boom: from the turntable up and out over the barrier, two telescoped sections
+                Vector3 bx = (-D * 0.72f + up * 0.69f).normalized, by = Vector3.Cross(T, bx).normalized;
+                if (by.y < 0f) by = -by;
+                Vector3 foot = c - T * 1.0f + up * 2.0f;
+                Box(A, foot + bx * 3.2f, bx, by, T, 3.2f, 0.28f, 0.28f, TracksideArt.PaintYellow, true);
+                Box(A, foot + bx * 8.4f, bx, by, T, 2.2f, 0.2f, 0.2f, TracksideArt.PaintYellow, true);
+                Vector3 tip = foot + bx * 10.6f;
+                Box(A, tip - up * 1.6f, T, up, D, 0.02f, 1.6f, 0.02f, TracksideArt.PostDark);
+                Box(A, tip - up * 3.35f, T, up, D, 0.12f, 0.16f, 0.12f, TracksideArt.LampRed, true);
+                AddFoot(c, T, 4.2f, 1.8f);
+                cranes++;
+            }
+            // floodlight masts: a tall pole with a rack of lamps, about every 450 m, alternating sides, behind the fence
+            int masts = Mathf.FloorToInt((float)t.length / 450f);
+            for (int k = 0; k < masts; k++)
+            {
+                int i = W(Mathf.RoundToInt((k * 450f + 190f) / ds)), sg = (k & 1) == 0 ? -1 : 1;
+                if (InPit(i, sg)) sg = -sg;
+                if (InPit(i, sg)) continue;
+                var p = t.pts[i]; Vector3 T = Tan(p), D = Nrm(p) * sg, up = Vector3.up;
+                float lat = Off(i, sg) + 6.5f; Vector3 c = P(p) + D * lat;
+                if (!Free(c, lat - 1f)) continue;
+                SetChunk(i);
+                const float mh = 19f;
+                Box(A, c + up * (mh * 0.5f + skirt * 0.5f), T, up, D, 0.16f, mh * 0.5f - skirt * 0.5f, 0.16f, TracksideArt.Steel);
+                Box(A, c - D * 0.25f + up * (mh + 0.6f), T, up, D, 1.5f, 0.75f, 0.12f, TracksideArt.GantryDark, true);
+                aoOn = false;
+                for (int q = 0; q < 6; q++)
+                    Panel(A, c - D * 0.38f + T * ((q % 3 - 1) * 0.95f), -D, 0.36f, mh + (q < 3 ? 0.05f : 0.75f), mh + (q < 3 ? 0.55f : 1.25f), TracksideArt.Sw(TracksideArt.PaintWhite));
+                aoOn = true;
+                AddFoot(c, T, 0.8f, 0.8f);
             }
         }
 
@@ -907,6 +1154,9 @@ public static class Trackside
                             // 1 m boards in runs of three segments, bold colours (yellow / red / white / blue)
                             int nbp = Mathf.Max(1, Mathf.RoundToInt(len / 4f));
                             Vector3 ba = a + da * (back - 0.06f), bb = b + db * (back - 0.06f);
+                            // the board's left end must be at the viewer's left (seen from the track), or its name reads mirrored:
+                            // true along the left-hand fence, the other way round along the right-hand one
+                            if (Vector3.Dot(Vector3.Cross(up, mid), len3) < 0f) { var sw3 = ba; ba = bb; bb = sw3; }
                             for (int q = 0; q < nbp; q++)
                             {
                                 Vector3 qa = Vector3.Lerp(ba, bb, (float)q / nbp), qb = Vector3.Lerp(ba, bb, (float)(q + 1) / nbp);
@@ -1144,6 +1394,47 @@ public static class Trackside
                     }
                 }
             }
+            // braking zones: a pair of black lock-up marks on the asphalt running wide of the line towards the outside of
+            // the corner, and dirt thrown over the kerb on the exit; at the slow corners only, a few of them
+            {
+                var done = new List<int>(); int maxLk = high ? 8 : 5;
+                foreach (int apex in corners)
+                {
+                    if (done.Count >= maxLk || curvAbs[apex] < 1f / 130f) break;
+                    bool near = false; foreach (int u in done) if (Gap(u, apex) < Mathf.RoundToInt(150f / ds)) near = true;
+                    if (near) continue;
+                    done.Add(apex);
+                    int sg = Outside(apex), st = Mathf.Max(1, Mathf.RoundToInt(3f / ds));
+                    int lenL = Mathf.RoundToInt((30f + 25f * Rand(apex, 81)) / ds), i0 = apex - Mathf.RoundToInt(22f / ds) - lenL;
+                    float latA = hw * (0.15f + 0.3f * Rand(apex, 82)), latB = hw - 0.9f;
+                    for (int m = 0; m < 2; m++)
+                        for (int j = 0; j + st <= lenL; j += st)
+                        {
+                            int ia = W(i0 + j), ib = W(i0 + j + st);
+                            float fa = (float)j / lenL, fb = (float)(j + st) / lenL;
+                            float la = Mathf.Lerp(latA, latB, fa * fa) - m * 1.55f, lb = Mathf.Lerp(latA, latB, fb * fb) - m * 1.55f;
+                            float wa = 0.07f + 0.07f * fa, wb = 0.07f + 0.07f * fb;
+                            var pa = t.pts[ia]; var pb = t.pts[ib];
+                            Vector3 Da = Nrm(pa) * sg, Db = Nrm(pb) * sg, ca = P(pa), cb = P(pb);
+                            SetChunk(ia);
+                            Decal(G, ca + Da * (la - wa), ca + Da * (la + wa), cb + Db * (lb - wb), cb + Db * (lb + wb), 0.05f,
+                                  j * ds / 4f, (j + st) * ds / 4f, TracksideArt.GrimeCol(TracksideArt.GrimeTyre));
+                        }
+                    // dirt over the exit kerb (outside), where cars drop a wheel
+                    int e0 = apex + Mathf.RoundToInt(8f / ds), lenD = Mathf.RoundToInt(34f / ds);
+                    for (int j = 0; j + st <= lenD; j += st)
+                    {
+                        int ia = W(e0 + j), ib = W(e0 + j + st);
+                        var pa = t.pts[ia]; var pb = t.pts[ib];
+                        if (InPit(ia, sg) || InPit(ib, sg)) continue;
+                        Vector3 Da = Nrm(pa) * sg, Db = Nrm(pb) * sg;
+                        float l0 = hw + kerb * 0.3f, l1 = hw + kerb + 1.3f;
+                        if (grid.MinDist(P(pa) + Da * l1) < hw + kerb) continue;
+                        SetChunk(ia);
+                        Decal(G, P(pa) + Da * l0, P(pa) + Da * l1, P(pb) + Db * l0, P(pb) + Db * l1, 0.058f, j * ds / 6f, (j + st) * ds / 6f, TracksideArt.GrimeCol(TracksideArt.GrimeDirt));
+                    }
+                }
+            }
             // gravel dragged back onto the astroturf where a trap ends (parkland)
             if (!street && t.runL != null)
                 for (int sg = -1; sg <= 1; sg += 2)
@@ -1255,6 +1546,7 @@ public static class Trackside
             {
                 fenceMat.shader = sh;
                 fenceMat.SetFloat("_Cutoff", 0.5f);
+                fenceMat.SetFloat("_Veil", 1f); // far away the mesh thins to a veil (MSAA coverage) instead of a solid sheet
                 fenceMat.renderQueue = 2450;
             }
             else

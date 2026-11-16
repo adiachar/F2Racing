@@ -24,7 +24,16 @@ public class TracksideLod : MonoBehaviour
         c.Apply();
     }
 
-    void Update() { Apply(); Far(); }
+    void Update() { Apply(); Far(); Msaa(); }
+
+    // BakedCutout's distance veil for the fences needs MSAA (alpha to coverage); tell the shader when it is on
+    static readonly int MsaaId = Shader.PropertyToID("_F2Msaa"); int msaa = -1;
+    void Msaa()
+    {
+        int m = QualitySettings.antiAliasing > 1 ? 1 : 0;
+        if (m == msaa) return;
+        msaa = m; Shader.SetGlobalFloat(MsaaId, m);
+    }
 
     void Apply()
     {

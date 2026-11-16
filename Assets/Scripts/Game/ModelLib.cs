@@ -114,7 +114,10 @@ public static class ModelLib
     public static int TreeCount, ShrubCount, PropCount, Vertices, DrawMeshes;
     public static readonly int[] LodCount = new int[3];
 
-    public static void Reset() { bufs.Clear(); active = false; propsDone = false; for (int i = 0; i < used.Length; i++) used[i] = 0; TreeCount = ShrubCount = PropCount = Vertices = DrawMeshes = 0; LodCount[0] = LodCount[1] = LodCount[2] = 0; }
+    // every model tree of this build: foot (x, y, z) and height in w, and its crown width (RoadShadow.cs draws their
+    // shadows as dappled crowns; the meshes themselves, leaf quads and impostor cards, are not projected)
+    public static readonly List<Vector4> TreeFeet = new List<Vector4>(); public static readonly List<float> TreeWidth = new List<float>();
+    public static void Reset() { TreeFeet.Clear(); TreeWidth.Clear(); bufs.Clear(); active = false; propsDone = false; for (int i = 0; i < used.Length; i++) used[i] = 0; TreeCount = ShrubCount = PropCount = Vertices = DrawMeshes = 0; LodCount[0] = LodCount[1] = LodCount[2] = 0; }
 
     // Medium and High only, with the baked lighting and the foliage shader; false = keep the card trees
     public static bool Begin(int gfx)
@@ -181,13 +184,17 @@ public static class ModelLib
             if (used[lod] + m.lods[lod].v.Length <= cap[lod]) break;
         }
         if (lod > 2) return false;
-        float h = 15f + 10f * (float)rnd.NextDouble();
+        // a real wood has storeys: about a third are young or understorey trees (7-12 m) under and between the tall ones
+        // (14-26 m), so the tree line has a ragged top and depth instead of one height
+        float hr = (float)rnd.NextDouble();
+        float h = hr < 0.32f ? 7f + 5f * (hr / 0.32f) : 14f + 12f * ((hr - 0.32f) / 0.68f);
         if (trackDist < 22f) h = Mathf.Min(h, 20f); // no giant right at the fence
         float sy = h / m.height, sxz = sy * (0.9f + 0.25f * (float)rnd.NextDouble());
         float yaw = (float)rnd.NextDouble() * 6.2832f, phase = (float)rnd.NextDouble() * 6.2832f;
         var tint = LeafTint(m, leafLin, rnd);
         float shade = 0.7f + 0.3f * (float)rnd.NextDouble();
         Put(m, lod, lod, foot, yaw, sxz, sy, tint, shade, 1f, phase);
+        TreeFeet.Add(new Vector4(foot.x, foot.y, foot.z, h)); TreeWidth.Add(Mathf.Clamp(2.5f * m.radius * sxz, 0.4f * h, 0.9f * h));
         TreeCount++; LodCount[lod]++;
         return true;
     }

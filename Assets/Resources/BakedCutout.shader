@@ -9,6 +9,7 @@ Shader "F2/BakedCutout"
         _MainTex ("Texture", 2D) = "white" {}
         _Color ("Color", Color) = (1,1,1,1)
         _Cutoff ("Alpha cutoff", Range(0,1)) = 0.5
+        _Veil ("Distance veil (fences; needs MSAA)", Range(0,1)) = 0
     }
     SubShader
     {
@@ -45,6 +46,9 @@ Shader "F2/BakedCutout"
             float4 _MainTex_ST;
             fixed4 _Color;
             fixed _Cutoff;
+            float4 _MainTex_TexelSize;
+            float _Veil;
+            float _F2Msaa; // global, 1 while MSAA is on (TracksideLod.cs); unset = 0
 
             v2f vert (appdata v)
             {
@@ -59,8 +63,17 @@ Shader "F2/BakedCutout"
             fixed4 frag (v2f i) : SV_Target
             {
                 fixed4 c = tex2D(_MainTex, i.uv);
-                half a = (c.a - _Cutoff) / max(fwidth(c.a), 0.0001) + 0.5;
-                clip(a);
+                float al = c.a;
+                float a = (al - _Cutoff) / max(fwidth(al), 0.0001) + 0.5;
+                // fences far away (several texels per pixel): the wire mesh averages out, so its mean alpha goes out as
+                // MSAA coverage: a light veil over what is behind, not an opaque sheet and not a hard pop to nothing.
+                // (floats only: no compares on half values, see CarPaint)
+                float2 tx = i.uv * _MainTex_TexelSize.zw;
+                float2 dx = ddx(tx), dy = ddy(tx);
+                float rho = max(dot(dx, dx), dot(dy, dy));
+                float veil = saturate((rho - 1.5) * 0.4) * _Veil * _F2Msaa;
+                a = lerp(a, al, veil);
+                clip(a - 0.02);
                 c.a = saturate(a);
                 c.rgb *= i.color.rgb;
                 UNITY_APPLY_FOG(i.fogCoord, c);
