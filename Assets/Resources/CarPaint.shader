@@ -39,7 +39,7 @@ Shader "F2/CarPaint"
         _Metal ("Metal", Range(0, 1)) = 0.2
         _Color2 ("Livery secondary", Color) = (0.93, 0.93, 0.94, 1)
         _Color3 ("Livery accent", Color) = (0.1, 0.1, 0.11, 1)
-        _Livery ("Livery split (0 off, 1 on)", Float) = 0
+        _Livery ("Livery split (0 off, 1 + style 0..3)", Float) = 0
         _AO ("Baked AO strength (vertex R)", Range(0, 1)) = 0
         _Under ("Carbon only underneath", Float) = 0
         _Wear ("Tyre wear", Range(0, 1)) = 0
@@ -67,6 +67,30 @@ Shader "F2/CarPaint"
     }
     // how much weave to show: full while a tow covers 3+ pixels, gone below ~1.4 (derivatives: call outside branches)
     half WeaveFade(float3 op) { float3 d = fwidth(op) * 100.0; return saturate(1.75 - 2.5 * max(d.x, max(d.y, d.z))); }
+    // Livery areas from the car's own shape (object space: +z forward, nose tip at z 2.8, x across, ny = how much the
+    // surface faces up). style 0: engine cover + sidepod tops + nose tip; 1: engine cover + the whole nose cone, sidepods
+    // in the primary; 2: the whole sidepods + nose tip, engine cover in the primary; 3: a centre stripe down nose and
+    // engine cover. Returns (secondary weight, accent weight); the accent is a thin line along the secondary's edge.
+    half2 LiverySplit(float3 p, half ny, half style)
+    {
+        float ax = abs(p.x);
+        half s1 = step(0.5, style) * step(style, 1.5), s2 = step(1.5, style) * step(style, 2.5), s3 = step(2.5, style);
+        half s0 = 1.0 - saturate(s1 + s2 + s3);
+        half side = step(0.30, ax) * step(-1.2, p.z) * step(p.z, 0.99);
+        half sideSec = side * step(p.z, 0.95) * (s0 * step(0.55, ny) + s2 * step(0.2, ny));
+        half sideAcc = side * step(0.42, ny) * (1.0 - sideSec) * lerp(1.0, step(ny, 0.56), s1 + s3);
+        half eng = step(ax, 0.32) * step(-1.7, p.z) * step(p.z, -0.01);
+        half engSec = eng * step(p.z, -0.05) * step(0.30, ny) * (1.0 - s2 - s3);
+        half engAcc = eng * step(0.18, ny) * (1.0 - engSec) * lerp(1.0, step(ny, 0.32), s2) * (1.0 - s3);
+        half noseT = lerp(2.45, 1.5, s1);
+        half noseSec = step(noseT, p.z);
+        half noseAcc = step(noseT - 0.05, p.z) * (1.0 - noseSec);
+        half top = step(0.3, ny) * step(-1.7, p.z) * s3;
+        half stripeSec = top * step(ax, 0.10), stripeAcc = top * step(ax, 0.15) * (1.0 - stripeSec);
+        half sec = saturate(sideSec + engSec + noseSec + stripeSec);
+        half acc = saturate(sideAcc + engAcc + noseAcc + stripeAcc) * (1.0 - sec);
+        return half2(sec, acc);
+    }
     #if defined(_MERGED)
         UNITY_INSTANCING_BUFFER_START(CarProps)
             // float4 only: half / fixed members in an instanced constant buffer are laid out or read wrongly by some
@@ -90,20 +114,10 @@ Shader "F2/CarPaint"
         half MIs(half id, half k) { return step(abs(id - k), 0.5); }
         half MId(half a) { return floor(a * 255.0 + 0.5); }
         // the livery split of the body paint (the same areas as the per-part passes below)
-        half3 MLivery(float3 p, half ny, half3 c1, half3 c2, half3 c3)
+        half3 MLivery(float3 p, half ny, half style, half3 c1, half3 c2, half3 c3)
         {
-            float ax = abs(p.x);
-            half side = step(0.30, ax) * step(-1.2, p.z) * step(p.z, 0.99);
-            half sideSec = side * step(p.z, 0.95) * step(0.55, ny);
-            half sideAcc = side * step(0.42, ny) * (1.0 - sideSec);
-            half eng = step(ax, 0.32) * step(-1.7, p.z) * step(p.z, -0.01);
-            half engSec = eng * step(p.z, -0.05) * step(0.30, ny);
-            half engAcc = eng * step(0.18, ny) * (1.0 - engSec);
-            half noseSec = step(2.45, p.z);
-            half noseAcc = step(2.40, p.z) * (1.0 - noseSec);
-            half sec = saturate(sideSec + engSec + noseSec);
-            half acc = saturate(sideAcc + engAcc + noseAcc) * (1.0 - sec);
-            return lerp(lerp(c1, c2, sec), c3, acc);
+            half2 w = LiverySplit(p, ny, style);
+            return lerp(lerp(c1, c2, w.x), c3, w.y);
         }
         // part IDs (CarModel.Id*): 0 body paint, 1 wings (secondary), 2 carbon, 3 metal, 4/5 tyre front/rear,
         // 6/7 rim + brake front/rear, 8 rear lights, 9 tyre stripe, 11 steering wheel; the driver (DriverModel): 12 suit
@@ -203,21 +217,7 @@ Shader "F2/CarPaint"
                 #endif
                 if (_Livery > 0.5)
                 {
-                    // car space: +z forward (nose tip at z 2.8), +y up, x across; ny = how much the surface faces up
-                    float3 p = i.op; half ny = normalize(i.on).y; float ax = abs(p.x);
-                    // sidepods: the part beside the cockpit, from the inlets back
-                    half side = step(0.30, ax) * step(-1.2, p.z) * step(p.z, 0.99);
-                    half sideSec = side * step(p.z, 0.95) * step(0.55, ny);
-                    half sideAcc = side * step(0.42, ny) * (1.0 - sideSec);
-                    // engine cover: the spine behind the driver (rear-wing endplates are wider and stay primary)
-                    half eng = step(ax, 0.32) * step(-1.7, p.z) * step(p.z, -0.01);
-                    half engSec = eng * step(p.z, -0.05) * step(0.30, ny);
-                    half engAcc = eng * step(0.18, ny) * (1.0 - engSec);
-                    // nose tip, in the front wing's colour
-                    half noseSec = step(2.45, p.z);
-                    half noseAcc = step(2.40, p.z) * (1.0 - noseSec);
-                    half sec = saturate(sideSec + engSec + noseSec);
-                    half acc = saturate(sideAcc + engAcc + noseAcc) * (1.0 - sec);
+                    half2 lw = LiverySplit(i.op, normalize(i.on).y, _Livery - 1.0); half sec = lw.x, acc = lw.y;
                     base = lerp(lerp(base, _Color2.rgb, sec), _Color3.rgb, acc);
                 }
                 half ao = lerp(1.0, i.col.r, _AO);
@@ -231,7 +231,7 @@ Shader "F2/CarPaint"
                     coatK = cgm.x; gloss0 = cgm.y; metal = cgm.z; ao = i.col.r;
                     half3 on = normalize(i.on);
                     half body = MIs(id, 0) * step(0.5, MP(_LivC).a);
-                    base = lerp(base, MLivery(i.op, on.y, MP(_Color).rgb, MP(_LivB).rgb, MP(_LivC).rgb), body);
+                    base = lerp(base, MLivery(i.op, on.y, MP(_LivC).a - 1.0, MP(_Color).rgb, MP(_LivB).rgb, MP(_LivC).rgb), body);
                     // carbon weave (carbon parts, the wings' undersides) while it is big enough on screen
                     half near = (1.0 - _Far) * WeaveFade(i.op); // (derivatives: outside the branch)
                     half cw = saturate(MIs(id, 2) + MIs(id, 1) * smoothstep(-0.25, -0.6, on.y));
@@ -342,6 +342,7 @@ Shader "F2/CarPaint"
                 half3 gr = max(_GroundRefl.rgb, half3(grL, grL, grL));
                 env = lerp(env, gr, 1.0 - smoothstep(lerp(-0.35, -0.05, gloss), 0.015, R.y));
                 env *= lerp(0.35, 1.0, _CarLit) * (0.3 + 0.7 * ao) * envTint;
+                env *= lerp(1.0, 0.65, step(0.9, coatK)); // paint's mirror coat adds less white: deep colours stay deep
                 half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
                 half f = 0.05 + 0.95 * x2 * x2;
                 half coat = max(saturate(f * coatK * (1.0 + 0.35 * _Wet) + 0.03 * _Wet), coatMin);
@@ -434,6 +435,7 @@ Shader "F2/CarPaint"
                 half3 gr = max(_GroundRefl.rgb, half3(grL, grL, grL)); // (as the full pass)
                 env = lerp(env, gr, 1.0 - smoothstep(lerp(-0.35, -0.05, gloss), 0.015, R.y));
                 env *= lerp(0.35, 1.0, _CarLit);
+                env *= lerp(1.0, 0.65, step(0.9, coat0)); // (as the full pass)
                 half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
                 half coat = max(saturate((0.05 + 0.95 * x2 * x2) * coat0 * (1.0 + 0.35 * _Wet) + 0.03 * _Wet), 0.22 * mir);
                 half nh = saturate(dot(N, normalize(L + V)));
@@ -459,25 +461,14 @@ Shader "F2/CarPaint"
                 #endif
                 if (_Livery > 0.5)
                 {
-                    // the same areas as the full pass
-                    float3 p = i.op; half ny = i.ny; float ax = abs(p.x);
-                    half side = step(0.30, ax) * step(-1.2, p.z) * step(p.z, 0.99);
-                    half sideSec = side * step(p.z, 0.95) * step(0.55, ny);
-                    half sideAcc = side * step(0.42, ny) * (1.0 - sideSec);
-                    half eng = step(ax, 0.32) * step(-1.7, p.z) * step(p.z, -0.01);
-                    half engSec = eng * step(p.z, -0.05) * step(0.30, ny);
-                    half engAcc = eng * step(0.18, ny) * (1.0 - engSec);
-                    half noseSec = step(2.45, p.z);
-                    half noseAcc = step(2.40, p.z) * (1.0 - noseSec);
-                    half sec = saturate(sideSec + engSec + noseSec);
-                    half acc = saturate(sideAcc + engAcc + noseAcc) * (1.0 - sec);
+                    half2 lw = LiverySplit(i.op, i.ny, _Livery - 1.0); half sec = lw.x, acc = lw.y;
                     base = lerp(lerp(base, _Color2.rgb, sec), _Color3.rgb, acc);
                 }
                 half3 emis = 0;
                 half ao = lerp(1.0, i.col.r, _AO);
                 #if defined(_MERGED)
                     half id = MId(i.col.a); base = i.mbase; ao = i.col.r;
-                    base = lerp(base, MLivery(i.op, i.ny, MP(_Color).rgb, MP(_LivB).rgb, MP(_LivC).rgb), MIs(id, 0) * step(0.5, MP(_LivC).a));
+                    base = lerp(base, MLivery(i.op, i.ny, MP(_LivC).a - 1.0, MP(_Color).rgb, MP(_LivB).rgb, MP(_LivC).rgb), MIs(id, 0) * step(0.5, MP(_LivC).a));
                     half front = step(id, 4.5) + MIs(id, 6), hub = step(5.5, id) * step(id, 7.5);
                     half dust = lerp(MP(_Axle).y, MP(_Axle).x, front) * hub, disc = i.col.g * hub;
                     base = lerp(base * (1.0 - 0.55 * dust), half3(0.06, 0.06, 0.065), disc);

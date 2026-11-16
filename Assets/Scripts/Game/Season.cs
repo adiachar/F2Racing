@@ -67,7 +67,10 @@ public static class Season
     public static int TeamIndexOf(string team) => Mathf.Max(0, Teams.IndexOf(team));
     public static Color TeamColour(int t)
     {
-        foreach (var g in DriverProfile.Grid) if (g.team == Teams[t]) return new Color(g.r, g.g, g.b);
+        // the same colour the car wears (Livery), so the mini-map, tower and results match the cars
+        string name = t >= 0 && t < Teams.Count ? Teams[t] : null;
+        for (int i = 0; i < Livery.Teams.Length; i++) if (Livery.Teams[i].name == name) return Livery.TeamColour(i);
+        foreach (var g in DriverProfile.Grid) if (g.team == name) return new Color(g.r, g.g, g.b);
         return Color.white;
     }
     // the team with fewer than two drivers in the built-in grid (-1 = none)

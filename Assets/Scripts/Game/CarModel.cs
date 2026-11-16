@@ -303,13 +303,13 @@ public class CarModel : MonoBehaviour
         {
             mpb.SetVector(LivAId, LinV(l.primary)); mpb.SetVector(LivBId, LinV(l.secondary));
             mpb.SetVector(HelmAId, LinV(l.secondary)); mpb.SetVector(HelmBId, LinV(l.primary));
-            var acc = l.accent; acc.a = 1f; mpb.SetVector(LivCId, LinV(acc)); // a = 1: livery split on
+            var acc = l.accent; acc.a = 1f + l.style; mpb.SetVector(LivCId, LinV(acc)); // a = 1 + style: livery split on (style picks the zones, CarPaint LiverySplit)
             Flush(); return;
         }
         if (liveryBody != null)
         {
             liveryBody.color = l.primary;
-            if (liveryBody.HasProperty("_Livery")) { liveryBody.SetFloat("_Livery", 1); liveryBody.SetColor("_Color2", l.secondary); liveryBody.SetColor("_Color3", l.accent); }
+            if (liveryBody.HasProperty("_Livery")) { liveryBody.SetFloat("_Livery", 1 + l.style); liveryBody.SetColor("_Color2", l.secondary); liveryBody.SetColor("_Color3", l.accent); }
         }
         if (liverySecond != null) liverySecond.color = l.secondary;
     }
