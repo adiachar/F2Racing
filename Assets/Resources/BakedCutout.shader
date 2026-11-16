@@ -1,6 +1,7 @@
 // See-through world surfaces (debris and catch fences) with lighting baked into the vertex colours, like Baked.shader:
 // one texture read and an alpha test per pixel, both faces drawn, fog kept. Trackside.cs swaps fence materials to it
-// after LightBake has lit them.
+// after LightBake has lit them; the tree cards fall back to it (Foliage.shader). Edges: alpha to coverage (MSAA)
+// on an alpha sharpened to a one-pixel ramp at the cut-off; without MSAA the clip keeps the hard cut-out.
 Shader "F2/BakedCutout"
 {
     Properties
@@ -14,11 +15,13 @@ Shader "F2/BakedCutout"
         Tags { "Queue"="AlphaTest" "RenderType"="TransparentCutout" "IgnoreProjector"="True" }
         LOD 100
         Cull Off
+        AlphaToMask On
         Pass
         {
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #pragma target 3.0
             #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
@@ -56,7 +59,9 @@ Shader "F2/BakedCutout"
             fixed4 frag (v2f i) : SV_Target
             {
                 fixed4 c = tex2D(_MainTex, i.uv);
-                clip(c.a - _Cutoff);
+                half a = (c.a - _Cutoff) / max(fwidth(c.a), 0.0001) + 0.5;
+                clip(a);
+                c.a = saturate(a);
                 c.rgb *= i.color.rgb;
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)

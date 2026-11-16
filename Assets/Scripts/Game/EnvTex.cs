@@ -12,9 +12,11 @@
 //   Stone         256  coursed stone / concrete blocks (retaining walls).
 //   RoadFine      256  linear data for Road.shader HQ (1.4 m per tile): aggregate albedo, stone polish, stone slopes.
 //   Facade        128  one window bay of a plastered town house: frame, sky-lit glass, sill, lintel shadow.
-//   Foliage       512  alpha-tested tree cards, a 2 x 2 atlas: spruce, broad-leaf, umbrella pine, palm. Colour is
-//                      dilated into the cut-out areas and the mip chain keeps its coverage, so trees do not thin out or
-//                      get dark fringes in the distance.
+//   Foliage  1024x512  alpha-tested tree cards, a 4 x 2 atlas: spruce, round park tree, umbrella pine, palm, spreading
+//                      oak, poplar and two forest-edge groves. Crowns are hundreds of small leaf clusters shaded as
+//                      lobes of a volume (dark interior, light top and rim, sky holes at the edge). Colour is dilated into
+//                      the cut-out areas and the mip chain keeps each card's coverage, so trees do not thin out or get
+//                      dark fringes in the distance.
 using UnityEngine;
 
 public static class EnvTex
@@ -643,30 +645,43 @@ public static class EnvTex
     }
 
     // ---------------------------------------------------------------- tree cards
-    public enum Card { Spruce = 0, Broadleaf = 1, Pine = 2, Palm = 3 }
+    // 4 x 2 cells of 256 px (1024 x 512). The first four values are the ones the road shadows know (RoadShadow: 0 spruce,
+    // 2 pine, 3 palm, the rest broad-leaf); SlotOf places each card in the atlas. The bottom row holds the cards whose
+    // foliage reaches the foot of the cell (the groves) and the poplar, so mip bleeding only ever meets other foliage.
+    //   Broadleaf  round park tree (lime, maple): many lobes, crown from a fifth of the height, thin dark trunk
+    //   Oak        broad spreading crown, short trunk, low limbs
+    //   Poplar     tall narrow flame (Lombardy poplar)
+    //   Grove(2)   a strip of forest edge: several crowns of mixed height over a dense understorey, foliage to the
+    //              ground and ragged sides (the band of cards that stands for the woods beyond the first trees)
+    public enum Card { Spruce = 0, Broadleaf = 1, Pine = 2, Palm = 3, Oak = 4, Poplar = 5, Grove = 6, Grove2 = 7 }
+    public const int CardCount = 8;
+    static readonly int[] SlotOf = { 4, 5, 6, 7, 2, 3, 0, 1 };
+    const int AW = 1024, AH = 512, CN = 256;
     // uv rect of each card in the atlas (u0, v0, u1, v1), a half-texel in so neighbours never bleed
     public static Vector4 CardRect(Card c)
     {
-        int k = (int)c; float u0 = (k % 2) * 0.5f, v0 = (k / 2) * 0.5f, e = 1f / 512f;
-        return new Vector4(u0 + e, v0 + e, u0 + 0.5f - e, v0 + 0.5f - e);
+        int s = SlotOf[(int)c]; float eu = 1f / AW, ev = 1f / AH, u0 = (s % 4) * 0.25f, v0 = (s / 4) * 0.5f;
+        return new Vector4(u0 + eu, v0 + ev, u0 + 0.25f - eu, v0 + 0.5f - ev);
     }
     // mean leaf colour (linear) painted into each card, so circuits can tint relative to it
-    public static readonly Color[] CardLeaf = new Color[4];
+    public static readonly Color[] CardLeaf = new Color[CardCount];
 
-    const int AN = 512, CN = 256;
     static float[] cr, cg, cb, ca;
     static System.Random rnd;
     static float R01() => (float)rnd.NextDouble();
 
+    // paint over the cell (premultiplied "over": soft edges keep the leaf colour, never a dark fringe)
     static void Put(int x, int y, Color c, float a)
     {
-        if (x < 0 || y < 0 || x >= CN || y >= CN) return;
-        int i = (oy + y) * AN + ox + x;
-        cr[i] = Mathf.Lerp(cr[i], c.r, a); cg[i] = Mathf.Lerp(cg[i], c.g, a); cb[i] = Mathf.Lerp(cb[i], c.b, a); ca[i] = Mathf.Max(ca[i], a);
+        if (x < 0 || y < 0 || x >= CN || y >= CN || a <= 0.002f) return;
+        int i = (oy + y) * AW + ox + x;
+        float na = a + ca[i] * (1f - a), k = a / na;
+        cr[i] += (c.r - cr[i]) * k; cg[i] += (c.g - cg[i]) * k; cb[i] += (c.b - cb[i]) * k; ca[i] = na;
     }
     static int ox, oy;
+    static void Cell(Card c) { int s = SlotOf[(int)c]; ox = (s % 4) * CN; oy = (s / 4) * CN; }
     static Photo leafPh, barkPh;
-    // a leaf cluster: a disc with a ragged rim and holes, lit from above (lighter top, darker underside)
+    // a leaf cluster: a disc with a ragged rim and holes, lit from above (lighter top, darker underside) (conifers, palm)
     static void Leaves(float cx, float cy, float r, Color col, float holes = 0.12f)
     {
         int x0 = Mathf.FloorToInt(cx - r - 1), x1 = Mathf.CeilToInt(cx + r + 1), y0 = Mathf.FloorToInt(cy - r - 1), y1 = Mathf.CeilToInt(cy + r + 1);
@@ -702,17 +717,102 @@ public static class EnvTex
         }
     }
 
+    // one leaf: a small pointed ellipse, anti-aliased, its upper half a little lighter
+    static void Leaf(float cx, float cy, float len, float wid, float ang, Color c)
+    {
+        float co = Mathf.Cos(ang), si = Mathf.Sin(ang), r = len + 1f, edge = Mathf.Max(wid, 0.9f);
+        float bx = Mathf.Abs(co) * len + Mathf.Abs(si) * wid + 1f, by = Mathf.Abs(si) * len + Mathf.Abs(co) * wid + 1f; // the leaf's box
+        int x0 = Mathf.FloorToInt(cx - bx), x1 = Mathf.CeilToInt(cx + bx), y0 = Mathf.FloorToInt(cy - by), y1 = Mathf.CeilToInt(cy + by);
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++)
+        {
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy, u = (dx * co + dy * si) / len;
+            if (u * u >= 1.2f) continue;
+            float v = (-dx * si + dy * co) / (wid * (1f - 0.35f * u * u)), d2 = u * u + v * v;
+            if (d2 >= 1.6f) continue;
+            float a = Mathf.Clamp01((1f - d2) * 0.5f * edge + 0.5f); // (1 - d) ~ (1 - d^2) / 2 at the rim: no square root
+            if (a > 0f) Put(x, y, c * (1f + 0.16f * dy / r), a);
+        }
+    }
+    // a twig's worth of leaves scattered over a disc: the top and rim lighter, the lower inner ones in the cluster's own
+    // shade, each leaf's shade and hue jittered (the "many small leaves" look, not a smooth blob)
+    static void Cluster(float cx, float cy, float rad, Color col, float leaf, float fill)
+    {
+        int n = Mathf.Max(3, (int)(rad * rad / (leaf * leaf) * fill));
+        for (int k = 0; k < n; k++)
+        {
+            float a = R01() * 6.2832f, rr = Mathf.Sqrt(R01());
+            float x = cx + Mathf.Cos(a) * rr * rad, y = cy + Mathf.Sin(a) * rr * rad * 0.9f;
+            float sh = 0.8f + 0.26f * (y - cy) / rad + 0.1f * rr + (R01() - 0.5f) * 0.3f, hue = (R01() - 0.5f) * 0.16f;
+            var c = new Color(col.r * sh * (1f + hue), col.g * sh, col.b * sh * (1f - hue * 1.5f));
+            float l = leaf * (0.7f + 0.6f * R01());
+            Leaf(x, y, l, l * (0.42f + 0.2f * R01()), R01() * 3.1416f, c);
+        }
+    }
+
+    struct Blob { public float x, y, z, r; public Color c; }
+    static readonly System.Collections.Generic.List<Blob> blobs = new System.Collections.Generic.List<Blob>();
+    // A crown: "lobes" sub-crowns (spheres) inside the envelope (cx, cy, rx, ry), each covered in leaf clusters. A cluster
+    // is shaded as part of its lobe (lit from above and the front) and of the whole crown (clusters deep inside and low
+    // down in the crown's own shade), and all are painted back to front: the gaps between the front clusters show the
+    // dark interior, the outline is the ragged edge of many clusters (sky holes at the rim), never a disc.
+    // shape: 0 round / ellipsoid, 1 flame (poplar: widest low down, narrowing to a point), 2 spreading (wide, flat-bottomed)
+    static void Crown(float cx, float cy, float rx, float ry, int lobes, float clusterR, float leaf, Color col, int shape = 0, float dens = 1f)
+    {
+        blobs.Clear();
+        var Ld = new Vector3(0.2f, 0.78f, 0.6f).normalized;
+        for (int l = 0; l < lobes; l++)
+        {
+            float t = shape == 2 ? 0.3f + 0.65f * R01() : 0.12f + 0.8f * R01();      // height in the envelope (0 foot .. 1 top)
+            float prof = shape == 1 ? Mathf.Pow(Mathf.Sin(Mathf.PI * Mathf.Pow(t, 0.75f)), 0.8f) * (1f - 0.3f * t)
+                       : shape == 2 ? Mathf.Sqrt(Mathf.Clamp01(1f - (t - 0.55f) * (t - 0.55f) * 3.2f))
+                       : Mathf.Sqrt(Mathf.Clamp01(1f - (2f * t - 1f) * (2f * t - 1f)));
+            prof = Mathf.Max(prof, 0.25f);
+            float lr = (0.42f + 0.22f * R01()) * Mathf.Min(rx * (0.3f + 0.7f * prof), ry * 0.75f);
+            float lx = cx + (R01() * 2f - 1f) * Mathf.Max(0f, rx * prof - lr * 0.75f), ly = cy - ry + 2f * ry * t, lz = (R01() * 2f - 1f) * rx * prof * 0.4f;
+            ly = Mathf.Clamp(ly, cy - ry + lr * 0.8f, cy + ry - lr * 0.8f);
+            if (l >= lobes - lobes / 6)
+            {
+                // a few small lobes out on the rim (branch ends breaking the outline)
+                float a = (R01() * 1.5f - 0.25f) * Mathf.PI; lr = (0.16f + 0.1f * R01()) * Mathf.Min(rx, ry);
+                lx = cx + Mathf.Cos(a) * (rx - lr * 0.6f); ly = cy + Mathf.Sin(a) * (ry - lr * 0.6f); lz = (R01() - 0.5f) * rx * 0.3f;
+            }
+            float hue = (R01() - 0.5f) * 0.22f; // lobes a little olive or yellow-green, a little blue-green
+            int m = (int)(3.6f * lr * lr / (clusterR * clusterR) * dens) + 4;
+            for (int q = 0; q < m; q++)
+            {
+                // a point on the lobe's surface (a little inside it)
+                float z = R01() * 2f - 1f, ph = R01() * 6.2832f, s = Mathf.Sqrt(1f - z * z);
+                var n = new Vector3(s * Mathf.Cos(ph), s * Mathf.Sin(ph), z);
+                float rad = lr * (0.72f + 0.28f * R01());
+                float px = lx + n.x * rad, py = ly + n.y * rad, pz = lz + n.z * rad;
+                float lit = 0.3f + 0.7f * Mathf.Max(0f, Vector3.Dot(n, Ld));
+                float ex = (px - cx) / rx, ey = (py - cy) / ry, ez = pz / rx, rc = Mathf.Sqrt(ex * ex + ey * ey + ez * ez);
+                if (rc > 0.8f && R01() < 0.3f) continue;                                       // sky holes round the rim
+                float u = Mathf.Clamp01((rc - 0.15f) / 0.85f), ao = 0.3f + 0.7f * u * u * (3f - 2f * u);       // deep inside the crown: shade
+                ao *= 0.66f + 0.34f * Mathf.Clamp01((py - (cy - ry)) / (1.3f * ry));           // underside: shade
+                float j = 0.9f + 0.2f * R01(), warm = hue + (lit > 0.8f ? (lit - 0.8f) * 0.6f : 0f); // sunlit tips a touch yellower
+                var c = new Color(col.r * (1f + warm), col.g, col.b * (1f - warm), 1f) * (lit * ao * j);
+                blobs.Add(new Blob { x = px, y = py, z = pz, r = clusterR * (0.75f + 0.5f * R01()), c = c });
+            }
+        }
+        blobs.Sort((a, b) => a.z.CompareTo(b.z));
+        for (int k = 0; k < blobs.Count; k++) { var b = blobs[k]; Cluster(b.x, b.y, b.r, b.c, leaf, 0.9f); }
+        blobs.Clear();
+    }
+
     static Texture2D foliage;
     public static Texture2D Foliage()
     {
         if (foliage != null) return foliage;
         leafPh = LoadPhoto("grass"); barkPh = LoadPhoto("bark");
-        cr = new float[AN * AN]; cg = new float[AN * AN]; cb = new float[AN * AN]; ca = new float[AN * AN];
+        cr = new float[AW * AH]; cg = new float[AW * AH]; cb = new float[AW * AH]; ca = new float[AW * AH];
         rnd = new System.Random(5);
-        Color bark = new Color(0.20f, 0.14f, 0.10f), barkGrey = new Color(0.30f, 0.27f, 0.24f), palmBark = new Color(0.36f, 0.30f, 0.22f);
+        Color bark = new Color(0.20f, 0.14f, 0.10f), palmBark = new Color(0.36f, 0.30f, 0.22f);
+        Color barkDark = new Color(0.07f, 0.06f, 0.05f);                       // deciduous trunks: thin and dark, in the crown's shade
+        Color leafMid = new Color(0.17f, 0.31f, 0.085f);                       // (the circuit's leaf colours ride in the vertex tint)
 
         // spruce: a straight trunk, drooping tiers of needle sprays that shorten towards the spire
-        ox = 0; oy = 0;
+        Cell(Card.Spruce);
         {
             Color dark = new Color(0.045f, 0.12f, 0.06f), lite = new Color(0.08f, 0.20f, 0.09f);
             Limb(128, 0, 128, 236, 9, 2, bark);
@@ -732,25 +832,30 @@ public static class EnvTex
                 Leaves(128, ty + 2, 6 + 7 * (1 - f), dark, 0.05f);
             }
         }
-        // broad-leaf: trunk and limbs, then a dome of leaf clusters (back ones darker, front ones lighter)
-        ox = CN; oy = 0;
+        // round park tree: a thin dark trunk forking into limbs that show in the gaps, the crown from a fifth of the
+        // height (the trunk mostly hidden by the lower foliage) to the top
+        Cell(Card.Broadleaf);
         {
-            Limb(128, 0, 126, 110, 16, 9, barkGrey);
-            Limb(126, 90, 84, 150, 8, 3, barkGrey); Limb(127, 95, 176, 156, 8, 3, barkGrey); Limb(126, 105, 132, 180, 7, 3, barkGrey);
-            Color deep = new Color(0.07f, 0.16f, 0.05f), leaf = new Color(0.16f, 0.32f, 0.09f);
-            for (int layer = 0; layer < 3; layer++)
-                for (int k = 0; k < 46; k++)
-                {
-                    float a = R01() * 6.283f, rr = Mathf.Sqrt(R01());
-                    float x = 128 + Mathf.Cos(a) * rr * 100f, y = 160 + Mathf.Sin(a) * rr * 80f;
-                    if (y < 92) continue;
-                    float hi = (y - 80f) / 170f;
-                    var c = Color.Lerp(deep, leaf, Mathf.Clamp01(0.25f + 0.35f * layer + 0.4f * hi + 0.2f * (R01() - 0.5f)));
-                    for (int q = 0; q < 5; q++) Leaves(x + (R01() - 0.5f) * 26f, y + (R01() - 0.5f) * 20f, 9f + R01() * 9f - layer * 1.5f, c, 0.14f);
-                }
+            Limb(128, 0, 127, 120, 7, 3.5f, barkDark);
+            for (int b = 0; b < 6; b++) Limb(127, 58 + b * 11, 128 + (R01() - 0.5f) * 160f, 110 + R01() * 100f, 3.2f, 1f, barkDark);
+            Crown(128, 145, 104, 99, 18, 8.5f, 2.0f, leafMid);
+            for (int b = 0; b < 3; b++) Crown(128 + (R01() - 0.5f) * 70f, 52 + R01() * 14f, 24, 18, 2, 6.5f, 1.9f, leafMid * 0.82f);
+        }
+        // broad spreading tree (oak, plane): short trunk, low heavy limbs, a wide crown flatter at the bottom
+        Cell(Card.Oak);
+        {
+            Limb(128, 0, 126, 76, 10, 7, barkDark);
+            Limb(126, 66, 52, 118, 5, 1.5f, barkDark); Limb(127, 70, 204, 124, 5, 1.5f, barkDark); Limb(126, 74, 112, 160, 4, 1.5f, barkDark); Limb(127, 72, 150, 150, 4, 1.5f, barkDark);
+            Crown(128, 148, 116, 88, 22, 9f, 2.1f, leafMid * 0.95f, 2);
+        }
+        // Lombardy poplar: a tall narrow flame on a slim stem
+        Cell(Card.Poplar);
+        {
+            Limb(128, 0, 128, 190, 5, 1.5f, barkDark);
+            Crown(128, 134, 40, 112, 28, 6.5f, 1.8f, new Color(0.15f, 0.30f, 0.09f), 1, 1.2f);
         }
         // umbrella pine: a tall, slightly bent bare trunk forking into a wide flat crown
-        ox = 0; oy = CN;
+        Cell(Card.Pine);
         {
             Limb(128, 0, 122, 120, 13, 9, bark); Limb(122, 120, 128, 160, 9, 7, bark);
             Limb(126, 150, 70, 178, 7, 3, bark); Limb(126, 152, 190, 180, 7, 3, bark); Limb(128, 158, 128, 190, 6, 3, bark);
@@ -765,7 +870,7 @@ public static class EnvTex
                 }
         }
         // palm: a curved ringed trunk and a crown of arching fronds with leaflets
-        ox = CN; oy = CN;
+        Cell(Card.Palm);
         {
             float px0 = 0, py0 = 0;
             for (int s = 0; s <= 40; s++)
@@ -796,47 +901,127 @@ public static class EnvTex
             }
             Leaves(hx, hy - 4, 9, new Color(0.18f, 0.12f, 0.06f), 0f); // the coconuts / frond bases
         }
-
-        // mean leaf colour per card (for tinting), then dilate colour into the cut-out pixels
-        for (int k = 0; k < 4; k++)
+        // forest edge, two strips: tall crowns of mixed height at the back (darker, deeper in the wood), a middle row,
+        // dark trunks between, and a dense understorey of bushes to the ground in front. Crowns stay inside the cell so the
+        // sides are ragged outlines (neighbouring band cards overlap them), never a straight cut.
+        for (int g = 0; g < 2; g++)
         {
-            int x0 = (k % 2) * CN, y0 = (k / 2) * CN; double r = 0, g = 0, b = 0; int n = 0;
+            Cell(g == 0 ? Card.Grove : Card.Grove2);
+            Color back = leafMid * (g == 0 ? 0.74f : 0.66f), midC = leafMid * 0.9f, bush = leafMid * 0.7f;
+            for (int k = 0; k < 4; k++)
+            {
+                bool pop = g == 1 && (k == 1 || k == 3);
+                float rx = pop ? 26f : 44f + R01() * 16f, ry = pop ? 104f : 66f + R01() * 26f;
+                float x = Mathf.Clamp(36f + k * 61f + (R01() - 0.5f) * 20f, rx + 5f, 251f - rx), y = Mathf.Min(150f + R01() * 30f, 250f - ry);
+                if (pop) y = 250f - ry;
+                Crown(x, y, rx, ry, pop ? 12 : 12, pop ? 6.5f : 8f, 1.9f, pop ? back * 1.08f : back, pop ? 1 : 0);
+            }
+            for (int k = 0; k < 4; k++) { float x = 40f + k * 58f + (R01() - 0.5f) * 16f; Limb(x, 20f, x + (R01() - 0.5f) * 8f, 110f + R01() * 40f, 3.5f, 1.8f, barkDark); }
+            for (int k = 0; k < 3; k++)
+            {
+                float rx = 42f + R01() * 12f, x = Mathf.Clamp(66f + k * 62f + (R01() - 0.5f) * 24f, rx + 5f, 251f - rx);
+                Crown(x, 98f + R01() * 22f, rx, 58f + R01() * 14f, 10, 8f, 1.9f, midC);
+            }
+            for (int k = 0; k < 10; k++)
+            {
+                float rx = 22f + R01() * 8f, x = Mathf.Clamp(22f + k * 24f + (R01() - 0.5f) * 10f, rx + 3f, 253f - rx);
+                Crown(x, 26f + R01() * 14f, rx, 34f + R01() * 8f, 6, 6.5f, 1.8f, bush * (0.9f + 0.2f * R01()), 0, 2.2f);
+            }
+        }
+
+        // mean leaf colour per card (for tinting)
+        var done = new bool[AW * AH];
+        for (int k = 0; k < CardCount; k++)
+        {
+            int s = SlotOf[k], x0 = (s % 4) * CN, y0 = (s / 4) * CN; double r = 0, g = 0, b = 0; int n = 0;
             for (int y = 0; y < CN; y++) for (int x = 0; x < CN; x++)
             {
-                int i = (y0 + y) * AN + x0 + x; if (ca[i] < 0.5f || cg[i] < cr[i] * 1.2f) continue;
+                int i = (y0 + y) * AW + x0 + x; if (ca[i] < 0.5f || cg[i] < cr[i] * 1.2f) continue;
                 r += cr[i]; g += cg[i]; b += cb[i]; n++;
             }
             CardLeaf[k] = n > 0 ? new Color((float)(r / n), (float)(g / n), (float)(b / n)) : new Color(0.1f, 0.2f, 0.1f);
+        }
+        // colour into the cut-out texels: grown outwards from the leaves for a few texels, the rest the cell's mean leaf
+        // colour, so filtering across the silhouette never blends in a foreign colour
+        for (int i = 0; i < done.Length; i++) done[i] = ca[i] > 0.004f;
+        var grow = new System.Collections.Generic.List<int>();
+        for (int pass = 0; pass < 6; pass++)
+        {
+            grow.Clear();
+            for (int y = 0; y < AH; y++) for (int x = 0; x < AW; x++)
+            {
+                int i = y * AW + x; if (done[i]) continue;
+                float r = 0, g = 0, b = 0; int n = 0;
+                if (x > 0 && done[i - 1] && ((x - 1) / CN == x / CN)) { r += cr[i - 1]; g += cg[i - 1]; b += cb[i - 1]; n++; }
+                if (x < AW - 1 && done[i + 1] && ((x + 1) / CN == x / CN)) { r += cr[i + 1]; g += cg[i + 1]; b += cb[i + 1]; n++; }
+                if (y > 0 && done[i - AW] && ((y - 1) / CN == y / CN)) { r += cr[i - AW]; g += cg[i - AW]; b += cb[i - AW]; n++; }
+                if (y < AH - 1 && done[i + AW] && ((y + 1) / CN == y / CN)) { r += cr[i + AW]; g += cg[i + AW]; b += cb[i + AW]; n++; }
+                if (n == 0) continue;
+                cr[i] = r / n; cg[i] = g / n; cb[i] = b / n; grow.Add(i);
+            }
+            for (int q = 0; q < grow.Count; q++) done[grow[q]] = true;
+        }
+        for (int k = 0; k < CardCount; k++)
+        {
+            int s = SlotOf[k], x0 = (s % 4) * CN, y0 = (s / 4) * CN;
             for (int y = 0; y < CN; y++) for (int x = 0; x < CN; x++)
             {
-                int i = (y0 + y) * AN + x0 + x; if (ca[i] > 0) continue;
+                int i = (y0 + y) * AW + x0 + x; if (done[i]) continue;
                 cr[i] = CardLeaf[k].r * 0.8f; cg[i] = CardLeaf[k].g * 0.8f; cb[i] = CardLeaf[k].b * 0.8f;
             }
         }
 
-        // mip chain by hand: colour averaged, alpha sharpened round the cut-off so each level keeps the full
-        // level's coverage (otherwise distant trees fade to sticks)
-        var tex = new Texture2D(AN, AN, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
-        int w = AN; float[] R = cr, G = cg, Bb = cb, A = ca; int mip = 0;
+        // mip chain by hand: colour averaged by coverage (the cut-out fill never darkens the leaves), alpha remapped per
+        // cell so each level keeps the full level's coverage at the cut-off (Castano): distant trees neither thin out
+        // to sticks nor swell into blobs, and the alpha-to-coverage edge stays where the leaves are
+        var tex = new Texture2D(AW, AH, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
+        int w = AW, h = AH, cs = CN, mip = 0; float[] R = cr, G = cg, Bb = cb, A = ca;
+        var cov = new float[CardCount]; var scratch = new float[CN * CN];
+        var lut = new byte[4096]; for (int i = 0; i < 4096; i++) lut[i] = S(i / 4095f); // linear -> sRGB, a table: 700k texels
+        for (int s = 0; s < CardCount; s++)
+        {
+            int n = 0, x0 = (s % 4) * CN, y0 = (s / 4) * CN;
+            for (int y = 0; y < CN; y++) for (int x = 0; x < CN; x++) if (A[(y0 + y) * AW + x0 + x] >= 0.5f) n++;
+            cov[s] = n / (float)(CN * CN);
+        }
         while (true)
         {
-            var px = new Color32[w * w];
-            float sharp = 1f + 0.6f * mip;
-            for (int i = 0; i < px.Length; i++)
-            {
-                float a = Mathf.Clamp01((A[i] - 0.5f) * sharp + 0.5f);
-                px[i] = new Color32(S(R[i]), S(G[i]), S(Bb[i]), B(a));
-            }
+            var px = new Color32[w * h];
+            for (int i = 0; i < px.Length; i++) px[i] = new Color32(lut[(int)(Mathf.Clamp01(R[i]) * 4095f)], lut[(int)(Mathf.Clamp01(G[i]) * 4095f)], lut[(int)(Mathf.Clamp01(Bb[i]) * 4095f)], B(A[i]));
+            if (mip > 0 && cs >= 2)
+                for (int s = 0; s < CardCount; s++)
+                {
+                    if (cov[s] <= 0f) continue;
+                    int x0 = (s % 4) * cs, y0 = (s / 4) * cs, n = cs * cs, q = 0;
+                    for (int y = 0; y < cs; y++) for (int x = 0; x < cs; x++) scratch[q++] = A[(y0 + y) * w + x0 + x];
+                    System.Array.Sort(scratch, 0, n);
+                    float t = Mathf.Clamp(scratch[Mathf.Clamp(n - Mathf.RoundToInt(cov[s] * n), 0, n - 1)], 0.03f, 0.97f);
+                    for (int y = 0; y < cs; y++) for (int x = 0; x < cs; x++)
+                    {
+                        int i = (y0 + y) * w + x0 + x; float a = A[i];
+                        a = a < t ? a * 0.5f / t : 0.5f + (a - t) * 0.5f / (1f - t);
+                        px[i].a = B(a);
+                    }
+                }
             tex.SetPixels32(px, mip);
-            if (w == 1) break;
-            int nw = w / 2; var nR = new float[nw * nw]; var nG = new float[nw * nw]; var nB = new float[nw * nw]; var nA = new float[nw * nw];
-            for (int y = 0; y < nw; y++) for (int x = 0; x < nw; x++)
+            if (w == 1 && h == 1) break;
+            int nw = Mathf.Max(1, w / 2), nh = Mathf.Max(1, h / 2);
+            var nR = new float[nw * nh]; var nG = new float[nw * nh]; var nB = new float[nw * nh]; var nA = new float[nw * nh];
+            for (int y = 0; y < nh; y++) for (int x = 0; x < nw; x++)
             {
-                int i0 = (y * 2) * w + x * 2, i1 = i0 + 1, i2 = i0 + w, i3 = i2 + 1, o = y * nw + x;
-                nR[o] = (R[i0] + R[i1] + R[i2] + R[i3]) * 0.25f; nG[o] = (G[i0] + G[i1] + G[i2] + G[i3]) * 0.25f; nB[o] = (Bb[i0] + Bb[i1] + Bb[i2] + Bb[i3]) * 0.25f;
-                nA[o] = (A[i0] + A[i1] + A[i2] + A[i3]) * 0.25f;
+                int xa = Mathf.Min(x * 2, w - 1), xb = Mathf.Min(x * 2 + 1, w - 1), ya = Mathf.Min(y * 2, h - 1), yb = Mathf.Min(y * 2 + 1, h - 1);
+                int i0 = ya * w + xa, i1 = ya * w + xb, i2 = yb * w + xa, i3 = yb * w + xb, o = y * nw + x;
+                float sa = A[i0] + A[i1] + A[i2] + A[i3];
+                if (sa > 0.01f)
+                {
+                    nR[o] = (R[i0] * A[i0] + R[i1] * A[i1] + R[i2] * A[i2] + R[i3] * A[i3]) / sa;
+                    nG[o] = (G[i0] * A[i0] + G[i1] * A[i1] + G[i2] * A[i2] + G[i3] * A[i3]) / sa;
+                    nB[o] = (Bb[i0] * A[i0] + Bb[i1] * A[i1] + Bb[i2] * A[i2] + Bb[i3] * A[i3]) / sa;
+                }
+                else { nR[o] = (R[i0] + R[i1] + R[i2] + R[i3]) * 0.25f; nG[o] = (G[i0] + G[i1] + G[i2] + G[i3]) * 0.25f; nB[o] = (Bb[i0] + Bb[i1] + Bb[i2] + Bb[i3]) * 0.25f; }
+                nA[o] = sa * 0.25f;
             }
-            R = nR; G = nG; Bb = nB; A = nA; w = nw; mip++;
+            R = nR; G = nG; Bb = nB; A = nA; w = nw; h = nh; cs /= 2; mip++;
         }
         tex.Apply(false, true);
         cr = cg = cb = ca = null;

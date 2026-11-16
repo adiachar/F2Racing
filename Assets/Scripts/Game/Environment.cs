@@ -52,6 +52,7 @@ public class EnvDef
     // woods as a mass: beyond canopyAt m from the road the wooded share of the land (cover 0..1) is raised by
     // canopy m and coloured like tree tops, so a few hundred real trees along its edge read as a deep forest
     public float canopy = 0, canopyAt = 48, cover = 0.5f;
+    public float poplar = 0.06f;                                  // share of Lombardy poplars among the broad-leaf trees
     public Color leaf = new Color(0.19f, 0.42f, 0.21f), leaf2 = new Color(0.19f, 0.42f, 0.21f), trunk = new Color(0.36f, 0.25f, 0.19f);
     // backdrop
     public EnvRing[] rings;
@@ -115,7 +116,7 @@ public static class Environment
             grass = C(0.27f, 0.42f, 0.17f), dry = C(0.37f, 0.44f, 0.20f), patch = 0.35f,
             rough = 1.2f, roughScale = 300,
             tree = TreeKind.Broadleaf, tree2 = TreeKind.Broadleaf, tree2Share = 0.4f, treeMul = 1.25f, treeNear = 9, treeFar = 380, treeSize = 2.2f,
-            canopy = 24, canopyAt = 36, cover = 0.72f,
+            canopy = 24, canopyAt = 36, cover = 0.72f, poplar = 0.16f,
             leaf = C(0.19f, 0.38f, 0.16f), leaf2 = C(0.27f, 0.42f, 0.15f),
             rings = new[]
             {
@@ -362,12 +363,9 @@ public static class Environment
     }
     // the ground itself (landmarks and blocks stand on it), without the tree tops
     public static float GroundY(float x, float z) => RealWorld.Ready ? RealWorld.GroundY(x, z) : WorldBuilder.H(x, z) + Lift(x, z);
-    // the terrain mesh: ground plus the canopy of the woods
-    public static float Surface(float x, float z, float lift)
-    {
-        float c = Canopy(x, z);
-        return c <= 0 ? lift : lift + Cur.canopy * c * (0.62f + 0.5f * Noise(x / 19f, z / 19f, 93) + 0.34f * Hash(Mathf.RoundToInt(x), Mathf.RoundToInt(z), 94));
-    }
+    // the terrain mesh: the ground. (The woods used to raise it into a canopy mass, which read as faceted green hills;
+    // they are now rows of trees and forest-edge bands of cards, Trees below, over a dark forest floor, GroundTint.)
+    public static float Surface(float x, float z, float lift) => lift;
 
     // colour of the ground at (x, z) relative to the grass texture's own colour (multiplied in after the light bake)
     public static Color GroundTint(float x, float z, float lift)
@@ -554,6 +552,101 @@ public static class Environment
         b.tri.Add(i); b.tri.Add(i + 1); b.tri.Add(i + 2); b.tri.Add(i); b.tri.Add(i + 2); b.tri.Add(i + 3);
     }
 
+    // ================================================================ tree cards, shared with RealWorld.cs
+    // the tree material: Foliage.shader on the atlas, with the sun's direction for the back-light (off at night)
+    public static Material FoliageMaterial()
+    {
+        var atlas = EnvTex.Foliage();
+        if (WorldBuilder.FoliageShader == null) return WorldBuilder.Mat(Color.white, atlas);
+        var m = new Material(WorldBuilder.FoliageShader) { mainTexture = atlas };
+        m.SetFloat("_Cutoff", 0.5f);
+        var sun = RenderSettings.sun;
+        if (sun != null)
+        {
+            Vector3 to = -sun.transform.forward;
+            m.SetVector("_SunDir", new Vector4(to.x, to.y, to.z, 0));
+            float k = Mathf.Clamp01((sun.intensity - 0.3f) / 0.8f) * Mathf.Clamp01(to.y * 4f + 0.2f);
+            m.SetVector("_Trans", new Vector4(1.2f, 1.4f, 0.5f, 0.9f * k));
+        }
+        return m;
+    }
+
+    // one card: foot-left, foot-right, top-right, top-left (LightBake and RoadShadow read the cards in this order),
+    // normals bent out to the card's sides and up (the bake then lights the sun side of the crown and shades the far
+    // side and the foot), uv2 = (sway weight, phase) for Foliage.shader
+    static void Card4(List<Vector3> v, List<Vector3> n, List<Vector2> uv, List<Vector2> uv2, List<Color> col, List<int> tri,
+                      Vector3 foot, Vector3 half, float h, Vector4 r, float vFrom, bool flip, Vector3 outward, float sway, float phase, Color footC, Color topC)
+    {
+        int k = v.Count;
+        Vector3 b0 = foot - half, b1 = foot + half;
+        v.Add(b0); v.Add(b1); v.Add(b1 + Vector3.up * h); v.Add(b0 + Vector3.up * h);
+        float u0 = flip ? r.z : r.x, u1 = flip ? r.x : r.z, v0 = Mathf.Lerp(r.y, r.w, vFrom);
+        uv.Add(new Vector2(u0, v0)); uv.Add(new Vector2(u1, v0)); uv.Add(new Vector2(u1, r.w)); uv.Add(new Vector2(u0, r.w));
+        var side = half.normalized;
+        n.Add((-side * 0.7f + outward * 0.5f + Vector3.up * 0.12f).normalized); n.Add((side * 0.7f + outward * 0.5f + Vector3.up * 0.12f).normalized);
+        n.Add((side * 0.6f + outward * 0.35f + Vector3.up * 0.75f).normalized); n.Add((-side * 0.6f + outward * 0.35f + Vector3.up * 0.75f).normalized);
+        uv2.Add(new Vector2(0, phase)); uv2.Add(new Vector2(0, phase)); uv2.Add(new Vector2(sway, phase)); uv2.Add(new Vector2(sway, phase));
+        col.Add(footC); col.Add(footC); col.Add(topC); col.Add(topC);
+        tri.Add(k); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k); tri.Add(k + 3); tri.Add(k + 2);
+    }
+    // per-tree colour relative to the colour painted in the card: the species' leaf colour, then a shade and one of
+    // a few hue families (as in a real park: olive, yellow-green, dark green next to each other)
+    static Color LeafTint(Color leafLin, EnvTex.Card card, System.Random rnd, float shade)
+    {
+        var painted = EnvTex.CardLeaf[(int)card]; if (painted.g <= 0f) painted = new Color(0.1f, 0.2f, 0.1f);
+        float sh = (0.86f + (float)rnd.NextDouble() * 0.28f) * shade, h = (float)rnd.NextDouble(), kr = 1, kg = 1, kb = 1;
+        if (h < 0.2f) { kr = 1.14f; kg = 0.97f; kb = 0.78f; }               // olive
+        else if (h < 0.38f) { kr = 1.2f; kg = 1.1f; kb = 0.72f; }           // yellow-green
+        else if (h < 0.55f) { kr = 0.8f; kg = 0.86f; kb = 1.0f; }           // dark blue-green
+        return new Color(Mathf.Clamp(leafLin.r / painted.r, 0.5f, 1.9f) * sh * kr, Mathf.Clamp(leafLin.g / painted.g, 0.5f, 1.9f) * sh * kg,
+                         Mathf.Clamp(leafLin.b / painted.b, 0.5f, 1.9f) * sh * kb, 1f);
+    }
+    // One tree: "cards" crossed cards round one foot (2 far away and on Low, 3 near). Broad-leaf trees are a mix of round
+    // park trees, spreading oaks and poplars (Cur.poplar); the cards of one tree alternate between two crown cards and
+    // are mirrored at random, so the crown's outline changes as the view goes round it. The first card is always the
+    // tree's own, unmirrored (RoadShadow reads the tree's kind from it).
+    public static void EmitTree(List<Vector3> v, List<Vector3> n, List<Vector2> uv, List<Vector2> uv2, List<Color> col, List<int> tri,
+                                Vector3 foot, TreeKind kind, float sz, Color leafLin, System.Random rnd, int cards)
+    {
+        float rot = (float)rnd.NextDouble() * 6.28f, phase = (float)rnd.NextDouble() * 6.28f, wsz = sz > 1.2f ? 1.2f + (sz - 1.2f) * 0.6f : sz;
+        float w, h, vFrom = 0f, sway; EnvTex.Card a, b;
+        switch (kind)
+        {
+            case TreeKind.Spruce: w = 7.2f * sz; h = 15f * sz; sway = 0.45f; a = b = EnvTex.Card.Spruce; break;
+            case TreeKind.Pine: w = 9.5f * sz; h = 9.6f * sz; sway = 0.6f; a = b = EnvTex.Card.Pine; break;
+            case TreeKind.Palm: w = 8.4f * sz; h = 9.4f * sz; sway = 1.2f; a = b = EnvTex.Card.Palm; break;
+            case TreeKind.Scrub: w = 3.8f * sz; h = 2.2f * sz; vFrom = 0.26f; sway = 0.25f; foot += Vector3.down * 0.2f; a = b = EnvTex.Card.Oak; break;
+            default:
+            {
+                float r = (float)rnd.NextDouble();
+                if (r < Cur.poplar) { w = 4.4f * wsz; h = 12.5f * sz; sway = 0.7f; a = b = EnvTex.Card.Poplar; }
+                else if (r < Cur.poplar + 0.35f) { w = 10.6f * wsz; h = 9.2f * sz; sway = 0.7f; a = EnvTex.Card.Oak; b = EnvTex.Card.Broadleaf; }
+                else { w = 8.8f * wsz; h = 10f * sz; sway = 0.8f; a = EnvTex.Card.Broadleaf; b = EnvTex.Card.Oak; }
+                break;
+            }
+        }
+        Color top = LeafTint(leafLin, a, rnd, 1f), low = top * 0.72f; low.a = 1f; // the foot in the crown's own shade
+        for (int c = 0; c < cards; c++)
+        {
+            float ang = rot + c * Mathf.PI / cards + (c == 0 ? 0f : ((float)rnd.NextDouble() - 0.5f) * 0.35f);
+            var card = (c & 1) == 1 ? b : a;
+            float ww = w * (c == 0 ? 1f : 0.88f + 0.24f * (float)rnd.NextDouble()) * (card == a ? 1f : 0.95f), hh = h * (c == 0 ? 1f : 0.94f + 0.1f * (float)rnd.NextDouble());
+            var half = new Vector3(Mathf.Cos(ang), 0, Mathf.Sin(ang)) * (ww * 0.5f);
+            Card4(v, n, uv, uv2, col, tri, foot, half, hh, EnvTex.CardRect(card), vFrom, c > 0 && rnd.NextDouble() < 0.5, Vector3.zero, sway, phase, low, top);
+        }
+    }
+    // One card of a forest edge band (EnvTex.Card.Grove / Grove2): a strip of mixed crowns over a dense understorey,
+    // standing a few rows behind the first trees and facing out of the wood, so the woods read as deep, layered forest
+    // with a sunlit or shaded edge, instead of a raised green mass. along / outward: unit vectors along the edge and
+    // out of the wood.
+    public static void EmitBand(List<Vector3> v, List<Vector3> n, List<Vector2> uv, List<Vector2> uv2, List<Color> col, List<int> tri,
+                                Vector3 foot, Vector3 along, Vector3 outward, float w, float h, Color leafLin, System.Random rnd)
+    {
+        var card = rnd.NextDouble() < 0.5 ? EnvTex.Card.Grove : EnvTex.Card.Grove2;
+        Color top = LeafTint(leafLin, card, rnd, 0.92f), low = top * 0.6f; low.a = 1f;
+        Card4(v, n, uv, uv2, col, tri, foot, along * (w * 0.5f), h, EnvTex.CardRect(card), 0f, rnd.NextDouble() < 0.5, outward, 0.22f, (float)rnd.NextDouble() * 6.28f, low, top);
+    }
+
     // ================================================================ trees: one mesh of alpha-tested cards
     // Every tree is two (Low) or three crossed upright cards cut from one atlas (EnvTex.Foliage: spruce, broad-leaf,
     // umbrella pine, palm; scrub is the broad-leaf crown alone, squat). The trunk is painted into the card, so the
@@ -570,32 +663,9 @@ public static class Environment
         bool low = WorldBuilder.Gfx <= 1;
         if (low) want = want * 3 / 5; // Low: fewer trees
         float near = e.treeNear + (t.def != null ? (float)t.def.barrier : 0), far = e.treeFar;
-        var atlas = EnvTex.Foliage();
+        EnvTex.Foliage();
         var v = new List<Vector3>(); var nrm = new List<Vector3>(); var uv = new List<Vector2>(); var uv2 = new List<Vector2>();
         var tri = new List<int>(); var col = new List<Color>();
-        int cards = low ? 2 : 3;
-        // card (width, height) per unit size, the atlas cell, the share of the cell used (scrub: the crown only), sway
-        void Card(Vector3 foot, float w, float h, Vector4 r, float vFrom, float rot, float sway, float phase, Color tint)
-        {
-            float v0 = Mathf.Lerp(r.y, r.w, vFrom);
-            for (int c = 0; c < cards; c++)
-            {
-                float a = rot + c * Mathf.PI / cards;
-                var d = new Vector3(Mathf.Cos(a), 0, Mathf.Sin(a)) * (w * 0.5f);
-                int k = v.Count;
-                Vector3 b0 = foot - d, b1 = foot + d, t1 = b1 + Vector3.up * h, t0 = b0 + Vector3.up * h;
-                v.Add(b0); v.Add(b1); v.Add(t1); v.Add(t0);
-                uv.Add(new Vector2(r.x, v0)); uv.Add(new Vector2(r.z, v0)); uv.Add(new Vector2(r.z, r.w)); uv.Add(new Vector2(r.x, r.w));
-                var side = d.normalized;
-                nrm.Add((-side * 0.75f + Vector3.up * 0.1f).normalized); nrm.Add((side * 0.75f + Vector3.up * 0.1f).normalized);
-                nrm.Add((side * 0.5f + Vector3.up * 0.85f).normalized); nrm.Add((-side * 0.5f + Vector3.up * 0.85f).normalized);
-                uv2.Add(new Vector2(0, phase)); uv2.Add(new Vector2(0, phase)); uv2.Add(new Vector2(sway, phase)); uv2.Add(new Vector2(sway, phase));
-                // the foot a little darker (grass round the trunk, the crown's own shade)
-                Color foot2 = tint * 0.85f; foot2.a = 1;
-                col.Add(foot2); col.Add(foot2); col.Add(tint); col.Add(tint);
-                tri.Add(k); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k); tri.Add(k + 3); tri.Add(k + 2);
-            }
-        }
         while (placed < want && tries++ < want * 40)
         {
             double x = bb.minX - far * 0.6 + rnd.NextDouble() * (bb.maxX - bb.minX + far * 1.2), y = bb.minY - far * 0.6 + rnd.NextDouble() * (bb.maxY - bb.minY + far * 1.2);
@@ -604,44 +674,69 @@ public static class Environment
             if (e.clump > 0 && Fbm(fx / 170f, fz / 170f, 71) < e.clump) continue; // copses with open land between
             if (e.canopy > 0)
             {
-                // woods: the canopy stands for the trees inside; real trees crowd along its edge and thin out in the open
+                // woods: rows of trees along the edge and a little way in (the band below stands for the rest); thinner in the open
                 float cn = Canopy(fx, fz);
-                if (cn > 0.45f || (cn < 0.02f && Clear(fx, fz) > e.canopyAt + 18f && rnd.NextDouble() > 0.22)) continue;
+                if (cn > 0.75f || (cn < 0.02f && Clear(fx, fz) > e.canopyAt + 18f && rnd.NextDouble() > 0.22)) continue;
             }
             double dist2 = t.Nearest(x, y).dist;
             if (dist2 < near || dist2 > far) continue;
             bool second = e.tree2 != TreeKind.None && rnd.NextDouble() < e.tree2Share;
             var kind = second ? e.tree2 : e.tree;
-            float sz = (0.7f + (float)rnd.NextDouble() * 0.8f) * e.treeSize, rot = (float)rnd.NextDouble() * 6.28f;
+            float sz = (0.7f + (float)rnd.NextDouble() * 0.8f) * e.treeSize;
             if (kind != TreeKind.Scrub && dist2 < near + 14) sz = Mathf.Min(sz, 1.25f * Mathf.Max(1f, e.treeSize * 0.75f)); // no giant right at the fence
             // (heights relative to the circuit's height field: WorldBuilder.Drape lifts the mesh onto it)
             var foot = new Vector3(fx, Lift(fx, fz) - 0.35f, fz);
-            float phase = (float)rnd.NextDouble() * 6.28f;
-            // per-tree shade variety; the species colour rides in the tint, relative to the colour painted in the card
-            float sh = 0.86f + (float)rnd.NextDouble() * 0.28f, warm = (float)rnd.NextDouble() * 0.12f;
-            var lc = (second ? e.leaf2 : e.leaf).linear;
-            EnvTex.Card card = kind == TreeKind.Spruce ? EnvTex.Card.Spruce : kind == TreeKind.Pine ? EnvTex.Card.Pine : kind == TreeKind.Palm ? EnvTex.Card.Palm : EnvTex.Card.Broadleaf;
-            var painted = EnvTex.CardLeaf[(int)card];
-            Color tint = new Color(Mathf.Clamp(lc.r / painted.r, 0.55f, 1.8f) * sh * (1f + warm), Mathf.Clamp(lc.g / painted.g, 0.55f, 1.8f) * sh,
-                                   Mathf.Clamp(lc.b / painted.b, 0.55f, 1.8f) * sh * (1f - warm * 0.5f), 1f);
-            var r = EnvTex.CardRect(card);
-            switch (kind)
-            {
-                case TreeKind.Spruce: Card(foot, 7.2f * sz, 15f * sz, r, 0f, rot, 0.45f, phase, tint); break;
-                case TreeKind.Pine: Card(foot, 9.5f * sz, 9.6f * sz, r, 0f, rot, 0.6f, phase, tint); break;
-                case TreeKind.Palm: Card(foot, 8.4f * sz, 9.4f * sz, r, 0f, rot, 1.2f, phase, tint); break;
-                case TreeKind.Scrub: Card(foot + Vector3.down * 0.2f, 3.8f * sz, 2.2f * sz, r, 0.42f, rot, 0.25f, phase, tint); break;
-                default: Card(foot, 8.6f * sz, 10f * sz, r, 0f, rot, 0.8f, phase, tint); break;
-            }
+            int cards = low || dist2 > 300 ? 2 : 3; // far trees: two cards (LOD by distance)
+            EmitTree(v, nrm, uv, uv2, col, tri, foot, kind, sz, (second ? e.leaf2 : e.leaf).linear, rnd, cards);
             placed++;
         }
+        if (e.canopy > 0) WoodBands(t, bb, near, far, v, nrm, uv, uv2, col, tri, rnd);
         if (tri.Count == 0) return;
         // (named "Trees" as before: WorldBuilder.Drape lays them onto the circuit's height field and keeps these normals)
-        var fm = WorldBuilder.FoliageShader != null ? new Material(WorldBuilder.FoliageShader) { mainTexture = atlas } : WorldBuilder.Mat(Color.white, atlas);
-        if (WorldBuilder.FoliageShader != null) fm.SetFloat("_Cutoff", 0.5f);
+        var fm = FoliageMaterial();
         var treesGo = WorldBuilder.MeshObj("Trees", v, uv, tri, fm, true, uv2); treesGo.transform.SetParent(root);
         var mesh = treesGo.GetComponent<MeshFilter>().sharedMesh; mesh.SetNormals(nrm);
         BakeTint.Add(mesh, col.ToArray());
+    }
+    // the woods' edge: on an 8 m lattice, the wooded points (Canopy > 0.5) next to open land get a forest-edge band
+    // card a few metres in, turned along the edge and facing out of the wood; a second, taller row further in near the
+    // track for depth. The cards overlap about twice, so the band reads as one ragged wall of foliage.
+    static void WoodBands(Track t, (double minX, double minY, double maxX, double maxY) bb, float near, float far, List<Vector3> v, List<Vector3> nrm, List<Vector2> uv, List<Vector2> uv2, List<Color> col, List<int> tri, System.Random rnd)
+    {
+        var e = Cur; const float S = 8f; bool low = WorldBuilder.Gfx <= 1;
+        float x0 = (float)bb.minX - far, z0 = (float)bb.minY - far;
+        int nx = Mathf.CeilToInt(((float)bb.maxX + far - x0) / S) + 1, nz = Mathf.CeilToInt(((float)bb.maxY + far - z0) / S) + 1;
+        var inW = new bool[nx * nz];
+        for (int j = 0; j < nz; j++) for (int i = 0; i < nx; i++)
+        {
+            float x = x0 + i * S, z = z0 + j * S;
+            if (Clear(x, z) > far + 30f) continue;
+            inW[j * nx + i] = Canopy(x, z) > 0.5f;
+        }
+        int count = 0, cap = low ? 1500 : 3000;
+        for (int j = 1; j < nz - 1 && count < cap; j++) for (int i = 1; i < nx - 1 && count < cap; i++)
+        {
+            int k = j * nx + i; if (!inW[k]) continue;
+            int open = (inW[k - 1] ? 0 : 1) + (inW[k + 1] ? 0 : 1) + (inW[k - nx] ? 0 : 1) + (inW[k + nx] ? 0 : 1);
+            if (open == 0) continue;
+            float x = x0 + i * S + ((float)rnd.NextDouble() - 0.5f) * S * 0.5f, z = z0 + j * S + ((float)rnd.NextDouble() - 0.5f) * S * 0.5f;
+            // out of the wood: down the canopy's slope
+            float gx = Canopy(x + 4f, z) - Canopy(x - 4f, z), gz = Canopy(x, z + 4f) - Canopy(x, z - 4f);
+            var outward = new Vector3(-gx, 0, -gz); if (outward.sqrMagnitude < 1e-6f) outward = new Vector3((inW[k - 1] ? 0 : -1) + (inW[k + 1] ? 0 : 1), 0, (inW[k - nx] ? 0 : -1) + (inW[k + nx] ? 0 : 1));
+            if (outward.sqrMagnitude < 1e-6f) continue;
+            outward.Normalize(); var along = new Vector3(-outward.z, 0, outward.x);
+            double d = t.Nearest(x, z).dist; if (d < near + 6 || d > far * 1.15f) continue;
+            if (WorldBuilder.Pad.Contains(new Vector2(x, z)) || Waterfront.InWater(x, z) || Trackside.Blocked(x, z, 6f) || Taken(x, z, 8f)) continue;
+            var lc = Color.Lerp(e.leaf, e.leaf2, e.tree2Share * Noise(x / 60f, z / 60f, 95)).linear;
+            for (int row = 0; row < (d < 260 && !low ? 2 : 1); row++)
+            {
+                var p = new Vector3(x, 0, z) - outward * (5f + row * 16f);
+                p.y = Lift(p.x, p.z) - 0.5f;
+                float h = e.canopy * (0.95f + 0.3f * (float)rnd.NextDouble()) * (row == 0 ? 1f : 1.18f), w = S * 2.3f * (0.9f + 0.25f * (float)rnd.NextDouble());
+                EmitBand(v, nrm, uv, uv2, col, tri, p, along, outward, w, h, lc, rnd);
+                count++;
+            }
+        }
     }
 
     // ground a landmark will stand on (known before the town rows are built, so they leave room)

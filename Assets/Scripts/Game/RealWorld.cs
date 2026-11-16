@@ -7,9 +7,10 @@
 //    get coarser away from the track (2, 4, 8 cells per step), with skirts where neighbouring chunks differ.
 //  * ground colour: the land-use polygons painted into one colour map (Baked.shader F2_LAND: the map times a
 //    world-space detail texture: grass, paving, rough ground or tree canopy, picked per texel).
-//  * woods: inside forest polygons the terrain is raised into a canopy with a crown texture; card trees
-//    (Environment's atlas, Foliage.shader) stand along the wood edges near the track, in parks and gardens, and at
-//    the mapped single trees.
+//  * woods: forest polygons stay flat (a dark forest floor); card trees (Environment's atlas, Foliage.shader) stand
+//    in rows along the wood edges near the track, in parks and gardens, and at the mapped single trees, and two rows of
+//    forest-edge band cards a few tree rows into the wood stand for the forest beyond (no raised canopy mass: it read
+//    as faceted green hills).
 //  * water: lakes, rivers and sea as flat surfaces with the harbour's look, the ground carved below them.
 //  * roads, paths and railways: flat ribbons on the terrain (one atlas), kept level over water like a bridge.
 //  * buildings: extruded footprints with flat roofs and parapets, gabled, hipped, pyramidal or domed roofs; facades
@@ -43,7 +44,7 @@ public static class RealWorld
     static float fx0, fz0, fx1, fz1; static float bbX0, bbZ0, bbX1, bbZ1; // distance field rectangle, track bounds
     // base grid of heights: point (i, j) at (rx0 + i B, rz0 + j B)
     static float B; static int gnx, gnz; static float rx0, rz0, rx1, rz1;
-    static float[] gGround, gTop, gW, gCan; // ground, ground + canopy, 0 on the circuit's ground .. 1 real terrain, canopy 0..1
+    static float[] gGround, gTop, gW, gCan, gEff; // ground, terrain mesh height (= ground), 0 on the circuit's ground .. 1 real terrain, woods 0..1, depth into the woods (m)
     // land grid (the colour map): ids of the land-use polygon covering each texel, and flags (1 road, 2 building)
     static int lnx, lnz; static float lcx, lcz; static ushort[] lid; static byte[] lflag;
     static float[] waterL; // water level per land-use polygon (NaN: not water)
@@ -479,7 +480,7 @@ public static class RealWorld
             }
     }
 
-    // ---------------------------------------------------------------- woods: the canopy raised over forest polygons
+    // ---------------------------------------------------------------- woods: how deep into the forest polygons each grid point is
     static float CanopyHeight()
     {
         if (env.canopy > 0) return env.canopy;
@@ -488,7 +489,7 @@ public static class RealWorld
     static float BaseH(TreeKind k) => k == TreeKind.Spruce ? 15f : k == TreeKind.Pine ? 9.6f : k == TreeKind.Palm ? 9.4f : k == TreeKind.Scrub ? 2.2f : 10f;
     static void Canopy()
     {
-        int n = gnx * gnz; gCan = new float[n]; gTop = new float[n];
+        int n = gnx * gnz; gCan = new float[n]; gTop = new float[n]; gEff = new float[n];
         var fd = new float[n]; bool any = false;
         for (int j = 0; j < gnz; j++)
             for (int i = 0; i < gnx; i++)
@@ -498,6 +499,7 @@ public static class RealWorld
                 fd[k] = f ? 1e6f : 0f; any |= f;
             }
         if (!any) { System.Array.Copy(gGround, gTop, n); return; }
+        // (ch, the canopy height, now sizes the trees and bands only)
         // chamfer distance (m) from the edge of the woods
         float A = B, Dg = B * 1.4142f;
         for (int j = 0; j < gnz; j++)
@@ -520,20 +522,18 @@ public static class RealWorld
         for (int j = 0; j < gnz; j++)
             for (int i = 0; i < gnx; i++)
             {
-                int k = j * gnx + i; float c = 0f;
+                int k = j * gnx + i; float c = 0f, eff = 0f;
                 if (fd[k] > 0f)
                 {
                     float x = rx0 + i * B, z = rz0 + j * B;
-                    // a steep edge (a wall of trees) a little beyond the circuit's own ground, not the long terrain ramp
+                    // the wood begins a little beyond the circuit's own ground, not on the long terrain ramp
                     float dd = Dist(x, z);
-                    c = Smooth((fd[k] - 4f) / 12f) * Smooth((dd - c0 + 2f) / 12f) * (gW[k] > 0f ? 1f : 0f);
-                    if (PadDist(x, z) < 40f) c = 0f;
-                    if (c > 0f && Environment.Reserved(x, z, 14f)) c = 0f; // clearings round the landmarks
-                    if (c > 0f) gTop[k] = gGround[k] + c * ch * (0.82f + 0.36f * Noise(x / 41f, z / 41f, 7));
-                    else gTop[k] = gGround[k];
+                    eff = gW[k] > 0f ? Mathf.Max(0f, Mathf.Min(fd[k] - 4f, dd - c0 + 2f)) : 0f;
+                    if (PadDist(x, z) < 40f || (eff > 0f && Environment.Reserved(x, z, 14f))) eff = 0f; // clearings round the landmarks
+                    c = Smooth(eff / 12f);
                 }
-                else gTop[k] = gGround[k];
-                gCan[k] = c;
+                gTop[k] = gGround[k]; // (flat: no canopy mass)
+                gCan[k] = c; gEff[k] = eff;
             }
     }
 
@@ -618,13 +618,13 @@ public static class RealWorld
         bufs.Clear();
         FreeGrids(); D = null; // (the flags HasBuildings ... stay for the rest of this load)
         LoadMs += (float)sw.Elapsed.TotalMilliseconds;
-        Debug.Log("RealWorld " + t.def.id + ": " + BuildingCount + " buildings, " + TreeCount + " trees, " + Vertices + " vertices, " + LoadMs.ToString("F0") + " ms (" + Timing + ")");
+        Debug.Log("RealWorld " + t.def.id + ": " + BuildingCount + " buildings, " + TreeCount + " trees, " + BandCount + " forest-edge cards, " + Vertices + " vertices, " + LoadMs.ToString("F0") + " ms (" + Timing + ")");
     }
 
     static void FreeGrids()
     {
         Ready = false;
-        gGround = gTop = gW = gCan = null; lid = null; lflag = null; waterL = null; cStep = null; cDist = null; tbk = null;
+        gGround = gTop = gW = gCan = gEff = null; lid = null; lflag = null; waterL = null; cStep = null; cDist = null; tbk = null;
     }
 
     // ---------------------------------------------------------------- terrain
@@ -1179,7 +1179,13 @@ public static class RealWorld
                 int k = j * gnx + i;
                 switch (kind)
                 {
-                    case 1: { float cn = gCan[k]; p = cn < 0.55f ? (d < 200f ? 1.6f * (d < 150f ? Mathf.Max(1f, env.treeMul) : 1f) : 1.0f) : 0f; src = 1; break; }
+                    case 1:
+                    {
+                        // rows of trees from the wood's edge to just past the first band (BandAt), thinning inwards
+                        float ef = gEff[k]; src = 1;
+                        p = ef > BandAt + 6f ? 0f : (ef < 12f ? 1.3f : ef < 24f ? 0.8f : 0.45f) * (d < 150f ? Mathf.Max(1f, env.treeMul) : 1f) * (d < 200f ? 1f : 0.7f);
+                        break;
+                    }
                     case 8: p = 0.45f; break;
                     case 3: p = 0.16f; break;
                     case 0: p = 0.05f; break;
@@ -1228,50 +1234,51 @@ public static class RealWorld
             sz = Mathf.Clamp(sz, 0.4f, 2.6f);
             if (tk != TreeKind.Scrub && d < near + 14f) sz = Mathf.Min(sz, 1.25f * Mathf.Max(1f, env.treeSize * 0.95f)); // no giant right at the fence
             float y = Mathf.Min(Ground(x, z), MeshY(x, z)) - 0.35f;
-            Card(Buf(STree, Block(x, z), 12), new Vector3(x, y, z), tk, sz, (float)rnd.NextDouble() * 6.28f, (float)rnd.NextDouble() * 6.28f, t.src == 1, rnd, cards);
+            var lc = (t.src == 1 && rnd.NextDouble() < env.tree2Share ? env.leaf2 : env.leaf).linear;
+            int nc = d > 320f ? 2 : cards; // far trees: two cards (LOD by distance)
+            var mb = Buf(STree, Block(x, z), 12);
+            Environment.EmitTree(mb.v, mb.n, mb.uv, mb.uv2, mb.col, mb.tri, new Vector3(x, y, z), tk, sz, lc, rnd, nc);
             TreeCount++;
         }
+        Bands(rnd);
     }
-    static bool Flagged(float x, float z) { int k = Texel(x, z); return k >= 0 && lflag[k] != 0; }
-
-    // crossed cards cut from the atlas (as Environment.Trees: foot-left, foot-right, top-right, top-left per card,
-    // normals bent outwards and up, uv2 = sway weight and phase for Foliage.shader)
-    static void Card(MB b, Vector3 foot, TreeKind kind, float sz, float rot, float phase, bool second, System.Random rnd, int cards)
+    // Forest-edge bands: where the depth into the woods crosses BandAt (and, near the track, BandAt + 18 m) a band card
+    // (Environment.EmitBand) stands along the edge facing out, as tall as the canopy; they overlap about twice, so the
+    // woods behind the first rows of trees read as a deep layered forest with ragged tops, never as a raised green mass.
+    const float BandAt = 26f;
+    static void Bands(System.Random rnd)
     {
-        float w, h, vFrom = 0f, sway;
-        switch (kind)
-        {
-            case TreeKind.Spruce: w = 7.2f * sz; h = 15f * sz; sway = 0.45f; break;
-            case TreeKind.Pine: w = 9.5f * sz; h = 9.6f * sz; sway = 0.6f; break;
-            case TreeKind.Palm: w = 8.4f * sz; h = 9.4f * sz; sway = 1.2f; break;
-            case TreeKind.Scrub: w = 3.8f * sz; h = 2.2f * sz; vFrom = 0.42f; sway = 0.25f; foot += Vector3.down * 0.2f; break;
-            default: w = 8.6f * (sz > 1.2f ? 1.2f + (sz - 1.2f) * 0.6f : sz); h = 10f * sz; sway = 0.8f; break; // (tall park trees: crowns grow up more than out)
-        }
-        var card = kind == TreeKind.Spruce ? EnvTex.Card.Spruce : kind == TreeKind.Pine ? EnvTex.Card.Pine : kind == TreeKind.Palm ? EnvTex.Card.Palm : EnvTex.Card.Broadleaf;
-        var rc = EnvTex.CardRect(card); var painted = EnvTex.CardLeaf[(int)card];
-        float sh = 0.86f + (float)rnd.NextDouble() * 0.28f, warm = (float)rnd.NextDouble() * 0.12f;
-        var lc = (second && rnd.NextDouble() < env.tree2Share ? env.leaf2 : env.leaf).linear;
-        if (painted.g <= 0f) painted = new Color(0.1f, 0.2f, 0.1f);
-        Color tint = new Color(Mathf.Clamp(lc.r / painted.r, 0.55f, 1.8f) * sh * (1f + warm), Mathf.Clamp(lc.g / painted.g, 0.55f, 1.8f) * sh,
-                               Mathf.Clamp(lc.b / painted.b, 0.55f, 1.8f) * sh * (1f - warm * 0.5f), 1f);
-        Color footC = tint * 0.85f; footC.a = 1f;
-        float v0 = Mathf.Lerp(rc.y, rc.w, vFrom);
-        for (int c = 0; c < cards; c++)
-        {
-            float a = rot + c * Mathf.PI / cards;
-            var dv = new Vector3(Mathf.Cos(a), 0, Mathf.Sin(a)) * (w * 0.5f);
-            int k = b.v.Count;
-            Vector3 b0 = foot - dv, b1 = foot + dv, t1 = b1 + Vector3.up * h, t0 = b0 + Vector3.up * h;
-            b.v.Add(b0); b.v.Add(b1); b.v.Add(t1); b.v.Add(t0);
-            b.uv.Add(new Vector2(rc.x, v0)); b.uv.Add(new Vector2(rc.z, v0)); b.uv.Add(new Vector2(rc.z, rc.w)); b.uv.Add(new Vector2(rc.x, rc.w));
-            var side = dv.normalized;
-            b.n.Add((-side * 0.75f + Vector3.up * 0.1f).normalized); b.n.Add((side * 0.75f + Vector3.up * 0.1f).normalized);
-            b.n.Add((side * 0.5f + Vector3.up * 0.85f).normalized); b.n.Add((-side * 0.5f + Vector3.up * 0.85f).normalized);
-            b.uv2.Add(new Vector2(0, phase)); b.uv2.Add(new Vector2(0, phase)); b.uv2.Add(new Vector2(sway, phase)); b.uv2.Add(new Vector2(sway, phase));
-            b.col.Add(footC); b.col.Add(footC); b.col.Add(tint); b.col.Add(tint);
-            b.tri.Add(k); b.tri.Add(k + 2); b.tri.Add(k + 1); b.tri.Add(k); b.tri.Add(k + 3); b.tri.Add(k + 2);
-        }
+        float reach = TreeReach * 1.1f, ch = CanopyHeight(); int count = 0, cap = gfx <= 1 ? 2000 : 4000;
+        float[] at = { BandAt, BandAt + 18f };
+        for (int j = 1; j < gnz - 1 && count < cap; j++)
+            for (int i = 1; i < gnx - 1 && count < cap; i++)
+            {
+                int cc = Mathf.Min(cnz - 1, j / CH) * cnx + Mathf.Min(cnx - 1, i / CH);
+                if (cDist[cc] > reach) { i = (i / CH + 1) * CH - 1; continue; }
+                int k = j * gnx + i; float e = gEff[k];
+                for (int row = 0; row < 2; row++)
+                {
+                    float L = at[row];
+                    // the contour: this point at or beyond L, a neighbour short of it
+                    if (e < L || (gEff[k - 1] >= L && gEff[k + 1] >= L && gEff[k - gnx] >= L && gEff[k + gnx] >= L)) continue;
+                    float x = rx0 + i * B + ((float)rnd.NextDouble() - 0.5f) * B * 0.4f, z = rz0 + j * B + ((float)rnd.NextDouble() - 0.5f) * B * 0.4f;
+                    float d = Dist(x, z); if (d > reach || (row == 1 && (d > 300f || gfx <= 1))) continue;
+                    var outward = new Vector3(gEff[k - 1] - gEff[k + 1], 0f, gEff[k - gnx] - gEff[k + gnx]); // down the depth: out of the wood
+                    if (outward.sqrMagnitude < 1e-4f) continue;
+                    outward.Normalize(); var along = new Vector3(-outward.z, 0f, outward.x);
+                    if (Trackside.Blocked(x, z, 6f) || PadDist(x, z) < 30f || (Waterfront.HasWater && Waterfront.InWater(x, z)) || !Environment.Free(x, z, 6f)) continue;
+                    float y = Mathf.Min(Ground(x, z), MeshY(x, z)) - 0.5f;
+                    float h = ch * (0.95f + 0.3f * (float)rnd.NextDouble()) * (row == 0 ? 1f : 1.15f), w = B * 2.4f * (0.9f + 0.25f * (float)rnd.NextDouble());
+                    var lc = Color.Lerp(env.leaf, env.leaf2, env.tree2Share * Noise(x / 60f, z / 60f, 95)).linear;
+                    var mb = Buf(STree, Block(x, z), 4);
+                    Environment.EmitBand(mb.v, mb.n, mb.uv, mb.uv2, mb.col, mb.tri, new Vector3(x, y, z), along, outward, w, h, lc, rnd);
+                    count++;
+                }
+            }
+        BandCount = count;
     }
+    public static int BandCount;
+    static bool Flagged(float x, float z) { int k = Texel(x, z); return k >= 0 && lflag[k] != 0; }
 
     // ---------------------------------------------------------------- the land colour map
     static float[] noiseTab; static byte[] toSrgb;
@@ -1330,7 +1337,7 @@ public static class RealWorld
                 else if (kind == 1)
                 {
                     float cn = Bilinear(gCan, x, z);
-                    if (cn > 0.3f) { c = Color.Lerp(leafA, leafB, env.tree2Share * n2); a = 255; }
+                    if (cn > 0.3f) { c = Color.Lerp(Color.Lerp(leafA, leafB, env.tree2Share * n2), soil * 0.55f, 0.35f) * 0.8f; a = 170; } // shaded forest floor
                 }
                 float bright = 0.9f + 0.2f * n1;
                 float e = Mathf.Min(Mathf.Min(x - rx0, rx1 - x), ez);
@@ -1397,12 +1404,7 @@ public static class RealWorld
         }
         return WorldBuilder.Mat(new Color(0.9f, 0.86f, 0.78f), EnvTex.Facade(), 0.2f);
     }
-    static Material TreeMaterial()
-    {
-        var atlas = EnvTex.Foliage();
-        if (WorldBuilder.FoliageShader != null) { var m = new Material(WorldBuilder.FoliageShader) { mainTexture = atlas }; m.SetFloat("_Cutoff", 0.5f); return m; }
-        return WorldBuilder.Mat(Color.white, atlas);
-    }
+    static Material TreeMaterial() => Environment.FoliageMaterial();
 
     static void Emit(Transform root, Texture2D landTex)
     {
