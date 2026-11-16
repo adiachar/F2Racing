@@ -24,6 +24,7 @@ struct v2f
     float4 uv : TEXCOORD0;   // detail uv, macro uv
     float2 trk : TEXCOORD1;  // lateral m, along m
     half3 color : TEXCOORD2; // baked light
+    half sideSun : TEXCOORD4; // vertex alpha (LightBake): side of the track (>0.5 = left) + the sun's share of the baked light
     UNITY_FOG_COORDS(3)
 };
 
@@ -34,6 +35,8 @@ fixed4 _DryTint;      // rgb multiplier of dry patches, a = how much
 float4 _Stripe;       // from (m), to (m), stripe width (m), strength
 float4 _Wall;         // barrier line (m), darkening, -, -
 float4 _Ruts;         // gravel inner edge (m), strength, -, -
+sampler2D _F2RoadShadow; // global (RoadShadow.cs): sun shadows in track space, here continued onto verges and run-offs
+float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: 1 / width covered (m), w: half width (m)
 
 v2f vert (appdata v)
 {
@@ -43,6 +46,7 @@ v2f vert (appdata v)
     o.uv = float4(TRANSFORM_TEX(v.uv, _MainTex), m.x * 0.8 - m.y * 0.6, m.x * 0.6 + m.y * 0.8);
     o.trk = v.uv2;
     o.color = v.color.rgb * 2.0; // stored light 0.5 = full brightness (LightBake)
+    o.sideSun = v.color.a;
     UNITY_TRANSFER_FOG(o, o.pos);
     return o;
 }
@@ -85,6 +89,22 @@ fixed4 frag (v2f i) : SV_Target
     half rut = (half)(saturate(1.0 - abs(abs(o) - 0.8) / rw) * (0.14 / rw)) * (half)saturate((mac.b - 0.42) * 6.0);
     col *= 1.0 - _Ruts.y * (0.12 * near + 0.32 * rut * near);
 #endif
+
+    // sun shadows beyond the road (verges / run-offs only: uv2 holds the distance from the centreline there): the road's
+    // mask, signed by the side (vertex alpha), takes away the sun's share of the baked light where it says shadow
+    if (lat > 0.5 && _F2RoadShadowP.z > 0.0)
+    {
+        bool left = i.sideSun > 0.5;
+        half sf = (half)saturate(left ? (i.sideSun - 0.55) * 2.222 : i.sideSun * 2.222);
+        float2 sp = float2((left ? lat : -lat) * _F2RoadShadowP.z + 0.5, i.trk.y * _F2RoadShadowP.x);
+        float2 sgx = ddx(sp), sgy = ddy(sp);
+        float strip = floor(sp.y);
+        float2 suv = float2((strip + saturate(sp.x)) * _F2RoadShadowP.y, sp.y - strip);
+        float2 gsc = float2(_F2RoadShadowP.y, 1.0) * 1.5;
+        half shade = tex2Dgrad(_F2RoadShadow, suv, sgx * gsc, sgy * gsc).r;
+        half edge = (half)saturate((_F2RoadShadowP.w - lat) * 0.5); // fades out at the mask's outer edge
+        col *= 1.0 - sf * (1.0 - shade) * edge;
+    }
 
     col *= i.color;
     fixed4 c = fixed4(col, 1);

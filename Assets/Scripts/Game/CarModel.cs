@@ -265,6 +265,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localPosition = new Vector3(0, 0.035f, -0.15f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
         sh.transform.localScale = new Vector3(2.5f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = WorldBuilder.ShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        AddSunShadow(root);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
         return cm;
     }
@@ -584,6 +585,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
         // soft blob + a tighter, darker occlusion core under the floor + the four tyre contact patches, in one texture
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = ContactShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        AddSunShadow(root);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
         return cm;
     }
@@ -769,6 +771,7 @@ public class CarModel : MonoBehaviour
         sh.transform.localPosition = new Vector3(0, 0.035f, 0.3f); sh.transform.localRotation = Quaternion.Euler(90, 0, 0);
         sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = ContactShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        AddSunShadow(root);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer;
         cm.blockBase = cm.blockR.Count;
         cm.Flush();
@@ -1031,6 +1034,65 @@ public class CarModel : MonoBehaviour
         var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = faceMat[k];
         r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
         faces.Add(r);
+    }
+
+    // ---- sun-projected shadow: ONE extra quad per car (alpha-darken only), laid on the road along the sun's ground
+    // direction, as long as the car's silhouette projected by the sun's height. Soft-edged texture, shared material.
+    static Material sunShadowMat; static Texture2D sunShadowTex;
+    static readonly int ColorId = Shader.PropertyToID("_Color");
+    static void AddSunShadow(GameObject root)
+    {
+        if (sunShadowMat == null)
+        {
+            var bm = ContactShadowMat();
+            sunShadowMat = new Material(bm);
+            sunShadowTex = WorldBuilder.Tex(64, 64, (u, v, px, py) =>
+            {
+                // rounded box with a soft edge, a little darker towards the car end (v = 0 is the car side)
+                float dx = Mathf.Abs(u - 0.5f) * 2f, dy = Mathf.Abs(v - 0.5f) * 2f;
+                float e = Mathf.Pow(Mathf.Pow(dx, 4f) + Mathf.Pow(dy, 4f), 0.25f);
+                float a = Mathf.Clamp01((1f - e) / 0.35f); a = a * a * (3f - 2f * a);
+                a *= Mathf.Lerp(1f, 0.65f, v);
+                return new Color32(0, 0, 0, (byte)(a * 255));
+            });
+            sunShadowTex.wrapMode = TextureWrapMode.Clamp;
+            sunShadowMat.mainTexture = sunShadowTex;
+        }
+        var go = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(go.GetComponent<Collider>());
+        go.name = "SunShadow"; go.transform.SetParent(root.transform, false);
+        var r = go.GetComponent<MeshRenderer>(); r.sharedMaterial = sunShadowMat;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false; r.enabled = false;
+        go.AddComponent<SunShadowFollow>();
+    }
+    sealed class SunShadowFollow : MonoBehaviour
+    {
+        MeshRenderer r; MaterialPropertyBlock pb; Transform car; bool hasColor;
+        void Awake() { r = GetComponent<MeshRenderer>(); car = transform.parent; pb = new MaterialPropertyBlock(); hasColor = r.sharedMaterial.HasProperty(ColorId); }
+        void LateUpdate()
+        {
+            if (!LightBake.Active || LightBake.Night || car == null) { r.enabled = false; return; }
+            Vector3 s = LightBake.ToSun; float hl = Mathf.Sqrt(s.x * s.x + s.z * s.z);
+            if (s.y < 0.12f || hl < 0.05f) { r.enabled = false; return; }
+            var cam = Camera.main;
+            if (cam != null && (cam.transform.position - car.position).sqrMagnitude > 140f * 140f) { r.enabled = false; return; }
+            r.enabled = true;
+            Vector2 aw = new Vector2(-s.x, -s.z) / hl;                       // away from the sun, on the ground
+            Vector3 f = car.forward; Vector2 f2 = new Vector2(f.x, f.z).normalized;
+            float cosP = Mathf.Abs(f2.x * aw.x + f2.y * aw.y), sinP = Mathf.Sqrt(Mathf.Max(0f, 1f - cosP * cosP));
+            const float Len = 4.6f, Wid = 1.7f, Hgt = 0.95f;
+            float throwLen = Mathf.Min(Hgt * hl / s.y, 3.5f);                // how far the roof's shadow lands past the car
+            float ext = Len * cosP + Wid * sinP, across = (Len * sinP + Wid * cosP) * 0.92f + 0.25f;
+            float length = ext * 0.95f + throwLen + 0.5f;
+            var t = transform;
+            t.position = car.position + Vector3.up * 0.04f + new Vector3(aw.x, 0, aw.y) * (throwLen * 0.5f + 0.05f);
+            t.rotation = Quaternion.Euler(90f, Mathf.Atan2(aw.x, aw.y) * Mathf.Rad2Deg, 0f);
+            t.localScale = new Vector3(across, length, 1f);
+            if (hasColor)
+            {
+                float k = Mathf.Clamp01(Sky.SunShare * 0.7f) * Shader.GetGlobalFloat("_CarLit") * 0.62f;
+                pb.SetColor(ColorId, new Color(1f, 1f, 1f, k)); r.SetPropertyBlock(pb);
+            }
+        }
     }
 
     // contact shadow (one quad, one texture, no lighting): what makes the car sit ON the road. Four layers:

@@ -1,0 +1,6 @@
+Models and textures in this folder are derived from Poly Haven assets (https://polyhaven.com), released under CC0 (public domain).
+They were simplified for mobile (leaf clumps, decimated wood, one shared atlas) by Tools/Models/build_models.py.
+
+Trees:  tree_small_02, jacaranda_tree, island_tree_01, island_tree_02, island_tree_03
+Shrubs: shrub_02, shrub_03
+Props:  street_lamp_01, street_lamp_02 (street_lamp_01 is used)

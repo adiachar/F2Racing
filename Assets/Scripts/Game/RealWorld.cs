@@ -129,6 +129,7 @@ public static class RealWorld
     {
         Active = Ready = HasBuildings = HasVegetation = HasWaterAreas = HasTerrain = false;
         D = null; trk = t; FreeGrids(); Vertices = BuildingCount = TreeCount = 0; LoadMs = 0;
+        ModelLib.Reset(); // (real tree / shrub / lamp models are queued per build)
         if (t == null || t.def == null || t.N < 8) return;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         WorldData w = null;
@@ -621,6 +622,7 @@ public static class RealWorld
             Roads(); Mark("roads");
             Buildings(); Mark("buildings");
             Trees(); Mark("trees");
+            ModelLib.Flush(root); Mark("models"); // (final heights, like the rest of RealWorld)
             var land = LandTexture(); Mark("landtex");
             Emit(root, land); Mark("emit");
         }
@@ -1358,6 +1360,7 @@ public static class RealWorld
 
     // ---------------------------------------------------------------- trees (Environment's card atlas)
     struct TCand { public float x, z, h, pr; public byte src; }
+    struct MPend { public float x, y, z, edge, sz; public Color lc; public int nc; }
     static void Trees()
     {
         if (!HasVegetation) return; // (no vegetation in the data: Environment.Trees planted the usual ones)
@@ -1406,6 +1409,8 @@ public static class RealWorld
             }
         cand.Sort((a, c) => a.pr.CompareTo(c.pr));
         bool low = gfx <= 1; int cards = low ? 2 : 3; float ch = CanopyHeight();
+        // real tree models near the track (ModelLib.cs, Medium and High): queued, nearest first; whatever is out of budget stays a card
+        bool mdl = env.realModels && ModelLib.Begin(gfx); var pend = mdl ? new List<MPend>() : null;
         bool med = env.tree == TreeKind.Palm || env.tree == TreeKind.Pine; // Mediterranean towns: palms and pines in the streets too
         foreach (var t in cand)
         {
@@ -1439,9 +1444,25 @@ public static class RealWorld
             float y = Mathf.Min(Ground(x, z), MeshY(x, z)) - 0.35f;
             var lc = (t.src == 1 && rnd.NextDouble() < env.tree2Share ? env.leaf2 : env.leaf).linear;
             int nc = d > 320f ? 2 : cards; // far trees: two cards (LOD by distance)
+            if (mdl && tk == TreeKind.Broadleaf)
+            {
+                float edge = TrackDist(x, z, ModelLib.Reach + wallLat + 1f) - wallLat;
+                if (edge < ModelLib.Reach) { pend.Add(new MPend { x = x, y = y, z = z, edge = edge, sz = sz, lc = lc, nc = nc }); TreeCount++; continue; }
+            }
             var mb = Buf(STree, Block(x, z), 12);
             Environment.EmitTree(mb.v, mb.n, mb.uv, mb.uv2, mb.col, mb.tri, new Vector3(x, y, z), tk, sz, lc, rnd, nc);
             TreeCount++;
+        }
+        if (mdl)
+        {
+            pend.Sort((ma, mc) => ma.edge.CompareTo(mc.edge));
+            foreach (var mp in pend)
+                if (!ModelLib.TryTree(new Vector3(mp.x, mp.y, mp.z), mp.edge, mp.lc, rnd))
+                {
+                    var mb = Buf(STree, Block(mp.x, mp.z), 12);
+                    Environment.EmitTree(mb.v, mb.n, mb.uv, mb.uv2, mb.col, mb.tri, new Vector3(mp.x, mp.y, mp.z), TreeKind.Broadleaf, mp.sz, mp.lc, rnd, mp.nc);
+                }
+            ModelLib.PlaceProps(trk);
         }
         Bands(rnd);
     }

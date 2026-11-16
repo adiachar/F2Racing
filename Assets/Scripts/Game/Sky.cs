@@ -150,28 +150,29 @@ public class Sky : MonoBehaviour
     }
 
     // sun angle / colour / intensity, the cars' ambient and the bake's light for the time of day.
-    // Balance (afternoon, on flat ground): sun 1.45 x sin 48 = 1.08 against a sky fill of (0.49, 0.59, 0.77) after
+    // Balance (afternoon, on flat ground): sun 1.78 x sin 48 = 1.32 (was 1.45: 1.08) against a sky fill of (0.49, 0.59, 0.77) after
     // LightBake's gain: sunlit white is neutral-warm (it was blue-tinted: the old sky fill was as strong as the sun and
     // bluer), shade is a clean blue-grey at ~0.36 of the sun side in linear (0.58 on screen; it was 0.69: flat).
     // The bake gets the sun colour in linear, like the real-time light the cars get, so world and cars match.
     static void SunAt(Light sun, TimeOfDay.Kind t)
     {
+        float ambGain = 1.32f;
         Color sky = new Color(0.37f, 0.45f, 0.58f); // the bake's sky light, linear (blue from above; LightBake scales it)
         switch (t)
         {
             case TimeOfDay.Kind.Morning: // low, cool-gold sun
-                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.4f;
+                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.85f;
                 sky = new Color(0.36f, 0.44f, 0.60f);
-                RenderSettings.ambientSkyColor = new Color(0.66f, 0.74f, 0.86f); RenderSettings.ambientEquatorColor = new Color(0.60f, 0.62f, 0.64f);
+                RenderSettings.ambientSkyColor = new Color(0.50f, 0.58f, 0.72f); RenderSettings.ambientEquatorColor = new Color(0.46f, 0.46f, 0.46f);
                 break;
             case TimeOfDay.Kind.Afternoon:
-                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.45f;
-                RenderSettings.ambientSkyColor = new Color(0.69f, 0.76f, 0.86f); RenderSettings.ambientEquatorColor = new Color(0.62f, 0.64f, 0.64f);
+                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.78f; ambGain = 0.80f;
+                RenderSettings.ambientSkyColor = new Color(0.52f, 0.60f, 0.74f); RenderSettings.ambientEquatorColor = new Color(0.46f, 0.46f, 0.46f);
                 break;
             case TimeOfDay.Kind.Evening: // golden hour: a strong, low, warm sun lights every wall that faces it
-                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 1.6f;
+                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 2.0f; ambGain = 1.0f;
                 sky = new Color(0.29f, 0.32f, 0.45f);
-                RenderSettings.ambientSkyColor = new Color(0.58f, 0.62f, 0.74f); RenderSettings.ambientEquatorColor = new Color(0.64f, 0.58f, 0.52f);
+                RenderSettings.ambientSkyColor = new Color(0.46f, 0.50f, 0.62f); RenderSettings.ambientEquatorColor = new Color(0.50f, 0.45f, 0.40f);
                 RenderSettings.ambientGroundColor *= new Color(1f, 0.85f, 0.7f);
                 break;
             case TimeOfDay.Kind.Night:   // the "sun" is the moon; the cars get the floodlights (Create)
@@ -181,10 +182,12 @@ public class Sky : MonoBehaviour
                 RenderSettings.ambientGroundColor = new Color(0.10f, 0.09f, 0.08f);
                 break;
         }
+        // warm ground bounce under the blue sky (the cars' trilight ambient: sky above, bounce below)
+        if (t != TimeOfDay.Kind.Night && t != TimeOfDay.Kind.Evening) RenderSettings.ambientGroundColor *= new Color(0.85f, 0.72f, 0.55f);
         todSun = t == TimeOfDay.Kind.Night ? 0.5f : sun.intensity / 1.25f; // GameManager: car sun = 1.25 x SunShare
         bool night = t == TimeOfDay.Kind.Night;
         // night keeps its tuned (non-linear) moon value: the floodlights do the work there
-        LightBake.SetLight(night ? sun.color * sun.intensity : sun.color.linear * sun.intensity, sky, night);
+        LightBake.SetLight(night ? sun.color * sun.intensity : sun.color.linear * sun.intensity, sky, night, ambGain);
     }
 
     static Look dryLook; static bool haveLook;

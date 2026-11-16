@@ -53,6 +53,7 @@ public class EnvDef
     // canopy m and coloured like tree tops, so a few hundred real trees along its edge read as a deep forest
     public float canopy = 0, canopyAt = 48, cover = 0.5f;
     public float poplar = 0.06f;                                  // share of Lombardy poplars among the broad-leaf trees
+    public bool realModels;                                       // real tree / shrub / lamp models near the track (ModelLib.cs; Medium and High)
     public Color leaf = new Color(0.19f, 0.42f, 0.21f), leaf2 = new Color(0.19f, 0.42f, 0.21f), trunk = new Color(0.36f, 0.25f, 0.19f);
     // backdrop
     public EnvRing[] rings;
@@ -116,7 +117,7 @@ public static class Environment
             grass = C(0.27f, 0.42f, 0.17f), dry = C(0.37f, 0.44f, 0.20f), patch = 0.35f,
             rough = 1.2f, roughScale = 300,
             tree = TreeKind.Broadleaf, tree2 = TreeKind.Broadleaf, tree2Share = 0.4f, treeMul = 1.25f, treeNear = 9, treeFar = 380, treeSize = 2.2f,
-            canopy = 24, canopyAt = 36, cover = 0.72f, poplar = 0.16f,
+            canopy = 24, canopyAt = 36, cover = 0.72f, poplar = 0.16f, realModels = true,
             leaf = C(0.19f, 0.38f, 0.16f), leaf2 = C(0.27f, 0.42f, 0.15f),
             rings = new[]
             {
@@ -653,6 +654,7 @@ public static class Environment
     // trunk mesh is gone: thousands of trees are one draw call. The normals are bent outwards from the tree's axis
     // and upwards, so the bake lights the crowns like rounded volumes (sun side bright, the far side and the foot in
     // shade). uv2 = (sway weight, phase) for the breeze in Foliage.shader (Medium/High).
+    struct ModelPend { public Vector3 foot; public float edge, sz; public TreeKind kind; public Color leaf; public int cards; }
     public static void Trees(Track t, Transform root, float ext)
     {
         var e = Cur; var bb = t.Bounds();
@@ -666,6 +668,9 @@ public static class Environment
         EnvTex.Foliage();
         var v = new List<Vector3>(); var nrm = new List<Vector3>(); var uv = new List<Vector2>(); var uv2 = new List<Vector2>();
         var tri = new List<int>(); var col = new List<Color>();
+        // real tree models near the track (ModelLib.cs): collected here, nearest first, the rest stay cards
+        bool mdl = e.realModels && ModelLib.Begin(WorldBuilder.Gfx);
+        var pend = mdl ? new List<ModelPend>() : null; float wall = (float)(t.width / 2 + (t.def != null ? t.def.barrier : 1.4));
         while (placed < want && tries++ < want * 40)
         {
             double x = bb.minX - far * 0.6 + rnd.NextDouble() * (bb.maxX - bb.minX + far * 1.2), y = bb.minY - far * 0.6 + rnd.NextDouble() * (bb.maxY - bb.minY + far * 1.2);
@@ -687,8 +692,24 @@ public static class Environment
             // (heights relative to the circuit's height field: WorldBuilder.Drape lifts the mesh onto it)
             var foot = new Vector3(fx, Lift(fx, fz) - 0.35f, fz);
             int cards = low || dist2 > 300 ? 2 : 3; // far trees: two cards (LOD by distance)
+            if (mdl && kind == TreeKind.Broadleaf && dist2 - wall < ModelLib.Reach)
+            {
+                pend.Add(new ModelPend { foot = foot, edge = (float)dist2 - wall, kind = kind, sz = sz, leaf = (second ? e.leaf2 : e.leaf).linear, cards = cards });
+                placed++; continue;
+            }
             EmitTree(v, nrm, uv, uv2, col, tri, foot, kind, sz, (second ? e.leaf2 : e.leaf).linear, rnd, cards);
             placed++;
+        }
+        if (mdl)
+        {
+            pend.Sort((ma, mb) => ma.edge.CompareTo(mb.edge));
+            foreach (var mp in pend)
+            {
+                var fin = mp.foot + Vector3.up * WorldBuilder.H(mp.foot.x, mp.foot.z); // (models are made at their final height: Drape leaves them alone)
+                if (!ModelLib.TryTree(fin, mp.edge, mp.leaf, rnd)) EmitTree(v, nrm, uv, uv2, col, tri, mp.foot, mp.kind, mp.sz, mp.leaf, rnd, mp.cards);
+            }
+            ModelLib.PlaceProps(t);
+            ModelLib.Flush(root);
         }
         if (e.canopy > 0) WoodBands(t, bb, near, far, v, nrm, uv, uv2, col, tri, rnd);
         if (tri.Count == 0) return;

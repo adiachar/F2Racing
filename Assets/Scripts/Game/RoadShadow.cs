@@ -25,6 +25,7 @@ public static class RoadShadow
 {
     public static Texture2D Mask;
     public static float BuildMs;
+    const float VergeReach = 12f;
     static readonly int TexId = Shader.PropertyToID("_F2RoadShadow"), ParId = Shader.PropertyToID("_F2RoadShadowP"), SunId = Shader.PropertyToID("_F2SunLin");
 
     // no mask: white texture, no sun split (Road.shader then uses the baked light as it is)
@@ -101,8 +102,9 @@ public static class RoadShadow
         sH = new Vector2(s.x, s.z);
 
         // layout: C texels across, strips of Hs rows along, S strips side by side
-        float L = (float)(t.N * t.ds), half = (float)t.width * 0.5f + WorldBuilder.Kerb + 2f;
-        int C = Mathf.Clamp(Mathf.CeilToInt(2f * half / 0.25f / 4f) * 4, 32, 128);
+        // the mask also covers the verges and run-offs (VergeReach m beyond the road) so Ground.cginc can continue the shadows onto the grass
+        float L = (float)(t.N * t.ds), half = (float)t.width * 0.5f + WorldBuilder.Kerb + 2f + VergeReach;
+        int C = Mathf.Clamp(Mathf.CeilToInt(2f * half / 0.27f / 4f) * 4, 32, 192);
         int S = Mathf.Max(1, 2048 / C);
         int R = Mathf.CeilToInt(L / 0.3f);
         S = Mathf.Min(S, Mathf.Max(1, Mathf.CeilToInt(R / 256f)));

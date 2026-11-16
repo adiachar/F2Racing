@@ -137,6 +137,48 @@ public static class Scenery
         Emit("TownRoofs", roofs, WorldBuilder.Mat(new Color(0.62f, 0.33f, 0.24f), null, 0.1f), parent, false);
     }
 
+    // Real shrub and street-lamp models (ModelLib.cs; Medium and High, circuits with EnvDef.realModels): bushes standing
+    // behind the catch fences along the lap, and lamps between the paddock motorhomes behind the garages. Called once per
+    // build by ModelLib.PlaceProps, while the ground is still known (Environment.GroundY).
+    public static void ModelProps(Track t)
+    {
+        var env = Environment.Cur; if (env == null || !env.realModels || t == null || t.N < 8) return;
+        var rnd = new System.Random(31);
+        float hw = (float)t.width / 2, wall = (float)(hw + (t.def != null ? t.def.barrier : 3)), ds = (float)t.ds;
+        var leaf = env.leaf.linear;
+        // shrubs: irregular gaps of 12-34 m, 3-5.5 m behind the barrier line, both sides; not in front of stands and garages
+        int shrubs = 0, cap = WorldBuilder.Gfx >= 3 ? 150 : 80;
+        for (int side = -1; side <= 1; side += 2)
+        {
+            float next = (float)rnd.NextDouble() * 20f, s = 0f;
+            for (int i = 0; i < t.N && shrubs < cap; i++, s += ds)
+            {
+                if (s < next) continue;
+                next = s + 12f + (float)rnd.NextDouble() * 22f;
+                if (rnd.NextDouble() < 0.35) continue;
+                var p = t.pts[i]; float lat = wall + 3f + (float)rnd.NextDouble() * 2.5f;
+                float x = (float)(p.x + p.nx * lat * side), z = (float)(p.y + p.ny * lat * side);
+                if (Trackside.Blocked(x, z, 3f) || !Environment.Free(x, z, 2f) || Waterfront.InWater(x, z) || Waterfront.InTunnel(x, z)) continue;
+                if (WorldBuilder.Pad.Contains(new Vector2(x, z))) continue;
+                if (t.Nearest(x, z).dist < wall + 2.5) continue; // another leg of the circuit
+                if (ModelLib.TryShrub(new Vector3(x, Environment.GroundY(x, z) - 0.05f, z), 1.1f + 0.6f * (float)rnd.NextDouble(), (float)rnd.NextDouble() * 6.28f, leaf, rnd)) shrubs++;
+            }
+        }
+        // lamps: every 17 m along the paddock, in the gaps between the motorhomes (Trackside: back wall at lane + 23.75 m)
+        var L = Trackside.Lane;
+        if (L != null)
+        {
+            float back = (float)L.laneLat + 23.75f + 5.2f;
+            for (double u = L.sA + 8.5; u < L.sB; u += 17.0)
+            {
+                var p = t.pts[L.TrackIdx(u)];
+                float x = (float)(p.x + p.nx * back * L.side), z = (float)(p.y + p.ny * back * L.side);
+                if (Trackside.Blocked(x, z, 1.2f) || !Environment.Free(x, z, 1.5f) || Waterfront.InWater(x, z)) continue;
+                ModelLib.AddProp("street_lamp_01", new Vector3(x, Environment.GroundY(x, z), z), (float)rnd.NextDouble() * 6.28f, 5.2f);
+            }
+        }
+    }
+
     // Braking distance boards (150 / 100 / 50 m) before every real braking zone, on the outside of the corner,
     // facing the driver. The distances are measured to the turn-in point of the racing line.
     static readonly string[] Digit = {
