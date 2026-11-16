@@ -827,6 +827,10 @@ public partial class GameManager : MonoBehaviour
             pos = tr.TransformPoint(new Vector3(0, up, -back));
             look = tr.TransformPoint(new Vector3(0, 0.7f, 6));
             fov = fovChase; // a setting (default 62), fixed: widening the view with speed exaggerated how fast the car felt
+            // the setting is the view on a 16:9 screen; on wider phones (19.5:9, 20:9, 21:9) keep that same side-to-side view
+            // instead of stretching it, which made the road look narrow and far away
+            float aspect = Mathf.Max(0.5f, cam.aspect);
+            if (aspect > 16f / 9f) fov = 2f * Mathf.Rad2Deg * Mathf.Atan(Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad) * (16f / 9f) / aspect);
             if (tvWasOn) { cam.transform.position = pos; camVel = Vector3.zero; } // back from the TV camera: no swoop across the circuit
             cam.transform.position = Vector3.SmoothDamp(cam.transform.position, pos, ref camVel, 0.06f);
         }
