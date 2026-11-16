@@ -1,0 +1,655 @@
+// PitGarage.cs — the inside of every team garage along the pit lane and the team's pit-wall stand across the lane.
+// Trackside.cs builds the building shell (glass upper floor, roof, canopy, pillars) and leaves each bay's front open;
+// this fills it like a real modern F1 pit box:
+//  * white / light-grey panelled walls, grey epoxy floor, a ceiling of light panels and light strips; the team colour only
+//    as accents (wall stripe, LED line, floor band, beam cover, an invented team name board on the header and back wall)
+//  * the overhead gantry over the box: arms from the header, a beam with hose reels, air lines, two hanging timing screens
+//    and the release-light bracket (the light itself is PitCrew's, it changes colour)
+//  * tyre sets in blankets (black covers with a team band, heater cables to a control box) on trolleys, blanketed stacks,
+//    a wheel rack, roll cabinets and a tool board, quick-lift jacks parked, wheel guns laid ready with their hoses to wall
+//    reels, a fire extinguisher, a spare front wing, the engineers' desk with screens; no refuelling rig (2026)
+//  * the pit-wall stand: raised platform, desk with a bank of screens, stools, roof with a name fascia, engineers in
+//    headsets and mechanics in the garage (static, posed with PitCrew's body code)
+// Cost: one mesh (one draw call) per detailed bay: the player's box and two neighbours on each side (graphics Medium and
+// up); the other bays are simple (walls, floor, stripe, blanket stacks, cabinets, stand) merged six to a mesh. One material,
+// one 256 x 256 atlas (white, wall panel, epoxy floor, light diffuser, two screen faces, blanket quilt, vent; 8 name rows).
+// Colours are final vertex colours. The holder lives OUTSIDE the world root (a link object under the root destroys it with
+// the world), so the light bake and the static batcher leave it alone and SetTeams can rebuild it once the session's
+// teams are known (PitCrew.Init). Heights follow the ground per vertex (WorldBuilder.H), like the draped building.
+using System.Collections.Generic;
+using UnityEngine;
+
+public class PitGarage : MonoBehaviour
+{
+    GameObject owned; // the link's holder
+    void OnDestroy() { if (owned != null) { Kill(owned); if (holder == owned) holder = null; owned = null; } }
+
+    static GameObject holder; static Material mat; static Texture2D atlas;
+    static int gfx; static int[] order; static Livery[] liv; static string[] names;
+
+    // invented team brands (rival team index -> name on the boards)
+    static readonly string[] Brands = { "ARKON", "VELTRA", "NOVAK", "HALCYON", "KESTREL", "ORBIS", "TALON", "ZEPHYR", "MERIDIAN", "STRATOS", "VORTEX", "AURELIA" };
+    public static string Brand(int team) { int k = ((team % Brands.Length) + Brands.Length) % Brands.Length; return Brands[k] + " RACING"; }
+    public static string PlayerBrand(Livery l) { string s = (l.name ?? "TEAM").ToUpperInvariant(); return s.Length <= 13 ? s + " RACING" : s; }
+
+    // bays sorted by distance from the start line (the player's box first); PitCrew uses the same order
+    public static int[] BayOrder(int N)
+    {
+        var bays = Trackside.Bays; int n = bays.Count;
+        var idx = new List<int>(); for (int i = 0; i < n; i++) idx.Add(i);
+        int D(int i) => Mathf.Min(bays[i].idx, N - bays[i].idx);
+        idx.Sort((a, b) => { int c = D(a).CompareTo(D(b)); return c != 0 ? c : a.CompareTo(b); });
+        return idx.ToArray();
+    }
+
+    static Livery Neutral() => new Livery(null, new Color(0.24f, 0.25f, 0.28f), new Color(0.86f, 0.87f, 0.88f), new Color(0.55f, 0.58f, 0.62f));
+
+    // from Trackside.Build, once the bays exist: neutral garages, the player's box in the player's livery
+    public static void Build(int N, Transform root, int gfxLevel)
+    {
+        holder = null; // an older holder goes with its own world (link)
+        var bays = Trackside.Bays; int n = bays.Count;
+        if (n == 0 || root == null) return;
+        gfx = gfxLevel; order = BayOrder(N);
+        liv = new Livery[n]; names = new string[n];
+        for (int b = 0; b < n; b++) liv[b] = Neutral();
+        var pl = Livery.Player[Livery.PlayerIndex]; liv[order[0]] = pl; names[order[0]] = PlayerBrand(pl);
+        holder = new GameObject("PitGarages");
+        var link = new GameObject("PitGarageLink"); link.transform.SetParent(root, false);
+        link.AddComponent<PitGarage>().owned = holder;
+        Rebuild();
+    }
+
+    // the session's teams (PitCrew.Init): l[b] and nm[b] per bay, nm[b] == null = no team (neutral garage)
+    public static void SetTeams(Livery[] l, string[] nm)
+    {
+        if (holder == null || liv == null || l == null || nm == null || l.Length != liv.Length || nm.Length != liv.Length) return;
+        for (int b = 0; b < liv.Length; b++) { if (nm[b] != null) { liv[b] = l[b]; names[b] = nm[b]; } else { liv[b] = Neutral(); names[b] = null; } }
+        Rebuild();
+    }
+
+    static void Kill(GameObject h)
+    {
+        foreach (var mf in h.GetComponentsInChildren<MeshFilter>(true)) if (mf.sharedMesh != null) Destroy(mf.sharedMesh);
+        Destroy(h);
+    }
+
+    static void Rebuild()
+    {
+        if (holder == null) return;
+        foreach (Transform ch in holder.transform) { var mf = ch.GetComponent<MeshFilter>(); if (mf != null && mf.sharedMesh != null) Destroy(mf.sharedMesh); Destroy(ch.gameObject); }
+        var bays = Trackside.Bays; int n = bays.Count; if (n != liv.Length) return;
+        var row = new int[n]; for (int b = 0; b < n; b++) row[b] = -1;
+        int r = 0; foreach (int b in order) if (names[b] != null && r < 8) row[b] = r++;
+        DrawAtlas(row);
+        Mat().mainTexture = atlas;
+        var det = new bool[n];
+        if (gfx >= 2) { int pb = order[0]; for (int d = -2; d <= 2; d++) if (pb + d >= 0 && pb + d < n) det[pb + d] = true; }
+        for (int b = 0; b < n; b++)
+            if (det[b]) { var g = Frame(b); Detailed(g, b, liv[b], row[b]); Emit(g, "PitGarage_" + b); }
+        GB s = null; int cnt = 0;
+        for (int b = 0; b < n; b++)
+        {
+            if (det[b]) continue;
+            if (s == null) s = new GB();
+            Frame(b, s); Simple(s, b, liv[b], row[b]);
+            if (++cnt == 6) { Emit(s, "PitGarageSimple_" + b); s = null; cnt = 0; }
+        }
+        if (s != null) Emit(s, "PitGarageSimple_end");
+    }
+
+    static Material Mat()
+    {
+        if (mat != null) return mat;
+        var sh = Resources.Load<Shader>("Baked"); if (sh == null || !sh.isSupported) sh = Shader.Find("Sprites/Default");
+        mat = new Material(sh) { color = Color.white, name = "PitGarage" };
+        return mat;
+    }
+
+    static void Emit(GB g, string name)
+    {
+        if (g.t.Count == 0) return;
+        var mesh = new Mesh { name = name };
+        if (g.v.Count > 65000) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        mesh.SetVertices(g.v); mesh.SetUVs(0, g.uv); mesh.SetColors(g.c); mesh.SetTriangles(g.t, 0);
+        mesh.RecalculateBounds();
+        var go = new GameObject(name); go.transform.SetParent(holder.transform, false);
+        go.AddComponent<MeshFilter>().sharedMesh = mesh;
+        var mr = go.AddComponent<MeshRenderer>(); mr.sharedMaterial = Mat();
+        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; mr.receiveShadows = false;
+    }
+
+    static float HalfWidth(int b)
+    {
+        var bays = Trackside.Bays; float d = 8f;
+        if (bays.Count > 1) { int o = b + 1 < bays.Count ? b + 1 : b - 1; d = Vector3.Distance(bays[b].centre, bays[o].centre); }
+        return Mathf.Clamp(d * 0.5f, 3f, 6f);
+    }
+    static GB Frame(int b, GB g = null)
+    {
+        g ??= new GB();
+        var bb = Trackside.Bays[b]; g.O = bb.centre; g.O.y = 0f; g.X = bb.fwd.normalized; g.Z = bb.side.normalized;
+        return g;
+    }
+
+    // ---------------------------------------------------------------- palette
+    static Color C(float r, float g, float b) => new Color(r, g, b);
+    static readonly Color WallW = C(0.90f, 0.91f, 0.92f), Floor = C(0.52f, 0.53f, 0.55f), Ceil = C(0.80f, 0.81f, 0.83f), Graph = C(0.20f, 0.21f, 0.23f),
+                          Dark = C(0.11f, 0.11f, 0.12f), Black = C(0.04f, 0.04f, 0.045f), Steel = C(0.56f, 0.57f, 0.60f), Blanket = C(0.06f, 0.06f, 0.065f),
+                          Rubber = C(0.05f, 0.05f, 0.055f), ExtRed = C(0.78f, 0.06f, 0.05f), AirYellow = C(0.95f, 0.75f, 0.10f), Kick = C(0.30f, 0.31f, 0.33f),
+                          Light = C(1f, 0.99f, 0.96f);
+    static Color Accent(Livery L) { var a = L.accent; float m = Mathf.Max(a.r, Mathf.Max(a.g, a.b)); return m < 0.25f ? L.secondary : a; }
+
+    // ---------------------------------------------------------------- a detailed bay (bay frame: x along the lane, z towards the garage, y up)
+    const float DZ = 8.8f, CH = 4.4f;
+    static void Detailed(GB g, int b, Livery L, int row)
+    {
+        var bb = Trackside.Bays[b]; float gd = bb.garageDist, HW = HalfWidth(b) - 0.08f, zF = gd, zB = gd + DZ;
+        Color P = L.primary, S = L.secondary, Ac = Accent(L);
+        int seed = b * 7 + 3;
+        Interior(g, HW, zF, zB, P, Ac, row, true);
+        Gantry(g, HW, zF, P, Ac, true);
+        g.light = 1f;
+        // tyre trolleys with blanketed sets (front corners), blanketed stacks behind them
+        TyreTrolley(g, new Vector3(-HW + 0.62f, 0, zF + 1.25f), P);
+        TyreTrolley(g, new Vector3(HW - 0.62f, 0, zF + 1.25f), P);
+        for (int s = -1; s <= 1; s += 2)
+            for (int k = 0; k < 3; k++)
+            {
+                Vector3 c = new Vector3(s * (HW - 0.48f), 0.02f + k * 0.37f, zF + 3.25f);
+                g.CylV(c, 0.37f, 0.36f, 12, Blanket, Blanket, GB.Cell(6));
+                g.CylV(c + Vector3.up * 0.12f, 0.375f, 0.12f, 12, P, P, GB.White, false);
+            }
+        // wheel rack (back left): bare wheels standing, faces to the opening
+        {
+            float a0 = -HW + 0.15f, a1 = a0 + 2.5f, z = zB - 0.38f;
+            for (int k = 0; k < 4; k++) g.Box(new Vector3(Mathf.Lerp(a0, a1, k / 3f), 0.9f, z), new Vector3(0.03f, 0.9f, 0.3f), Steel);
+            for (int k = 0; k < 2; k++) g.Box(new Vector3((a0 + a1) * 0.5f, 0.06f + k * 0.86f, z), new Vector3((a1 - a0) * 0.5f, 0.025f, 0.3f), Graph);
+            for (int k = 0; k < 2; k++) for (int j = 0; j < 3; j++)
+                    g.Wheel(new Vector3(a0 + 0.42f + j * 0.83f, 0.085f + k * 0.86f + 0.36f, z), 90f, 0.36f, 0.36f, Rubber, C(0.10f, 0.10f, 0.11f), Steel);
+        }
+        // roll cabinets (back right), worktop, tool board above
+        {
+            float a1 = HW - 0.15f;
+            for (int k = 0; k < 3; k++)
+            {
+                float ca = a1 - 0.4f - k * 0.82f; Vector3 c = new Vector3(ca, 0.52f, zB - 0.34f);
+                g.Box(c, new Vector3(0.39f, 0.5f, 0.28f), Graph);
+                for (int d = 0; d < 4; d++)
+                {
+                    float y = 0.2f + d * 0.21f, z = zB - 0.625f;
+                    g.Quad(new Vector3(ca - 0.36f, y, z), new Vector3(ca + 0.36f, y, z), new Vector3(ca + 0.36f, y + 0.17f, z), new Vector3(ca - 0.36f, y + 0.17f, z), Vector3.back, C(0.30f, 0.31f, 0.33f), GB.White);
+                    g.Quad(new Vector3(ca - 0.2f, y + 0.12f, z - 0.005f), new Vector3(ca + 0.2f, y + 0.12f, z - 0.005f), new Vector3(ca + 0.2f, y + 0.15f, z - 0.005f), new Vector3(ca - 0.2f, y + 0.15f, z - 0.005f), Vector3.back, Steel, GB.White);
+                }
+                g.Quad(new Vector3(ca - 0.39f, 0.94f, zB - 0.626f), new Vector3(ca + 0.39f, 0.94f, zB - 0.626f), new Vector3(ca + 0.39f, 1.0f, zB - 0.626f), new Vector3(ca - 0.39f, 1.0f, zB - 0.626f), Vector3.back, P, GB.White);
+            }
+            g.Box(new Vector3(a1 - 1.23f, 1.04f, zB - 0.34f), new Vector3(1.24f, 0.025f, 0.3f), Black);
+            float tz = zB - 0.03f;
+            g.Quad(new Vector3(a1 - 2.4f, 1.35f, tz), new Vector3(a1 - 0.05f, 1.35f, tz), new Vector3(a1 - 0.05f, 2.25f, tz), new Vector3(a1 - 2.4f, 2.25f, tz), Vector3.back, Graph, GB.Cell(7));
+            for (int k = 0; k < 7; k++)
+            {
+                float ta = a1 - 2.2f + k * 0.33f, th = 0.18f + 0.1f * ((k * 5) % 3);
+                g.Box(new Vector3(ta, 1.8f, tz - 0.03f), new Vector3(0.025f, th * 0.5f, 0.02f), k % 3 == 0 ? Ac : Steel);
+            }
+        }
+        // engineers' desk (back middle): screens to the opening, engineers on stools with their backs to the lane
+        {
+            float zd = zB - 1.5f;
+            g.Box(new Vector3(0, 0.37f, zd), new Vector3(1.25f, 0.37f, 0.3f), Graph);
+            g.Box(new Vector3(0, 0.76f, zd), new Vector3(1.3f, 0.02f, 0.34f), Black);
+            for (int k = -1; k <= 1; k++) g.Screen(new Vector3(k * 0.78f, 1.06f, zd + 0.1f), 0.32f, 0.2f, Vector3.back, (k & 1) == 0 ? 4 : 5, true);
+            for (int k = -1; k <= 1; k += 2)
+            {
+                Vector3 st = new Vector3(k * 0.55f, 0, zd - 0.85f);
+                g.CylV(st, 0.03f, 0.6f, 6, Steel, Steel, GB.White); g.CylV(st + Vector3.up * 0.6f, 0.17f, 0.05f, 8, Black, Black, GB.White);
+                g.Person(1, L, seed + k, st, Vector3.forward, 0);
+            }
+        }
+        // a mechanic watching from the cabinets (arms crossed)
+        g.Person(2, L, seed + 5, new Vector3(HW - 1.5f, 0, zB - 1.25f), new Vector3(-0.35f, 0, -1f), 1);
+        // spare front wing on its stand (left wall), tool trolley (right)
+        {
+            Vector3 c = new Vector3(-HW + 0.35f, 0, zF + 5.2f);
+            g.Box(c + new Vector3(0, 0.03f, 0), new Vector3(0.22f, 0.03f, 0.7f), Graph);
+            g.Box(c + new Vector3(0, 0.3f, 0), new Vector3(0.02f, 0.27f, 0.02f), Steel);
+            g.Box(c + new Vector3(0, 0.62f, 0), new Vector3(0.05f, 0.08f, 0.85f), P);
+            g.Box(c + new Vector3(0.01f, 0.76f, 0), new Vector3(0.04f, 0.06f, 0.8f), Black);
+            for (int s = -1; s <= 1; s += 2) g.Box(c + new Vector3(0, 0.66f, s * 0.86f), new Vector3(0.09f, 0.16f, 0.015f), Black);
+            Vector3 t = new Vector3(HW - 0.45f, 0, zF + 5.0f);
+            g.Box(t + new Vector3(0, 0.48f, 0), new Vector3(0.28f, 0.4f, 0.22f), Graph);
+            g.Box(t + new Vector3(0, 0.9f, 0), new Vector3(0.3f, 0.02f, 0.24f), Black);
+            g.Box(t + new Vector3(0.05f, 0.95f, 0.02f), new Vector3(0.12f, 0.03f, 0.04f), Ac);
+            for (int k = 0; k < 4; k++) g.Box(t + new Vector3((k & 1) * 0.4f - 0.2f, 0.04f, (k >> 1) * 0.36f - 0.18f), new Vector3(0.03f, 0.04f, 0.03f), Black);
+        }
+        // quick-lift jacks parked along the front, wheel guns laid ready with hoses to the wall reels, extinguisher
+        for (int s = -1; s <= 1; s += 2)
+        {
+            Vector3 jb = new Vector3(s * 1.7f, 0, zF + 0.45f);
+            g.Box(jb + new Vector3(0, 0.08f, 0), new Vector3(0.18f, 0.07f, 0.22f), S);
+            g.Box(jb + new Vector3(0, 0.2f, 0), new Vector3(0.1f, 0.05f, 0.1f), Black);
+            g.Seg(jb + new Vector3(0, 0.12f, 0.15f), jb + new Vector3(0, 0.22f, 1.45f), 0.045f, Black);
+            g.Seg(jb + new Vector3(-0.18f, 0.22f, 1.45f), jb + new Vector3(0.18f, 0.22f, 1.45f), 0.04f, Black);
+            Vector3 gp = new Vector3(s * 0.75f, 0.06f, zF + 0.4f);
+            g.Box(gp, new Vector3(0.07f, 0.06f, 0.16f), Ac, s * 20f);
+            g.Box(gp + new Vector3(0, -0.01f, -0.16f), new Vector3(0.025f, 0.035f, 0.05f), Steel, s * 20f);
+            Vector3 reel = new Vector3(s * (HW - 0.12f), 2.3f, zF + 0.9f);
+            g.Wheel(reel, 0f, 0.26f, 0.14f, Black, Steel, Graph);
+            Vector3 h0 = gp + new Vector3(-s * 0.06f, 0, 0.16f), h1 = new Vector3(s * 1.6f, 0.03f, zF + 0.95f), h2 = new Vector3(s * (HW - 0.2f), 0.03f, zF + 0.9f);
+            g.Seg(h0, h1, 0.035f, Black); g.Seg(h1, h2, 0.035f, Black); g.Seg(h2, reel + new Vector3(-s * 0.1f, -0.25f, 0), 0.035f, Black);
+        }
+        {
+            Vector3 e = new Vector3(-HW + 0.28f, 0, zF + 0.3f);
+            g.CylV(e, 0.09f, 0.55f, 8, ExtRed, ExtRed, GB.White);
+            g.Box(e + new Vector3(0, 0.61f, 0), new Vector3(0.03f, 0.05f, 0.05f), Black);
+            g.Seg(e + new Vector3(0.03f, 0.62f, 0.04f), e + new Vector3(0.1f, 0.25f, 0.11f), 0.02f, Black);
+            g.Box(e + new Vector3(-0.05f, 1.1f, 0), new Vector3(0.01f, 0.12f, 0.12f), ExtRed, 0f, 1.3f);
+        }
+        PitWallStand(g, b, gd, P, S, row, true, L, seed);
+    }
+
+    // walls, floor, ceiling, header of one bay
+    static void Interior(GB g, float HW, float zF, float zB, Color P, Color Ac, int row, bool fine)
+    {
+        g.light = 1f;
+        Vector4 wc = fine ? GB.Cell(1) : GB.White, fc = GB.Cell(2);
+        // floor: epoxy tiles, the team band along the front, a painted car outline
+        int na = fine ? 4 : 1, nz = fine ? 4 : 1;
+        for (int i = 0; i < na; i++) for (int j = 0; j < nz; j++)
+            {
+                float a0 = Mathf.Lerp(-HW, HW, i / (float)na), a1 = Mathf.Lerp(-HW, HW, (i + 1f) / na), z0 = Mathf.Lerp(zF, zB, j / (float)nz), z1 = Mathf.Lerp(zF, zB, (j + 1f) / nz);
+                g.Quad(new Vector3(a0, 0.04f, z0), new Vector3(a1, 0.04f, z0), new Vector3(a1, 0.04f, z1), new Vector3(a0, 0.04f, z1), Vector3.up, Floor, fc);
+            }
+        g.Quad(new Vector3(-HW, 0.045f, zF + 0.12f), new Vector3(HW, 0.045f, zF + 0.12f), new Vector3(HW, 0.045f, zF + 0.3f), new Vector3(-HW, 0.045f, zF + 0.3f), Vector3.up, P, GB.White);
+        if (fine)
+        {
+            float oa = 1.05f, o0 = zF + 1.0f, o1 = zF + 6.3f, lw = 0.05f; Color lc = C(0.80f, 0.81f, 0.82f);
+            g.Quad(new Vector3(-oa, 0.045f, o0), new Vector3(-oa + lw, 0.045f, o0), new Vector3(-oa + lw, 0.045f, o1), new Vector3(-oa, 0.045f, o1), Vector3.up, lc, GB.White);
+            g.Quad(new Vector3(oa - lw, 0.045f, o0), new Vector3(oa, 0.045f, o0), new Vector3(oa, 0.045f, o1), new Vector3(oa - lw, 0.045f, o1), Vector3.up, lc, GB.White);
+            g.Quad(new Vector3(-oa, 0.045f, o1 - lw), new Vector3(oa, 0.045f, o1 - lw), new Vector3(oa, 0.045f, o1), new Vector3(-oa, 0.045f, o1), Vector3.up, lc, GB.White);
+        }
+        // side walls and back wall: panels, kick strip, team stripe, LED line
+        int pz = fine ? 4 : 1, py = fine ? 2 : 1;
+        for (int s = -1; s <= 1; s += 2)
+        {
+            float a = s * HW; Vector3 n = new Vector3(-s, 0, 0);
+            for (int i = 0; i < pz; i++) for (int j = 0; j < py; j++)
+                {
+                    float z0 = Mathf.Lerp(zF, zB, i / (float)pz), z1 = Mathf.Lerp(zF, zB, (i + 1f) / pz), y0 = Mathf.Lerp(0.25f, CH, j / (float)py), y1 = Mathf.Lerp(0.25f, CH, (j + 1f) / py);
+                    g.Quad(new Vector3(a, y0, z0), new Vector3(a, y0, z1), new Vector3(a, y1, z1), new Vector3(a, y1, z0), n, WallW, wc);
+                }
+            g.Quad(new Vector3(a, 0, zF), new Vector3(a, 0, zB), new Vector3(a, 0.25f, zB), new Vector3(a, 0.25f, zF), n, Kick, GB.White);
+            float ai = a - s * 0.01f;
+            g.Quad(new Vector3(ai, 1.15f, zF), new Vector3(ai, 1.15f, zB), new Vector3(ai, 1.3f, zB), new Vector3(ai, 1.3f, zF), n, P, GB.White, 1.05f);
+            g.Quad(new Vector3(ai, 3.92f, zF), new Vector3(ai, 3.92f, zB), new Vector3(ai, 3.97f, zB), new Vector3(ai, 3.97f, zF), n, Ac, GB.White, 1.8f);
+        }
+        {
+            Vector3 n = Vector3.back; int pa = fine ? 4 : 1;
+            for (int i = 0; i < pa; i++) for (int j = 0; j < py; j++)
+                {
+                    float a0 = Mathf.Lerp(-HW, HW, i / (float)pa), a1 = Mathf.Lerp(-HW, HW, (i + 1f) / pa), y0 = Mathf.Lerp(0.25f, CH, j / (float)py), y1 = Mathf.Lerp(0.25f, CH, (j + 1f) / py);
+                    g.Quad(new Vector3(a0, y0, zB), new Vector3(a1, y0, zB), new Vector3(a1, y1, zB), new Vector3(a0, y1, zB), n, WallW, wc);
+                }
+            g.Quad(new Vector3(-HW, 0, zB), new Vector3(HW, 0, zB), new Vector3(HW, 0.25f, zB), new Vector3(-HW, 0.25f, zB), n, Kick, GB.White);
+            float zi = zB - 0.01f;
+            g.Quad(new Vector3(-HW, 1.15f, zi), new Vector3(HW, 1.15f, zi), new Vector3(HW, 1.3f, zi), new Vector3(-HW, 1.3f, zi), n, P, GB.White, 1.05f);
+            g.Quad(new Vector3(-HW, 3.92f, zi), new Vector3(HW, 3.92f, zi), new Vector3(HW, 3.97f, zi), new Vector3(-HW, 3.97f, zi), n, Ac, GB.White, 1.8f);
+            // name board (white letters on black) with a team-colour underline, a big timing screen beside it
+            float bw = 2.1f, by = 3.0f, bz = zB - 0.02f;
+            g.Box(new Vector3(0, by + 0.13f, zB - 0.03f), new Vector3(bw + 0.08f, 0.2f, 0.02f), Black);
+            if (row >= 0) g.Quad(new Vector3(-bw, by, bz - 0.02f), new Vector3(bw, by, bz - 0.02f), new Vector3(bw, by + 0.2625f, bz - 0.02f), new Vector3(-bw, by + 0.2625f, bz - 0.02f), n, Color.white, GB.Name(row), 1.6f);
+            g.Quad(new Vector3(-bw, by - 0.1f, bz - 0.025f), new Vector3(bw, by - 0.1f, bz - 0.025f), new Vector3(bw, by - 0.05f, bz - 0.025f), new Vector3(-bw, by - 0.05f, bz - 0.025f), n, P, GB.White, 1.2f);
+            if (fine) g.Screen(new Vector3(0, 2.25f, zB - 0.06f), 0.75f, 0.42f, n, 4, false);
+        }
+        // ceiling: panels and three light strips; the roller door rolled up behind the header
+        {
+            Vector3 n = Vector3.down; int ca = fine ? 2 : 1;
+            for (int i = 0; i < ca; i++)
+            {
+                float a0 = Mathf.Lerp(-HW, HW, i / (float)ca), a1 = Mathf.Lerp(-HW, HW, (i + 1f) / ca);
+                g.Quad(new Vector3(a0, CH, zF), new Vector3(a1, CH, zF), new Vector3(a1, CH, zB), new Vector3(a0, CH, zB), n, Ceil, GB.White);
+            }
+            for (int k = -1; k <= 1; k++)
+            {
+                if (!fine && k != 0) continue;
+                float a = k * HW * 0.55f;
+                g.Quad(new Vector3(a - 0.16f, CH - 0.03f, zF + 0.6f), new Vector3(a + 0.16f, CH - 0.03f, zF + 0.6f), new Vector3(a + 0.16f, CH - 0.03f, zB - 0.4f), new Vector3(a - 0.16f, CH - 0.03f, zB - 0.4f), n, Light, GB.Cell(3), 1.95f);
+            }
+            if (fine) g.Box(new Vector3(0, CH - 0.2f, zF + 0.3f), new Vector3(HW, 0.18f, 0.2f), Graph);
+        }
+        // header over the opening: white fascia, team stripe and the name; jambs
+        {
+            g.light = 0.95f; Vector3 n = Vector3.back; float z = zF - 0.02f, w = HW + 0.1f;
+            g.Quad(new Vector3(-w, 3.95f, z), new Vector3(w, 3.95f, z), new Vector3(w, 4.52f, z), new Vector3(-w, 4.52f, z), n, WallW, GB.White);
+            g.Quad(new Vector3(-w, 3.95f, z), new Vector3(w, 3.95f, z), new Vector3(w, 3.95f, zF + 0.4f), new Vector3(-w, 3.95f, zF + 0.4f), Vector3.down, WallW, GB.White);
+            g.Quad(new Vector3(-w, 3.95f, z - 0.01f), new Vector3(w, 3.95f, z - 0.01f), new Vector3(w, 4.06f, z - 0.01f), new Vector3(-w, 4.06f, z - 0.01f), n, P, GB.White, 1.1f);
+            if (row >= 0)
+            {
+                g.Quad(new Vector3(-1.95f, 4.12f, z - 0.01f), new Vector3(1.95f, 4.12f, z - 0.01f), new Vector3(1.95f, 4.48f, z - 0.01f), new Vector3(-1.95f, 4.48f, z - 0.01f), n, Black, GB.White);
+                g.Quad(new Vector3(-1.84f, 4.185f, z - 0.02f), new Vector3(1.84f, 4.185f, z - 0.02f), new Vector3(1.84f, 4.415f, z - 0.02f), new Vector3(-1.84f, 4.415f, z - 0.02f), n, Color.white, GB.Name(row), 1.6f);
+            }
+            for (int s = -1; s <= 1; s += 2) g.Box(new Vector3(s * (HW - 0.02f), 1.975f, zF + 0.1f), new Vector3(0.1f, 1.975f, 0.14f), WallW);
+            g.light = 1f;
+        }
+    }
+
+    // the gantry over the box: arms from the header, a beam (team cover, LED underside), hose reels, air lines, two hanging
+    // screens, the release-light bracket at x 3.3 (PitCrew hangs the light at bay (3.3, 2.95, 0.6))
+    static void Gantry(GB g, float HW, float zF, Color P, Color Ac, bool fine)
+    {
+        g.light = 0.95f;
+        float zb = 0.6f, yb = 3.75f, ea = Mathf.Min(3.6f, HW - 0.2f);
+        for (int s = -1; s <= 1; s += 2)
+        {
+            g.Box(new Vector3(s * ea, 3.88f, (zF + zb) * 0.5f), new Vector3(0.07f, 0.07f, (zF - zb) * 0.5f), Graph);
+            if (fine) g.Seg(new Vector3(s * ea, 3.88f, zF - 0.9f), new Vector3(s * ea, 4.4f, zF - 0.02f), 0.05f, Graph);
+        }
+        g.Box(new Vector3(0, yb, zb), new Vector3(ea + 0.1f, 0.11f, 0.11f), Graph);
+        g.Quad(new Vector3(-ea - 0.1f, yb - 0.09f, zb - 0.115f), new Vector3(ea + 0.1f, yb - 0.09f, zb - 0.115f), new Vector3(ea + 0.1f, yb + 0.09f, zb - 0.115f), new Vector3(-ea - 0.1f, yb + 0.09f, zb - 0.115f), Vector3.back, P, GB.White, 1.05f);
+        g.Quad(new Vector3(-ea, yb - 0.115f, zb - 0.04f), new Vector3(ea, yb - 0.115f, zb - 0.04f), new Vector3(ea, yb - 0.115f, zb + 0.04f), new Vector3(-ea, yb - 0.115f, zb + 0.04f), Vector3.down, Ac, GB.White, 1.7f);
+        if (!fine) return;
+        float[] reels = { -2.0f, -1.4f, 1.4f, 2.0f };
+        foreach (float ra in reels) { g.Wheel(new Vector3(ra, yb - 0.24f, zb), 0f, 0.12f, 0.09f, Black, Steel, Graph); g.Seg(new Vector3(ra, yb - 0.12f, zb), new Vector3(ra, yb - 0.03f, zb), 0.03f, Steel); }
+        for (int s = -1; s <= 1; s += 2)
+        {
+            g.Seg(new Vector3(s * 2.9f, yb + 0.12f, zb + 0.05f), new Vector3(s * 2.9f, 4.35f, zF - 0.05f), 0.03f, s < 0 ? AirYellow : Black);
+            g.Seg(new Vector3(s * 3.05f, yb + 0.12f, zb + 0.05f), new Vector3(s * 3.05f, 4.35f, zF - 0.05f), 0.03f, Black);
+        }
+        g.Seg(new Vector3(-ea, yb + 0.13f, zb + 0.07f), new Vector3(ea, yb + 0.13f, zb + 0.07f), 0.035f, AirYellow);
+        foreach (float ma in new[] { -2.7f, 0.3f })
+        {
+            g.Seg(new Vector3(ma - 0.2f, yb - 0.11f, zb), new Vector3(ma - 0.2f, 3.5f, zb), 0.02f, Steel);
+            g.Seg(new Vector3(ma + 0.2f, yb - 0.11f, zb), new Vector3(ma + 0.2f, 3.5f, zb), 0.02f, Steel);
+            g.Box(new Vector3(ma, 3.27f, zb), new Vector3(0.42f, 0.25f, 0.035f), Black);
+            g.Screen(new Vector3(ma, 3.27f, zb - 0.037f), 0.38f, 0.21f, Vector3.back, 4, false);
+            g.Screen(new Vector3(ma, 3.27f, zb + 0.037f), 0.38f, 0.21f, Vector3.forward, 5, false);
+        }
+        g.Seg(new Vector3(3.3f, yb - 0.11f, zb), new Vector3(3.3f, 3.08f, zb), 0.03f, Steel);
+        g.light = 1f;
+    }
+
+    static void TyreTrolley(GB g, Vector3 c, Color P)
+    {
+        g.Box(c + new Vector3(0, 0.15f, 0), new Vector3(0.3f, 0.03f, 0.84f), Steel);
+        g.Box(c + new Vector3(0, 0.96f, 0), new Vector3(0.3f, 0.02f, 0.84f), Steel);
+        for (int k = 0; k < 4; k++)
+        {
+            Vector3 q = c + new Vector3((k & 1) * 0.56f - 0.28f, 0, (k >> 1) * 1.6f - 0.8f);
+            g.Box(q + new Vector3(0, 0.98f, 0), new Vector3(0.02f, 0.88f, 0.02f), Steel);
+            g.Box(q + new Vector3(0, 0.05f, 0), new Vector3(0.035f, 0.05f, 0.035f), Black);
+        }
+        Vector3 box = c + new Vector3(0, 1.98f, 0);
+        g.Box(box, new Vector3(0.16f, 0.1f, 0.26f), Graph);
+        g.Quad(box + new Vector3(-0.161f, -0.02f, -0.12f), box + new Vector3(-0.161f, -0.02f, -0.04f), box + new Vector3(-0.161f, 0.04f, -0.04f), box + new Vector3(-0.161f, 0.04f, -0.12f), Vector3.left, C(1f, 0.15f, 0.1f), GB.White, 1.9f);
+        g.Quad(box + new Vector3(0.161f, -0.02f, -0.12f), box + new Vector3(0.161f, -0.02f, -0.04f), box + new Vector3(0.161f, 0.04f, -0.04f), box + new Vector3(0.161f, 0.04f, -0.12f), Vector3.right, C(0.2f, 1f, 0.3f), GB.White, 1.9f);
+        for (int lv = 0; lv < 2; lv++) for (int k = -1; k <= 1; k += 2)
+            {
+                Vector3 t = c + new Vector3(0, 0.55f + lv * 0.81f, k * 0.4f);
+                g.Wheel(t, 0f, 0.375f, 0.4f, Blanket, Blanket, Blanket, GB.Cell(6));
+                g.Wheel(t, 0f, 0.38f, 0.13f, P, P, P, GB.White, false);
+                g.Seg(t + new Vector3(0.12f, 0.36f, 0), box + new Vector3(0.1f, -0.1f, k * 0.15f), 0.018f, Black);
+            }
+    }
+
+    static void PitWallStand(GB g, int b, float gd, Color P, Color S, int row, bool fine, Livery L, int seed)
+    {
+        float zl = gd - 12f, z0 = zl + 0.12f, z1 = zl + 1.68f, zc = (z0 + z1) * 0.5f, hz = (z1 - z0) * 0.5f, py = 0.54f, ha = 2.7f;
+        g.light = 0.95f;
+        g.Box(new Vector3(0, py * 0.5f, zc), new Vector3(ha, py * 0.5f, hz), Graph);
+        g.Quad(new Vector3(-ha, 0.3f, z1 + 0.005f), new Vector3(ha, 0.3f, z1 + 0.005f), new Vector3(ha, 0.42f, z1 + 0.005f), new Vector3(-ha, 0.42f, z1 + 0.005f), Vector3.forward, P, GB.White, 1.05f);
+        // desk and screens (facing the engineers, i.e. the pit lane)
+        g.Box(new Vector3(0, py + 0.39f, zl + 0.38f), new Vector3(ha - 0.2f, 0.39f, 0.2f), Black);
+        if (fine)
+        {
+            for (int k = 0; k < 4; k++) { float a = -1.8f + k * 1.2f; g.Box(new Vector3(a, py + 1.06f, zl + 0.33f), new Vector3(0.3f, 0.19f, 0.03f), Black); g.Screen(new Vector3(a, py + 1.06f, zl + 0.362f), 0.27f, 0.165f, Vector3.forward, 4 + (k & 1), false); }
+            for (int k = -1; k <= 1; k += 2) { float a = k * 1.2f; g.Box(new Vector3(a, py + 1.52f, zl + 0.33f), new Vector3(0.4f, 0.24f, 0.03f), Black); g.Screen(new Vector3(a, py + 1.52f, zl + 0.362f), 0.37f, 0.21f, Vector3.forward, 5 - (k > 0 ? 1 : 0), false); }
+            g.Seg(new Vector3(-ha + 0.1f, py + 0.5f, z1 - 0.05f), new Vector3(ha - 0.1f, py + 0.5f, z1 - 0.05f), 0.04f, Steel);
+            for (int k = -1; k <= 1; k++)
+            {
+                Vector3 st = new Vector3(k * 1.2f, py, zl + 1.0f);
+                g.CylV(st, 0.03f, 0.6f, 6, Steel, Steel, GB.White); g.CylV(st + Vector3.up * 0.6f, 0.17f, 0.05f, 8, Black, Black, GB.White);
+                g.Person(1, L, seed + 11 + k, st, Vector3.back, 0);
+            }
+        }
+        else g.Screen(new Vector3(0, py + 1.06f, zl + 0.6f), 1.6f, 0.2f, Vector3.forward, 4, false);
+        // roof on posts, name fascia to the pit lane
+        float ry = 2.85f;
+        for (int k = 0; k < 4; k++) { float a = (k & 1) == 0 ? -ha + 0.06f : ha - 0.06f, z = (k >> 1) == 0 ? z0 + 0.05f : z1 - 0.05f; g.Box(new Vector3(a, (py + ry) * 0.5f, z), new Vector3(0.04f, (ry - py) * 0.5f, 0.04f), Steel); }
+        g.Box(new Vector3(0, ry, zc - 0.15f), new Vector3(ha + 0.15f, 0.06f, hz + 0.3f), WallW);
+        float fz = zc + hz + 0.16f;
+        g.Quad(new Vector3(-ha - 0.15f, ry - 0.32f, fz), new Vector3(ha + 0.15f, ry - 0.32f, fz), new Vector3(ha + 0.15f, ry + 0.06f, fz), new Vector3(-ha - 0.15f, ry + 0.06f, fz), Vector3.forward, WallW, GB.White);
+        g.Quad(new Vector3(-ha - 0.15f, ry - 0.32f, fz + 0.005f), new Vector3(ha + 0.15f, ry - 0.32f, fz + 0.005f), new Vector3(ha + 0.15f, ry - 0.24f, fz + 0.005f), new Vector3(-ha - 0.15f, ry - 0.24f, fz + 0.005f), Vector3.forward, P, GB.White, 1.1f);
+        if (row >= 0) g.Quad(new Vector3(-1.6f, ry - 0.2f, fz + 0.005f), new Vector3(1.6f, ry - 0.2f, fz + 0.005f), new Vector3(1.6f, ry, fz + 0.005f), new Vector3(-1.6f, ry, fz + 0.005f), Vector3.forward, Color.white, GB.Name(row), 1.5f);
+        g.light = 1f;
+    }
+
+    // ---------------------------------------------------------------- a simple bay (far from the player's box)
+    static void Simple(GB g, int b, Livery L, int row)
+    {
+        var bb = Trackside.Bays[b]; float gd = bb.garageDist, HW = HalfWidth(b) - 0.08f, zF = gd, zB = gd + DZ;
+        Color P = L.primary;
+        Interior(g, HW, zF, zB, P, Accent(L), row, false);
+        Gantry(g, HW, zF, P, Accent(L), false);
+        g.light = 1f;
+        for (int s = -1; s <= 1; s += 2)
+        {
+            Vector3 c = new Vector3(s * (HW - 0.62f), 0.95f, zF + 1.25f);
+            g.Box(c, new Vector3(0.3f, 0.82f, 0.8f), Blanket);
+            g.Box(c, new Vector3(0.31f, 0.06f, 0.81f), P);
+        }
+        g.Box(new Vector3(HW - 1.4f, 0.52f, zB - 0.34f), new Vector3(1.24f, 0.52f, 0.28f), Graph);
+        g.Box(new Vector3(0, 0.38f, zB - 1.5f), new Vector3(1.25f, 0.38f, 0.3f), Graph);
+        g.Screen(new Vector3(0, 1.0f, zB - 1.45f), 1.0f, 0.18f, Vector3.back, 4, true);
+        if (gfx >= 2) PitWallStand(g, b, gd, P, L.secondary, row, false, L, b);
+    }
+
+    // ---------------------------------------------------------------- the atlas
+    static void DrawAtlas(int[] row)
+    {
+        if (atlas == null) atlas = new Texture2D(256, 256, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, anisoLevel = 2, name = "PitGarageAtlas" };
+        var px = new Color32[256 * 256];
+        void Cell(int k, System.Func<int, int, Color32> f)
+        {
+            int x0 = (k % 4) * 64, y0 = 192 - (k / 4) * 64;
+            for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) px[(y0 + y) * 256 + x0 + x] = f(x, y);
+        }
+        Color32 G(int v) { byte b = (byte)Mathf.Clamp(v, 0, 255); return new Color32(b, b, b, 255); }
+        Cell(0, (x, y) => G(255));
+        Cell(1, (x, y) => (x < 5 || x > 58 || y < 5 || y > 58) ? G(178) : (x < 7 || y > 56) ? G(250) : G(234 - y / 16 + (int)(Hash(x, y, 1) * 4)));
+        Cell(2, (x, y) => G(150 + (int)((Hash(x, y, 2) - 0.5f) * 14f) + (int)((Hash(x / 8, y / 8, 3) - 0.5f) * 8f)));
+        Cell(3, (x, y) => (x % 16 == 0 || y % 16 == 0) ? G(222) : G(255));
+        Cell(4, (x, y) =>
+        {
+            int r = (y - 4) / 5, ry = (y - 4) % 5;
+            if (y < 4 || y > 60 || ry > 2 || x < 3 || x > 60) return new Color32(10, 14, 24, 255);
+            float h = Hash(r, 0, 4); int w2 = 26 + (int)(h * 18);
+            if (x < 7) return new Color32(220, 220, 225, 255);
+            if (x >= 9 && x < 21) return (x % 4 == 3) ? new Color32(10, 14, 24, 255) : new Color32(235, 235, 240, 255);
+            if (x >= 24 && x < w2) { int t = (int)(Hash(r, 1, 5) * 4); return t == 0 ? new Color32(170, 60, 230, 255) : t == 1 ? new Color32(60, 220, 90, 255) : t == 2 ? new Color32(250, 220, 60, 255) : new Color32(230, 230, 235, 255); }
+            if (x >= 48 && x < 58 && Hash(r, 2, 6) > 0.4f) return new Color32(200, 200, 205, 255);
+            return new Color32(10, 14, 24, 255);
+        });
+        Cell(5, (x, y) =>
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                float cy = 32f + 13f * Mathf.Sin(x * (0.11f + k * 0.05f) + k * 2f) * (1f - k * 0.25f) + (k - 1) * 6f;
+                if (Mathf.Abs(y - cy) < 1.3f) return k == 0 ? new Color32(60, 210, 240, 255) : k == 1 ? new Color32(250, 210, 60, 255) : new Color32(240, 80, 160, 255);
+            }
+            return (x % 10 == 0 || y % 10 == 0) ? new Color32(30, 40, 58, 255) : new Color32(9, 13, 22, 255);
+        });
+        Cell(6, (x, y) => ((x + y) % 12 == 0 || (x - y + 64) % 12 == 0) ? G(52) : G(22 + (int)(Hash(x, y, 7) * 6)));
+        Cell(7, (x, y) => (y % 6 < 2) ? G(30) : G(70));
+        // name rows: white letters on near-black, 5 x 7 font doubled (10 x 14), centred
+        for (int i = 0; i < 128 * 256; i++) px[i] = new Color32(20, 20, 23, 255);
+        for (int b = 0; b < row.Length; b++)
+        {
+            if (row[b] < 0 || names[b] == null) continue;
+            string s = names[b]; int len = Mathf.Min(s.Length, 21), x0 = (256 - len * 12) / 2, y0 = row[b] * 16 + 1;
+            for (int ci = 0; ci < len; ci++)
+            {
+                var gl = Glyph(s[ci]); if (gl == null) continue;
+                for (int gy = 0; gy < 7; gy++) for (int gx = 0; gx < 5; gx++)
+                    {
+                        if (gl[gy][gx] != '#') continue;
+                        for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++)
+                            {
+                                int X = x0 + ci * 12 + 1 + gx * 2 + dx, Y = y0 + (6 - gy) * 2 + dy;
+                                if (X >= 0 && X < 256 && Y >= 0 && Y < 128) px[Y * 256 + X] = new Color32(245, 245, 245, 255);
+                            }
+                    }
+            }
+        }
+        atlas.SetPixels32(px); atlas.Apply(true);
+    }
+    static float Hash(int x, int y, int s)
+    {
+        unchecked { int h = x * 374761393 + y * 668265263 + s * 2147483; h = (h ^ (int)((uint)h >> 13)) * 1274126177; return (uint)(h ^ (int)((uint)h >> 16)) / 4294967296f; }
+    }
+    static string[] Glyph(char ch)
+    {
+        switch (ch)
+        {
+            case 'A': return new[] { " ### ", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
+            case 'B': return new[] { "#### ", "#   #", "#   #", "#### ", "#   #", "#   #", "#### " };
+            case 'C': return new[] { " ### ", "#   #", "#    ", "#    ", "#    ", "#   #", " ### " };
+            case 'D': return new[] { "#### ", "#   #", "#   #", "#   #", "#   #", "#   #", "#### " };
+            case 'E': return new[] { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#####" };
+            case 'F': return new[] { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#    " };
+            case 'G': return new[] { " ### ", "#   #", "#    ", "# ###", "#   #", "#   #", " ### " };
+            case 'H': return new[] { "#   #", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
+            case 'I': return new[] { " ### ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", " ### " };
+            case 'J': return new[] { "  ###", "   # ", "   # ", "   # ", "   # ", "#  # ", " ##  " };
+            case 'K': return new[] { "#   #", "#  # ", "# #  ", "##   ", "# #  ", "#  # ", "#   #" };
+            case 'L': return new[] { "#    ", "#    ", "#    ", "#    ", "#    ", "#    ", "#####" };
+            case 'M': return new[] { "#   #", "## ##", "# # #", "# # #", "#   #", "#   #", "#   #" };
+            case 'N': return new[] { "#   #", "##  #", "# # #", "#  ##", "#   #", "#   #", "#   #" };
+            case 'O': return new[] { " ### ", "#   #", "#   #", "#   #", "#   #", "#   #", " ### " };
+            case 'P': return new[] { "#### ", "#   #", "#   #", "#### ", "#    ", "#    ", "#    " };
+            case 'Q': return new[] { " ### ", "#   #", "#   #", "#   #", "# # #", "#  # ", " ## #" };
+            case 'R': return new[] { "#### ", "#   #", "#   #", "#### ", "# #  ", "#  # ", "#   #" };
+            case 'S': return new[] { " ####", "#    ", "#    ", " ### ", "    #", "    #", "#### " };
+            case 'T': return new[] { "#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  " };
+            case 'U': return new[] { "#   #", "#   #", "#   #", "#   #", "#   #", "#   #", " ### " };
+            case 'V': return new[] { "#   #", "#   #", "#   #", "#   #", "#   #", " # # ", "  #  " };
+            case 'W': return new[] { "#   #", "#   #", "#   #", "# # #", "# # #", "## ##", "#   #" };
+            case 'X': return new[] { "#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #" };
+            case 'Y': return new[] { "#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  " };
+            case 'Z': return new[] { "#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####" };
+            default: return null;
+        }
+    }
+
+    // ---------------------------------------------------------------- mesh builder in a bay frame (x along the lane, z to the garage)
+    sealed class GB
+    {
+        public readonly List<Vector3> v = new List<Vector3>(); public readonly List<Vector2> uv = new List<Vector2>();
+        public readonly List<Color32> c = new List<Color32>(); public readonly List<int> t = new List<int>();
+        public Vector3 O, X, Z; public float light = 1f;
+
+        public static Vector4 Cell(int k) { int x0 = (k % 4) * 64, y0 = 192 - (k / 4) * 64; return new Vector4((x0 + 3) / 256f, (y0 + 3) / 256f, (x0 + 61) / 256f, (y0 + 61) / 256f); }
+        public static readonly Vector4 White = new Vector4(8 / 256f, 200 / 256f, 56 / 256f, 248 / 256f);
+        public static Vector4 Name(int r) => new Vector4(0.5f / 256f, (r * 16 + 0.5f) / 256f, 255.5f / 256f, (r * 16 + 15.5f) / 256f);
+
+        public Vector3 W(Vector3 l) { Vector3 p = O + X * l.x + Z * l.z; p.y = l.y + WorldBuilder.H(p.x, p.z); return p; }
+        Vector3 Dir(Vector3 l) => X * l.x + Vector3.up * l.y + Z * l.z;
+        static byte B(float x) => (byte)(Mathf.Clamp01(x) * 255f + 0.5f);
+        static Color32 Col(Color g, float k) { var l = g.linear; k *= 0.5f; return new Color32(B(l.r * k), B(l.g * k), B(l.b * k), 255); } // the shader doubles it
+        float Shade(Vector3 n) => light * (0.70f + 0.30f * (n.y * 0.5f + 0.5f)) * (0.95f + 0.05f * n.x - 0.04f * Mathf.Abs(n.z));
+
+        public void Quad(Vector3 a, Vector3 b, Vector3 cc, Vector3 d, Vector3 n, Color col, Vector4 cell, float glow = 0f)
+        {
+            Color32 k = Col(col, glow > 0f ? glow : Shade(n));
+            Vector3 wa = W(a), wb = W(b), wc = W(cc), wd = W(d);
+            int i = v.Count; v.Add(wa); v.Add(wb); v.Add(wc); v.Add(wd);
+            uv.Add(new Vector2(cell.x, cell.y)); uv.Add(new Vector2(cell.z, cell.y)); uv.Add(new Vector2(cell.z, cell.w)); uv.Add(new Vector2(cell.x, cell.w));
+            c.Add(k); c.Add(k); c.Add(k); c.Add(k);
+            if (Vector3.Dot(Vector3.Cross(wb - wa, wc - wa), Dir(n)) >= 0f) { t.Add(i); t.Add(i + 1); t.Add(i + 2); t.Add(i); t.Add(i + 2); t.Add(i + 3); }
+            else { t.Add(i); t.Add(i + 2); t.Add(i + 1); t.Add(i); t.Add(i + 3); t.Add(i + 2); }
+        }
+        void Tri(Vector3 a, Vector3 b, Vector3 cc, Vector3 n, Color col, Vector2 u, float glow = 0f)
+        {
+            Color32 k = Col(col, glow > 0f ? glow : Shade(n));
+            Vector3 wa = W(a), wb = W(b), wc = W(cc);
+            int i = v.Count; v.Add(wa); v.Add(wb); v.Add(wc); uv.Add(u); uv.Add(u); uv.Add(u); c.Add(k); c.Add(k); c.Add(k);
+            if (Vector3.Dot(Vector3.Cross(wb - wa, wc - wa), Dir(n)) >= 0f) { t.Add(i); t.Add(i + 1); t.Add(i + 2); } else { t.Add(i); t.Add(i + 2); t.Add(i + 1); }
+        }
+        // box: centre, half sizes (x, y, z in the bay frame, turned by yaw degrees about up)
+        public void Box(Vector3 cen, Vector3 h, Color col, float yaw = 0f, float glow = 0f)
+        {
+            float cs = Mathf.Cos(yaw * Mathf.Deg2Rad), sn = Mathf.Sin(yaw * Mathf.Deg2Rad);
+            Vector3 ra = new Vector3(cs, 0, sn) * h.x, rz = new Vector3(-sn, 0, cs) * h.z, ry = Vector3.up * h.y;
+            Face(cen, ra, ry, rz, col, glow); Face(cen, -ra, ry, rz, col, glow);
+            Face(cen, ry, ra, rz, col, glow);
+            Face(cen, rz, ra, ry, col, glow); Face(cen, -rz, ra, ry, col, glow);
+            if (cen.y - h.y > 0.1f) Face(cen, -ry, ra, rz, col, glow);
+        }
+        void Face(Vector3 cen, Vector3 n, Vector3 e1, Vector3 e2, Color col, float glow)
+        {
+            Vector3 f = cen + n; Quad(f - e1 - e2, f + e1 - e2, f + e1 + e2, f - e1 + e2, n.normalized, col, White, glow);
+        }
+        // a thin box along a segment (hoses, cables, braces)
+        public void Seg(Vector3 p0, Vector3 p1, float th, Color col)
+        {
+            Vector3 d = p1 - p0; if (d.sqrMagnitude < 1e-6f) return;
+            Vector3 dn = d.normalized, e1 = Vector3.Cross(dn, Vector3.up); if (e1.sqrMagnitude < 1e-4f) e1 = Vector3.Cross(dn, Vector3.right);
+            e1 = e1.normalized * (th * 0.5f); Vector3 e2 = Vector3.Cross(e1, dn).normalized * (th * 0.5f);
+            for (int k = 0; k < 4; k++)
+            {
+                Vector3 a = k == 0 ? e1 : k == 1 ? e2 : k == 2 ? -e1 : -e2, bq = k == 0 ? e2 : k == 1 ? -e1 : k == 2 ? -e2 : e1;
+                Quad(p0 + a - bq, p1 + a - bq, p1 + a + bq, p0 + a + bq, a.normalized, col, White);
+            }
+        }
+        // upright cylinder: base centre, radius, height
+        public void CylV(Vector3 b, float r, float hgt, int n, Color side, Color top, Vector4 cell, bool cap = true)
+        {
+            Vector2 tu = new Vector2((cell.x + cell.z) * 0.5f, (cell.y + cell.w) * 0.5f);
+            for (int k = 0; k < n; k++)
+            {
+                float a0 = 2f * Mathf.PI * k / n, a1 = 2f * Mathf.PI * (k + 1) / n, am = (a0 + a1) * 0.5f;
+                Vector3 d0 = new Vector3(Mathf.Cos(a0), 0, Mathf.Sin(a0)) * r, d1 = new Vector3(Mathf.Cos(a1), 0, Mathf.Sin(a1)) * r, nm = new Vector3(Mathf.Cos(am), 0, Mathf.Sin(am));
+                float u0 = Mathf.Lerp(cell.x, cell.z, k / (float)n), u1 = Mathf.Lerp(cell.x, cell.z, (k + 1f) / n);
+                Quad(b + d0, b + d1, b + d1 + Vector3.up * hgt, b + d0 + Vector3.up * hgt, nm, side, new Vector4(u0, cell.y, u1, cell.w));
+                if (cap) Tri(b + Vector3.up * hgt, b + d0 + Vector3.up * hgt, b + d1 + Vector3.up * hgt, Vector3.up, top, tu);
+            }
+        }
+        // a wheel / tyre / reel on a horizontal axis (yaw 0 = along x, 90 = along z): tread, sidewalls down to the hub
+        public void Wheel(Vector3 cen, float yaw, float r, float w, Color tread, Color wall, Color hub, Vector4? cell = null, bool caps = true)
+        {
+            Vector4 ce = cell ?? White; Vector2 cu = new Vector2((ce.x + ce.z) * 0.5f, (ce.y + ce.w) * 0.5f), wu = new Vector2((White.x + White.z) * 0.5f, (White.y + White.w) * 0.5f);
+            float cs = Mathf.Cos(yaw * Mathf.Deg2Rad), sn = Mathf.Sin(yaw * Mathf.Deg2Rad);
+            Vector3 ax = new Vector3(cs, 0, sn), p1 = new Vector3(-sn, 0, cs), hw = ax * (w * 0.5f);
+            const int n = 12; float rIn = r * 0.55f;
+            for (int k = 0; k < n; k++)
+            {
+                float a0 = 2f * Mathf.PI * k / n, a1 = 2f * Mathf.PI * (k + 1) / n, am = (a0 + a1) * 0.5f;
+                Vector3 d0 = (p1 * Mathf.Cos(a0) + Vector3.up * Mathf.Sin(a0)), d1 = (p1 * Mathf.Cos(a1) + Vector3.up * Mathf.Sin(a1)), dm = (p1 * Mathf.Cos(am) + Vector3.up * Mathf.Sin(am));
+                float u0 = Mathf.Lerp(ce.x, ce.z, k / (float)n), u1 = Mathf.Lerp(ce.x, ce.z, (k + 1f) / n);
+                Quad(cen - hw + d0 * r, cen - hw + d1 * r, cen + hw + d1 * r, cen + hw + d0 * r, dm, tread, new Vector4(u0, ce.y, u1, ce.w));
+                if (!caps) continue;
+                for (int s = -1; s <= 1; s += 2)
+                {
+                    Vector3 o = cen + hw * s, nn = ax * s;
+                    Quad(o + d0 * r, o + d1 * r, o + d1 * rIn, o + d0 * rIn, nn, wall, new Vector4(cu.x, cu.y, cu.x, cu.y));
+                    Tri(o, o + d0 * rIn, o + d1 * rIn, nn, hub, wu);
+                }
+            }
+        }
+        // a screen: glowing face (atlas cell 4 or 5), centre c, half sizes, facing n; framed = a thin black bezel behind
+        public void Screen(Vector3 cen, float hw, float hh, Vector3 n, int cellK, bool framed)
+        {
+            Vector3 side = Vector3.Cross(Vector3.up, n).normalized;
+            if (framed) Box(cen - n * 0.03f, new Vector3(Mathf.Abs(side.x) * (hw + 0.03f) + Mathf.Abs(n.x) * 0.025f, hh + 0.03f, Mathf.Abs(side.z) * (hw + 0.03f) + Mathf.Abs(n.z) * 0.025f), Black);
+            Quad(cen - side * hw - Vector3.up * hh, cen + side * hw - Vector3.up * hh, cen + side * hw + Vector3.up * hh, cen - side * hw + Vector3.up * hh, n, Color.white, Cell(cellK), 1.5f);
+        }
+        // a posed person (PitCrew's body): kind 1 engineer with headset, 2 mechanic; facing in the bay frame; pose 0 seated at a
+        // desk (pos = the stool's foot), 1 arms crossed, 2 hands on hips
+        public void Person(int kind, Livery L, int seed, Vector3 pos, Vector3 facing, int pose)
+        {
+            Vector3 wp = W(pos);
+            Vector3 fd = Dir(facing); fd.y = 0; if (fd.sqrMagnitude < 1e-6f) fd = X;
+            float sc = 0.96f + 0.08f * Hash(seed, 1, 9);
+            var root = Matrix4x4.TRS(wp, Quaternion.LookRotation(fd.normalized, Vector3.up), Vector3.one * sc);
+            PitCrew.StaticPerson(kind, L, seed, root, pose, v, uv, new Vector2((White.x + White.z) * 0.5f, (White.y + White.w) * 0.5f), c, t);
+        }
+    }
+}

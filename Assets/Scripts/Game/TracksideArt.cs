@@ -12,7 +12,7 @@
 //                    a second, newer concrete block (128 x 64) so neighbouring blocks differ
 //        y 128..255  eight more advertising boards (condensed lettering, a mark block on the left)
 //    So every opaque trackside part still shares one material: one draw call.
-//  * Crowd: coloured noise of heads and shirts in four density bands, tiled along grandstand rows.
+//  * Crowd: 512 x 128, seated people (shirts, heads, caps, raised arms, flags, banners) in four bands, tiled along grandstand rows.
 //  * Fence: chain-link diamonds in alpha for the alpha-tested debris/catch fence, with mip levels whose alpha is boosted
 //    so the fence fades to a grey veil in the distance instead of vanishing.
 //  * Grime: soft dark ground decals in four columns (base shadow, tyre mark, dirt, rubber smear).
@@ -330,36 +330,69 @@ public static class TracksideArt
         return Tone(Swatch[BuildWhite], k, k, k);
     }
 
-    // ---------------------------------------------------------------- crowd: 32 seats x 4 density bands
+    // ---------------------------------------------------------------- crowd: 32 seats (16 x 32 px each) x 4 bands
+    // band 0 mixed fans, band 1 mostly red (Ferrari), band 2 mixed and thinner, band 3 sparse. Seated people: shoulders,
+    // head, hair or cap, sometimes both arms up, a flag pole, and now and then a banner across four seats. Only mid-sized
+    // contrasts (no single-pixel detail), so the mips turn into soft coloured noise.
     public static Texture2D Crowd()
     {
-        const int W = 256, H = 64;
+        const int W = 512, H = 128, CW = 16, CH = 32;
         Color32[] shirts = {
             new Color32(230, 40, 40, 255), new Color32(245, 245, 245, 255), new Color32(30, 30, 34, 255), new Color32(240, 130, 20, 255),
             new Color32(250, 210, 40, 255), new Color32(40, 90, 200, 255), new Color32(30, 140, 70, 255), new Color32(120, 120, 128, 255),
-            new Color32(200, 60, 140, 255), new Color32(90, 170, 220, 255) };
-        Color32[] skin = { new Color32(236, 196, 160, 255), new Color32(200, 150, 110, 255), new Color32(140, 96, 64, 255), new Color32(90, 60, 42, 255) };
-        float[] fill = { 0.96f, 0.9f, 0.78f, 0.5f };
+            new Color32(200, 60, 140, 255), new Color32(90, 170, 220, 255), new Color32(150, 20, 30, 255), new Color32(60, 40, 90, 255) };
+        Color32[] reds = { new Color32(225, 30, 35, 255), new Color32(190, 20, 30, 255), new Color32(240, 70, 60, 255) };
+        Color32[] skin = { new Color32(236, 196, 160, 255), new Color32(214, 164, 124, 255), new Color32(168, 116, 80, 255), new Color32(110, 74, 50, 255), new Color32(80, 54, 40, 255) };
+        Color32[] hair = { new Color32(30, 24, 20, 255), new Color32(70, 46, 28, 255), new Color32(150, 110, 60, 255), new Color32(210, 190, 140, 255), new Color32(120, 120, 120, 255) };
+        float[] fill = { 0.9f, 0.9f, 0.82f, 0.55f };
         var px = new Color32[W * H];
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++)
             {
-                int band = y / 16, ly = y % 16, seat = x / 8, lx = x % 8;
-                float occ = Hash(seat, band, 21);
-                Color32 seatCol = (band & 1) == 0 ? new Color32(40, 64, 120, 255) : new Color32(70, 74, 82, 255);
-                Color32 c = ly < 3 ? Mul(seatCol, 0.55f) : seatCol; // seat edge
-                if (occ < fill[band])
+                int band = y / CH, ly = y % CH, seat = x / CW, lx = x % CW;
+                Color32 seatCol = (band & 1) == 0 ? new Color32(40, 64, 120, 255) : new Color32(86, 90, 98, 255);
+                Color32 c = ly < 4 ? Mul(seatCol, 0.5f) : Mul(seatCol, 0.8f + 0.25f * (lx > 1 && lx < 14 ? 1f : 0f)); // seat back with a dark gap under it
+                if (Hash(seat, band, 21) < fill[band])
                 {
-                    var sh = shirts[(int)(Hash(seat, band, 22) * shirts.Length) % shirts.Length];
-                    var sk = skin[(int)(Hash(seat, band, 23) * skin.Length) % skin.Length];
-                    int dx = Hash(seat, band, 24) > 0.5f ? 1 : 0; // lean a little left or right
-                    if (ly >= 2 && ly <= 9 && lx >= 1 && lx <= 6) c = Mul(sh, 0.85f + 0.2f * Hash(x, y, 25));
-                    if (ly >= 10 && ly <= 13 && lx >= 2 + dx && lx <= 4 + dx) c = ly == 13 ? Mul(sk, 0.45f) : sk; // head, hair on top
-                    if (Hash(seat, band, 26) > 0.93f && ly >= 13 && lx >= 1 && lx <= 6) c = shirts[(seat + band) % shirts.Length]; // flag / scarf held up
+                    bool redBand = band == 1;
+                    Color32 sh = (redBand ? Hash(seat, band, 40) < 0.7f : Hash(seat, band, 40) < 0.16f)
+                        ? reds[(int)(Hash(seat, band, 41) * 3f) % 3]
+                        : shirts[(int)(Hash(seat, band, 22) * shirts.Length) % shirts.Length];
+                    Color32 sk = skin[(int)(Hash(seat, band, 23) * skin.Length) % skin.Length];
+                    Color32 hr = hair[(int)(Hash(seat, band, 27) * hair.Length) % hair.Length];
+                    int dx = (int)(Hash(seat, band, 24) * 3f) - 1;                        // lean -1, 0, +1
+                    int cx = 8 + dx, hy = 21 + (int)(Hash(seat, band, 28) * 3f);           // head centre
+                    bool cap = Hash(seat, band, 29) < (redBand ? 0.35f : 0.14f), arms = Hash(seat, band, 30) < 0.09f;
+                    float sw = 0.88f + 0.22f * Hash(x / 2, y / 3, 25);
+                    // torso with rounded shoulders
+                    int half = ly >= 15 ? 4 - (ly - 14) / 2 : 5;
+                    if (ly >= 4 && ly <= 17 && Mathf.Abs(lx - cx) <= half) c = Mul(sh, sw * (ly < 7 ? 0.7f : 1f));
+                    // arms up: two skin columns beside the head, or a flag on a pole
+                    if (arms && ly >= 14 && ly <= 29 && (lx == cx - 5 || lx == cx + 5) && lx > 0 && lx < 15) c = sk;
+                    // head
+                    float dxh = lx - cx, dyh = (ly - hy) * 0.9f;
+                    if (dxh * dxh + dyh * dyh <= 10.5f) c = ly > hy + 1 && !cap ? hr : sk;
+                    if (cap && ly >= hy + 2 && ly <= hy + 3 && Mathf.Abs(lx - cx) <= 4) c = Mul(sh, 1.1f);
+                    if (ly >= 17 && ly <= 18 && Mathf.Abs(lx - cx) <= 1) c = Mul(sk, 0.9f);   // neck
+                    if (Hash(seat, band, 26) > 0.94f)                                      // flag on a pole
+                    {
+                        if (lx == 13 && ly >= 8) c = new Color32(210, 210, 210, 255);
+                        if (lx >= 9 && lx <= 12 && ly >= 24 && ly <= 30)
+                            c = (seat & 1) == 0 ? (lx < 11 ? new Color32(30, 150, 60, 255) : new Color32(230, 40, 40, 255)) : (ly > 27 ? new Color32(245, 245, 245, 255) : new Color32(230, 40, 40, 255));
+                    }
+                }
+                // banner stretched over a run of four seats
+                int run = seat / 4;
+                if (Hash(run, band, 50) > 0.955f && ly >= 8 && ly <= 15)
+                {
+                    bool two = Hash(run, band, 51) > 0.5f;
+                    Color32 b0 = two ? new Color32(220, 30, 35, 255) : new Color32(25, 60, 150, 255), b1 = new Color32(245, 240, 225, 255);
+                    bool txt = ly >= 10 && ly <= 13 && ((x / 3) % 3 != 2) && Hash(x / 3, run, 52) > 0.3f;
+                    c = txt ? b1 : (ly == 8 || ly == 15 ? Mul(b1, 0.9f) : b0);
                 }
                 px[y * W + x] = c;
             }
-        var t = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
+        var t = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
         t.SetPixels32(px); t.Apply(true, true);
         return t;
     }
