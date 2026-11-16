@@ -25,6 +25,7 @@ public partial class GameManager
     float aeroBal = 45, brakeBiasPct = 57, brakeMigPct, engBrakePct = 100, diffPowerPct = 15, diffCoastPct = 25, rideFmm, rideRmm;
     // camera
     float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100;
+    bool haloInCockpit = true;                           // cockpit view draws the halo (hoop + pillar); false hides all of it
     int horizonMode = 1;                                 // 0 off, 1 cockpit only, 2 all views
     // graphics
     int fpsIdx = 1; float resPct = 100; bool shadowsOn = true, showFps = true;
@@ -81,6 +82,7 @@ public partial class GameManager
         fovChase = LoadF("fovChase", 62, 50, 80); fovCockpit = LoadF("fovCockpit", 55, 45, 80);
         seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200);
         horizonMode = LoadI("horizon", 1, 2);
+        haloInCockpit = PlayerPrefs.GetInt("haloCockpit", 1) == 1;
         damageMode = LoadI("damage", 1, 2);
         flagsMode = LoadI("flags", 1, 1); raceDistIdx = LoadI("raceDist", 0, RaceDistNames.Length - 1);
         fpsIdx = LoadI("fps", 1, 1); resPct = LoadF("resScale", 100, 50, 100); shadowsOn = PlayerPrefs.GetInt("shadows", 1) == 1; showFps = PlayerPrefs.GetInt("showFps", 1) == 1;
@@ -106,6 +108,7 @@ public partial class GameManager
         PlayerPrefs.SetFloat("fovChase", fovChase); PlayerPrefs.SetFloat("fovCockpit", fovCockpit);
         PlayerPrefs.SetFloat("seatUp", seatUpCm); PlayerPrefs.SetFloat("seatFwd", seatFwdCm); PlayerPrefs.SetFloat("camShake", camShakePct);
         PlayerPrefs.SetInt("horizon", horizonMode);
+        PlayerPrefs.SetInt("haloCockpit", haloInCockpit ? 1 : 0);
         PlayerPrefs.SetInt("damage", damageMode);
         PlayerPrefs.SetInt("flags", flagsMode); PlayerPrefs.SetInt("raceDist", raceDistIdx);
         PlayerPrefs.SetInt("fps", fpsIdx); PlayerPrefs.SetFloat("resScale", resPct); PlayerPrefs.SetInt("shadows", shadowsOn ? 1 : 0); PlayerPrefs.SetInt("showFps", showFps ? 1 : 0);
@@ -257,6 +260,8 @@ public partial class GameManager
         camTab.Slider("Cockpit seat height", "Raises or lowers the driver's eyes.", -8, 8, 0.5f, 0, () => seatUpCm, v => seatUpCm = v, v => Signed(v, "0.0", " cm"));
         camTab.Slider("Cockpit seat position", "Moves the driver's eyes forward (+) or back (-).", -10, 10, 0.5f, 0, () => seatFwdCm, v => seatFwdCm = v, v => Signed(v, "0.0", " cm"));
         camTab.Slider("Camera shake", "How much the camera moves with braking, cornering, kerbs and bumps.", 0, 200, 10, 100, () => camShakePct, v => camShakePct = v, Pct);
+        camTab.Choice("Halo in cockpit", "Show the halo in the cockpit view, as a real driver sees it, or hide all of it.", new[] { "Hide", "Show" }, 1, () => haloInCockpit ? 1 : 0, v => haloInCockpit = v == 1);
+        camTab.Choice("Lens flare", "Sun flare with ghosts and an anamorphic streak when you look toward the sun (off on Low graphics).", new[] { "Off", "On" }, 1, () => PlayerPrefs.GetInt(LensFlare.PrefKey, 1), v => PlayerPrefs.SetInt(LensFlare.PrefKey, v));
         camTab.Choice("Horizon lock", "With tilt steering: turns the picture against the phone's tilt.", new[] { "Off", "Cockpit", "All views" }, 1, () => horizonMode, v => horizonMode = v);
 
         // ---- GRAPHICS

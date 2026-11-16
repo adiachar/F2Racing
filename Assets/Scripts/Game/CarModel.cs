@@ -9,7 +9,7 @@ public class CarModel : MonoBehaviour
 {
     public Transform body;
     public GameObject cockpitFloor;
-    public GameObject haloPillar; // hidden in the cockpit camera (a driver sees round it with two eyes)
+    public GameObject haloPillar, haloHoop; // the halo's centre pillar and top hoop (own parts of the full car); GameManager hides both in the cockpit view only when "Halo in cockpit" is Hide
     Transform steerWheel; float steerPitch;
     // turn the steering wheel in the cockpit: steer -1..1 (+ = right), about a third of a turn each way
     public void SetSteer(float steer) { if (steerWheel != null) steerWheel.localRotation = Quaternion.Euler(steerPitch, 0, -steer * 120f); }
@@ -532,6 +532,7 @@ public class CarModel : MonoBehaviour
                 cm.steerWheel = go.transform; mid = 5;
             }
             if (name == "halo_pillar") cm.haloPillar = go;
+            else if (name == "halo_hoop") cm.haloHoop = go;
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var mat = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
             bool front = name.StartsWith("wheel_F");

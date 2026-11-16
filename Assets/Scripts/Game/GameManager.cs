@@ -798,7 +798,7 @@ public partial class GameManager : MonoBehaviour
         if (camMode == TvMode || replaying)
         {
             TvCamera(tr, Time.deltaTime);
-            CockpitBits(false); // seen from outside: helmet and halo pillar shown, cockpit floor hidden, as in chase
+            CockpitBits(false); // seen from outside: helmet and halo shown, cockpit floor hidden, as in chase
             cam.nearClipPlane = ChaseNear;
             return;
         }
@@ -851,11 +851,13 @@ public partial class GameManager : MonoBehaviour
         float halfW = Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * Mathf.Max(1f, cam.aspect);
         return Mathf.Clamp(0.085f * 1.145f / Mathf.Max(halfW, 0.01f), 0.05f, 0.085f);
     }
-    // helmet and halo pillar are hidden from the driver's eyes; the dark cockpit floor is only shown there
+    // the whole halo (hoop + pillar) stays in every view; only the "Halo in cockpit: Hide" setting removes it, and only in the cockpit view. The dark cockpit floor is only shown there
     void CockpitBits(bool cockpit)
     {
         model.helmet.gameObject.SetActive(!cockpit);
-        if (model.haloPillar != null) model.haloPillar.SetActive(!cockpit);
+        bool showHalo = !(cockpit && !haloInCockpit);
+        if (model.haloPillar != null) model.haloPillar.SetActive(showHalo);
+        if (model.haloHoop != null) model.haloHoop.SetActive(showHalo);
         if (model.cockpitFloor) model.cockpitFloor.SetActive(cockpit);
         // the driver: head under the car's forces (DriverFeel), hands on the wheel as turned this frame (DriverModel)
         feel.Head(replaying ? null : car, gLon, gLat, Paused ? 0 : Time.deltaTime);

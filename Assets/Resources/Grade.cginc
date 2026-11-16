@@ -60,4 +60,38 @@ inline half3 F2Grade(half3 c)
 // for additive light (glare, sparks): only the white balance and exposure, so adding stays adding
 inline half3 F2GradeAdd(half3 c) { return c * _GradeTint.rgb * min(_GradeExposure, 1.5); }
 
+// ---- aerial perspective (haze), shared by every world shader through the fog macros ---------------------------------
+// Unity's linear fog is kept (same factor), then three things are added in the VERTEX shader only (nothing per pixel):
+//   * the fog colour leans towards a warm in-scatter colour when the view ray points at the sun (pow 8 lobe)
+//   * a little exponential haze with distance, thinning with height above the ground (denser low and near the ground)
+//   * the fog value now carries its own colour (rgb) and the keep factor (a), so one float4 interpolator replaces float1
+// Globals from Sky.cs (all 0 = plain Unity fog):  _F2HazeSun.xyz = direction to the sun, .w = in-scatter strength 0..1;
+// _F2HazeCol.rgb = warm in-scatter colour (linear); _F2HazeP = (density 1/m, height falloff 1/m, haze strength, 0).
+// The sky itself (skybox, clouds) has no fog, so the zenith stays a clean blue.
+float4 _F2HazeSun;
+half4  _F2HazeCol;
+float4 _F2HazeP;
+
+#if defined(FOG_LINEAR) || defined(FOG_EXP) || defined(FOG_EXP2)
+float4 F2Haze(float4 clip)
+{
+    UNITY_CALC_FOG_FACTOR_RAW(UNITY_Z_0_FAR_FROM_CLIPSPACE(clip.z));
+    float keep = saturate(unityFogFactor);
+    // exact view-space position from clip space (valid for vertices behind the camera too), then the world ray
+    float3 pv = float3(clip.x / UNITY_MATRIX_P._m00, clip.y / UNITY_MATRIX_P._m11, -clip.w);
+    float d = length(pv);
+    float3 wd = mul(pv, (float3x3)UNITY_MATRIX_V) / max(d, 1e-3);
+    float s = saturate(dot(wd, _F2HazeSun.xyz)); s *= s; s *= s; s *= s; s *= _F2HazeSun.w;
+    float rel = max(wd.y * d * 0.5 + 3.0, 0.0);            // mid-ray height above the track (camera is ~3 m up)
+    float amt = (1.0 - exp2(-d * _F2HazeP.x)) * exp2(-rel * _F2HazeP.y) * _F2HazeP.z * (1.0 + s);
+    return float4(lerp(unity_FogColor.rgb, _F2HazeCol.rgb, s), keep * (1.0 - saturate(amt)));
+}
+#undef UNITY_FOG_COORDS
+#undef UNITY_TRANSFER_FOG
+#undef UNITY_APPLY_FOG
+#define UNITY_FOG_COORDS(idx) float4 fogCoord : TEXCOORD##idx;
+#define UNITY_TRANSFER_FOG(o,outpos) o.fogCoord = F2Haze(outpos)
+#define UNITY_APPLY_FOG(coord,col) col.rgb = lerp((coord).rgb, (col).rgb, saturate((coord).a))
+#endif
+
 #endif

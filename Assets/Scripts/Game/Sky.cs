@@ -111,6 +111,8 @@ public class Sky : MonoBehaviour
         k.fogEnd *= 1f - 0.6f * w;                                     // and gone by ~40 % of the dry distance
         return k;
     }
+    // lens flare strength (LensFlare.cs): clear sky only, none at night, fades in cloud and is gone in the rain
+    public static float FlareGain => haveLook ? todGlare * (1f - 0.65f * dryLook.cover) * Mathf.Clamp01(1f - 1.6f * Weather.Wetness) : 0f;
     static float GlareMax(Look k, float w) => 0.4f * todGlare * (1f - 0.65f * k.cover) * Mathf.Clamp01(1f - 1.6f * w); // none in the rain
 
     // ---------------------------------------------------------------- time of day (TimeOfDay.cs)
@@ -212,6 +214,31 @@ public class Sky : MonoBehaviour
         }
     }
 
+    // ---------------------------------------------------------------- aerial perspective (Grade.cginc F2Haze)
+    // Subtle by default; stronger and warmer towards the sun in the morning and evening; none at night; thinner in rain
+    // (the fog is already close then). Same for every circuit; parkland / forest circuits get a little more.
+    // Colours are authored like the fog (the on-screen look before the grade) and pushed in linear.
+    static Vector3 hazeSun = new Vector3(0.5f, 0.7f, 0.5f); static bool hazeForest;
+    static void PushHaze(Look k)
+    {
+        float strength, sunW, height = 0.0035f;
+        switch (tod)
+        {
+            case TimeOfDay.Kind.Morning: strength = 0.28f; sunW = 0.6f; height = 0.0028f; break; // low mist, cool gold
+            case TimeOfDay.Kind.Evening: strength = 0.30f; sunW = 0.85f; height = 0.0030f; break;
+            case TimeOfDay.Kind.Night:   strength = 0f;    sunW = 0f; break;
+            default:                     strength = 0.10f; sunW = 0.35f; break;
+        }
+        float w = Weather.Wetness;
+        strength *= (hazeForest ? 1.3f : 1f) * (1f - 0.5f * w); sunW *= 1f - w;
+        var warm = new Color(Mathf.Min(k.fog.r * 1.10f, 1f), Mathf.Min(k.fog.g * 0.92f, 1f), Mathf.Min(k.fog.b * 0.70f, 1f), 1f);
+        warm = Color.Lerp(warm, new Color(1f, 0.78f, 0.52f), tod == TimeOfDay.Kind.Evening ? 0.5f : 0.15f);
+        var lin = warm.linear;
+        Shader.SetGlobalVector("_F2HazeSun", new Vector4(hazeSun.x, hazeSun.y, hazeSun.z, sunW));
+        Shader.SetGlobalVector("_F2HazeCol", new Vector4(lin.r, lin.g, lin.b, 1f));
+        Shader.SetGlobalVector("_F2HazeP", new Vector4(1f / 1400f, height, strength, 0f));
+    }
+
     static void SkyAndFog(Look k)
     {
         if (skyInst != null)
@@ -222,6 +249,7 @@ public class Sky : MonoBehaviour
         RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = k.fog;
         RenderSettings.fogStartDistance = k.fogStart; RenderSettings.fogEndDistance = k.fogEnd;
         var cam = Camera.main; if (cam != null && cam.clearFlags == CameraClearFlags.SolidColor) cam.backgroundColor = Grade.Apply(k.fog); // no shader grades it
+        PushHaze(k);
     }
 
     static void SunFor(float w)
@@ -256,6 +284,7 @@ public class Sky : MonoBehaviour
     public static Look Setup(Track t, bool street, Light sun)
     {
         tod = TimeOfDay.For(street); TimeOfDay.Current = tod; TimeOfDay.BuiltStreet = street;
+        hazeForest = t.def != null && t.def.forest > 0.6; // parkland / woods: a little more haze
         dryLook = AtTime(For(t, street), tod); haveLook = true;
         if (sun != null) SunAt(sun, tod); // before the road reads the sun colour and the bake reads its direction
         dryGrade = Grade.At(Grade.For(t.def != null ? t.def.id : ""), tod);
@@ -267,6 +296,7 @@ public class Sky : MonoBehaviour
             float e = dryGrade.exposure * Grade.BaseExposure;
             dryLook.fog = new Color(Mathf.Min(dryLook.fog.r / (dryGrade.tint.x * e), 0.75f), Mathf.Min(dryLook.fog.g / (dryGrade.tint.y * e), 0.8f), Mathf.Min(dryLook.fog.b / (dryGrade.tint.z * e), 0.85f), 1f);
         }
+        if (sun != null) hazeSun = -sun.transform.forward;
         var k = Wetted(dryLook, Weather.Wetness);
         sunLight = sun; sunBase = -1f; // dimmed in Create, after the road has read the dry sun colour and the bake is done
         var skyMat = Resources.Load<Material>("Sky");
@@ -281,6 +311,7 @@ public class Sky : MonoBehaviour
         // the cloud shader paints the horizon in exactly this colour, so sky and fogged hills always meet
         RenderSettings.fog = true; RenderSettings.fogMode = FogMode.Linear; RenderSettings.fogColor = k.fog;
         RenderSettings.fogStartDistance = k.fogStart; RenderSettings.fogEndDistance = k.fogEnd;
+        PushHaze(k);
         if (sun != null) RenderSettings.sun = sun; // the skybox's sun disk follows the world sun, not the cars' one
         return k;
     }
@@ -320,6 +351,7 @@ public class Sky : MonoBehaviour
             sky.glareMax = GlareMax(k, Weather.Wetness); // a cloudy sky diffuses the sun; none in the rain
             sky.glare.enabled = false;
         }
+        LensFlare.Create(go.transform, sky.sunDir); // one extra draw call; Low graphics hides it (Sky.NoGlare)
         sky.probe = probe; sky.probeRef = probe; Current = sky;
         TimeOfDay.BuiltRoot = root.gameObject;
         if (tod == TimeOfDay.Kind.Night)
