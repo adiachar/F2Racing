@@ -1445,6 +1445,8 @@ public static class RealWorld
                     case 6: p = env.tree == TreeKind.Scrub || env.tree2 == TreeKind.Scrub ? 0.12f : 0.02f; break;
                     default: p = 0f; break;
                 }
+                // gardens: trees round the buildings near the circuit (a house alone in a bare field looks dropped there)
+                if (p < 0.3f && d < 380f && !Flagged(x, z) && (Built(x + 9f, z) || Built(x - 9f, z) || Built(x, z + 9f) || Built(x, z - 9f))) { p = 0.4f; src = 2; }
                 if (p <= 0f) continue;
                 if (d > 300f) p *= 0.6f;
                 int cnt = (int)p + (rnd.NextDouble() < p - (int)p ? 1 : 0);
@@ -1547,6 +1549,7 @@ public static class RealWorld
     }
     public static int BandCount;
     static bool Flagged(float x, float z) { int k = Texel(x, z); return k >= 0 && lflag[k] != 0; }
+    static bool Built(float x, float z) { int k = Texel(x, z); return k >= 0 && (lflag[k] & 2) != 0; } // under a building's footprint
 
     // ---------------------------------------------------------------- the land colour map
     static float[] noiseTab; static byte[] toSrgb;

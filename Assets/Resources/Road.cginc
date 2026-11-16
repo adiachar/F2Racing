@@ -5,7 +5,7 @@
 //
 // Variety without textures (pure maths, box-filtered so nothing shimmers far away): the lap is laid in paving sections
 // of ~113 m, each a shade apart, with a sealed joint across the road between them; some sections carry a rectangular
-// resurfaced patch with a tar-sealed outline (both levels, the outline HQ only) and a wandering tar snake (HQ).
+// soft-edged, barely darker resurfaced patch (both levels) and a wandering tar snake (HQ).
 // HQ also reads _F2RoadFine (global, EnvTex.RoadFine, set by RoadSurface.cs), 1.4 m per tile, close up only:
 //   R aggregate albedo, G polish of the stone tops, BA stone slope (0.5 = flat). The slope tilts the normal of the sun
 //   sheen, so single stones glint near the car; all four channels are 0.5 = neutral and the mips average them away.
@@ -146,13 +146,17 @@ fixed4 frag (v2f i) : SV_Target
     // resurfaced patch (about half the sections): a rectangle of fresher, darker asphalt, often a lane wide
     float pa0 = 12.0 + h3 * 55.0, pa1 = pa0 + 6.0 + 22.0 * h4;
     float pc = (h1 * 2.0 - 1.0) * max(_HalfWidth - 2.5, 0.0), phw = 1.2 + 1.8 * Hash1(sec + 93.7);
-    half hasPatch = h2 > 0.5 ? 1.0 : 0.0;
-    half inPatch = Band(sa, pa0, pa1, wa) * Band(lat, pc - phw, pc + phw, wl) * hasPatch;
+    // (soft: the new mat blends into the old over ~1.5 m along and ~0.6 m across and is only a breath darker; a hard
+    // box with a tar outline read as a mystery rectangle on the road from the cockpit. Floats only for the compares.)
+    float hasPatchF = h2 > 0.5 ? 1.0 : 0.0;
+    float patchA = smoothstep(pa0, pa0 + 1.5, sa) * (1.0 - smoothstep(pa1 - 1.5, pa1, sa));
+    float patchL = smoothstep(pc - phw, pc - phw + 0.6, lat) * (1.0 - smoothstep(pc + phw - 0.6, pc + phw, lat));
+    half inPatch = (half)(patchA * patchL * hasPatchF);
 
     // ---- asphalt: aggregate grain, metre-scale blotches, darker resurfaced patches
     half tone = (0.88 + 0.24 * grain) * (0.88 + 0.24 * blotch) * (0.97 + 0.06 * d.g) * (1.0 - 0.10 * patch);
     tone *= 1.0 + 0.07 * (half)(h1 - 0.5);                       // section shade
-    tone *= 1.0 - 0.13 * inPatch;                                // fresh patch: darker binder
+    tone *= 1.0 - 0.045 * inPatch;                                // fresh patch: darker binder
 #ifdef ROAD_HQ
     half fineFade = saturate(fade * 2.5 - 1.5);                  // only the first ~15 m, gone by ~35 m
     tone *= 1.0 + 0.16 * (fn.r - 0.5) * fineFade;                // single stones and the dark binder between them
@@ -174,7 +178,8 @@ fixed4 frag (v2f i) : SV_Target
 
     // ---- dust off-line: lighter towards the edges where nobody drives (less on fresh patches)
     half edge = smoothstep(_HalfWidth - 3.2, _HalfWidth - 0.3, abs(lat));
-    col = lerp(col, _Dust.rgb * (0.8 + 0.4 * grain), edge * 0.45 * (1.0 - rub) * (1.0 - 0.6 * inPatch));
+    // (a light veil only: at 0.45 the outer thirds of the road went chalk white in the sun)
+    col = lerp(col, _Dust.rgb * (0.85 + 0.3 * grain), edge * 0.2 * (1.0 - rub) * (1.0 - 0.3 * inPatch));
 
     // ---- the outer edge of the mesh: the last ~1.5 pixels fade to a dark dirt tone, so the polygon edge against the
     // verge or the kerb has far less contrast to step (no hard, jagged line in bends without MSAA)
@@ -184,16 +189,14 @@ fixed4 frag (v2f i) : SV_Target
     // ---- tar: the joints, the patch outline and a wandering crack-sealing "snake" (HQ); dark and glossy
     half tar = joint;
 #ifdef ROAD_HQ
-    half pOut = Band(sa, pa0 - 0.05, pa1 + 0.05, wa) * Band(lat, pc - phw - 0.05, pc + phw + 0.05, wl);
-    half pIn = Band(sa, pa0 + 0.02, pa1 - 0.02, wa) * Band(lat, pc - phw + 0.02, pc + phw - 0.02, wl);
     float snakeLat = (h4 * 2.0 - 1.0) * (_HalfWidth - 1.5) + 0.35 * sin(sa * 0.21 + h1 * 6.28) + 0.12 * sin(sa * 0.83 + h2 * 6.28);
     half snakeOn = (half)saturate(sin(sa * 0.07 + h2 * 6.28) * 4.0 + 1.0) * (h3 > 0.45 ? 1.0 : 0.0); // in broken lengths
     float snakeX = lat - snakeLat;
     half snake = Band(snakeX, -0.025, 0.025, max(fwidth(snakeX), 1e-4)) * Band(sa, 4.0, SecLen - 4.0, wa) * snakeOn;
-    tar = max(tar, max((pOut - pIn) * hasPatch, snake));
+    tar = max(tar, snake);
 #endif
     tar *= 1.0 - kerbF;
-    col *= 1.0 - 0.55 * tar;
+    col *= 1.0 - 0.42 * tar;
 
     // ---- painted lines: white edge lines 0.15..0.40 m in from each edge
     half paint = Band(abs(lat), _HalfWidth - 0.40, _HalfWidth - 0.15, wl);
@@ -278,18 +281,20 @@ fixed4 frag (v2f i) : SV_Target
     half lobe = saturate(s * 1.6 - 0.6); lobe *= lobe;
     half s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s32 = s8 * s8; s32 *= s32;
     half s128 = s32 * s32; s128 *= s128;
-    half gloss = 0.35 + 0.55 * rub + 0.4 * paint + 0.5 * kerbF + 0.5 * d.a * fade + 0.35 * tar + 0.15 * inPatch // stones sparkle near
+    half gloss = 0.35 + 0.55 * rub + 0.4 * paint + 0.5 * kerbF + 0.22 * d.a * fade + 0.35 * tar // stones sparkle near
                + 0.2 * (fn.g - 0.5) * fineFade;
     // polished stone tops (G above 0.5) give tiny, sharp glints close to the car (gone past ~4 texels per pixel)
     half spark = 0.5 * saturate(fn.g * 2.0 - 1.0) * fineFade * (1.0 - kerbF) * (1.0 - paint) * saturate(2.0 - fineTexels * 0.25);
-    half3 spec = _SunCol.rgb * ((lobe * 0.55 + s32 * 0.7) * gloss + s128 * spark * 1.6) * sunVis;
+    // (dry sheen held down: lobe 0.55 and sparks 1.6 bleached the asphalt near the camera to white; RR3's sunlit
+    // asphalt is a neutral mid grey, about 150-160 sRGB)
+    half3 spec = _SunCol.rgb * ((lobe * 0.24 + s32 * 0.5) * gloss + s128 * spark * 0.7) * sunVis;
     half f = 1.0 - saturate(dot(V, N)); half f2 = f * f; half fres = f2 * f2 * f;
     // wet: a water film mirrors the sky (Schlick, F0 = 0.02 for water) and the sun in a sharp, bright glint
     // (s^128), dimmed by the overcast; rubber and puddles are the smoothest, so they shine most
     half wetG = saturate(wet * (0.75 + 0.25 * paint + 0.3 * rub + 0.3 * tar) + pool);
     spec += _SunCol.rgb * ((s32 * 0.8 + s128 * 3.0) * wetG * (1.0 - 0.7 * _Wet) * (0.3 + 0.7 * sunVis));
     col = lerp(col, unity_FogColor.rgb * skyVis, saturate((0.02 + 0.98 * fres) * wetG * 0.95));
-    col += spec + unity_FogColor.rgb * (fres * 0.22 * (0.6 + 0.4 * gloss) * (1.0 - wetG));
+    col += spec + unity_FogColor.rgb * (fres * 0.13 * (0.6 + 0.4 * gloss) * (1.0 - wetG));
 #else
     // Low: the same sky mirror, with the Fresnel term from the vertex shader; no glint
     col = lerp(col, unity_FogColor.rgb * skyVis, saturate((0.02 + 0.98 * i.fres) * wet * 0.85));

@@ -892,7 +892,23 @@ public partial class GameManager : MonoBehaviour
         double hw = track.width / 2;
         for (int c = 0; c < count; c++)
         {
-            int at = c * every; var tp = track.pts[at];
+            int at = c * every;
+            // not beside a gantry post, bridge column, tower, mast or screen (Trackside.Tall): a pole right in front of
+            // the lens blocked the start-line camera. Move on down the track 12 m at a time until 25 m clear of them all.
+            double wallT = Traffic.WallOffset(track);
+            for (int tryN = 0; tryN < 8; tryN++)
+            {
+                var q = track.pts[at % track.N]; bool clear = true;
+                for (int sdT = -1; sdT <= 1 && clear; sdT += 2)
+                {
+                    double qx = q.x + q.nx * sdT * wallT, qy = q.y + q.ny * sdT * wallT;
+                    foreach (var tall in Trackside.Tall)
+                        if ((tall.x - qx) * (tall.x - qx) + (tall.z - qy) * (tall.z - qy) < 25.0 * 25.0) { clear = false; break; }
+                }
+                if (clear) break;
+                at = (at + Mathf.Max(1, (int)(12 / track.ds))) % track.N;
+            }
+            var tp = track.pts[at];
             // curv > 0 = a left-hander, whose outside is to the right (-normal); on straights alternate sides
             double cv = 0; for (int j = -span; j <= span; j++) cv += track.pts[((at + j) % track.N + track.N) % track.N].curv;
             cv /= 2 * span + 1;

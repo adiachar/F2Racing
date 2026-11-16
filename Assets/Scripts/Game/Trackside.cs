@@ -235,6 +235,9 @@ public static class Trackside
     // objects that must not go into the light bake's shadow map (see-through fence, ground decals): WorldBuilder parents
     // this holder to the world only after LightBake.AddOccluders
     public static GameObject Late;
+    // tall things standing at the barrier line (gantry posts, bridge columns, towers, masts, screens): the TV cameras
+    // (GameManager.BuildTvCams) keep away from them so none stands right in front of a lens
+    public static readonly List<Vector3> Tall = new List<Vector3>();
     // pit boxes (one per garage bay): where a car stops in the working lane. Used by PitCrew.cs. Rebuilt with the circuit.
     public struct PitBay { public Vector3 centre, fwd, side; public float garageDist; public int idx; } // side = towards the garage; garageDist = from centre to the garage front
     public static readonly List<PitBay> Bays = new List<PitBay>();
@@ -291,7 +294,7 @@ public static class Trackside
     // ================================================================ build
     public static void Build(Track t, Transform root, bool street)
     {
-        Bays.Clear(); Lane = null; feet.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
+        Bays.Clear(); Lane = null; feet.Clear(); Tall.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
         if (t == null || t.N < 8 || root == null) return;
         int N = t.N; float ds = (float)t.ds;
         float hw = (float)t.width * 0.5f, kerb = WorldBuilder.Kerb;
@@ -660,7 +663,7 @@ public static class Trackside
             aoOn = true;
             Panel(A, qc - qD * 0.03f, -qD, hwS, y1, y1 + 0.9f, TracksideArt.Ad(BoldAds[screenNo % BoldAds.Length]));
             screenNo++;
-            AddFoot(qc + qD * 0.4f, qT, hwS + 0.5f, 1.2f);
+            AddFoot(qc + qD * 0.4f, qT, hwS + 0.5f, 1.2f); Tall.Add(qc);
             return true;
         }
         bool Stand(int i, int sg, float halfL, int rows, bool roof)
@@ -989,7 +992,7 @@ public static class Trackside
                 Box(A, c - D * 0.5f + up * (th + 0.75f), T, up, D, 0.06f, 0.65f, 0.06f, TracksideArt.PostDark);
                 Box(A, c - D * 0.5f - T * 0.2f + up * (th + 1.55f), T, up, D, 0.5f, 0.17f, 0.15f, TracksideArt.GantryDark, true);
                 Box(A, c - D * 0.5f - T * 0.78f + up * (th + 1.55f), T, up, D, 0.1f, 0.12f, 0.12f, TracksideArt.GlassDark, true);
-                AddFoot(c, T, hf + 1f, hf + 1f);
+                AddFoot(c, T, hf + 1f, hf + 1f); Tall.Add(c);
                 camNo++;
             }
             // recovery cranes: yellow carrier, cab, outriggers, the boom raised over the barrier
@@ -1022,7 +1025,7 @@ public static class Trackside
                 Vector3 tip = foot + bx * 10.6f;
                 Box(A, tip - up * 1.6f, T, up, D, 0.02f, 1.6f, 0.02f, TracksideArt.PostDark);
                 Box(A, tip - up * 3.35f, T, up, D, 0.12f, 0.16f, 0.12f, TracksideArt.LampRed, true);
-                AddFoot(c, T, 4.2f, 1.8f);
+                AddFoot(c, T, 4.2f, 1.8f); Tall.Add(c);
                 cranes++;
             }
             // floodlight masts: a tall pole with a rack of lamps, about every 450 m, alternating sides, behind the fence
@@ -1043,8 +1046,27 @@ public static class Trackside
                 for (int q = 0; q < 6; q++)
                     Panel(A, c - D * 0.38f + T * ((q % 3 - 1) * 0.95f), -D, 0.36f, mh + (q < 3 ? 0.05f : 0.75f), mh + (q < 3 ? 0.55f : 1.25f), TracksideArt.Sw(TracksideArt.PaintWhite));
                 aoOn = true;
-                AddFoot(c, T, 0.8f, 0.8f);
+                AddFoot(c, T, 0.8f, 0.8f); Tall.Add(c);
             }
+            // feather banners along the start straight where there is neither a stand nor the pits: a 6.5 m pole with a
+            // tall narrow flag in the advertisers' colours every 22 m, behind the fence (the straight looked bare there)
+            int[] feather = { TracksideArt.StripeRed, TracksideArt.PaintYellow, TracksideArt.PaintWhite, TracksideArt.StripeBlue, TracksideArt.SeatGreen, TracksideArt.MarshalOrange };
+            for (int sg = -1; sg <= 1; sg += 2)
+                for (int k = -14; k <= 20; k++)
+                {
+                    int i = W(Mathf.RoundToInt(k * 22f / ds));
+                    if (InPit(i, sg) || curvAbs[i] > 1f / 400f) continue;
+                    var p = t.pts[i]; Vector3 T = Tan(p), D = Nrm(p) * sg, up = Vector3.up;
+                    float lat = Off(i, sg) + 2.2f; Vector3 c = P(p) + D * lat;
+                    if (!Free(c, lat - 0.8f)) continue;
+                    SetChunk(i);
+                    Post(Pm, c, -D, T, 0.04f, skirt, 6.5f, TracksideArt.PostDark);
+                    int fcol = feather[(((k + 14) / 3) + (sg > 0 ? 2 : 0)) % feather.Length]; // runs of three in one colour
+                    aoOn = false;
+                    Panel(A, c + T * 0.45f, -D, 0.4f, 2.2f, 6.4f, TracksideArt.Sw(fcol));
+                    Panel(A, c + T * 0.45f + D * 0.01f, D, 0.4f, 2.2f, 6.4f, TracksideArt.Sw(fcol));
+                    aoOn = true;
+                }
         }
 
         // ---------------------------------------------------------------- barriers (+ fences, + base shadow decals)
@@ -1256,7 +1278,10 @@ public static class Trackside
             float po = Mathf.Min(wallLat - 0.4f, street ? hw + kerb + 0.6f : hw + kerb + 2.5f);
             const float postH = 7.2f, beamY = 6.8f;
             for (int sg = -1; sg <= 1; sg += 2)
+            {
                 Box(A, c + Nn * (po * sg) + up * (postH * 0.5f + skirt * 0.5f), Nn, up, T, 0.3f, postH * 0.5f - skirt * 0.5f, 0.3f, TracksideArt.GantryWhite);
+                Tall.Add(c + Nn * (po * sg));
+            }
             Box(A, c + up * beamY, Nn, up, T, po + 0.3f, 0.45f, 0.5f, TracksideArt.GantryWhite, true);
             // advertiser on both faces of the beam
             Panel(A, c + up * 0f - T * 0.52f, -T, po * 0.6f, beamY - 0.42f, beamY + 0.42f, TracksideArt.Ad(1));
@@ -1323,7 +1348,7 @@ public static class Trackside
                         aoOn = true;
                     }
                 bn++;
-                AddFoot(cL, T, 1f, 1f); AddFoot(cR, T, 1f, 1f);
+                AddFoot(cL, T, 1f, 1f); AddFoot(cR, T, 1f, 1f); Tall.Add(cL); Tall.Add(cR);
             }
         }
 

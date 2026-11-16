@@ -39,3 +39,14 @@ screenshots, the RR3 Monza sheet and the RR3 quality sheet. Ranked by visual imp
 
 Risks to check first: the fence on a build without MSAA (should thin out, not vanish abruptly), the lettering
 scale on the boards, the balcony guests' height on the pit building.
+
+## Round 2 (after the v10 shots)
+
+- The "box" at ~2500 m was `Road.cginc`'s resurfaced patch, not a shadow: its tar outline is gone, its edges are
+  feathered (1.5 m along, 0.6 m across) and it is 4.5 % darker instead of 13 %, with no extra gloss.
+- Whitish asphalt: edge dust 0.45 -> 0.2, dry sheen lobe 0.55 -> 0.24, stone sparks 1.6 -> 0.7, grazing sky 0.22 -> 0.13;
+  base asphalt 0.38 -> 0.43 sRGB so the sunlit road sits near 150 sRGB.
+- TV cameras keep 25 m away from everything in `Trackside.Tall` (gantry posts, bridge columns, towers, masts, screens).
+- Start straight: feather banners behind the fence where there is no stand or pit; trees round map buildings
+  within 380 m of the track (gardens), so houses no longer stand in a bare field.
+- Still open: Poly Haven building models, undergrowth cards, Armco depth, kerb wear.
