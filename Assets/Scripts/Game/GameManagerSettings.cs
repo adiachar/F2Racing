@@ -227,8 +227,8 @@ public partial class GameManager
 
         // ---- ASSISTS
         var asst = new SettingsUI.Tab("ASSISTS");
-        asst.Choice("Traction control", "Cuts power when the rear wheels spin. Real F1 has none.", offLowHigh, (int)TcMode.Low, () => (int)tc, v => { tc = (TcMode)v; if (car != null) car.cfg.tc = tc; });
-        asst.Toggle("ABS brakes", "Stops the wheels locking under braking. Real F1 has none.", true, () => absOn, v => { absOn = v; if (car != null) car.cfg.abs = absOn; });
+        asst.Choice("Traction control", "Cuts power when the rear wheels spin. Not allowed in top-tier racing.", offLowHigh, (int)TcMode.Low, () => (int)tc, v => { tc = (TcMode)v; if (car != null) car.cfg.tc = tc; });
+        asst.Toggle("ABS brakes", "Stops the wheels locking under braking. Not allowed in top-tier racing.", true, () => absOn, v => { absOn = v; if (car != null) car.cfg.abs = absOn; });
         asst.Choice("Steering assist", "Steers into a slide for you when the rear steps out.", offLowHigh, 0, () => steerAssist, v => steerAssist = v);
         asst.Choice("Braking assist", "Brakes for corners by the racing line's speed. Low brakes later and softer.", offLowHigh, 0, () => brakeAssist, v => brakeAssist = v)
             .LockedWhen(() => mapIdx == PlaygroundIdx ? "Circuits only: the playground has no racing line." : null);
@@ -241,7 +241,7 @@ public partial class GameManager
         setup.Choice("Tyre compound", "Soft grips most, wears fastest. Inters for damp, Wets for rain. Fitted at the next restart.", Weather.TyreNames(), 0,
             () => tyreSet, v => { tyreSet = v; compIdx = (int)Weather.PhysicsCompound(v); });
         setup.Slider("Aero balance", "Downforce on the front. More = sharper turn-in, looser rear.", 44, 54, 0.5f, 45, () => aeroBal, v => { aeroBal = v; SetupChanged(); }, v => $"{v:0.0}% F")
-            .LockedWhen(() => classIdx == 0 ? null : "F1 2026 car only.");
+            .LockedWhen(() => classIdx == 0 ? null : "Apex Premier car only.");
         setup.Slider("Brake bias", "Braking on the front. Less = the car turns in more, rears lock sooner.", 50, 65, 0.5f, 57, () => brakeBiasPct, v => { brakeBiasPct = v; SetupChanged(); }, v => $"{v:0.0}% F");
         setup.Slider("Brake migration", "Moves the bias rearwards as you ease off the pedal. Helps turn-in.", 0, 6, 0.5f, 0, () => brakeMigPct, v => { brakeMigPct = v; SetupChanged(); }, v => $"{v:0.0}%");
         setup.Slider("Engine braking", "Rear braking off the throttle. More = more rotation, less stable.", 50, 150, 5, 100, () => engBrakePct, v => { engBrakePct = v; SetupChanged(); }, Pct);
@@ -300,7 +300,7 @@ public partial class GameManager
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
         game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => damageMode, v => { damageMode = v; SetupChanged(); });
         game.Choice("Flags & safety car", "On: yellow flags, Virtual Safety Car and Safety Car after crashes, blue flags, track-limits warnings (3 strikes, then +5 s). Fitted at the next restart.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
-        game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a Grand Prix (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
+        game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();

@@ -90,7 +90,8 @@ namespace FormulaSim
         public double[,] bank;           // banked corners {from s, to s, degrees} (see Track.SetBanking); null = none
         public CircuitStyle style = CircuitStyle.Parkland;
         public double barrier = 9.3;     // m from the track edge to the barriers
-        public double realPole;          // s, real pole lap for comparison (0 = none)
+        public double realPole;          // (display names: CircuitDef.name is the player-visible name; ids stay real-world keys)
+        // s, real pole lap for comparison (0 = none)
         // water: the track from waterFrom to waterTo (m from the start line) runs along a quay; the water lies on the
         // side towards (waterX, waterY) (track coordinates) and stretches out to sea
         public double waterFrom, waterTo, waterX, waterY;
@@ -149,7 +150,7 @@ namespace FormulaSim
         public static readonly CircuitDef Test = new CircuitDef { id = "test", name = "Test track", width = 14, style = CircuitStyle.Parkland };
         public static readonly CircuitDef Monaco = new CircuitDef
         {
-            id = "monaco", name = "Monaco", lonlat = TrackData.Monaco, width = TrackData.MonacoWidth, startAt = TrackData.MonacoStart,
+            id = "monaco", name = "Porto Reale Street Circuit", lonlat = TrackData.Monaco, width = TrackData.MonacoWidth, startAt = TrackData.MonacoStart,
             elev = TrackData.MonacoElev, style = CircuitStyle.Street, barrier = 2.65, realPole = 72.051, forest = 0.1, pitSide = -1,
             waterFrom = 1540, waterTo = 2890, waterX = 400, waterY = -100,   // Port Hercule and the sea
             tunnelFrom = 1560, tunnelTo = 1880,                               // the tunnel under the hotel
@@ -162,7 +163,7 @@ namespace FormulaSim
         };
         public static readonly CircuitDef Spa = new CircuitDef
         {
-            id = "spa", name = "Spa", metric = StartAtRow(TrackDataTum.Spa, 4), width = 12, gridOffset = -100, style = CircuitStyle.Parkland, realPole = 104.361, forest = 1, pitSide = -1,
+            id = "spa", name = "Ardennes Forest Circuit", metric = StartAtRow(TrackDataTum.Spa, 4), width = 12, gridOffset = -100, style = CircuitStyle.Parkland, realPole = 104.361, forest = 1, pitSide = -1,
             // Height profile: measured (TrackElev). 102 m between the highest point (just before Les Combes) and the
             // lowest (after Stavelot, before Paul Frere); La Source 56 m, Eau Rouge 24 m, top of Raidillon 47 m, the
             // steepest stretch 14 % up Raidillon; Les Combes to Stavelot is all downhill (up to 8 %).
@@ -284,7 +285,7 @@ namespace FormulaSim
         // point) up the start straight and through Curva Grande to the highest point before Roggia, down through the
         // Lesmos to the dip at the Serraglio underpass (2.4 % down, 1.6 % up), then gently down from Ascari to Parabolica.
         // Corners: Rettifilo 925-988, Curva Grande 1506, Roggia 2156-2210, Lesmo 2570 / 2888, Ascari 3959-4155, Parabolica 5244 m.
-        public static readonly CircuitDef Monza = Tum("monza", "Monza", StartAtRow(TrackDataTum.Monza, 7), 0.8, 81.786,
+        public static readonly CircuitDef Monza = Tum("monza", "Autodromo del Parco", StartAtRow(TrackDataTum.Monza, 7), 0.8, 81.786,
             Shift(TrackElev.Monza, 35),
             new double[,] { { 956, 71, 60 }, { 2111, 118, 60 }, { 2509, 205, 80 }, { 2847, 184, 80 }, { 3917, 186, 60 }, { 4020, 221, 90 }, { 5165, 211, 160 } },
             new double[,] { { 956, 9.8, 60 }, { 2111, 9.4, 60 }, { 2509, 40.8, 80 }, { 2847, 20.6, 80 }, { 3917, 10.8, 60 }, { 4020, 46.9, 90 }, { 5165, 49.2, 160 } } /*CURVEFIT:monza*/, width: 11, grid: -287);
@@ -293,7 +294,7 @@ namespace FormulaSim
         // Chapel along Hangar Straight (with a 2 % rise into Stowe), then the main drop (3.5 %) out of Stowe to Vale.
         // Corners: Abbey 459, Village 876, Loop 1045, Brooklands 1978, Luffield 2204, Copse 3091, Maggotts/Becketts
         // 3648-4034, Stowe 5046, Vale 5499, Club 5586-5738 m.
-        public static readonly CircuitDef Silverstone = Tum("silverstone", "Silverstone", TrackDataTum.Silverstone, 0.15, 88.111,
+        public static readonly CircuitDef Silverstone = Tum("silverstone", "Old Airfield Circuit", TrackDataTum.Silverstone, 0.15, 88.111,
             TrackElev.Silverstone,
             new double[,] { { 396, 303, 80 }, { 892, 108, 60 }, { 1042, 87, 60 }, { 1248, 217, 60 }, { 1998, 167, 90 }, { 2182, 114, 60 }, { 3138, 282, 80 }, { 3722, 274, 60 }, { 3888, 252, 60 }, { 4020, 219, 60 }, { 5079, 236, 80 }, { 5513, 102, 40 }, { 5595, 111, 40 } },
             new double[,] { { 396, 32.8, 80 }, { 892, 25.8, 60 }, { 1042, 23.9, 60 }, { 1248, 11.2, 60 }, { 1998, 35.2, 90 }, { 2182, 0.0, 60 }, { 3138, 12.2, 80 }, { 3722, 22.0, 60 }, { 3888, 14.1, 60 }, { 4020, 38.4, 60 }, { 5079, 44.1, 80 }, { 5513, 13.1, 40 }, { 5595, 9.4, 40 } } /*CURVEFIT:silverstone*/, grid: -121);
@@ -303,7 +304,7 @@ namespace FormulaSim
         // upper leg at 4910 m is 6.4 m above the lower leg at 2550 m), up to the chicane and down again to the line.
         // Corners: T1 728, T2 845, Esses 1092-1539, Dunlop 1859, Degner 2275 / 2430, hairpin 2905, Spoon 3802-3961,
         // 130R 5005, chicane 5402-5476 m.
-        public static readonly CircuitDef Suzuka = Tum("suzuka", "Suzuka", StartAtRow(TrackDataTum.Suzuka, 4), 0.5, 88.778,
+        public static readonly CircuitDef Suzuka = Tum("suzuka", "Ise Bay Circuit", StartAtRow(TrackDataTum.Suzuka, 4), 0.5, 88.778,
             Shift(TrackElev.Suzuka, 20),
             new double[,] { { 854, 170, 60 }, { 1096, 235, 50 }, { 1198, 217, 50 }, { 1378, 211, 60 }, { 1578, 184, 60 }, { 1718, 226, 60 }, { 2280, 240, 60 }, { 2438, 143, 60 }, { 3780, 226, 50 }, { 3932, 168, 60 } },
             new double[,] { { 854, 38.0, 60 }, { 1096, 40.3, 50 }, { 1198, 32.8, 50 }, { 1378, 27.7, 60 }, { 1578, 0.0, 60 }, { 1718, 41.2, 60 }, { 2280, 11.2, 60 }, { 2438, 23.9, 60 }, { 3780, 18.3, 50 }, { 3932, 30.5, 60 } } /*CURVEFIT:suzuka*/, width: 12, grid: -278);
@@ -312,7 +313,7 @@ namespace FormulaSim
         // 250 m, 12.4 % at the steepest) and straight back down (11 %) to T2; a second rise to T9 (23 m), down to the
         // T11 hairpin and along the back straight to the low stadium section.
         // Corners: T1 663, Esses 1180-1505, T9 1986, T10 2198, T11 2586, T12 3790, T15 4306, T19 5055, T20 5375 m.
-        public static readonly CircuitDef Austin = Tum("austin", "Austin", StartAtRow(TrackDataTum.Austin, 6), 0.1, 94.035,
+        public static readonly CircuitDef Austin = Tum("austin", "Texas Hill Country Circuit", StartAtRow(TrackDataTum.Austin, 6), 0.1, 94.035,
             Shift(TrackElev.Austin, 30),
             new double[,] { { 636, 84, 60 }, { 1240, 267, 45 }, { 1332, 250, 45 }, { 1556, 226, 60 }, { 1694, 195, 60 }, { 1886, 147, 30 }, { 1948, 166, 30 }, { 2156, 249, 60 }, { 2564, 75, 60 }, { 3752, 89, 60 }, { 3988, 99, 45 }, { 4080, 112, 45 }, { 4266, 83, 60 }, { 5019, 202, 60 }, { 5333, 103, 60 } },
             new double[,] { { 636, 24.8, 60 }, { 1240, 5.6, 45 }, { 1332, 32.3, 45 }, { 1556, 0.0, 60 }, { 1694, 35.2, 60 }, { 1886, 45.5, 30 }, { 1948, 10.8, 30 }, { 2156, 45.5, 60 }, { 2564, 24.4, 60 }, { 3752, 25.8, 60 }, { 3988, 29.1, 45 }, { 4080, 2.3, 45 }, { 4266, 26.7, 60 }, { 5019, 33.8, 60 }, { 5333, 25.8, 60 } } /*CURVEFIT:austin*/, pit: 1, grid: -282);
@@ -320,7 +321,7 @@ namespace FormulaSim
         // and T2 (7 % at the steepest, after T2) to the lowest point 150 m after T3, then a steady climb (5.7 % into T4)
         // back up through the middle sector, a dip between T11 and T13, and up out of T14.
         // Corners: T1 655, T2 1160, T3 1345, T4 1826, T5 2065, T6/7 2408-2453, T8/9 2618-2758, T11 3150, T12 3547, T13 3813, T14 4104 m.
-        public static readonly CircuitDef Budapest = Tum("budapest", "Hungaroring", TrackDataTum.Budapest, 0.3, 77.207,
+        public static readonly CircuitDef Budapest = Tum("budapest", "Danube Valley Ring", TrackDataTum.Budapest, 0.3, 77.207,
             TrackElev.Budapest,
             new double[,] { { 642, 92, 60 }, { 1286, 199, 60 }, { 1820, 237, 60 }, { 2042, 154, 60 }, { 2386, 111, 60 }, { 2622, 167, 50 }, { 2730, 154, 50 }, { 3106, 220, 60 }, { 3536, 115, 60 }, { 3822, 98, 60 }, { 4090, 132, 60 } },
             new double[,] { { 642, 25.3, 60 }, { 1286, 41.7, 60 }, { 1820, 29.1, 60 }, { 2042, 28.6, 60 }, { 2386, 10.3, 60 }, { 2622, 18.3, 50 }, { 2730, 31.9, 50 }, { 3106, 36.1, 60 }, { 3536, 20.2, 60 }, { 3822, 5.2, 60 }, { 4090, 0.0, 60 } } /*CURVEFIT:budapest*/, width: 12, grid: -33);
@@ -335,7 +336,7 @@ namespace FormulaSim
         // Corners: T1 844, T3 1185, T4 1762, T5 2195, T7 2551, T9 2910, T10 3510, T12 3764, T13 4043, T14 4359 m.
         static readonly double[,] CatalunyaT10 = { { 0.4, 212.8 }, { 1.5, 222.6 }, { -1.5, 233.5 }, { -6.5, 242.2 }, { -13.8, 249.4 }, { -24.3, 257.6 }, { -41.5, 265.3 }, { -52.1, 268.0 },
                                                    { -66.8, 270.1 }, { -79.4, 270.8 }, { -92.2, 270.1 }, { -106.1, 266.7 }, { -125.5, 257.5 }, { -138.8, 250.0 } };
-        public static readonly CircuitDef Catalunya = Tum("catalunya", "Barcelona", StartAtRow(Reroute(Bypass(TrackDataTum.Catalunya, 798, 849), 688, 738, CatalunyaT10), 4), 0.2, 74.679,
+        public static readonly CircuitDef Catalunya = Tum("catalunya", "Circuit del Vallès", StartAtRow(Reroute(Bypass(TrackDataTum.Catalunya, 798, 849), 688, 738, CatalunyaT10), 4), 0.2, 74.679,
             Shift(TrackElev.Catalunya, 20),
             new double[,] { { 818, 150, 50 }, { 881, 161, 50 }, { 1148, 236, 80 }, { 1694, 147, 60 }, { 2126, 103, 60 }, { 2536, 148, 60 }, { 2882, 243, 60 }, { 3490, 112, 60 }, { 3739, 120, 60 } },
             new double[,] { { 818, 29.1, 50 }, { 881, 14.1, 50 }, { 1148, 33.3, 80 }, { 1694, 28.6, 60 }, { 2126, 32.3, 60 }, { 2536, 28.1, 60 }, { 2882, 42.7, 60 }, { 3490, 26.7, 60 }, { 3739, 0.0, 60 } } /*CURVEFIT:catalunya*/, grid: -101);
@@ -344,7 +345,7 @@ namespace FormulaSim
         // climb (11.7 %) into Remus (T3), highest point 80 m after it; down to T4 (35 m), level to T6, 8.8 % down after
         // T6 to T7, a small rise to T9, then down through T10 to the line.
         // Corners: T1 463, T3 1402, T4 2225, T6 2737, T7 3051, T9 3790, T10 3994 m.
-        public static readonly CircuitDef Spielberg = Tum("spielberg", "Red Bull Ring", StartAtRow(TrackDataTum.Spielberg, 3), 0.5, 66.113,
+        public static readonly CircuitDef Spielberg = Tum("spielberg", "Styrian Alpine Ring", StartAtRow(TrackDataTum.Spielberg, 3), 0.5, 66.113,
             Shift(TrackElev.Spielberg, 15),
             new double[,] { { 433, 133, 60 }, { 1381, 71, 60 }, { 2193, 106, 60 }, { 2723, 183, 80 }, { 3019, 207, 90 }, { 3771, 231, 60 }, { 3971, 185, 80 } },
             new double[,] { { 433, 18.8, 60 }, { 1381, 16.4, 60 }, { 2193, 25.8, 60 }, { 2723, 43.1, 80 }, { 3019, 41.7, 90 }, { 3771, 33.8, 60 }, { 3971, 26.2, 80 } } /*CURVEFIT:spielberg*/, grid: -112);
@@ -359,7 +360,7 @@ namespace FormulaSim
         // start line moved 40 m on to the real timing line (it sat 57 m early), and the remaining 0.7 % of excess
         // length scaled out: 4259 m, the official length.
         static readonly double[,] ZandvoortT3 = { { 33.8, -15.5 }, { 30.6, -30.0 }, { 30.4, -43.0 }, { 36.0, -56.1 }, { 46.0, -65.4 }, { 58.3, -70.1 } };
-        public static readonly CircuitDef Zandvoort = Tum("zandvoort", "Zandvoort", Scaled(StartAtRow(Reroute(TrackDataTum.Zandvoort, 166, 196, ZandvoortT3), 12), 0.9930), 0.2, 71.163, elev: Shift(TrackElev.Zandvoort, 20),
+        public static readonly CircuitDef Zandvoort = Tum("zandvoort", "North Sea Dunes Circuit", Scaled(StartAtRow(Reroute(TrackDataTum.Zandvoort, 166, 196, ZandvoortT3), 12), 0.9930), 0.2, 71.163, elev: Shift(TrackElev.Zandvoort, 20),
             real: new double[,] { { 357, 113, 60 }, { 677, 185, 60 }, { 825, 134, 50 }, { 1664, 256, 80 }, { 2002, 219, 60 }, { 2245, 117, 60 }, { 2513, 122, 60 }, { 3071, 117, 30 }, { 3165, 93, 30 }, { 3500, 180, 60 } },
             fit: new double[,] { { 357, 45.9, 60 }, { 677, 32.8, 60 }, { 825, 40.3, 50 }, { 1664, 46.4, 80 }, { 2002, 30.9, 60 }, { 2245, 28.1, 60 }, { 2513, 29.1, 60 }, { 3071, 21.1, 30 }, { 3165, 0.0, 30 }, { 3500, 34.2, 60 } } /*CURVEFIT:zandvoort*/,
             bank: new double[,] { { 775, 885, 9.5 }, { 3565, 3885, 9 } }, width: 12, grid: -26);

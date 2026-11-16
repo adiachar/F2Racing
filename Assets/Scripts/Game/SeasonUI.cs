@@ -110,8 +110,8 @@ public sealed class SeasonUI
             calGp[r] = Season.GpNames[r]; calCircuit[r] = Circuits.All[Season.CircuitIndex(r)].name;
             if (r < d.results.Count) { int me = System.Array.IndexOf(d.results[r].order, 0); calRes[r] = Season.Winner(r) + "  ·  you P" + (me + 1); }
         }
-        hubEyebrow = over ? $"Championship {Season.Year}  ·  season complete" : $"Championship {Season.Year}  ·  round {d.round + 1} / {R}";
-        hubTitle = over ? "SEASON COMPLETE" : Season.GpNames[d.round].ToUpperInvariant() + " GRAND PRIX";
+        hubEyebrow = over ? $"Apex World Series {Season.Year}  ·  season complete" : $"Apex World Series {Season.Year}  ·  round {d.round + 1} / {R}";
+        hubTitle = over ? "SEASON COMPLETE" : Season.GpNames[d.round].ToUpperInvariant() + " ROUND";
         hubSub = over ? "Champion: " + Season.Name(st[0]) + "  ·  all " + R + " rounds done"
                       : Circuits.All[Season.CircuitIndex(d.round)].name + "  ·  full grid of " + Season.RosterCount + "  ·  " + MenuUI.LapCounts[m.lapsIdx] + " laps  ·  qualifying " + MenuUI.QualiMinutes[m.qualiIdx] + " min";
         statPos = "P" + rank; statPts = d.points[0] + " PTS"; statTeam = Season.Teams[d.team];
@@ -245,7 +245,7 @@ public sealed class SeasonUI
         {
             float x = a.x + c * (cw + gap);
             Head(new Rect(x + U(6), a.y, cw * 0.1f, U(14)), "Rnd");
-            Head(new Rect(x + cw * 0.12f, a.y, cw * 0.5f, U(14)), "Grand Prix");
+            Head(new Rect(x + cw * 0.12f, a.y, cw * 0.5f, U(14)), "Round");
             Head(new Rect(x + cw * 0.55f, a.y, cw * 0.43f, U(14)), "Winner / you", TextAnchor.MiddleRight);
         }
         for (int r = 0; r < n; r++)
@@ -278,7 +278,7 @@ public sealed class SeasonUI
                 teamLine1[t] = ids.Count > 0 ? Season.Name(ids[0]) : "";
                 teamLine2[t] = ids.Count > 1 ? Season.Name(ids[1]) : "Open seat";
             }
-            pickEyebrow = $"New championship {Season.Year}  ·  {Season.Rounds} rounds";
+            pickEyebrow = $"New Apex World Series {Season.Year}  ·  {Season.Rounds} rounds";
         }
         if (pickInfoFor != pickTeam)
         {

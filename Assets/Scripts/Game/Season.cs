@@ -36,7 +36,7 @@ public static class Season
 {
     public const string Year = "2026";
     public static readonly string[] CalendarIds = { "suzuka", "monaco", "catalunya", "spielberg", "silverstone", "spa", "budapest", "zandvoort", "monza", "austin" };
-    public static readonly string[] GpNames = { "Japan", "Monaco", "Barcelona-Catalunya", "Austria", "Britain", "Belgium", "Hungary", "Netherlands", "Italy", "United States" };
+    public static readonly string[] GpNames = { "Japan", "Monaco", "Spain", "Austria", "Britain", "Belgium", "Hungary", "Netherlands", "Italy", "United States" };
     public static readonly int[] Points = { 25, 18, 15, 12, 10, 8, 6, 4, 2, 1 };
     public static int Rounds => CalendarIds.Length;
     public const string PlayerName = "You";

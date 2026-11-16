@@ -67,7 +67,7 @@ namespace FormulaSim
             D("G. Rowe",     "Argent",  0.93, 0.94, 0.65, 0.75f, 0.78f, 0.80f),
             D("O. Pascoe",   "Solstice",        0.92, 0.90, 0.55, 1.00f, 0.50f, 0.05f),
             D("I. Haddad",   "Midnight Comet",    0.88, 0.82, 0.80, 0.10f, 0.13f, 0.35f),
-            D("C. Sainz-Rey","Blue Works",    0.85, 0.92, 0.60, 0.05f, 0.30f, 0.75f),
+            D("C. Salazar-Rey","Blue Works",    0.85, 0.92, 0.60, 0.05f, 0.30f, 0.75f),
             D("A. Albrecht", "Blue Works",    0.83, 0.90, 0.50, 0.05f, 0.30f, 0.75f),
             D("F. Alvaro",   "Emerald",       0.82, 0.96, 0.85, 0.02f, 0.40f, 0.30f),
             D("P. Garnier",  "Glacier",   0.78, 0.88, 0.65, 0.20f, 0.50f, 0.95f),

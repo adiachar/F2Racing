@@ -252,7 +252,7 @@ public sealed class MenuUI
             }
             else if (i == 0) UiKit.Chip(r, "Length", info.length, UiKit.TextCol);
             else if (i == 1) UiKit.Chip(r, "Turns", info.corners, UiKit.TextCol);
-            else UiKit.Chip(r, "Real pole", info.pole, UiKit.TextCol);
+            else UiKit.Chip(r, "Target pole", info.pole, UiKit.TextCol);
             UiKit.PopAlpha();
         }
 

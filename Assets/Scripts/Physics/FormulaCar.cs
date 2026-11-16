@@ -246,7 +246,7 @@ namespace FormulaSim
         // Car classes the player can choose. F1 = the 2026 car above. F2 = the FIA Formula 2 car the physics was
         // first calibrated on (620 hp, 795 kg with driver). F3 = FIA Formula 3 (3.4 L V6, ~380 hp, ~673 kg with driver);
         // F3 gearing and chassis figures are estimates.
-        public static string[] ClassNames = { "F1 2026", "Formula 2", "Formula 3" };
+        public static string[] ClassNames = { "Apex Premier", "Apex Challenger", "Apex Rookie" };
         public static CarConfig ForClass(int k)
         {
             // grip (mu) and downforce (clA) of F2 and F3 are fitted so that their gap to the F1 car at Monaco and Spa

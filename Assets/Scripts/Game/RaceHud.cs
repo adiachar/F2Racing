@@ -551,7 +551,7 @@ public partial class GameManager
         {
             UiKit.Rect(new Rect(c.x, c.y + S(8), S(2.5f), c.height - S(16)), HudAccent, 1f);
             TF(new Rect(x, y + S(5), iw, S(14)), "TEST DATA", UiKit.Bold, 8f, Color.white);
-            TF(new Rect(x, y + S(5), iw, S(14)), "OURS VS REAL F1", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
+            TF(new Rect(x, y + S(5), iw, S(14)), "OURS VS REAL", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
             TF(new Rect(x, y + S(21), iw, S(14)), testSlot.Test(t100, topSpeed * (unitsIdx == 1 ? 0.621371 : 1), SpeedUnit), UiKit.Semi, 7.2f, HudGrey);
             return;
         }
