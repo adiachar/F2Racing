@@ -44,6 +44,16 @@ public struct Livery
     public static Livery ForTeam(int teamIndex, Color primary)
     {
         int k = ((teamIndex % TeamTrim.GetLength(0)) + TeamTrim.GetLength(0)) % TeamTrim.GetLength(0);
-        return new Livery("Team " + (teamIndex + 1), primary, TeamTrim[k, 0], TeamTrim[k, 1]);
+        Color sec = TeamTrim[k, 0], acc = TeamTrim[k, 1];
+        // a white / silver / pale-grey team colour would make the rival look like the (white) player car: the car is
+        // painted in the team's strong trim colour instead, with the pale colour as its secondary
+        float mx = Mathf.Max(primary.r, Mathf.Max(primary.g, primary.b)), mn = Mathf.Min(primary.r, Mathf.Min(primary.g, primary.b));
+        if (mx > 0.5f && (mx - mn) < 0.15f * mx)
+        {
+            var strong = acc; float am = Mathf.Max(strong.r, Mathf.Max(strong.g, strong.b)), an = Mathf.Min(strong.r, Mathf.Min(strong.g, strong.b));
+            if (am - an < 0.3f * am) strong = sec; // trim is pale too: fall back to the dark one
+            return new Livery("Team " + (teamIndex + 1), strong, primary, sec);
+        }
+        return new Livery("Team " + (teamIndex + 1), primary, sec, acc);
     }
 }

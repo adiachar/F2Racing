@@ -388,7 +388,7 @@ public static class TracksideArt
             for (int i = 0; i < px.Length; i++)
             {
                 float al = Mathf.Clamp01(cur[i]);
-                px[i] = new Color32(150, 156, 162, B(al * 255));
+                px[i] = new Color32(36, 66, 46, B(al * 255)); // dark green catch fence
             }
             t.SetPixels32(px, m);
             if (size == 1) break;

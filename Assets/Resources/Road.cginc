@@ -133,7 +133,7 @@ fixed4 frag (v2f i) : SV_Target
     half blotch = d.g, patch = 0.0;
 #endif
     half fade = i.misc.z;
-    half grain = lerp(0.5, d.r, fade);
+    half grain = lerp(0.5, d.r, fade * fade);                    // grain only close up: mid / far asphalt is smooth
 
     // ---- paving sections: ~113 m each, a shade apart, a sealed joint across the road between them
     const float SecLen = 113.0;
@@ -150,12 +150,12 @@ fixed4 frag (v2f i) : SV_Target
     half inPatch = Band(sa, pa0, pa1, wa) * Band(lat, pc - phw, pc + phw, wl) * hasPatch;
 
     // ---- asphalt: aggregate grain, metre-scale blotches, darker resurfaced patches
-    half tone = (0.70 + 0.60 * grain) * (0.90 + 0.20 * blotch) * (0.93 + 0.14 * d.g) * (1.0 - 0.10 * patch);
+    half tone = (0.88 + 0.24 * grain) * (0.88 + 0.24 * blotch) * (0.97 + 0.06 * d.g) * (1.0 - 0.10 * patch);
     tone *= 1.0 + 0.07 * (half)(h1 - 0.5);                       // section shade
     tone *= 1.0 - 0.13 * inPatch;                                // fresh patch: darker binder
 #ifdef ROAD_HQ
-    half fineFade = saturate(fade * 2.0 - 1.0);                  // full up to 25 m, gone by 60 m
-    tone *= 1.0 + 0.45 * (fn.r - 0.5) * fineFade;                // single stones and the dark binder between them
+    half fineFade = saturate(fade * 2.5 - 1.5);                  // only the first ~15 m, gone by ~35 m
+    tone *= 1.0 + 0.16 * (fn.r - 0.5) * fineFade;                // single stones and the dark binder between them
 #endif
     half3 col = _Asphalt.rgb * tone;
 
@@ -170,7 +170,7 @@ fixed4 frag (v2f i) : SV_Target
     half streak = (half)(0.5 + 0.5 * sin(xs * 21.0 + sin(xs * 6.3 + along * 0.013) * 1.7));
     rub *= lerp(1.0, 0.65 + 0.7 * streak, (half)saturate(1.0 - wl * 6.0));
 #endif
-    col *= 1.0 - 0.32 * rub; // rubbered, not black: in the sun the line reads as a darker grey
+    col *= 1.0 - 0.42 * rub; // rubbered, not black: in the sun the line reads as a darker grey
 
     // ---- dust off-line: lighter towards the edges where nobody drives (less on fresh patches)
     half edge = smoothstep(_HalfWidth - 3.2, _HalfWidth - 0.3, abs(lat));
@@ -216,7 +216,7 @@ fixed4 frag (v2f i) : SV_Target
     // paint on rough asphalt: the grain shows through a little, and tyres wear it where the line crosses it
     half3 paintCol = _Paint.rgb * (0.86 + 0.18 * grain) * (1.0 - 0.3 * rub);
 #ifdef ROAD_HQ
-    paintCol *= 1.0 + 0.22 * (fn.r - 0.5) * fineFade;          // stone tops through the paint
+    paintCol *= 1.0 + 0.08 * (fn.r - 0.5) * fineFade;          // stone tops through the paint
 #endif
     col = lerp(col, paintCol, paint);
 
@@ -237,7 +237,7 @@ fixed4 frag (v2f i) : SV_Target
     half lipW = (half)min(1.5 * wk, 0.5);
     kc = lerp(kc, _Dust.rgb * 0.4, 0.7 * (half)saturate((across - (1.0 - lipW)) / max(lipW, 1e-4)));
 #ifdef ROAD_HQ
-    kc *= 1.0 + 0.18 * (fn.r - 0.5) * fineFade;                       // grit in the paint
+    kc *= 1.0 + 0.08 * (fn.r - 0.5) * fineFade;                       // grit in the paint
 #endif
     col = kerb ? kc : col;
 
@@ -269,7 +269,7 @@ fixed4 frag (v2f i) : SV_Target
     // fine texels per pixel (1.4 m / 256): stone glints and slopes fade out once a pixel spans several stones, so
     // nothing crawls at grazing angles
     half fineTexels = (half)min(max(wl, wa) * (256.0 / 1.4), 1000.0);
-    half bump = 1.1 * fineFade * (1.0 - 0.6 * paint - 0.6 * kerbF) * (1.0 - tar) * saturate(1.5 - fineTexels * 0.125);
+    half bump = 0.45 * fineFade * (1.0 - 0.6 * paint - 0.6 * kerbF) * (1.0 - tar) * saturate(1.5 - fineTexels * 0.125);
     half3 Nb = normalize(N + half3(fn.b - 0.5, 0.0, fn.a - 0.5) * bump);
     half3 R = reflect(-_SunDir.xyz, Nb);
     half s = saturate(dot(V, R));
@@ -279,9 +279,9 @@ fixed4 frag (v2f i) : SV_Target
     half s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s32 = s8 * s8; s32 *= s32;
     half s128 = s32 * s32; s128 *= s128;
     half gloss = 0.35 + 0.55 * rub + 0.4 * paint + 0.5 * kerbF + 0.5 * d.a * fade + 0.35 * tar + 0.15 * inPatch // stones sparkle near
-               + 0.5 * (fn.g - 0.5) * fineFade;
+               + 0.2 * (fn.g - 0.5) * fineFade;
     // polished stone tops (G above 0.5) give tiny, sharp glints close to the car (gone past ~4 texels per pixel)
-    half spark = saturate(fn.g * 2.0 - 1.0) * fineFade * (1.0 - kerbF) * (1.0 - paint) * saturate(2.0 - fineTexels * 0.25);
+    half spark = 0.5 * saturate(fn.g * 2.0 - 1.0) * fineFade * (1.0 - kerbF) * (1.0 - paint) * saturate(2.0 - fineTexels * 0.25);
     half3 spec = _SunCol.rgb * ((lobe * 0.55 + s32 * 0.7) * gloss + s128 * spark * 1.6) * sunVis;
     half f = 1.0 - saturate(dot(V, N)); half f2 = f * f; half fres = f2 * f2 * f;
     // wet: a water film mirrors the sky (Schlick, F0 = 0.02 for water) and the sun in a sharp, bright glint

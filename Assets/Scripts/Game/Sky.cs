@@ -41,8 +41,8 @@ public class Sky : MonoBehaviour
     {
         var k = new Look
         {
-            cover = 0.3f, haze = 0.75f, deck = 0.22f, wind = 1f, tint = new Color(0.40f, 0.54f, 0.80f), atmosphere = 0.95f, exposure = 2.0f,
-            fog = new Color(0.68f, 0.78f, 0.90f), fogStart = 420, fogEnd = 1950,
+            cover = 0.3f, haze = 0.75f, deck = 0.22f, wind = 1f, tint = new Color(0.30f, 0.48f, 0.85f), atmosphere = 0.85f, exposure = 2.0f,
+            fog = new Color(0.62f, 0.76f, 0.90f), fogStart = 420, fogEnd = 1950,
         };
         var d = t.def;
         string id = d != null ? d.id : "";
@@ -63,8 +63,8 @@ public class Sky : MonoBehaviour
                 k.fog = new Color(0.68f, 0.77f, 0.88f); k.fogStart = 380; k.fogEnd = 1800;
                 break;
             case "monza": // Po valley: warm, a little hazy, clear
-                k.cover = 0.25f; k.haze = 0.85f; k.tint = new Color(0.30f, 0.58f, 0.80f); k.atmosphere = 1.25f; k.exposure = 2.2f;
-                k.fog = new Color(0.76f, 0.84f, 0.93f); k.fogStart = 340; k.fogEnd = 1750;
+                k.cover = 0.25f; k.haze = 0.85f; k.tint = new Color(0.20f, 0.44f, 0.88f); k.atmosphere = 0.9f; k.exposure = 2.0f; // deep clean azure, little sunset scatter (RR3)
+                k.fog = new Color(0.62f, 0.76f, 0.90f); k.fogStart = 340; k.fogEnd = 1750;
                 break;
             case "suzuka":
                 k.cover = 0.38f; k.fog = new Color(0.68f, 0.78f, 0.90f);
@@ -238,7 +238,7 @@ public class Sky : MonoBehaviour
         cloudMat.SetFloat("_Cover", c);
         cloudMat.SetFloat("_Scale", k.deck);
         cloudMat.SetFloat("_Haze", k.haze);
-        cloudMat.SetFloat("_HazeHeight", 0.15f); // a little higher: covers the procedural sky's over-cyan bottom degrees
+        cloudMat.SetFloat("_HazeHeight", 0.2f); // a little higher: covers the procedural sky's over-cyan bottom degrees
         cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c) * cloudLit * (1f - 0.3f * Weather.Wetness));
         // fair-weather cumulus have light, sky-lit blue-grey bases; only a closing (rain) deck goes dark grey
         cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.74f, 0.78f, 0.86f), new Color(0.44f, 0.47f, 0.52f), c) * cloudShade * (1f - 0.2f * Weather.Wetness));
@@ -260,6 +260,13 @@ public class Sky : MonoBehaviour
         if (sun != null) SunAt(sun, tod); // before the road reads the sun colour and the bake reads its direction
         dryGrade = Grade.At(Grade.For(t.def != null ? t.def.id : ""), tod);
         Grade.Push(Grade.Wetted(dryGrade, Weather.Wetness));
+        // fog is authored as the colour it should have ON SCREEN; the grade (exposure x warm tint) would push a pale
+        // fog into the tone shoulder and turn the horizon cream, so divide it out for the clear-sky times of day
+        if (tod != TimeOfDay.Kind.Night && tod != TimeOfDay.Kind.Evening)
+        {
+            float e = dryGrade.exposure * Grade.BaseExposure;
+            dryLook.fog = new Color(Mathf.Min(dryLook.fog.r / (dryGrade.tint.x * e), 0.75f), Mathf.Min(dryLook.fog.g / (dryGrade.tint.y * e), 0.8f), Mathf.Min(dryLook.fog.b / (dryGrade.tint.z * e), 0.85f), 1f);
+        }
         var k = Wetted(dryLook, Weather.Wetness);
         sunLight = sun; sunBase = -1f; // dimmed in Create, after the road has read the dry sun colour and the bake is done
         var skyMat = Resources.Load<Material>("Sky");

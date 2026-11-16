@@ -529,7 +529,7 @@ public static class WorldBuilder
                         Strip(t, i, i + 1, -(Wd / 2 + kr), -(Wd / 2 + kr + 2f), 0.035f, 4, v, uv, tri);
                     }
                 });
-                MeshObj("Astroturf", v, uv, tri, Mat(Color.white, EnvTex.Turf())).transform.SetParent(root);
+                MeshObj("Astroturf", v, uv, tri, Mat(new Color(0.88f, 0.76f, 0.84f), EnvTex.Turf())).transform.SetParent(root); // tint: darker, less saturated paint green (~sRGB 40,120,70)
                 // gravel traps out to the barrier: Ground.shader with the stone texture in world space; uv2 = (metres from
                 // the centreline, metres along) for the churned inner edge and the ruts of cars that went off
                 v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>(); var uv2g = new List<Vector2>();

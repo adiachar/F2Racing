@@ -46,6 +46,7 @@ public static class Trackside
     static MB A, C, F, G, Pm;       // the current chunk of each layer (P: thin posts, in short chunks culled by distance)
     static int chunkPts = 125, postPts = 20;
     static Color tint = Color.white;
+    static readonly int[] BoldAds = { 1, 6, 4, 0, 15, 12, 3, 8, 13, 2 };
     static bool aoOn = true;
     const float AoH = 1.4f, AoMin = 0.58f;
 
@@ -369,6 +370,17 @@ public static class Trackside
             return rel >= pitA && rel <= pitB;
         }
         if (pitB >= pitA) for (int k = pitA; k <= pitB; k++) fenceZ[SI(pitSide), W(k)] = true;
+        // catch fences (parkland): Monza has them along nearly the whole lap (straights, Curva Grande, Lesmo, Ascari,
+        // Parabolica); elsewhere along the straights
+        if (!street && !low)
+        {
+            int kw = Mathf.Max(2, Mathf.RoundToInt(30f / ds));
+            for (int i = 0; i < N; i++)
+            {
+                float kk = 0f; for (int j = -kw; j <= kw; j += 2) kk = Mathf.Max(kk, curvAbs[W(i + j)]);
+                if (monza || kk < 1f / 600f) { fenceZ[0, i] = true; fenceZ[1, i] = true; }
+            }
+        }
 
         // ---------------------------------------------------------------- pit complex
         if (pitB >= pitA)
@@ -500,23 +512,30 @@ public static class Trackside
                 for (int k = 0; k < panels; k++)
                 {
                     Vector3 c = O + T * (-halfL + (k + 0.5f) * pw);
-                    tint = street ? new Color(0.4f, 0.41f, 0.44f) : Color.white; // scaffold-dark cladding in town
+                    tint = street ? new Color(0.4f, 0.41f, 0.44f) : new Color(0.62f, 0.64f, 0.68f); // dark cladding under the stand
                     Panel(A, c, -D, pw * 0.5f, skirt, baseH - 0.9f, TracksideArt.Cladding);
                     tint = Color.white;
                     Panel(A, c, -D, pw * 0.5f, baseH - 0.9f, baseH, TracksideArt.Ad(id * 3 + k));
                 }
+                // steel columns and a beam along the front of the stand
+                for (int k = 0; k <= panels; k++)
+                    Box(A, O + T * (-halfL + k * pw) - D * 0.12f + up * (baseH * 0.5f + skirt * 0.5f), T, up, D, 0.1f, baseH * 0.5f - skirt * 0.5f, 0.1f, TracksideArt.GantryDark);
+                Box(A, O - D * 0.12f + up * (baseH + 0.05f), T, up, D, halfL, 0.08f, 0.12f, TracksideArt.GantryDark);
                 // rows: riser, tread and the crowd sitting on it
                 for (int r = 0; r < rows; r++)
                 {
                     float y = baseH + r * RowH, d0 = r * RowD, d1 = d0 + RowD;
                     Vector3 l0 = O - T * halfL + D * d0, r0 = O + T * halfL + D * d0, l1 = O - T * halfL + D * d1, r1 = O + T * halfL + D * d1;
                     if (r > 0) Quad(A, l0 + up * (y - RowH), r0 + up * (y - RowH), r0 + up * y, l0 + up * y, -D, TracksideArt.Sw(TracksideArt.ConcreteDark));
-                    Quad(A, l0 + up * y, r0 + up * y, r1 + up * y, l1 + up * y, up, TracksideArt.Sw(seat));
                     // crowd: sections of ~10 m with their own band, offset and colour mood
                     int secs = Mathf.Max(1, Mathf.RoundToInt(halfL * 2f / 10f));
                     float sl = halfL * 2f / secs;
                     for (int s = 0; s < secs; s++)
                     {
+                        // coloured seat blocks, striped every two rows
+                        Vector3 ta = O + T * (-halfL + s * sl) + D * d0, tb = ta + T * sl;
+                        int sc2 = seatCols[(id + s + (((r >> 1) & 1) == 0 ? 0 : 1)) % seatCols.Length];
+                        Quad(A, ta + up * y, tb + up * y, tb + D * RowD + up * y, ta + D * RowD + up * y, up, TracksideArt.Sw(sc2));
                         int h = id * 997 + r * 31 + s;
                         int band = Rand(h, 1) < 0.72f ? (Rand(h, 2) < 0.5f ? 0 : 1) : (Rand(h, 3) < 0.6f ? 2 : 3);
                         float u0 = Rand(h, 4), len = sl / (32f * 0.55f);
@@ -532,7 +551,9 @@ public static class Trackside
                     for (int e = -1; e <= 1; e += 2)
                     {
                         Vector3 en = T * e, ea = O + T * (e * halfL) + D * d0, eb = O + T * (e * halfL) + D * d1;
+                        tint = new Color(0.55f, 0.57f, 0.6f);
                         Wall(A, ea, eb, skirt, y, en, TracksideArt.Sub(TracksideArt.Cladding, 0f, 0.25f, 0f, 1f));
+                        tint = Color.white;
                     }
                 }
                 // back wall (outside and the part seen above the top row), railing height
@@ -609,7 +630,7 @@ public static class Trackside
                 bool near = false; foreach (int u in used) if (Gap(u, apex) < Mathf.RoundToInt(250f / ds)) near = true;
                 if (near) continue;
                 int at2 = W(apex - Mathf.RoundToInt(15f / ds));
-                bool roof = high || placed == 0;
+                bool roof = !low;
                 if (Stand(at2, Outside(apex), street ? 14f : 20f, low ? 7 : 10, roof)) { used.Add(apex); placed++; }
             }
         }
@@ -738,17 +759,33 @@ public static class Trackside
                         if (decals && (!hills || t.runL != null && (sg > 0 ? t.runL[i] : t.runR[i]) == SurfaceType.Gravel))
                             Decal(G, a - da * 0.9f, a + da * 0.15f, b - db * 0.9f, b + db * 0.15f, 0.05f, fenceU / 4f, (fenceU + len) / 4f, TracksideArt.GrimeCol(TracksideArt.GrimeShade));
                     }
-                    // debris / catch fence above the barrier, leaning in at the top, posts every segment
+                    // debris / catch fence above the barrier (parkland: 3.7 m dark-green mesh), advertising boards in front of it
                     if (fz)
                     {
-                        float back = IsWall(i) ? 0.25f : 0.3f, y0 = topY - 0.05f, y1 = topY + 2.6f, y2 = topY + 3.3f;
+                        bool tall = !street;
+                        float back = IsWall(i) ? 0.25f : 0.3f, y0 = topY - 0.05f, y1 = topY + (tall ? 3.0f : 2.6f), y2 = topY + (tall ? 3.7f : 3.3f);
                         Vector3 fa = a + da * back, fb = b + db * back, lean = -mid * 0.55f;
                         Vector4 r1 = new Vector4(fenceU, y0, fenceU + len, y1), r2 = new Vector4(fenceU, y1, fenceU + len, y2);
                         aoOn = false;
                         Quad(F, fa + up * y0, fb + up * y0, fb + up * y1, fa + up * y1, -mid, r1);
                         Quad(F, fa + up * y1, fb + up * y1, fb + lean + up * y2, fa + lean + up * y2, -mid, r2);
+                        if (!low && (segNo / 3 + s) % 4 != 3 && !InPit(i, sg))
+                        {
+                            // 1 m boards in runs of three segments, bold colours (yellow / red / white / blue)
+                            int nbp = Mathf.Max(1, Mathf.RoundToInt(len / 4f));
+                            Vector3 ba = a + da * (back - 0.06f), bb = b + db * (back - 0.06f);
+                            for (int q = 0; q < nbp; q++)
+                            {
+                                Vector3 qa = Vector3.Lerp(ba, bb, (float)q / nbp), qb = Vector3.Lerp(ba, bb, (float)(q + 1) / nbp);
+                                Quad(A, qa + up * (topY - 0.15f), qb + up * (topY - 0.15f), qb + up * (topY + 0.85f), qa + up * (topY + 0.85f), -mid,
+                                     TracksideArt.Ad(BoldAds[(segNo * 2 + q + s * 3) % BoldAds.Length]));
+                            }
+                        }
                         aoOn = true;
                         Post(Pm, fa + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
+                        if (tall && !low)
+                            for (float d = 5f; d < len - 2f; d += 5f)
+                                Post(Pm, Vector3.Lerp(fa, fb, d / len) + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
                         Quad(Pm, fa + da * 0.06f + up * y1, fa + da * 0.06f + up * (y1 + 0.1f), fa + lean + up * (y2 + 0.05f), fa + lean + up * (y2 - 0.05f), Vector3.Cross(mid, up), TracksideArt.Sw(TracksideArt.PostDark));
                     }
                     fenceU += len;
@@ -852,6 +889,58 @@ public static class Trackside
                     aoOn = true;
                     Box(A, lc + up * 0.24f - T * 0.1f, Nn, up, T, 0.22f, 0.03f, 0.12f, TracksideArt.GantryDark); // visor
                 }
+        }
+
+        // ---------------------------------------------------------------- banner bridges over the straights
+        if (!low)
+        {
+            float[] want2 = monza ? new[] { 520f, 2650f, 4650f } : new[] { (float)t.length * 0.3f, (float)t.length * 0.65f };
+            int bn = 0;
+            foreach (float sw2 in want2)
+            {
+                int i0 = W(Mathf.RoundToInt(sw2 / ds)), found = -1;
+                for (int tr = 0; tr < 12 && found < 0; tr++)
+                {
+                    int i = W(i0 + tr * Mathf.RoundToInt(25f / ds)); bool ok = true;
+                    for (int j = -14; j <= 14 && ok; j += 2)
+                    {
+                        int k = W(i + Mathf.RoundToInt(j * 3f / ds));
+                        ok = curvAbs[k] < 1f / 700f && !InPit(k, 1) && !InPit(k, -1);
+                    }
+                    if (ok && Gap(i, 0) > Mathf.RoundToInt(150f / ds)) found = i;
+                }
+                if (found < 0) continue;
+                SetChunk(found);
+                var p = t.pts[found];
+                Vector3 c = P(p), T = Tan(p), Nn = Nrm(p), up = Vector3.up;
+                float po = Mathf.Min(Off(found, 1), Off(found, -1)) + 0.9f;
+                Vector3 cL = c + Nn * po, cR = c - Nn * po;
+                if (!Free(cL, 0f) || !Free(cR, 0f)) continue;
+                const float deckY = 6.0f;
+                for (int sg = -1; sg <= 1; sg += 2)
+                {
+                    Vector3 pc = c + Nn * (po * sg);
+                    Box(A, pc + up * ((deckY + 0.6f) * 0.5f + skirt * 0.5f), Nn, up, T, 0.45f, (deckY + 0.6f) * 0.5f - skirt * 0.5f, 0.45f, TracksideArt.GantryWhite);
+                    Box(A, pc - T * 0.0f + up * 3.0f, Nn, up, T, 0.5f, 0.15f, 0.9f, TracksideArt.GantryDark); // base brace
+                }
+                // deck, parapets, steel underside
+                Box(A, c + up * deckY, Nn, up, T, po + 0.6f, 0.25f, 1.1f, TracksideArt.Steel, true);
+                Box(A, c + up * (deckY - 0.3f), Nn, up, T, po + 0.6f, 0.08f, 1.1f, TracksideArt.GantryDark, true);
+                for (int sd = -1; sd <= 1; sd += 2)
+                    Box(A, c + T * (sd * 1.05f) + up * (deckY + 0.7f), Nn, up, T, po + 0.6f, 0.45f, 0.05f, TracksideArt.GantryWhite);
+                // banner above the parapet, both faces: two advertisers side by side
+                int ab = bn * 5;
+                for (int fc = -1; fc <= 1; fc += 2)
+                    for (int h2 = 0; h2 < 2; h2++)
+                    {
+                        float off = (h2 - 0.5f) * (po + 0.6f);
+                        aoOn = false;
+                        Panel(A, c + T * (fc * 1.12f) + Nn * off, T * fc, (po + 0.6f) * 0.5f, deckY + 0.3f, deckY + 3.0f, TracksideArt.Ad(BoldAds[(ab + h2 + (fc > 0 ? 3 : 0)) % BoldAds.Length]));
+                        aoOn = true;
+                    }
+                bn++;
+                AddFoot(cL, T, 1f, 1f); AddFoot(cR, T, 1f, 1f);
+            }
         }
 
         // ---------------------------------------------------------------- advertising boards on the straights
