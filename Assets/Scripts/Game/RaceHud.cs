@@ -353,7 +353,7 @@ public partial class GameManager
         for (int i = 1; i < ordN; i++) { int e = ord[i], j = i - 1; while (j >= 0 && prog[ord[j]] < prog[e]) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = e; }
 
         // pit stop, jump start
-        if (pitStops > hudPitSeen) Banner("PIT STOP", PitLoss.ToString("0.0") + " s  ·  " + Weather.TyreName(carSet).ToUpperInvariant(), HudAccent);
+        if (pitStops > hudPitSeen) Banner("PIT STOP", (PitLaneOn ? pitStopLen.ToString("0.0") + " s STOP" : "+" + pitStopLen.ToString("0.0") + " s") + "  ·  " + Weather.TyreName(carSet).ToUpperInvariant(), HudAccent);
         hudPitSeen = pitStops;
         if (jumped && !hudJumpSeen) Banner("JUMP START", "+" + JumpPenalty.ToString("0") + " s TIME PENALTY", HudAccent);
         hudJumpSeen = jumped;
@@ -367,7 +367,7 @@ public partial class GameManager
             if (raceTime > Countdown + 4)
                 for (int i = 0; i < rivals.Count && !y; i++)
                 {
-                    var c = rivals[i].car; if (rivals[i].idx < 0) continue;
+                    var c = rivals[i].car; if (rivals[i].idx < 0 || rivals[i].InPit) continue; // (a car in its pit box is not stopped on track)
                     double ahead = ((rivals[i].idx - idx + track.N) % track.N) * track.ds;
                     if (c.vx * c.vx + c.vy * c.vy < 36 && ahead > 5 && ahead < 400) { y = true; ySector = secTimer.SectorOf(rivals[i].idx); }
                 }
@@ -788,8 +788,21 @@ public partial class GameManager
     // ---------------------------------------------------------------- banners and messages
     object bKeyT, bKeyS; float bTw, bSw; int bKeyH;
     object fKey; float fW; int fKeyH;
+    // pit lane: a banner at the entry and the exit, a "PIT LIMITER" chip while the limiter holds the car
+    void PitHudEnter() => Banner("PIT LIMITER", "80 KM/H  ·  BOX FOR " + Weather.TyreName(NextSet).ToUpperInvariant(), HudYellow);
+    void PitHudExit() => Banner("PIT EXIT", "BACK ON TRACK  ·  " + Weather.TyreName(carSet).ToUpperInvariant(), HudGreen);
+    void DrawPitLimiter()
+    {
+        if (pRun == null || pRun.frozen) return;
+        bool lim = pRun.InLimiter || pRun.phase >= 1;
+        string t = pRun.phase == 1 ? "IN THE BOX" : lim ? "PIT LIMITER  80" : "PIT ENTRY";
+        float w = S(118), h = S(18), x = Mathf.Round(Screen.width * 0.5f - w * 0.5f), y = hudT + S(78);
+        bool blink = lim && pRun.phase != 1 && Mathf.Repeat(Time.unscaledTime * 1.6f, 1f) < 0.5f;
+        Chip(new Rect(x, y, w, h), t, blink ? new Color(0.95f, 0.78f, 0.1f, 0.95f) : HudPanel, blink ? new Color(0.05f, 0.05f, 0.06f) : HudYellow);
+    }
     void DrawBanners()
     {
+        DrawPitLimiter();
         if (bCount > 0)
         {
             string title = bTitle[0], sub = bSub[0];

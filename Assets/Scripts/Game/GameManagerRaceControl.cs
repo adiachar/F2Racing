@@ -67,6 +67,7 @@ public partial class GameManager
             v = System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), recovered = rec,
             damage = dm.wingFL + dm.wingFR + dm.wingRear + dm.floor + dm.suspFL + dm.suspFR + dm.suspRL + dm.suspRR
         };
+        PitRcMask(); // cars in the pit lane are not on the track for race control (PitCrew.cs)
         raceCtl.Update(4 * H, raceTime, raceTime > Countdown + 2);
     }
 

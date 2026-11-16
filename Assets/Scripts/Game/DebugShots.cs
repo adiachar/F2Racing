@@ -6,7 +6,7 @@
 //   track    circuit name or id (Circuits.All, e.g. Monza, Spa)          default Monza
 //   cars     rivals placed around the player (0-21)                       default 6
 //   quality  Low | Medium | High | Auto                                   default High
-//   pit      1 = the player's car behind its pit box with the pit crew mid-stop (pits=service time in s, default 1.0)
+//   pit      1 = the player's real car standing in its pit box, the pit crew mid-stop on it (pits=service time in s, default 1.0)
 //   cam      list of chase | far | cockpit | halo | tv (one shot per s per cam)   default chase
 //   s        list of lap distances in metres                              default the Monza spots (see README)
 //   w, h     canvas size in CSS pixels (device pixel ratio forced to 1)   default 1280 x 720
@@ -81,6 +81,7 @@ public partial class GameManager
     // put the player on the racing line at lap distance s (heading along the line), the rivals around it
     internal void ShotPlace(double s, int camIdx, double kmh)
     {
+        PitShotClear(); // no pit stop carried over from the last shot (PitCrew.cs)
         int N = track.N;
         int i = ((int)System.Math.Round(s / track.ds) % N + N) % N;
         int a = (i + N - 1) % N, b = (i + 1) % N;
@@ -197,7 +198,7 @@ public class DebugShots : MonoBehaviour
             foreach (string cam in cams)
             {
                 gm.ShotPlace(s, GameManager.ShotCam(cam), kmh);
-                if (Get(q, "pit", "0") == "1") gm.ShotPit(GetF(q, "pits", 1.0f)); // pit=1: the player behind its pit box, the crew frozen at service time pits (s; 0 = car stopped, 2.4 = release)
+                if (Get(q, "pit", "0") == "1") gm.ShotPit(GetF(q, "pits", 1.0f)); // pit=1: the player's car in its pit box, the crew frozen on it at service time pits (s; 0 = car stopped, 2.4 = release)
                 // a few frames for the camera snap, the rival LODs, shadows and any texture / shader upload,
                 // and some real time (SwiftShader draws only a few frames a second)
                 float wait = settle + (n == 0 ? warm : 0f), ts = Time.realtimeSinceStartup;

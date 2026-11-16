@@ -8,14 +8,17 @@
 //    is one mesh whose vertices are written in world space every frame (a part is a range of vertices; hidden = collapsed).
 //  * The stop is a fixed choreography (service ~2.4 s from the car stopping to the release, like a real F1 stop): jacks in and up
 //    (car +8 cm), guns on, nuts off, old wheels off and carried away, new wheels carried in and on (compound colour band), guns
-//    on, off, jacks down, lollipop up, car away. The game's own stop is instant (GameManager.PitStop adds a time loss at the line),
-//    so this is a visual of it: the crew and a replica of the car (rivals' LOD model in the team livery) sit in the pit box. If the
-//    stop is longer (wing change), the crew hold position with the wheels on until it is over.
+//    on, off, jacks down, lollipop up, car away. The stop is real: the car drives the pit lane (PitLane.cs, a PitRun per car) and
+//    stops in its box; the crew works ON THE REAL CAR (the player's model or the rival's model in view): its clock is the run's
+//    (s to the stop / since the stop), the car is lifted 8 cm (after the game has placed it: LateUpdate), its wheels are hidden
+//    while off, and the compound band changes when the new wheels go on. If the stop is longer (wing change), the crew hold
+//    position with the wheels on until it is over.
 //  * Pit box lines are in Trackside.cs (Trackside.Bays); the team colour panels on the garage fronts are made here.
-//  * GameManager glue (partial class at the bottom): PitCrewSetup (after SetupRivals), PitCrewTick (the crew's own Update calls it:
-//    shows the crew waiting while BOX is armed, starts rivals' stops within ~150 m of the camera), PitCrewPlayerStop (PitStop),
-//    ShotPit (shot mode, DebugShots pit=1).
+//  * GameManager glue (partial class at the bottom): PitCrewSetup (after SetupRivals: the lane for the rivals), PitCrewTick (the
+//    crew's own Update calls it: crew waiting while BOX is armed or a car is coming in, the stop for the player and for rivals
+//    within ~150 m of the camera), the player's pit-lane drive (PlayerPitEntry / PlayerPitStep), ShotPit (shot mode, pit=1).
 using System.Collections.Generic;
+using FormulaSim;
 using UnityEngine;
 
 public class PitCrew : MonoBehaviour
@@ -169,9 +172,10 @@ public class PitCrew : MonoBehaviour
 
     // ---------------------------------------------------------------- state
     enum St { Off, Wait, Run }
-    St st; int owner = -99, bay = -1; float T, extra; bool frozen; float freezeS;
+    St st; int owner = -99, bay = -1; float extra, curS = A;
     Batch ppl, props, panels;
-    CarModel box; Transform[] wheelRoots = new Transform[4];
+    System.Func<CarModel> target; System.Func<float> clock; CarModel curModel;
+    Transform[] wheelRoots = new Transform[4]; readonly bool[] wheelWas = new bool[4];
     int[] order; Color[] bayCol, bayAcc;
     Vector3 centre, fwd, side; float gs, garageDist;
     Matrix4x4 F;
@@ -182,6 +186,7 @@ public class PitCrew : MonoBehaviour
 
     public bool Busy => st == St.Run;
     public bool Waiting(int who) => st == St.Wait && owner == who;
+    public bool Owns(int who) => st != St.Off && owner == who;
     public int PlayerBay => order[0];
     public int TeamBay(int team) { int n = order.Length; return n > 1 ? order[1 + ((team % (n - 1)) + (n - 1)) % (n - 1)] : order[0]; }
     public Vector3 BayPos(int b) => Trackside.Bays[b].centre;
@@ -278,37 +283,39 @@ public class PitCrew : MonoBehaviour
         b.NewPart(); b.Cyl(Vector3.zero, Quaternion.Euler(0, 0, 90), 0.08f, 0.45f, 8, SRed, SMetal, SMetal, 0.03f);                    // extinguisher
     }
 
-    void OnDestroy() { if (box != null) Destroy(box.gameObject); }
+    void OnDestroy() { RestoreWheels(); }
 
     // ---------------------------------------------------------------- public control
-    // crew standing ready in a bay (the player armed BOX, or a rival is about to box); no car yet
-    public void Wait(int who, int bayIdx, Livery l, Color oldTyre, Color newTyre)
+    // crew standing ready in a bay (the player armed BOX, or a car is coming in); car = the car's model, if known (its wheel
+    // positions place the crew)
+    public void Wait(int who, int bayIdx, Livery l, Color oldTyre, Color newTyre, System.Func<CarModel> car = null)
     {
         if (st == St.Run) return;
         if (st == St.Wait && owner == who && bay == bayIdx) return;
-        Prepare(who, bayIdx, l, oldTyre, newTyre); st = St.Wait; T = 0; extra = 0; frozen = false; ApplyFrame(A, A, 0f);
+        Prepare(who, bayIdx, l, oldTyre, newTyre, car); st = St.Wait; extra = 0; curS = A; ApplyFrame(A, 0f);
     }
     public void CancelWait(int who) { if (st == St.Wait && owner == who) Stop(); }
-    // the stop: the car rolls in, is serviced and leaves; extraHold = seconds the stop takes beyond the normal one (crew hold position)
-    public bool Begin(int who, int bayIdx, Livery l, Color oldTyre, Color newTyre, float extraHold, float freezeAtService = -999f)
+    // the stop on the real car: clk = the car's pit clock (s to the stop, negative, then s since it); extraHold = seconds the
+    // stop takes beyond the normal one (crew hold position). A frozen clock freezes the crew (shot mode).
+    public bool Begin(int who, int bayIdx, Livery l, Color oldTyre, Color newTyre, float extraHold, System.Func<CarModel> car, System.Func<float> clk)
     {
-        if (st == St.Run) return false;
-        if (!(st == St.Wait && owner == who && bay == bayIdx)) Prepare(who, bayIdx, l, oldTyre, newTyre);
-        st = St.Run; T = 0; extra = Mathf.Clamp(extraHold, 0f, 10f); frozen = freezeAtService > -900f; freezeS = freezeAtService;
+        if (st == St.Run) return owner == who;
+        if (!(st == St.Wait && owner == who && bay == bayIdx)) Prepare(who, bayIdx, l, oldTyre, newTyre, car);
+        else { target = car; AcquireWheels(car != null ? car() : null); }
+        st = St.Run; extra = Mathf.Clamp(extraHold, 0f, 10f); clock = clk; curS = clk != null ? clk() : 0f;
         return true;
     }
     public void Stop()
     {
-        st = St.Off; owner = -99; frozen = false;
-        for (int c = 0; c < 4; c++) if (wheelRoots[c] != null) wheelRoots[c].gameObject.SetActive(true);
+        RestoreWheels();
+        st = St.Off; owner = -99; target = null; clock = null; curModel = null;
         if (ppl != null) { ppl.HideAll(); props.HideAll(); ppl.Show(false); props.Show(false); }
-        if (box != null) box.gameObject.SetActive(false);
     }
 
     // ---------------------------------------------------------------- set up one stop
-    void Prepare(int who, int bayIdx, Livery l, Color oldTyre, Color newTyre)
+    void Prepare(int who, int bayIdx, Livery l, Color oldTyre, Color newTyre, System.Func<CarModel> car)
     {
-        for (int c = 0; c < 4; c++) if (wheelRoots[c] != null) wheelRoots[c].gameObject.SetActive(true);
+        RestoreWheels();
         owner = who; bay = bayIdx; liv = l; oldC = oldTyre; newC = newTyre; lolliGreen = false; wheelsOff = false; newStripe = false;
         var bb = Trackside.Bays[bayIdx]; fwd = bb.fwd; side = bb.side; garageDist = bb.garageDist;
         float gy = WorldBuilder.H(bb.centre.x, bb.centre.z); centre = new Vector3(bb.centre.x, gy, bb.centre.z);
@@ -323,16 +330,9 @@ public class PitCrew : MonoBehaviour
             p[SMetal] = new Color(0.42f, 0.43f, 0.46f); p[SGun] = l.accent; p[SRed] = new Color(0.8f, 0.06f, 0.05f); p[SLolli] = new Color(0.85f, 0.05f, 0.05f);
             p[SYellow] = new Color(0.9f, 0.72f, 0.08f); p[SBlack] = new Color(0.04f, 0.04f, 0.045f); p[SNewBand] = newTyre;
         }
-        ppl.Recolour(); props.Recolour();
-        // the replica of the car in the box (rivals' LOD model in the team livery), its wheels measured for the crew's positions
-        if (box == null)
-        {
-            box = CarModel.CreateFromAsset("Car/car_lod", l.primary, true);
-            if (box == null) box = CarModel.Create(3.4, 0.45, 0.36);
-            if (box != null) box.gameObject.name = "PitBoxCar";
-        }
-        if (box != null) { box.SetLivery(l); box.SetStripe(oldTyre); box.gameObject.SetActive(true); PlaceCar(0f, 0f, 0f); }
-        MeasureWheels();
+        props.pal[SLolli] = new Color(0.85f, 0.05f, 0.05f);
+        // the real car: its wheels, measured in its own frame, place the crew
+        target = car; MeasureWheels(car != null ? car() : null);
         // the crew
         int n = 0;
         for (int c = 0; c < 4; c++) { Person p = crew[n++]; p.role = Gun; p.corner = c; p.keys = GunKeys(c); }
@@ -350,24 +350,43 @@ public class PitCrew : MonoBehaviour
         ppl.Recolour(); props.Recolour();
     }
 
-    void MeasureWheels()
+    // the wheel hubs of a car model (corner order 0 FL, 1 FR, 2 RL, 3 RR of the model) in its own frame (x right, z forward)
+    static int Hubs(CarModel m, Transform[] wr, Vector3[] loc)
     {
-        for (int i = 0; i < 4; i++) wheelRoots[i] = null;
-        var pts = new Vector3[4]; var got = new bool[4]; var wr = new Transform[4];
-        if (box != null)
-        {
-            wr[0] = box.frontPivots[0]; wr[1] = box.frontPivots[1];
-            wr[2] = box.rearSpin[0] != null ? box.rearSpin[0].parent : null; wr[3] = box.rearSpin[1] != null ? box.rearSpin[1].parent : null;
-            for (int i = 0; i < 4; i++) if (wr[i] != null) { Vector3 d = wr[i].position - centre; pts[i] = new Vector3(Vector3.Dot(d, side), 0, Vector3.Dot(d, fwd)); got[i] = true; }
-        }
-        // corners: 0 front garage side, 1 front lane side, 2 rear garage side, 3 rear lane side
+        if (m == null) return 0;
+        wr[0] = m.frontPivots[0]; wr[1] = m.frontPivots[1];
+        wr[2] = m.rearSpin[0] != null ? m.rearSpin[0].parent : null; wr[3] = m.rearSpin[1] != null ? m.rearSpin[1].parent : null;
+        int got = 0;
+        for (int i = 0; i < 4; i++) if (wr[i] != null) { loc[i] = m.transform.InverseTransformPoint(wr[i].position); got++; }
+        return got;
+    }
+    // the wheels the crew takes off (corners: 0 front garage side, 1 front lane side, 2 rear garage side, 3 rear lane side)
+    void AcquireWheels(CarModel m)
+    {
+        RestoreWheels(); curModel = m; wheelsOff = false;
+        var wr = new Transform[4]; var loc = new Vector3[4];
+        if (Hubs(m, wr, loc) < 4) return;
+        for (int i = 0; i < 4; i++) { bool garage = gs * loc[i].x > 0f; int c = (i < 2 ? 0 : 2) + (garage ? 0 : 1); wheelRoots[c] = wr[i]; }
+        for (int c = 0; c < 4; c++) if (wheelRoots[c] == null) { for (int k = 0; k < 4; k++) wheelRoots[k] = null; return; }
+        for (int c = 0; c < 4; c++) wheelWas[c] = wheelRoots[c].gameObject.activeSelf;
+    }
+    void RestoreWheels()
+    {
+        for (int c = 0; c < 4; c++) { if (wheelRoots[c] != null && wheelsOff) wheelRoots[c].gameObject.SetActive(wheelWas[c]); wheelRoots[c] = null; }
+        wheelsOff = false;
+    }
+
+    void MeasureWheels(CarModel m)
+    {
+        var wr = new Transform[4]; var loc = new Vector3[4];
+        bool all = Hubs(m, wr, loc) == 4;
+        // crew frame: x = towards the garage, z = along the car (the car stands on the box centre, along the bay)
         float fF = 1.7f, fR = -1.7f, half = 0.8f;
-        if (got[0] && got[1] && got[2] && got[3]) { fF = (pts[0].z + pts[1].z) * 0.5f; fR = (pts[2].z + pts[3].z) * 0.5f; half = (Mathf.Abs(pts[0].x) + Mathf.Abs(pts[1].x) + Mathf.Abs(pts[2].x) + Mathf.Abs(pts[3].x)) * 0.25f; }
-        if (fF < fR || Mathf.Abs(fF - fR) < 2f || half < 0.5f || half > 1.2f) { fF = 1.7f; fR = -1.7f; half = 0.8f; got[0] = got[1] = got[2] = got[3] = false; }
+        if (all) { fF = (loc[0].z + loc[1].z) * 0.5f; fR = (loc[2].z + loc[3].z) * 0.5f; half = (Mathf.Abs(loc[0].x) + Mathf.Abs(loc[1].x) + Mathf.Abs(loc[2].x) + Mathf.Abs(loc[3].x)) * 0.25f; }
+        if (fF < fR || Mathf.Abs(fF - fR) < 2f || half < 0.5f || half > 1.2f) { fF = 1.7f; fR = -1.7f; half = 0.8f; }
         for (int c = 0; c < 4; c++) { wu[c] = half; wf[c] = c < 2 ? fF : fR; }
         frontEnd = fF + 1.2f; rearEnd = fR - 0.95f;
-        if (got[0] && got[1] && got[2] && got[3])
-            for (int i = 0; i < 4; i++) { bool garage = pts[i].x > 0f; bool front = i < 2; int c = (front ? 0 : 2) + (garage ? 0 : 1); wheelRoots[c] = wr[i]; }
+        AcquireWheels(m);
     }
 
     // ---------------------------------------------------------------- the choreography (keys per role; times in s, 0 = car stopped)
@@ -459,52 +478,45 @@ public class PitCrew : MonoBehaviour
         if (st == St.Off) return;
         float dt = Time.deltaTime;
         var cam = Camera.main;
+        bool vis = cam == null || (cam.transform.position - centre).sqrMagnitude < 230f * 230f;
         if (st == St.Run)
         {
-            if (!frozen) T += dt;
-            float sr = frozen ? freezeS : T + A;
+            float sr = clock != null ? clock() : curS, prev = curS;
             float s = sr < Hold ? sr : sr < Hold + extra ? Hold : sr - extra;
-            if (!frozen && s > Release + Depart) { Stop(); return; }
-            bool vis = frozen || cam == null || (cam.transform.position - centre).sqrMagnitude < 230f * 230f;
+            curS = s;
+            if (s > Release + Depart) { Stop(); return; }
             SetVisible(vis);
-            if (vis) ApplyFrame(s, sr, frozen ? 0f : dt);
+            if (vis) ApplyFrame(s, Mathf.Abs(s - prev) < 1e-5f ? 0f : dt);
         }
         else // waiting
         {
-            bool vis = cam == null || (cam.transform.position - centre).sqrMagnitude < 230f * 230f;
             SetVisible(vis);
-            if (vis) ApplyFrame(A, A, dt);
+            if (vis) ApplyFrame(A, dt);
         }
     }
 
-    void SetVisible(bool v)
+    // after the game has placed the cars: the real car on the jacks, its wheels off while the crew changes them
+    void LateUpdate()
     {
-        visible = v; ppl.Show(v); props.Show(v);
-        if (box != null) box.gameObject.SetActive(v && st == St.Run);
-    }
-
-    void PlaceCar(float carF, float spin, float lift)
-    {
-        if (box == null) return;
-        Vector3 p = centre + fwd * carF;
-        box.Apply(p.x, p.z, Mathf.Atan2(fwd.z, fwd.x), 0, spin, spin, 0, 0);
-        if (lift != 0f) box.transform.position += Vector3.up * lift;
-    }
-
-    void ApplyFrame(float s, float sReal, float dt)
-    {
-        float lift = Lift(s);
-        // the car: rolls in (decelerating from ~90 km/h), stops, is lifted, drops, leaves
-        float carF = 0f;
-        if (st == St.Run)
+        if (st != St.Run || target == null) return;
+        var m = target(); if (m == null) return;
+        if (m != curModel) AcquireWheels(m); // the model changed (level of detail): take its wheels
+        float s = curS, lift = Lift(s);
+        if (lift > 0f) m.transform.position += Vector3.up * lift;
+        bool off = s >= TOff && s < TOn;
+        if (off != wheelsOff && wheelRoots[0] != null)
         {
-            if (sReal < 0f) { float k = Mathf.Clamp01(-sReal / -A); carF = -16f * k * k; }
-            else if (s > Release) { float t = s - Release; carF = 0.5f * 9f * t * t; }
-            PlaceCar(carF, carF / WheelR, lift);
-            bool off = s >= TOff && s < TOn;
-            if (off != wheelsOff) { wheelsOff = off; for (int c = 0; c < 4; c++) if (wheelRoots[c] != null) wheelRoots[c].gameObject.SetActive(!off); }
-            if (s >= TOn && !newStripe) { newStripe = true; if (box != null) box.SetStripe(newC); }
+            wheelsOff = off;
+            for (int c = 0; c < 4; c++) if (wheelRoots[c] != null) wheelRoots[c].gameObject.SetActive(off ? false : wheelWas[c]);
         }
+        if (s >= TOn && !newStripe) { newStripe = true; m.SetStripe(newC); }
+    }
+
+    void SetVisible(bool v) { visible = v; ppl.Show(v); props.Show(v); }
+
+    void ApplyFrame(float s, float dt)
+    {
+        float lift = st == St.Run ? Lift(s) : 0f;
         // people and what they hold
         for (int i = 0; i < crew.Length; i++)
         {
@@ -705,67 +717,127 @@ public class PitCrew : MonoBehaviour
 // ==================================================================== GameManager glue
 public partial class GameManager
 {
-    PitCrew pitCrew; int[] pitSeenStops, pitSeenSet, pitTeam; double[] pitSeenLoss; Livery[] pitLiv; int pitWaitRival = -1;
+    PitCrew pitCrew; int[] pitTeam; Livery[] pitLiv; int pitWaitRival = -1;
+    PitRun pRun, pCrewRun; PitRun[] rivalCrewRun; double pitStopLen; readonly object playerPitKey = new object();
+    static PitLane Lane => Trackside.Lane;
+    // the pit lane is driven in races on circuits with a pit building (otherwise the old instant stop at the line)
+    bool PitLaneOn => Lane != null && track != null && Lane.track == track && raceLaps > 0 && !playground;
+    bool InPitLane => pRun != null;
+    CarModel PlayerPitModel() => model;
+    CarModel RivalPitModel(int i) => i < rivalModels.Count ? (rivalNear[i] || i >= rivalFar.Count || rivalFar[i] == null ? rivalModels[i] : rivalFar[i]) : null;
 
-    // once per session, after SetupRivals: the crew for this circuit's pit lane (none on a circuit without one, or without a race)
+    // once per session, after SetupRivals: the crew for this circuit's pit lane (none on a circuit without one, or without a
+    // race), the rivals' boxes
     void PitCrewSetup()
     {
         if (pitCrew != null) { Destroy(pitCrew.gameObject); pitCrew = null; }
-        pitSeenStops = new int[rivals.Count]; pitSeenSet = new int[rivals.Count]; pitTeam = new int[rivals.Count]; pitLiv = new Livery[rivals.Count]; pitSeenLoss = new double[rivals.Count]; pitWaitRival = -1;
+        pRun = null; pCrewRun = null; pitWaitRival = -1;
+        pitTeam = new int[rivals.Count]; pitLiv = new Livery[rivals.Count]; rivalCrewRun = new PitRun[rivals.Count];
+        if (Lane != null) Lane.Reset();
+        foreach (var d in rivals) { d.pitLane = null; d.pitBay = -1; d.pit = null; }
         if (playground || raceLaps <= 0 || track == null || Trackside.Bays.Count == 0) return;
         var teams = new Dictionary<int, Livery>();
         for (int i = 0; i < rivals.Count; i++)
         {
             var d = rivals[i]; var col = new Color(d.who.r, d.who.g, d.who.b); int ti = TeamIndex(d.who);
             pitTeam[i] = ti; pitLiv[i] = Livery.ForTeam(ti, col); if (!teams.ContainsKey(ti)) teams[ti] = pitLiv[i];
-            pitSeenStops[i] = d.pitStops; pitSeenSet[i] = d.tyreSet; pitSeenLoss[i] = d.pitLoss;
         }
         pitCrew = PitCrew.Create(track.N, Livery.Player[Livery.PlayerIndex], teams);
         if (pitCrew != null) pitCrew.onTick = PitCrewTick;
+        if (PitLaneOn) for (int i = 0; i < rivals.Count; i++) { rivals[i].pitLane = Lane; rivals[i].pitBay = pitCrew != null ? pitCrew.TeamBay(pitTeam[i]) : -1; }
     }
 
-    // every frame (from the crew's Update): BOX armed = the player's crew waits in the box; rivals' stops near the camera get the crew too
+    // every frame (from the crew's Update): the crew waits while BOX is armed or a car is coming in, and does the stop on the
+    // player's car, or on a rival's within ~150 m of the camera (the player's stop has priority)
     void PitCrewTick()
     {
-        if (pitCrew == null || cam == null || rivals.Count != pitSeenStops.Length) return;
+        if (pitCrew == null || cam == null || rivalCrewRun == null || rivals.Count != rivalCrewRun.Length) return;
         Vector3 cp = cam.transform.position;
-        // player: crew ready while BOX is armed and the camera is within ~250 m of the box
-        bool near = (pitCrew.BayPos(pitCrew.PlayerBay) - cp).sqrMagnitude < 250f * 250f;
-        if (boxArmed && near) pitCrew.Wait(-1, pitCrew.PlayerBay, Livery.Player[Livery.PlayerIndex], Weather.Stripe(carSet), Weather.Stripe(NextSet));
+        var pliv = Livery.Player[Livery.PlayerIndex];
+        bool near = (pitCrew.BayPos(pitCrew.PlayerBay) - cp).sqrMagnitude < 250f * 250f, playerCrew = false;
+        if (pRun != null && pRun.bay >= 0 && pRun != pCrewRun && !pRun.Done)
+        {
+            playerCrew = true;
+            var r = pRun;
+            if (pitCrew.Busy && !pitCrew.Owns(-1) && r.claimed && r.Clock > -2.5) pitCrew.Stop();
+            if (r.claimed && r.Clock >= -1.3)
+            { if (pitCrew.Begin(-1, r.bay, pliv, Weather.Stripe(carSet), Weather.Stripe(NextSet), (float)r.extraHold, PlayerPitModel, () => (float)r.Clock)) pCrewRun = r; }
+            else pitCrew.Wait(-1, r.bay, pliv, Weather.Stripe(carSet), Weather.Stripe(NextSet), PlayerPitModel);
+        }
+        else if (pRun == null && boxArmed && near) { playerCrew = true; pitCrew.Wait(-1, pitCrew.PlayerBay, pliv, Weather.Stripe(carSet), Weather.Stripe(NextSet), PlayerPitModel); }
         else pitCrew.CancelWait(-1);
         for (int i = 0; i < rivals.Count; i++)
         {
-            var d = rivals[i]; int bay = pitCrew.TeamBay(pitTeam[i]);
-            bool close = (pitCrew.BayPos(bay) - cp).sqrMagnitude < 150f * 150f;
-            if (d.pitStops > pitSeenStops[i])
+            var d = rivals[i]; var r = d.pit;
+            bool want = r != null && r.bay >= 0 && r != rivalCrewRun[i] && !playerCrew && (pitCrew.BayPos(r.bay) - cp).sqrMagnitude < 150f * 150f && !(pitCrew.Busy && !pitCrew.Owns(i));
+            if (!want) { if (pitWaitRival == i) { pitCrew.CancelWait(i); pitWaitRival = -1; } continue; }
+            int k = i; System.Func<CarModel> m = () => RivalPitModel(k);
+            if (r.claimed && r.Clock >= -1.3 && r.Clock < 0.5)
             {
-                double dl = d.pitLoss - pitSeenLoss[i]; float ex = dl > AiDriver.PitLoss + 1 ? (float)System.Math.Min(AiDriver.WingChange, dl - AiDriver.PitLoss) : 0f;
-                if (close && !pitCrew.Busy) pitCrew.Begin(i, bay, pitLiv[i], Weather.Stripe(pitSeenSet[i]), Weather.Stripe(d.tyreSet), ex);
+                if (pitCrew.Begin(i, r.bay, pitLiv[i], Weather.Stripe(d.tyreSet), Weather.Stripe(d.PredictedSet), (float)r.extraHold, m, () => (float)r.Clock)) rivalCrewRun[i] = r;
                 if (pitWaitRival == i) pitWaitRival = -1;
             }
-            else if (d.boxing && close && !pitCrew.Busy && !(boxArmed && near)) { pitCrew.Wait(i, bay, pitLiv[i], Weather.Stripe(d.tyreSet), Weather.Stripe(d.tyreSet)); pitWaitRival = i; }
-            else if (pitWaitRival == i && (!d.boxing || !close)) { pitCrew.CancelWait(i); pitWaitRival = -1; }
-            pitSeenStops[i] = d.pitStops; pitSeenSet[i] = d.tyreSet; pitSeenLoss[i] = d.pitLoss;
+            else if (r.Clock < 0 && !pitCrew.Busy && (pitWaitRival < 0 || pitWaitRival == i))
+            { pitCrew.Wait(i, r.bay, pitLiv[i], Weather.Stripe(d.tyreSet), Weather.Stripe(d.PredictedSet), m); pitWaitRival = i; }
         }
     }
 
-    // the player's stop (PitStop): old and new tyre colour, extra seconds of the stop (wing change)
-    void PitCrewPlayerStop(Color oldTyre, Color newTyre, double wing)
+    // ---------------------------------------------------------------- the player's pit-lane drive
+    // (physics step, on track) BOX armed and the car passing the pit entry: the pit lane takes over
+    void PlayerPitEntry()
     {
-        if (pitCrew == null) return;
-        pitCrew.Stop();
-        pitCrew.Begin(-1, pitCrew.PlayerBay, Livery.Player[Livery.PlayerIndex], oldTyre, newTyre, (float)wing);
+        if (!boxArmed || !PitLaneOn || idx < 0 || prevIdx < 0) return;
+        if (pLap >= raceLaps) { boxArmed = false; return; } // the last lap: no stop
+        if (pLap < 1 || raceTime < Countdown) return;
+        var lane = Lane;
+        double u0 = PitLane.RelS(track, prevIdx), u1 = PitLane.RelS(track, idx);
+        if (!(u0 < lane.sEntry && u1 >= lane.sEntry && u1 - u0 < 30) || car.reverse || car.vx < 3) return;
+        boxArmed = false;
+        pRun = new PitRun(lane, pitCrew != null ? pitCrew.PlayerBay : -1, playerPitKey, u1, System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), playerLat,
+                          car.damage.WingsDamaged ? AiDriver.WingChange : 0);
+        PitHudEnter();
     }
 
-    // shot mode (DebugShots pit=1): the player's car 16 m behind its box, the crew mid-stop at service time s, frozen
+    // (physics step, in the lane) the car follows the lane: the player's pedals do nothing, the limiter holds 80 km/h
+    void PlayerPitStep()
+    {
+        var r = pRun;
+        r.Step(H); r.ApplyTo(car);
+        prevIdx = idx < 0 ? r.idx : idx; idx = r.idx; playerLat = r.lateral; surface = 0;
+        if (r.TakeService()) PitStop(false); // the new wheels are on: tyres, repairs (GameManager.PitStop)
+        if (r.Done)
+        {
+            r.HandBack(car); pRun = null;   // back on the track at pit-lane speed, the player drives again
+            PitHudExit();
+        }
+    }
+
+    // RaceControl sees no car in the pit lane (no stopped-car incident, no queue place, no overtake while in the lane)
+    void PitRcMask()
+    {
+        if (raceCtl == null) return;
+        for (int i = 0; i < rivals.Count && i < raceCtl.cars.Length; i++) if (rivals[i].InPit) raceCtl.cars[i].idx = -1;
+        if (pRun != null && rcPlayerSlot >= 0 && rcPlayerSlot < raceCtl.cars.Length) raceCtl.cars[rcPlayerSlot].idx = -1;
+    }
+
+    // shot mode: no stop carried over into the next shot
+    void PitShotClear()
+    {
+        if (pRun != null) { pRun.Cancel(); pRun = null; }
+        pCrewRun = null;
+        if (pitCrew != null) pitCrew.Stop();
+    }
+
+    // shot mode (DebugShots pit=1): the player's real car standing in its box, the crew mid-stop at service time s, frozen
     internal bool ShotPit(float s)
     {
-        if (pitCrew == null || track == null) return false;
-        Vector3 c = pitCrew.BayPos(pitCrew.PlayerBay); var bb = Trackside.Bays[pitCrew.PlayerBay]; Vector3 p = c - bb.fwd * 16f;
-        car.x = p.x; car.y = p.z; car.heading = System.Math.Atan2(bb.fwd.z, bb.fwd.x); car.vx = car.vy = 0; car.r = 0;
+        if (pitCrew == null || track == null || !PitLaneOn) return false;
+        PitShotClear();
+        var r = PitRun.InBox(Lane, pitCrew.PlayerBay, playerPitKey, s);
+        pRun = r; pCrewRun = r;
+        r.ApplyTo(car); car.vx = car.vy = 0; car.r = 0; car.delta = 0;
         px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn; acc = 0;
-        idx = prevIdx = -1; offTime = wrongTime = 0; camVel = Vector3.zero;
-        pitCrew.Stop();
-        return pitCrew.Begin(-1, pitCrew.PlayerBay, Livery.Player[Livery.PlayerIndex], Weather.Stripe(carSet), Weather.Stripe(NextSet), 0f, s);
+        idx = prevIdx = r.idx; playerLat = r.lateral; offTime = wrongTime = 0; camVel = Vector3.zero;
+        return pitCrew.Begin(-1, r.bay, Livery.Player[Livery.PlayerIndex], Weather.Stripe(carSet), Weather.Stripe(NextSet), 0f, PlayerPitModel, () => (float)r.Clock);
     }
 }

@@ -106,6 +106,12 @@ namespace FormulaSim
         public double paceScale = 1;                    // the game's grip factor of the set fitted against the set planned for
         public int boxReason;                           // 0 plan, 1 damage, 2 cheap stop under the safety car, 3 weather
         bool scChecked;
+        // the pit lane (PitLane.cs, set by the game): with it a stop is driven down the lane into the team's box (pitBay)
+        // instead of the instant stop at the line; without it (the headless tools) everything is as before
+        public PitLane pitLane; public int pitBay = -1; public PitRun pit; int pitLapAfter;
+        public bool InPit => pit != null;
+        // the set the next stop will most likely fit (for the crew's tyres)
+        public int PredictedSet => strat != null && strat.next + 1 < strat.sets.Count ? strat.sets[strat.next + 1] : tyreSet;
 
         // Plan the race (call once, after the constructor): returns the start set and fits its compound
         public int PlanRace(int laps, int wet, int seed)
@@ -165,6 +171,7 @@ namespace FormulaSim
         public CarInput Think(double dt, double simTime, IList<AiDriver> others, FormulaCar player, int playerIdx, double playerLateral)
         {
             int N = track.N;
+            if (pit != null) { recovered = false; input = new CarInput(0, 0, 0); return input; } // in the pit lane: PitStep drives the car
             var near = track.Nearest(car.x, car.y, idx);
             prevIdx = idx < 0 ? near.idx : idx; idx = near.idx; lateral = near.lateral;
             double v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
@@ -174,13 +181,10 @@ namespace FormulaSim
             {
                 if (!double.IsNaN(lapStart)) { lastLap = simTime - lapStart; if (double.IsNaN(bestLap) || lastLap < bestLap) bestLap = lastLap; }
                 lapStart = simTime; lap++; car.NewLap();
-                if (boxing)
+                if (boxing && pitLane == null)
                 {
-                    boxing = false; pitStops++; pitLoss += (rc != null ? rc.PitLoss(PitLoss) : PitLoss) + (car.damage.WingsDamaged ? WingChange : 0);
-                    car.RepairWings(); car.FixPunctures();
-                    car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0; car.tyreTF = car.tyreTR = car.cfg.tyreStart; car.tyreSF = car.tyreSR = double.NaN;
-                    if (strat != null) { tyreSet = strat.OnStop(lap, boxReason); car.cfg.compound = TyreSets.Physics(tyreSet); setSerial++; }
-                    boxReason = 0;
+                    pitLoss += (rc != null ? rc.PitLoss(PitLoss) : PitLoss) + (car.damage.WingsDamaged ? WingChange : 0);
+                    Service(lap);
                 }
                 if (strat != null && raceLaps > 0 && !boxing && strat.BoxThisLap(lap, Math.Max(car.wearF, car.wearR))) { boxing = true; boxReason = 0; }
                 lapPace = 1 + (rng.NextDouble() - 0.5) * 0.02 * (1 - who.consistency); // good laps and bad laps
@@ -194,6 +198,18 @@ namespace FormulaSim
                 noPass = rc.NoOvertaking; blueFlag = rc.Blue(slot);
                 if (rc.ScOnTrack) { if (!scChecked && strat != null && !boxing) { scChecked = true; if (strat.CheapStop(lap, Math.Max(car.wearF, car.wearR))) { boxing = true; boxReason = 2; } } }
                 else scChecked = false;
+            }
+            // boxing, at the pit entry (and not on the last lap): into the pit lane
+            if (boxing && pitLane != null && raceLaps > 0 && lap >= 1 && lap < raceLaps && prevIdx >= 0 && v > 3)
+            {
+                double u0 = PitLane.RelS(track, prevIdx), u1 = PitLane.RelS(track, idx);
+                if (u0 < pitLane.sEntry && u1 >= pitLane.sEntry && u1 - u0 < 30)
+                {
+                    pit = new PitRun(pitLane, pitBay, this, u1, v, lateral, car.damage.WingsDamaged ? WingChange : 0);
+                    pitLapAfter = lap + 1;
+                    progress = lap + (double)idx / N - pitLoss / RefLap;
+                    recovered = false; input = new CarInput(0, 0, 0); return input;
+                }
             }
             progress = lap + (double)idx / N - pitLoss / RefLap;
             if (deploy != null) car.deployMap = deploy[idx];   // the same energy rule as the player's car, with its own map
@@ -360,6 +376,41 @@ namespace FormulaSim
             }
             input = new CarInput(steer, thr, brk);
             return input;
+        }
+
+        // the stop itself: new set (the strategy's), wings, punctures. lapNow = the lap starting at the line of this stop.
+        void Service(int lapNow)
+        {
+            boxing = false; pitStops++;
+            car.RepairWings(); car.FixPunctures();
+            car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0; car.tyreTF = car.tyreTR = car.cfg.tyreStart; car.tyreSF = car.tyreSR = double.NaN;
+            if (strat != null) { tyreSet = strat.OnStop(lapNow, boxReason); car.cfg.compound = TyreSets.Physics(tyreSet); setSerial++; }
+            boxReason = 0;
+        }
+
+        // In the pit lane: call every physics step instead of car.Step. The car follows its PitRun (no time is added: the
+        // lane costs what it costs); laps, progress and the line crossing go on from the lane's track distance.
+        public void PitStep(double dt, double simTime)
+        {
+            var r = pit; if (r == null) return;
+            int N = track.N, before = idx;
+            r.Step(dt); r.ApplyTo(car);
+            prevIdx = before < 0 ? r.idx : before; idx = r.idx; lateral = r.lateral;
+            if (prevIdx > N * 0.8 && idx < N * 0.2)
+            {
+                if (!double.IsNaN(lapStart)) { lastLap = simTime - lapStart; if (double.IsNaN(bestLap) || lastLap < bestLap) bestLap = lastLap; }
+                lapStart = simTime; lap++; car.NewLap();
+                if (strat != null && raceLaps > 0 && !boxing && strat.BoxThisLap(lap, Math.Max(car.wearF, car.wearR))) { boxing = true; boxReason = 0; }
+                lapPace = 1 + (rng.NextDouble() - 0.5) * 0.02 * (1 - who.consistency);
+            }
+            if (r.TakeService()) Service(pitLapAfter);
+            progress = lap + (double)idx / N - pitLoss / RefLap;
+            if (r.Done)
+            {
+                // back on the track at pit-lane speed: merge from the edge towards the racing line
+                r.HandBack(car); pit = null;
+                offset = offsetTarget = lateral - line.off[idx]; stuckT = offT = mistakeT = 0; wasBraking = false;
+            }
         }
 
         public CarInput LastInput => input;

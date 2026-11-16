@@ -207,6 +207,8 @@ public static class Trackside
     // pit boxes (one per garage bay): where a car stops in the working lane. Used by PitCrew.cs. Rebuilt with the circuit.
     public struct PitBay { public Vector3 centre, fwd, side; public float garageDist; public int idx; } // side = towards the garage; garageDist = from centre to the garage front
     public static readonly List<PitBay> Bays = new List<PitBay>();
+    // the pit lane cars drive (PitLane.cs): entry ramp, fast lane along the garages, exit ramp; null = no pit building
+    public static PitLane Lane;
     static Material fenceMat;
     static readonly List<Renderer> fenceRs = new List<Renderer>(), optional = new List<Renderer>(), postRs = new List<Renderer>();
 
@@ -215,10 +217,50 @@ public static class Trackside
     static Vector3 Nrm(TrackPoint p) { return new Vector3((float)p.nx, 0f, (float)p.ny).normalized; }
     static float Rand(int i, int s) { float x = Mathf.Sin(i * 12.9898f + s * 78.233f) * 43758.5453f; return x - Mathf.Floor(x); }
 
+    // ================================================================ pit lane roads
+    // does the pit entry / exit road cross a barrier at offset o (from the centreline) at track point i?
+    static bool PitGap(Track t, int i, float o)
+    {
+        if (Lane == null) return false;
+        double u = PitLane.RelS(t, i);
+        if (!Lane.OnRamp(u)) return false;
+        double L = System.Math.Abs(Lane.BaseLat(u));
+        return L - PitLane.RoadIn < o + 0.7 && L + PitLane.RoadOut > o - 0.2;
+    }
+    // entry and exit roads: pit asphalt from the track's edge (kerb) out to the fast lane along the ramps, a white line
+    // on the inner edge; footprints keep the scenery off them
+    static void PitRoads(Track t, PitLane lane, float edge)
+    {
+        float ds = (float)t.ds, step = 3f;
+        for (int part = 0; part < 2; part++)
+        {
+            double u0 = part == 0 ? lane.sEntry : lane.sB, u1 = part == 0 ? lane.sA : lane.sExit;
+            int n = Mathf.Max(1, Mathf.CeilToInt((float)(u1 - u0) / step));
+            for (int k = 0; k < n; k++)
+            {
+                double ua = u0 + (u1 - u0) * k / n, ub = u0 + (u1 - u0) * (k + 1) / n;
+                float La = Mathf.Abs((float)lane.BaseLat(ua)), Lb = Mathf.Abs((float)lane.BaseLat(ub));
+                float ia = Mathf.Max(La - (float)PitLane.RoadIn, edge), ib = Mathf.Max(Lb - (float)PitLane.RoadIn, edge);
+                float oa = La + (float)PitLane.RoadOut, ob = Lb + (float)PitLane.RoadOut;
+                if (oa - ia < 0.6f && ob - ib < 0.6f) continue;
+                oa = Mathf.Max(oa, ia + 0.1f); ob = Mathf.Max(ob, ib + 0.1f);
+                int a = lane.TrackIdx(ua), b = lane.TrackIdx(ub);
+                SetChunk(a);
+                var pa = t.pts[a]; var pb = t.pts[b];
+                Vector3 ca = P(pa), cb = P(pb), Da = Nrm(pa) * lane.side, Db = Nrm(pb) * lane.side, up = Vector3.up;
+                // positions along the track inside the point spacing (the ramps are sampled finer than the track)
+                ca += Tan(pa) * (float)(ua - PitLane.RelS(t, a)); cb += Tan(pb) * (float)(ub - PitLane.RelS(t, b));
+                Quad(A, ca + Da * ia + up * 0.03f, cb + Db * ib + up * 0.03f, cb + Db * ob + up * 0.03f, ca + Da * oa + up * 0.03f, up, TracksideArt.Sw(TracksideArt.PitAsphalt));
+                Quad(A, ca + Da * ia + up * 0.04f, cb + Db * ib + up * 0.04f, cb + Db * (ib + 0.15f) + up * 0.04f, ca + Da * (ia + 0.15f) + up * 0.04f, up, TracksideArt.Sw(TracksideArt.LineWhite));
+                if (k % 4 == 0) AddFoot((ca + cb) * 0.5f + (Da + Db) * 0.25f * (ia + oa), Tan(pa), step * 2f + 1f, (oa - ia) * 0.5f + 0.5f);
+            }
+        }
+    }
+
     // ================================================================ build
     public static void Build(Track t, Transform root, bool street)
     {
-        Bays.Clear(); feet.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
+        Bays.Clear(); Lane = null; feet.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
         if (t == null || t.N < 8 || root == null) return;
         int N = t.N; float ds = (float)t.ds;
         float hw = (float)t.width * 0.5f, kerb = WorldBuilder.Kerb;
@@ -469,6 +511,18 @@ public static class Trackside
                     for (int s2 = -1; s2 <= 1; s2 += 2) for (int s3 = -1; s3 <= 1; s3 += 2)
                         Box(A, mid + T * (s2 * hlP) + D * (s3 * hd) + up * (y + 2.5f), T, up, D, 0.1f, 2.05f, 0.1f, TracksideArt.Steel);
                 }
+            }
+            // the pit lane path (PitLane.cs): the fast lane's centre, every box by its track distance and offset
+            if (Bays.Count > 0)
+            {
+                var pitBu = new List<double>(); var pitBl = new List<double>();
+                foreach (var pitBay in Bays)
+                {
+                    var pitNear = t.Nearest(pitBay.centre.x, pitBay.centre.z); var pitTp = t.pts[pitNear.idx];
+                    pitBu.Add(PitLane.RelS(t, pitNear.idx) + (pitBay.centre.x - pitTp.x) * pitTp.tx + (pitBay.centre.z - pitTp.y) * pitTp.ty); pitBl.Add(pitNear.lateral);
+                }
+                Lane = new PitLane(t, sg, pitA * ds, pitB * ds, laneIn + 3.25, pitBu, pitBl);
+                PitRoads(t, Lane, hw + kerb + 0.3f);
             }
             // paddock motorhomes behind the garages (High, parkland)
             if (high && !street)
@@ -819,6 +873,7 @@ public static class Trackside
                     Vector3 dir = Nrm(p) * sg, inner = P(p) + dir * o;
                     bool ok = o >= minClear && grid.MinDist(inner) >= minClear;
                     if (ok && run && Vector3.Dot(inner - lastIn, Tan(p)) < 0.1f * step * ds) ok = false; // no fold-back in hairpins
+                    if (ok && sg == pitSide && PitGap(t, i, o)) ok = false; // the pit entry / exit road crosses the barrier line here
                     if (!ok)
                     {
                         if (run) { if (lastI != aI) Seg(aI, aIn, aDir, lastI, lastIn, lastDir); Cap(lastIn, lastDir, lastI); }

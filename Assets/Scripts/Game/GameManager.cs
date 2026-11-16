@@ -346,20 +346,23 @@ public partial class GameManager : MonoBehaviour
             for (int i = 0; i < rivals.Count; i++)
             {
                 rivals[i].Think(4 * H, simTime, rivals, car, idx, playerLat);
+                if (rivals[i].InPit) continue; // driven along the pit lane (PitStep below)
                 var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.Grade(rc.x, rc.y, rc.heading) : 0;
                 if (rivals[i].idx >= 0) Traffic.Wall(rivals[i].car, track.pts[rivals[i].idx], rivals[i].lateral, wallAt);
             }
             RcStep(); // race control sees every car (GameManagerRaceControl.cs)
             for (int i = 0; i < rivals.Count; i++)
             {
-                for (int j = i + 1; j < rivals.Count; j++) Traffic.Collide(rivals[i].car, rivals[j].car);
-                Traffic.Collide(rivals[i].car, car);
+                if (rivals[i].InPit) continue; // cars in the pit lane touch nobody
+                for (int j = i + 1; j < rivals.Count; j++) if (!rivals[j].InPit) Traffic.Collide(rivals[i].car, rivals[j].car);
+                if (pRun == null) Traffic.Collide(rivals[i].car, car);
             }
         }
         double hw = track.width / 2;
         for (int i = 0; i < rivals.Count; i++)
         {
             var d = rivals[i];
+            if (d.InPit) { if (i < rivalLag.Length) rivalLag[i] = 0; d.PitStep(H, simTime); continue; } // the pit lane (PitLane.cs)
             if (aiTick % 4 == 1) { WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles); Weather.Apply(track, line, d.car, d.idx, d.lateral, d.tyreSet); }
             if (RivalCoarse(i, d)) continue; // far from the camera and the player: 120 Hz (GameManagerPerf.cs)
             d.car.Step(RivalStartInput(i, d), H); // held until lights out + reaction time, then the launch clutch
@@ -375,6 +378,7 @@ public partial class GameManager : MonoBehaviour
 
     void Recover()
     {
+        if (pRun != null) return; // in the pit lane
         var p = track.pts[(idx + 4) % track.N];
         double keep = System.Math.Max(System.Math.Min(System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), 40), 22);
         var cfg = car.cfg; int gear = 1;
@@ -551,19 +555,24 @@ public partial class GameManager : MonoBehaviour
         double wallDv = 0; // biggest speed change from a barrier hit this frame (m/s), for the haptics
         while (acc >= H)
         {
-            SetSurface();
             px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn;
             input.steer = steerF.Step(H);
-            if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
-            car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
-            car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
-            StartAfterStep();
-            double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one
-            if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt))
+            if (pRun != null) PlayerPitStep(); // in the pit lane: driven along the lane at the limiter (PitCrew.cs)
+            else
             {
-                if (hitT <= 0) Flash("Barrier!"); hitT = 1.5f;
-                double dvx = car.vx - preVx, dvy = car.vy - preVy;
-                wallDv = System.Math.Max(wallDv, System.Math.Sqrt(dvx * dvx + dvy * dvy));
+                SetSurface();
+                if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
+                car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
+                car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
+                StartAfterStep();
+                double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one
+                if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt))
+                {
+                    if (hitT <= 0) Flash("Barrier!"); hitT = 1.5f;
+                    double dvx = car.vx - preVx, dvy = car.vy - preVy;
+                    wallDv = System.Math.Max(wallDv, System.Math.Sqrt(dvx * dvx + dvy * dvy));
+                }
+                PlayerPitEntry(); // BOX armed and passing the pit entry: into the pit lane
             }
             if (rivals.Count > 0) StepRivals();
             raceTime += H;
@@ -733,20 +742,21 @@ public partial class GameManager : MonoBehaviour
                 else Flash((cut ? "Lap invalid  " : "Lap ") + Fmt(lastLap));
             }
             lapStart = simTime; lapNo++; pLap++; cut = false; car.NewLap();
-            if (boxArmed) { boxArmed = false; if (raceLaps > 0 && pLap <= raceLaps) PitStop(); }
+            if (boxArmed && !PitLaneOn) { boxArmed = false; if (raceLaps > 0 && pLap <= raceLaps) PitStop(true); } // no pit lane: the old stop at the line
         }
         else if (prevIdx < track.N * 0.2 && idx > track.N * 0.8) { lapStart = null; pLap--; }
     }
 
     // ---------------------------------------------------------------- pit stop (races only)
-    // "BOX" arms a stop; on the next crossing of the line the car gets fresh tyres of the next compound and the
-    // stop's time loss is added to the player's race time (and taken off the race distance for the order).
-    // The car is not stopped on track: rivals would run into it at the line.
+    // "BOX" arms a stop; at the pit entry (~250 m before the line) the car is driven down the pit lane at the 80 km/h
+    // limiter into its box, the crew changes the tyres on it and it is driven out to the exit (PitLane.cs; glue in
+    // PitCrew.cs). The time lost is the drive itself. PitStop applies the service when the new wheels go on: the next
+    // compound fresh off the blankets, a new wing, puncture repair. On a circuit without a pit lane (instant = true) the
+    // stop happens at the line and its time loss is added as before.
     const double PitLoss = 22;
     bool boxArmed; double pitLoss; int pitStops;
-    void PitStop()
+    void PitStop(bool instant)
     {
-        Color oldTyre = Weather.Stripe(carSet); // (the crew shows the stop: PitCrew.cs)
         carSet = NextSet; var next = Weather.PhysicsCompound(carSet);
         car.cfg.compound = next;
         car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0;
@@ -754,10 +764,14 @@ public partial class GameManager : MonoBehaviour
         car.tyreSF = car.tyreSR = double.NaN;               // the surface temperature re-starts from the carcass
         if (model != null) model.SetStripe(Weather.Stripe(carSet));
         double wing = car.damage.WingsDamaged ? AiDriver.WingChange : 0; car.RepairWings(); car.FixPunctures();
-        double loss = RcPitLoss(PitLoss); // cheaper under the safety car / VSC
-        pitLoss += loss + wing; pitStops++;
-        PitCrewPlayerStop(oldTyre, Weather.Stripe(carSet), wing);
-        Flash($"Pit stop: {Weather.TyreName(carSet)}  +{loss + wing:0}s");
+        pitStops++;
+        if (instant)
+        {
+            double loss = RcPitLoss(PitLoss); // cheaper under the safety car / VSC
+            pitLoss += loss + wing; pitStopLen = loss + wing;
+            Flash($"Pit stop: {Weather.TyreName(carSet)}  +{loss + wing:0}s");
+        }
+        else pitStopLen = pRun != null ? pRun.serviceLen : PitLane.Service;
     }
     // the next tyre set: the one for the weather first (a wet race boxes for wets), then round the rest
     int NextSet => Weather.BestSet() != carSet ? Weather.BestSet() : (carSet + 1) % Weather.Sets;
@@ -1092,7 +1106,7 @@ public partial class GameManager : MonoBehaviour
         x -= b + g;
         if (RoundBtn(new Rect(x, y, b, b), icoGear)) menuOpen = true;
         // pit stop: arm it during a race (not on the last lap); it happens when the car next crosses the line
-        if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps)
+        if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps && pRun == null)
         {
             float pw = S(58); x -= pw + g;
             bool armed = boxArmed, blink = armed && Mathf.Repeat(Time.unscaledTime * 2f, 1f) < 0.5f;
