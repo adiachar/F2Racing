@@ -50,9 +50,14 @@ public struct Livery
         float mx = Mathf.Max(primary.r, Mathf.Max(primary.g, primary.b)), mn = Mathf.Min(primary.r, Mathf.Min(primary.g, primary.b));
         if (mx > 0.5f && (mx - mn) < 0.15f * mx)
         {
-            var strong = acc; float am = Mathf.Max(strong.r, Mathf.Max(strong.g, strong.b)), an = Mathf.Min(strong.r, Mathf.Min(strong.g, strong.b));
-            if (am - an < 0.3f * am) strong = sec; // trim is pale too: fall back to the dark one
-            return new Livery("Team " + (teamIndex + 1), strong, primary, sec);
+            // each pale team gets its OWN strong colour (taking the trim accent for all of them made every one teal)
+            var strong = acc;
+            switch (teamIndex) { case 0: strong = C(0.15f, 0.16f, 0.19f); acc = C(0.00f, 0.80f, 0.70f); break;   // silver team: graphite, silver, teal line
+                                 case 7: strong = C(0.42f, 0.26f, 0.62f); acc = C(0.95f, 0.95f, 0.95f); break;   // grey team: violet
+                                 case 8: strong = C(0.88f, 0.18f, 0.48f); break; }                                // white team: magenta
+            float am = Mathf.Max(strong.r, Mathf.Max(strong.g, strong.b)), an = Mathf.Min(strong.r, Mathf.Min(strong.g, strong.b));
+            if (teamIndex != 0 && teamIndex != 7 && teamIndex != 8 && am - an < 0.3f * am) strong = sec; // trim is pale too: fall back to the dark one
+            return new Livery("Team " + (teamIndex + 1), strong, primary, (teamIndex == 0 || teamIndex == 7) ? acc : sec);
         }
         return new Livery("Team " + (teamIndex + 1), primary, sec, acc);
     }
