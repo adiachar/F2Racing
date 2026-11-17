@@ -38,11 +38,12 @@ public static class DriverGeo
     public const float WheelPitch = -16.34f;
     // the left hand on the left grip, in the wheel's own frame (x right, y up, the driver at -z) in metres: the grip
     // sits in the closed fist, palm on its outer side, fingers round its back, the wrist behind and outside it. The
-    // right hand is the mirror image. The grip is the player's built wheel's (WheelGeo.GripL: 124 mm out from the
-    // centre; the model's own wheel had it at 117 mm, too little to tell on a rival), so the wrist follows from it.
+    // right hand is the mirror image. The grip is the player's wheel model's (WheelGeo.GripL, measured on its rubber
+    // grip by Tools/Wheel/convert.py: 125 mm out from the centre; the car model's own wheel had it at 117 mm, too little
+    // to tell on a rival), so the wrist follows from it.
     static readonly Vector3 HandFwdL = new Vector3(0.1f, 0f, 1f);
     static readonly Vector3 GripInHand = new Vector3(0.029f, 0.015f, 0.093f);        // grip axis in the hand's frame (x palm side)
-    static readonly Vector3 WristL = WristFor(WheelGeo.GripL);                        // (-0.162, -0.017, -0.116)
+    static readonly Vector3 WristL = WristFor(WheelGeo.GripL);                        // (-0.163, -0.021, -0.123)
     // the wrist that puts GripInHand on the grip point g with the wheel at rest (the hand's frame: forward HandFwdL, up y)
     static Vector3 WristFor(Vector3 g)
     {

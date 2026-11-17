@@ -1,0 +1,10 @@
+Steering wheel model (Assets/Resources/Wheel/wheel.bytes, atlas.bytes)
+
+This work is based on "McLaren Formula 1 Steering Wheel" (https://sketchfab.com/3d-models/mclaren-formula-1-steering-wheel-4dc0ce4effbe43d0a027aa072b437818) by dhimasdc9 (https://sketchfab.com/dhimasdc9) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+Author: dhimasdc9 (https://sketchfab.com/dhimasdc9)
+Source: https://sketchfab.com/3d-models/mclaren-formula-1-steering-wheel-4dc0ce4effbe43d0a027aa072b437818
+License: CC BY 4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+Changes: merged into one mesh, decimated (~12875 of 328088 triangles), rescaled and re-oriented, textures packed into one atlas, materials replaced by the game's steering-wheel shader; the display shows the game's own live read-out.
+In-game credit line: "Steering wheel model by dhimasdc9 (CC BY 4.0)".

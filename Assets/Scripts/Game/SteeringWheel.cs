@@ -1,5 +1,9 @@
-// SteeringWheel.cs — the player's steering wheel in the cockpit, built from code: a 2026-style formula wheel
-// (~2.6k triangles, ONE draw call, ONE material: SteeringWheel.shader):
+// SteeringWheel.cs — the player's steering wheel in the cockpit. The wheel is a real F1 wheel model (Resources/Wheel:
+// wheel.bytes + atlas.bytes from Tools/Wheel/convert.py; "Steering wheel model by dhimasdc9 (CC BY 4.0)", see
+// Resources/Wheel/CREDITS.txt): ~12.9k triangles, one draw call, SteeringWheel.shader with the model's albedo atlas.
+// Our live 128 x 64 display is mapped onto the model's screen, its 15 shift lights are lit from _Led, its upper rear
+// paddles flick on gear changes. Only if that file is missing (or fails to load) the built wheel below stands in:
+// a 2026-style formula wheel (~2.6k triangles, ONE draw call, ONE material: SteeringWheel.shader):
 //  * carbon body 280 x 168 mm with a flat top and bottom, shoulders over the grips and a foot under them, rounded edges
 //  * two contoured rubber / alcantara grips (dark, matte, thicker where the palm is) where the driver's gloves hold it
 //    at 9:15 (DriverGeo puts the hands on WheelGeo.GripL / its mirror)
@@ -10,7 +14,8 @@
 //  * carbon shift paddles behind (their tips show past the grips) that flick on every gear change (vertex shader:
 //    one uniform, no extra renderer) + clutch paddles, a quick-release hub and the column stub
 // Per vertex: colour rgb = base colour (linear), a = baked occlusion; uv0 = display UV / LED number / paddle hinge;
-// uv1 = (clear coat, gloss, metal, kind); uv2.x = paddle side (-1 left, +1 right, 0 none).
+// uv1 = (clear coat, gloss, metal, kind); uv2.x = paddle side (-1 left, +1 right, 0 none), uv2.y = 1: albedo from the
+// atlas at uv3 (the model only).
 // Built in metres in the wheel's own frame (x right, y up, the driver looks at its -z face) and scaled into the car's
 // body frame (the car's root is scaled by DriverGeo.K). Rivals keep the merged model's simple wheel.
 // WheelGeo and WheelDash use only maths types, so they can be built and checked off-line (F2_DRIVER_HARNESS).
@@ -25,8 +30,9 @@ public static class WheelGeo
     public static readonly Vector2 ScreenMin = new Vector2(-0.050f, 0.010f), ScreenMax = new Vector2(0.050f, 0.060f); // 100 x 50 mm (2:1, as the texture)
     public const int LedCount = 15;
     const float LedY = 0.0668f, LedPitch = 0.0071f;
-    // the left grip's axis where the left glove closes round it (the right one is the mirror image): DriverGeo.WristL
-    public static readonly Vector3 GripL = new Vector3(-0.124f, -0.002f, -0.026f);
+    // the left grip's axis where the left glove closes round it (the right one is the mirror image): DriverGeo.WristL.
+    // Measured on the model's rubber grip by Tools/Wheel/convert.py (the built fallback's grips are put there too).
+    public static readonly Vector3 GripL = new Vector3(-0.1246f, -0.0057f, -0.0333f);
     const float GripBotY = -0.066f, GripTopY = 0.054f;
     // paddles: hinge (x, z) of the right one; the left is the mirror
     const float PadHingeX = 0.036f, PadZ0 = -0.0058f, PadZ1 = -0.0025f;
@@ -573,14 +579,51 @@ public sealed class WheelDash
     }
 }
 
+// The converted wheel model (Resources/Wheel/wheel.bytes, written by Tools/Wheel/convert.py), in the same frame and
+// vertex layout as WheelGeo.Data (plus the atlas UV): "F2WH", version, vertex and triangle counts, the screen rect and
+// the measured grip (unused here: WheelGeo.GripL), then per vertex 52 bytes, then u16 / u32 indices.
+public static class WheelModel
+{
+    public sealed class Data
+    {
+        public Vector3[] v, n; public Color[] c; public Vector2[] uv0, uv2, uv3; public Vector4[] uv1; public int[] t;
+    }
+    public static Data Parse(byte[] b, float scale)
+    {
+        var r = new System.IO.BinaryReader(new System.IO.MemoryStream(b));
+        if (r.ReadByte() != 'F' || r.ReadByte() != '2' || r.ReadByte() != 'W' || r.ReadByte() != 'H') return null;
+        if (r.ReadUInt32() != 1) return null;
+        int nv = (int)r.ReadUInt32(), nt = (int)r.ReadUInt32();
+        if (nv <= 0 || nt <= 0 || b.Length < 44 + nv * 52 + nt * 3 * (nv < 65536 ? 2 : 4)) return null;
+        for (int i = 0; i < 7; i++) r.ReadSingle();
+        var d = new Data { v = new Vector3[nv], n = new Vector3[nv], c = new Color[nv], uv0 = new Vector2[nv], uv1 = new Vector4[nv], uv2 = new Vector2[nv], uv3 = new Vector2[nv], t = new int[nt * 3] };
+        for (int i = 0; i < nv; i++)
+        {
+            d.v[i] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()) * scale;
+            d.n[i] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+            float cr = r.ReadByte() / 255f, cg = r.ReadByte() / 255f, cb = r.ReadByte() / 255f, ao = r.ReadByte() / 255f;
+            d.c[i] = new Color(Mathf.Pow(cr, 2.2f), Mathf.Pow(cg, 2.2f), Mathf.Pow(cb, 2.2f), ao); // stored gamma-encoded
+            var u0 = new Vector2(r.ReadSingle(), r.ReadSingle());
+            float coat = r.ReadByte() / 255f, gloss = r.ReadByte() / 255f, metal = r.ReadByte() / 255f, kind = r.ReadByte();
+            float pad = (sbyte)r.ReadByte(), tex = r.ReadByte(); r.ReadByte(); r.ReadByte();
+            d.uv0[i] = pad != 0f ? u0 * scale : u0; // a paddle's hinge is a position
+            d.uv1[i] = new Vector4(coat, gloss, metal, kind); d.uv2[i] = new Vector2(pad, tex);
+            d.uv3[i] = new Vector2(r.ReadSingle(), r.ReadSingle());
+        }
+        bool small = nv < 65536;
+        for (int i = 0; i < nt * 3; i++) { d.t[i] = small ? r.ReadUInt16() : (int)r.ReadUInt32(); if ((uint)d.t[i] >= (uint)nv) return null; }
+        return d;
+    }
+}
+
 #if !F2_DRIVER_HARNESS
 // The component on the player's steering wheel (CarModel.CreateFromAsset puts it on the "steer_" part, whose transform
 // SetSteer turns): owns the material and the display texture; Feed (from DriverFeel.Cockpit, every frame) drives the
 // shift LEDs and the paddles every frame and redraws the display ~15 times a second while it is on screen.
 public class SteeringWheel : MonoBehaviour
 {
-    static Mesh shared; static Shader shader; static bool tried;
-    static readonly int LedId = Shader.PropertyToID("_Led"), PaddleId = Shader.PropertyToID("_Paddle"), DashId = Shader.PropertyToID("_Dash");
+    static Mesh shared; static Shader shader; static bool tried; static Texture2D atlas;
+    static readonly int LedId = Shader.PropertyToID("_Led"), PaddleId = Shader.PropertyToID("_Paddle"), DashId = Shader.PropertyToID("_Dash"), AlbedoId = Shader.PropertyToID("_Albedo");
     // shift lights: as ShiftLights (DriverFeel.cs): shares of the rev limit (the gearbox shifts at 97.5 %)
     const float From = 0.85f, Full = 0.965f, FlashAt = 0.972f, FlashHz = 12f;
     const float Hz = 15f, FlickTime = 0.16f, FlickRad = 4f * Mathf.Deg2Rad;
@@ -603,11 +646,15 @@ public class SteeringWheel : MonoBehaviour
         if (shader == null || go == null) return null;
         if (shared == null)
         {
-            var d = WheelGeo.Build(1f / DriverGeo.K); // metres -> the car body's units (the root is scaled by K)
-            shared = new Mesh { name = "SteeringWheel" };
-            shared.SetVertices(d.v); shared.SetNormals(d.n); shared.SetColors(d.c);
-            shared.SetUVs(0, d.uv0); shared.SetUVs(1, d.uv1); shared.SetUVs(2, d.uv2);
-            shared.SetTriangles(d.t, 0); shared.RecalculateBounds();
+            shared = LoadModel(1f / DriverGeo.K); // the real wheel model; the built one only if it is missing
+            if (shared == null)
+            {
+                var d = WheelGeo.Build(1f / DriverGeo.K); // metres -> the car body's units (the root is scaled by K)
+                shared = new Mesh { name = "SteeringWheel" };
+                shared.SetVertices(d.v); shared.SetNormals(d.n); shared.SetColors(d.c);
+                shared.SetUVs(0, d.uv0); shared.SetUVs(1, d.uv1); shared.SetUVs(2, d.uv2);
+                shared.SetTriangles(d.t, 0); shared.RecalculateBounds();
+            }
             // the paddles move a little in the shader: room for them in the bounds
             var b = shared.bounds; b.Expand(0.02f); shared.bounds = b;
         }
@@ -616,12 +663,41 @@ public class SteeringWheel : MonoBehaviour
         sw.tex = new Texture2D(WheelDash.W, WheelDash.H, TextureFormat.RGBA32, false) { name = "WheelDash", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp, anisoLevel = 2 };
         sw.Mat = new Material(shader) { name = "SteeringWheel" };
         sw.Mat.SetTexture(DashId, sw.tex);
+        if (atlas != null) sw.Mat.SetTexture(AlbedoId, atlas);
         sw.Mat.SetVector(LedId, Vector4.zero); sw.Mat.SetVector(PaddleId, Vector4.zero);
         sw.mph = PlayerPrefs.GetInt("units", 0) == 1;
         sw.dash.Draw(1, false, 0, sw.mph, double.NaN, 1f, 0, 0, 0f, false);
         sw.tex.SetPixels32(sw.dash.px); sw.tex.Apply(false, false);
         return sw;
     }
+    // Resources/Wheel: the model's mesh and its albedo atlas (PNG / JPEG bytes, ImageConversion like EnvTex.LoadPhoto);
+    // null if either is missing or broken (silently: the built wheel stands in)
+    static Mesh LoadModel(float scale)
+    {
+        try
+        {
+            var mb = Resources.Load<TextAsset>("Wheel/wheel"); var ab = Resources.Load<TextAsset>("Wheel/atlas");
+            if (mb == null || ab == null) return null;
+            var d = WheelModel.Parse(mb.bytes, scale);
+            Resources.UnloadAsset(mb);
+            if (d == null) { Resources.UnloadAsset(ab); return null; }
+            var tmp = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+            bool ok = ImageConversion.LoadImage(tmp, ab.bytes, false);
+            Resources.UnloadAsset(ab);
+            if (!ok) { Object.Destroy(tmp); return null; }
+            var px = tmp.GetPixels32(); int w = tmp.width, h = tmp.height; Object.Destroy(tmp);
+            atlas = new Texture2D(w, h, TextureFormat.RGBA32, true, false) { name = "WheelAtlas", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
+            atlas.SetPixels32(px); atlas.Apply(true, false); atlas.Compress(true); atlas.Apply(false, true);
+            var m = new Mesh { name = "SteeringWheelModel" };
+            if (d.v.Length >= 65536) m.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            m.SetVertices(d.v); m.SetNormals(d.n); m.SetColors(d.c);
+            m.SetUVs(0, d.uv0); m.SetUVs(1, d.uv1); m.SetUVs(2, d.uv2); m.SetUVs(3, d.uv3);
+            m.SetTriangles(d.t, 0); m.RecalculateBounds();
+            return m;
+        }
+        catch (System.Exception) { atlas = null; return null; }
+    }
+
     // CarModel adds the MeshRenderer after Attach: no shadow (the cockpit is in the car's own shade anyway)
     public void Bind(MeshRenderer r)
     {

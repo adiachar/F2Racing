@@ -8,6 +8,8 @@
 //   4 shift LED: TEXCOORD0.x = its number (0..14); _Led.x = how many are lit, _Led.y = 1 all blue / 2 all dark (flash)
 // Paddles (TEXCOORD2.x = -1 left / +1 right): turned about their hinge (TEXCOORD0 = hinge x, z) by _Paddle.x / .y
 // radians, the tip towards the driver: the flick on a gear change, with no extra object or draw call.
+// The wheel model (Resources/Wheel) also has TEXCOORD2.y = 1 where its albedo comes from _Albedo at TEXCOORD3 (the
+// built fallback wheel leaves it 0: vertex colour only).
 // Self-lit parts (display, LEDs) are added after the colour grade, so they read the same in the sun and in a tunnel.
 // PRECISION RULE (GLES3 / Vulkan, see CarPaint.shader): every comparison, step() and mask is FLOAT, never half.
 Shader "F2/SteeringWheel"
@@ -15,6 +17,7 @@ Shader "F2/SteeringWheel"
     Properties
     {
         _Dash ("Display (drawn by SteeringWheel.cs)", 2D) = "black" {}
+        _Albedo ("Wheel model albedo atlas", 2D) = "white" {}
         _Led ("Shift lights: lit, flash", Vector) = (0, 0, 0, 0)
         _Paddle ("Paddle angles left, right (rad)", Vector) = (0, 0, 0, 0)
     }
@@ -36,7 +39,7 @@ Shader "F2/SteeringWheel"
             #include "Grade.cginc"
             #include "Lighting.cginc"
 
-            sampler2D _Dash;
+            sampler2D _Dash, _Albedo;
             float4 _Led, _Paddle;
             half _CarLit;
             half4 _GroundRefl;
@@ -49,6 +52,7 @@ Shader "F2/SteeringWheel"
                 float2 uv : TEXCOORD0;
                 float4 mat : TEXCOORD1;
                 float2 pad : TEXCOORD2;
+                float2 auv : TEXCOORD3;
             };
             struct v2f
             {
@@ -56,9 +60,9 @@ Shader "F2/SteeringWheel"
                 float3 wp : TEXCOORD0;
                 half3 n : TEXCOORD1;
                 float4 col : COLOR;
-                float2 uv : TEXCOORD2;
+                float4 uv : TEXCOORD2;    // display UV / LED number, atlas UV
                 float4 mat : TEXCOORD3;   // coat, gloss, metal, kind (float: the kind feeds the masks)
-                float3 op : TEXCOORD4;    // object-space position and normal (carbon weave)
+                float4 op : TEXCOORD4;    // object-space position (carbon weave), w = textured
                 float3 on : TEXCOORD5;
                 half3 amb : TEXCOORD6;
                 half3 envSH : TEXCOORD7;
@@ -96,9 +100,9 @@ Shader "F2/SteeringWheel"
                 o.amb = ShadeSH9(half4(o.n, 1));
                 o.envSH = ShadeSH9(half4(reflect(-normalize(_WorldSpaceCameraPos.xyz - o.wp), o.n), 1));
                 o.col = v.color;
-                o.uv = v.uv;
+                o.uv = float4(v.uv, v.auv);
                 o.mat = v.mat;
-                o.op = p; o.on = nrm;
+                o.op = float4(p, saturate(v.pad.y)); o.on = nrm;
                 UNITY_TRANSFER_FOG(o, o.pos);
                 return o;
             }
@@ -109,20 +113,21 @@ Shader "F2/SteeringWheel"
                 float isCarbon = step(abs(kind - 1.0), 0.5), isFabric = step(abs(kind - 2.0), 0.5);
                 float isScreen = step(abs(kind - 3.0), 0.5), isLed = step(abs(kind - 4.0), 0.5);
                 // derivatives outside any branch
-                float3 dop = fwidth(i.op) * TOWS;
+                float3 dop = fwidth(i.op.xyz) * TOWS;
                 float fade = saturate(1.75 - 2.5 * max(dop.x, max(dop.y, dop.z))) * isCarbon;
-                float4 dash = tex2D(_Dash, i.uv);
+                float4 dash = tex2D(_Dash, i.uv.xy);
+                float3 alb = tex2D(_Albedo, i.uv.zw).rgb;
 
                 half3 N = normalize(i.n);
                 half3 V = normalize(_WorldSpaceCameraPos.xyz - i.wp);
                 half3 L = normalize(_WorldSpaceLightPos0.xyz);
                 half nl = dot(N, L), ndl = saturate(nl);
-                half3 base = i.col.rgb;
+                half3 base = (half3)(i.col.rgb * lerp(float3(1.0, 1.0, 1.0), alb, i.op.w));
                 half ao = i.col.a;
                 half coatK = i.mat.x, gloss = i.mat.y, metal = i.mat.z, specK = 1.0;
 
                 // carbon weave
-                float2 wv = Weave(i.op, normalize(i.on), fade, TOWS);
+                float2 wv = Weave(i.op.xyz, normalize(i.on), fade, TOWS);
                 base *= (half)lerp(1.0, wv.x, isCarbon);
                 specK = (half)lerp(1.0, wv.y, isCarbon);
 
