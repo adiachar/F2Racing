@@ -602,6 +602,7 @@ public partial class GameManager
                 double dl = deltaTr.Delta(idx, simTime - lapStart.Value);
                 if (!double.IsNaN(dl))
                 {
+                    SteeringWheel.SetDelta(dl); // the same delta on the steering wheel's display
                     Color dc = dl <= 0 ? HudGreen : HudRed;
                     var dr = new Rect(x + iw - S(46), clock.y + S(2), S(46), clock.height - S(4));
                     UiKit.Rect(dr, new Color(dc.r, dc.g, dc.b, 0.20f), 4f);

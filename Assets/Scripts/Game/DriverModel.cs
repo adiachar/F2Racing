@@ -37,11 +37,18 @@ public static class DriverGeo
     public static readonly Vector3 WheelPivotBody = new Vector3(0f, 0.6039f, 0.7995f);
     public const float WheelPitch = -16.34f;
     // the left hand on the left grip, in the wheel's own frame (x right, y up, the driver at -z) in metres: the grip
-    // (car.bytes: x -0.10..-0.126, centre (-0.108, 0.005, -0.025) at F2 size) sits in the closed fist, palm on its outer
-    // side, fingers round its front, the wrist behind and outside it. The right hand is the mirror image.
-    static readonly Vector3 WristL = new Vector3(-0.155f, -0.01f, -0.117f);
+    // sits in the closed fist, palm on its outer side, fingers round its back, the wrist behind and outside it. The
+    // right hand is the mirror image. The grip is the player's built wheel's (WheelGeo.GripL: 124 mm out from the
+    // centre; the model's own wheel had it at 117 mm, too little to tell on a rival), so the wrist follows from it.
     static readonly Vector3 HandFwdL = new Vector3(0.1f, 0f, 1f);
     static readonly Vector3 GripInHand = new Vector3(0.029f, 0.015f, 0.093f);        // grip axis in the hand's frame (x palm side)
+    static readonly Vector3 WristL = WristFor(WheelGeo.GripL);                        // (-0.162, -0.017, -0.116)
+    // the wrist that puts GripInHand on the grip point g with the wheel at rest (the hand's frame: forward HandFwdL, up y)
+    static Vector3 WristFor(Vector3 g)
+    {
+        Vector3 z = HandFwdL.normalized, x = Vector3.Cross(Vector3.up, z).normalized;
+        return g - (x * GripInHand.x + Vector3.up * GripInHand.y + z * GripInHand.z);
+    }
 
     public sealed class Pose
     {

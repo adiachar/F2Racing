@@ -153,12 +153,13 @@ public class DriverFeel
         {
             bound = model; Reset();
             if (leds != null) leds.Dispose();
-            leds = ShiftLights.Attach(model.SteerWheel);
+            leds = model.WheelRig != null ? null : ShiftLights.Attach(model.SteerWheel); // the built wheel lights its own LEDs (SteeringWheel.cs)
         }
         float lockDeg = Mathf.Max(1f, (float)car.cfg.maxLockDeg);
         float deg = (float)((double.IsNaN(delta) ? car.delta : delta) * 57.29578) * (WheelLockDeg / lockDeg);
         if (!float.IsNaN(deg)) model.SetSteerDeg(Mathf.Clamp(deg, -WheelLockDeg, WheelLockDeg));
         if (leds != null) leds.Set((float)car.rpm, (float)car.cfg.redline, time);
+        if (model.WheelRig != null) model.WheelRig.Feed(car, time); // its display, shift LEDs and paddle flicks
     }
 
     // Grip, wind and floor cues for the sound. Slip angles are given as a share of the angle where the tyre

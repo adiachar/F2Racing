@@ -16,6 +16,8 @@ public class CarModel : MonoBehaviour
     // the same, by the wheel's real angle in degrees (+ = turned left); used by DriverFeel with the real steering ratio
     public void SetSteerDeg(float deg) { if (steerWheel != null) steerWheel.localRotation = Quaternion.Euler(steerPitch, 0, deg); }
     public Transform SteerWheel => steerWheel; // null on the code-built fallback car (it has no steering wheel)
+    // the player's wheel (SteeringWheel.cs: display, shift LEDs, paddles); null on rivals, the fallback car, or without its shader
+    public SteeringWheel WheelRig { get; private set; }
     public Transform[] frontPivots = new Transform[2], frontSpin = new Transform[2], rearSpin = new Transform[2];
     public Transform helmet; // GameManager hides it in the cockpit view (with a driver: a stand-in that hides the driver's head)
     DriverModel driver;      // the player's driver (DriverModel.cs); rivals have theirs merged into the body mesh
@@ -531,15 +533,19 @@ public class CarModel : MonoBehaviour
                 float.TryParse(name.Substring(6), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out cm.steerPitch);
                 go.transform.localPosition = piv; go.transform.localRotation = Quaternion.Euler(cm.steerPitch, 0, 0);
                 cm.steerWheel = go.transform; mid = 5;
+                // the player's car: the built 2026-style wheel (SteeringWheel.cs) in place of the model's own, at the same
+                // pivot and tilt (the camera and the driver's hands were fitted there); rivals keep the model's
+                if (!rival) { cm.WheelRig = SteeringWheel.Attach(go); if (cm.WheelRig != null) mesh = cm.WheelRig.SharedMesh; }
             }
             if (name == "halo_pillar") cm.haloPillar = go;
             else if (name == "halo_hoop") cm.haloHoop = go;
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             var mat = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
             bool front = name.StartsWith("wheel_F");
-            if (name.StartsWith("steer_")) mat = steerMat;
+            if (name.StartsWith("steer_")) mat = cm.WheelRig != null ? cm.WheelRig.Mat : steerMat;
             else if (name.StartsWith("wheel_")) mat = name.EndsWith("_tyre") ? (front ? tyreF : tyreR) : (front ? hubF : hubR);
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mat;
+            if (cm.WheelRig != null && go.transform == cm.steerWheel) cm.WheelRig.Bind(r);
             if (name.EndsWith("_tyre"))
             {
                 if (res != "Car/car_far") TyreStripes(go.transform, pos, nv, mats[7]); // far rivals (30 m+): the thin ring is under a pixel; saves 4 draw calls per car
