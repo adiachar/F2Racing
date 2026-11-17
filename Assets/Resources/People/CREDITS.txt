@@ -1,0 +1,13 @@
+People (pit crew, engineers, mechanics) - Assets/Resources/People/people.bytes
+
+Models: "Universal Base Characters" (Standard, free version) - Superhero_Male, Superhero_Female
+Animations: "Universal Animation Library" (UAL1, UAL2)
+Author: Quaternius (https://quaternius.com, https://www.patreon.com/quaternius)
+Licence: CC0 1.0 Universal (public domain dedication) - https://creativecommons.org/publicdomain/zero/1.0/
+  (License_Standard.txt of the Universal Base Characters kit; LICENSE.md of the mirror)
+Obtained from the GitHub mirrors Dallolz/moorfall-assets (characters/, animations/, LICENSE.md: CC0 1.0, Quaternius)
+and tomoponz/novel-game-prototype (the kit's original License_Standard.txt), November 2026.
+
+Converted by Tools/People/convert.py (fetch.sh downloads the sources): decimated to ~1.2k / ~0.3k triangles,
+reduced to 22 joints, overalls / helmet / headset / cap regions and head gear added, clips baked at 24 fps.
+No attribution is required by CC0; credited with thanks.

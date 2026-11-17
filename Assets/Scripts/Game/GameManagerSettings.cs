@@ -72,6 +72,7 @@ public partial class GameManager
         steerGainPct = LoadF("steerGain", 100, 50, 200); steerCurve = LoadF("steerCurve", 1, 1, 2.5f); steerLockPct = LoadF("steerLock", 100, 50, 100);
         steerRate = LoadF("steerRate", 14, 4, 30); steerRet = LoadF("steerRet", 18, 4, 30);
         tiltDz = LoadOld("tiltDzF", "tiltDz", OldDeadZones, 1, 0, 3); tiltRange = LoadOld("tiltRangeF", "tiltRange", OldTiltRanges, 2, 10, 35);
+        tiltRealtime = PlayerPrefs.GetInt("tiltRT", 1) == 1; // Real-time tilt response by default
         gasMode = LoadI("gasMode", 0, 1); brakeMode = LoadI("brakeMode", 0, 1);
         brakeGainPct = LoadF("brakeGain", 100, 50, 150); brakeCurve = LoadF("brakeCurve", 1, 0.5f, 2.5f);
         steerAssist = LoadI("steerAssist", 0, 2); brakeAssist = LoadI("brakeAssist", 0, 2);
@@ -97,6 +98,7 @@ public partial class GameManager
         PlayerPrefs.SetFloat("steerRate", steerRate); PlayerPrefs.SetFloat("steerRet", steerRet);
         PlayerPrefs.SetFloat("tiltDzF", tiltDz); PlayerPrefs.SetInt("tiltDz", Nearest(OldDeadZones, tiltDz));
         PlayerPrefs.SetFloat("tiltRangeF", tiltRange); PlayerPrefs.SetInt("tiltRange", Nearest(OldTiltRanges, tiltRange));
+        PlayerPrefs.SetInt("tiltRT", tiltRealtime ? 1 : 0);
         PlayerPrefs.SetInt("gasMode", gasMode); PlayerPrefs.SetInt("brakeMode", brakeMode);
         PlayerPrefs.SetFloat("brakeGain", brakeGainPct); PlayerPrefs.SetFloat("brakeCurve", brakeCurve);
         PlayerPrefs.SetInt("steerAssist", steerAssist); PlayerPrefs.SetInt("brakeAssist", brakeAssist);
@@ -219,7 +221,10 @@ public partial class GameManager
             () => Time.realtimeSinceStartup - centreSetT < 1.5f ? "Centre set" : "Set straight now", () => { tiltCenter = TiltRaw(); centreSetT = Time.realtimeSinceStartup; }).LockedWhen(tiltOnly);
         con.Slider("Tilt dead zone", "Tilt around the centre that is ignored, so the car runs straight.", 0, 3, 0.1f, 0.5f, () => tiltDz, v => tiltDz = v, v => $"{v:0.0}°").LockedWhen(tiltOnly);
         con.Slider("Tilt for full lock", "How far to tilt for full steering. Smaller = more sensitive.", 10, 35, 1, 20, () => tiltRange, v => tiltRange = v, v => $"{v:0}°").LockedWhen(tiltOnly);
-        con.Choice("Tilt smoothing", "Steadies a shaky hand. More smoothing = a little more delay.", SmoothNames, 1, () => smoothIdx, v => smoothIdx = v).LockedWhen(tiltOnly);
+        con.Choice("Tilt response", "Real-time: the car steers the instant the phone turns; only a still hand's tremor is filtered. Smooth: filtered (Tilt smoothing).",
+            new[] { "Real-time", "Smooth" }, 0, () => tiltRealtime ? 0 : 1, v => tiltRealtime = v == 0).LockedWhen(tiltOnly);
+        con.Choice("Tilt smoothing", "Steadies a shaky hand. More smoothing = a little more delay.", SmoothNames, 1, () => smoothIdx, v => smoothIdx = v)
+            .LockedWhen(() => !tilt ? "Used with tilt steering only." : tiltRealtime ? "Used with the Smooth tilt response only." : null);
         con.Choice("Throttle pedal", "Analog: higher on the pedal = more throttle. On / Off: any touch = full.", pedal, 0, () => gasMode, v => gasMode = v);
         con.Choice("Brake pedal", "Analog: higher on the pedal = harder braking. On / Off: any touch = full.", pedal, 0, () => brakeMode, v => brakeMode = v);
         con.Slider("Brake sensitivity", "Braking for the same press. Below 100% a full press brakes less.", 50, 150, 5, 100, () => brakeGainPct, v => brakeGainPct = v, Pct);
@@ -232,8 +237,8 @@ public partial class GameManager
         asst.Choice("Steering assist", "Steers into a slide for you when the rear steps out.", offLowHigh, 0, () => steerAssist, v => steerAssist = v);
         asst.Choice("Braking assist", "Brakes for corners by the racing line's speed. Low brakes later and softer.", offLowHigh, 0, () => brakeAssist, v => brakeAssist = v)
             .LockedWhen(() => mapIdx == PlaygroundIdx ? "Circuits only: the playground has no racing line." : null);
-        asst.Choice("Racing line", "The ideal line on the road: green = go, red = brake.", new[] { "Hidden", "Shown" }, 0, () => showLine ? 1 : 0,
-            v => { showLine = v == 1; if (lineGo != null) lineGo.SetActive(showLine && !playground); });
+        asst.Choice("Racing line", "Chevrons on the ideal line, 250 m ahead: green = go faster, yellow = lift / at the limit, red = brake now.", new[] { "Off", "Braking only", "Full" }, RacingLineView.Full, () => lineMode,
+            v => { lineMode = Mathf.Clamp(v, 0, 2); if (lineGo != null) lineGo.SetActive(showLine && !playground); });
 
         // ---- CAR SETUP
         var setup = new SettingsUI.Tab("CAR SETUP");

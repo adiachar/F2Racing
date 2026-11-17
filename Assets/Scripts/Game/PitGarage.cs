@@ -9,7 +9,7 @@
 //    a wheel rack, roll cabinets and a tool board, quick-lift jacks parked, wheel guns laid ready with their hoses to wall
 //    reels, a fire extinguisher, a spare front wing, the engineers' desk with screens; no refuelling rig (2026)
 //  * the pit-wall stand: raised platform, desk with a bank of screens, stools, roof with a name fascia, engineers in
-//    headsets and mechanics in the garage (static, posed with PitCrew's body code)
+//    headsets and mechanics in the garage, people walking along the garage fronts (rigged people: PeoplePits.cs)
 // Cost: one mesh (one draw call) per detailed bay: the player's box and two neighbours on each side (graphics Medium and
 // up); the other bays are simple (walls, floor, stripe, blanket stacks, cabinets, stand) merged six to a mesh. One material,
 // one 256 x 256 atlas (white, wall panel, epoxy floor, light diffuser, two screen faces, blanket quilt, vent; 8 name rows).
@@ -26,6 +26,7 @@ public class PitGarage : MonoBehaviour
 
     static GameObject holder; static Material mat; static Texture2D atlas;
     static int gfx; static int[] order; static Livery[] liv; static string[] names;
+    static readonly List<PeoplePits.Spot> spots = new List<PeoplePits.Spot>(); // the people of the detailed bays (GB.Person)
 
     // invented team brands (rival team index -> name on the boards)
     static readonly string[] Brands = { "ARKON", "VELTRA", "NOVAK", "HALCYON", "KESTREL", "ORBIS", "TALON", "ZEPHYR", "MERIDIAN", "STRATOS", "VORTEX", "AURELIA" };
@@ -83,7 +84,7 @@ public class PitGarage : MonoBehaviour
         int r = 0; foreach (int b in order) if (names[b] != null && r < 8) row[b] = r++;
         DrawAtlas(row);
         Mat().mainTexture = atlas;
-        var det = new bool[n];
+        var det = new bool[n]; spots.Clear();
         if (gfx >= 2) { int pb = order[0]; for (int d = -2; d <= 2; d++) if (pb + d >= 0 && pb + d < n) det[pb + d] = true; }
         for (int b = 0; b < n; b++)
             if (det[b]) { var g = Frame(b); Detailed(g, b, liv[b], row[b]); Emit(g, "PitGarage_" + b); }
@@ -96,6 +97,7 @@ public class PitGarage : MonoBehaviour
             if (++cnt == 6) { Emit(s, "PitGarageSimple_" + b); s = null; cnt = 0; }
         }
         if (s != null) Emit(s, "PitGarageSimple_end");
+        PeoplePits.Create(holder.transform, spots, gfx >= 2 ? 4 : 0, order, liv); // the engineers, mechanics and walkers (animated rigs)
     }
 
     static Material Mat()
@@ -641,15 +643,12 @@ public class PitGarage : MonoBehaviour
             if (framed) Box(cen - n * 0.03f, new Vector3(Mathf.Abs(side.x) * (hw + 0.03f) + Mathf.Abs(n.x) * 0.025f, hh + 0.03f, Mathf.Abs(side.z) * (hw + 0.03f) + Mathf.Abs(n.z) * 0.025f), Black);
             Quad(cen - side * hw - Vector3.up * hh, cen + side * hw - Vector3.up * hh, cen + side * hw + Vector3.up * hh, cen - side * hw + Vector3.up * hh, n, Color.white, Cell(cellK), 1.5f);
         }
-        // a posed person (PitCrew's body): kind 1 engineer with headset, 2 mechanic; facing in the bay frame; pose 0 seated at a
-        // desk (pos = the stool's foot), 1 arms crossed, 2 hands on hips
+        // a person (People.cs rig, animated by PeoplePits): kind 1 engineer with headset, 2 mechanic; facing in the bay frame;
+        // pose 0 seated at a desk (pos = the stool's foot), 1 arms crossed, 2 talking, 3 working
         public void Person(int kind, Livery L, int seed, Vector3 pos, Vector3 facing, int pose)
         {
-            Vector3 wp = W(pos);
             Vector3 fd = Dir(facing); fd.y = 0; if (fd.sqrMagnitude < 1e-6f) fd = X;
-            float sc = 0.96f + 0.08f * Hash(seed, 1, 9);
-            var root = Matrix4x4.TRS(wp, Quaternion.LookRotation(fd.normalized, Vector3.up), Vector3.one * sc);
-            PitCrew.StaticPerson(kind, L, seed, root, pose, v, uv, new Vector2((White.x + White.z) * 0.5f, (White.y + White.w) * 0.5f), c, t);
+            spots.Add(new PeoplePits.Spot { kind = kind, seed = seed, pose = pose, liv = L, pos = W(pos), fwd = fd.normalized });
         }
     }
 }

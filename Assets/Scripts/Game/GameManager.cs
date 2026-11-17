@@ -33,7 +33,8 @@ public partial class GameManager : MonoBehaviour
     int liveryIdx; // the player's livery (Livery.Player), saved as "livery"
 
     // laps / recover / test bench
-    double? lapStart, lastLap, bestLap; bool cut; int lapNo = 1;
+    double? lapStart, lastLap, bestLap; bool cut, lastValid = true; int lapNo = 1;
+    double lineX, lineY, lineT = double.NaN; int lineIdx = -1; // the last timing-line check (LineCheck, every physics step)
     double offTime, wrongTime;
     double? t100; double launchT = -1, topSpeed;
     string flash; float flashT;
@@ -49,7 +50,7 @@ public partial class GameManager : MonoBehaviour
 
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
-        mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == PlaygroundIdx; camMode = Mathf.Clamp(PlayerPrefs.GetInt("cam", 0), 0, CamNames.Length - 1); sound = PlayerPrefs.GetInt("snd", 1) == 1; showLine = PlayerPrefs.GetInt("line", 0) == 1; absOn = PlayerPrefs.GetInt("abs", 1) == 1; classIdx = Mathf.Clamp(PlayerPrefs.GetInt("class", 0), 0, CarConfig.ClassNames.Length - 1); compIdx = Mathf.Clamp(PlayerPrefs.GetInt("tyres", 0), 0, CompoundTable.Defs.Length - 1); gfxIdx = Mathf.Clamp(PlayerPrefs.GetInt("gfx", 0), 0, GfxNames.Length - 1);
+        mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == PlaygroundIdx; camMode = Mathf.Clamp(PlayerPrefs.GetInt("cam", 0), 0, CamNames.Length - 1); sound = PlayerPrefs.GetInt("snd", 1) == 1; lineMode = Mathf.Clamp(PlayerPrefs.GetInt("lineMode", RacingLineView.Full), 0, 2); absOn = PlayerPrefs.GetInt("abs", 1) == 1; classIdx = Mathf.Clamp(PlayerPrefs.GetInt("class", 0), 0, CarConfig.ClassNames.Length - 1); compIdx = Mathf.Clamp(PlayerPrefs.GetInt("tyres", 0), 0, CompoundTable.Defs.Length - 1); gfxIdx = Mathf.Clamp(PlayerPrefs.GetInt("gfx", 0), 0, GfxNames.Length - 1);
         LoadSettings(); // everything the settings screen added (GameManagerSettings.cs)
         Weather.Load(); // before the world is built: the sky and fog are made for it
         tyreSet = Mathf.Clamp(PlayerPrefs.GetInt("tyreSet", compIdx), 0, Weather.Sets - 1); carSet = tyreSet;
@@ -229,25 +230,33 @@ public partial class GameManager : MonoBehaviour
         skids.Upload();
     }
 
-    // racing line overlay (off by default; "Line" button)
-    RacingLine line; GameObject lineGo; bool showLine;
+    // racing-line guide on the road (RacingLineView.cs): lineMode 0 off, 1 braking only, 2 full (Settings > Assists)
+    RacingLine line; GameObject lineGo; RacingLineView lineView; int lineMode = RacingLineView.Full;
+    bool showLine { get => lineMode != RacingLineView.Off; set => lineMode = value ? (lineMode != RacingLineView.Off ? lineMode : RacingLineView.Full) : RacingLineView.Off; }
     void BuildLine()
     {
-        if (lineGo != null) Destroy(lineGo);
+        if (lineView != null) lineView.Destroy(); else if (lineGo != null) Destroy(lineGo);
         var lc = CarConfig.ForClass(classIdx); lc.aeroFront = aeroBal / 100.0;
         line = RacingLine.Compute(track, lc); lineFor = classIdx;
-        lineGo = RacingLineView.Build(track, line, world.transform);
+        lineView = RacingLineView.Build(track, line, world.transform); lineGo = lineView != null ? lineView.go : null; // draped itself (vertex heights)
         var rubber = Scenery.Rubber(track, line, world.transform);
         var boards = Scenery.Boards(track, line, world.transform, (float)Traffic.WallOffset(track));
         // these are built after the world, so lay them on the hills here
-        WorldBuilder.Drape(lineGo); WorldBuilder.Drape(rubber); if (boards != null) { WorldBuilder.Drape(boards); LightBake.Apply(boards); }
-        lineGo.SetActive(showLine && !playground);
+        WorldBuilder.Drape(rubber); if (boards != null) { WorldBuilder.Drape(boards); LightBake.Apply(boards); }
+        if (lineGo != null) lineGo.SetActive(showLine && !playground);
+    }
+    // once a frame, after the physics: the guide's window and colours (hidden in the pit lane and on the results screen)
+    void LineFrame()
+    {
+        if (lineView == null || lineGo == null || !lineGo.activeSelf) return;
+        bool on = !playground && pRun == null && (ui == null || !ui.Showing);
+        lineView.Frame(on ? lineMode : RacingLineView.Off, idx, car.x, car.y, System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), Weather.TrackFactor(carSet, 1));
     }
 
     void Save()
     {
         PlayerPrefs.SetInt("tc", (int)tc); PlayerPrefs.SetInt("tilt", tilt ? 1 : 0); PlayerPrefs.SetInt("tiltInv", invertTilt ? 1 : 0);
-        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("line", showLine ? 1 : 0); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("class", classIdx); PlayerPrefs.SetInt("tyres", compIdx); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.SetInt("haptics", Haptics.enabled ? 1 : 0); Livery.PlayerIndex = liveryIdx;
+        PlayerPrefs.SetInt("map", mapIdx); PlayerPrefs.SetInt("cam", camMode); PlayerPrefs.SetInt("snd", sound ? 1 : 0); PlayerPrefs.SetInt("lineMode", lineMode); PlayerPrefs.SetInt("abs", absOn ? 1 : 0); PlayerPrefs.SetInt("class", classIdx); PlayerPrefs.SetInt("tyres", compIdx); PlayerPrefs.SetInt("gfx", gfxIdx); PlayerPrefs.SetInt("tiltSmooth", smoothIdx); PlayerPrefs.SetInt("speedSteer", speedSteerIdx); PlayerPrefs.SetInt("rivals", rivalIdx); PlayerPrefs.SetInt("diff", diffIdx); PlayerPrefs.SetInt("haptics", Haptics.enabled ? 1 : 0); Livery.PlayerIndex = liveryIdx;
         PlayerPrefs.SetInt("tyreSet", tyreSet); Weather.Save();
         SaveSettings(); // also writes the old "bal", "tiltDz", "tiltRange" and "brakeBias" keys
         PlayerPrefs.Save();
@@ -270,7 +279,7 @@ public partial class GameManager : MonoBehaviour
         }
         raceTime = 0; pLap = 0; aiTick = 0; boxArmed = false; pitLoss = 0; pitStops = 0;
         if (raceLaps > 0) { bestLap = lastLap = null; lapNo = 1; } // a race keeps its own lap records
-        idx = prevIdx = -1; lapStart = null; cut = false; offTime = wrongTime = 0; t100 = null; launchT = -1; topSpeed = 0;
+        idx = prevIdx = -1; lineIdx = -1; lineT = double.NaN; lastValid = true; lapStart = null; cut = false; offTime = wrongTime = 0; t100 = null; launchT = -1; topSpeed = 0;
         Flash(MapNames[mapIdx]);
         StartReset(); // lights, launch, jump-start check (GameManagerStart.cs)
     }
@@ -437,7 +446,8 @@ public partial class GameManager : MonoBehaviour
         pedalGas = gasT > pedalGas ? Mathf.Min(gasT, pedalGas + 6 * dt) : Mathf.Max(gasT, pedalGas - 10 * dt);
         pedalBrake = brkT > pedalBrake ? Mathf.Min(brkT, pedalBrake + 8 * dt) : Mathf.Max(brkT, pedalBrake - 12 * dt);
         float steer = steerHeld ? dragSteer : kSteer;
-        if (tilt && !steerHeld && kSteer == 0) steer = ShapeSteer(TiltSteer());
+        steerFromTilt = tilt && !steerHeld && kSteer == 0;
+        if (steerFromTilt) steer = ShapeSteer(TiltSteer());
         else if (steerHeld) steer = ShapeSteer(steer);       // the keyboard is on/off: no curve
         steer = AssistSteer(steer);
         return new CarInput(steer, pedalGas, pedalBrake);
@@ -452,26 +462,73 @@ public partial class GameManager : MonoBehaviour
 
     // ---------------------------------------------------------------- tilt steering
     // The phone is the steering wheel: its turn angle is the direction of gravity within the screen plane.
+    //  * Gravity comes from the gyroscope-fused sensor (Input.gyro.gravity) when the phone has a gyroscope: sensor
+    //    fusion makes it clean and immediate, the gyro is asked for its fastest rate (5 ms) and the newest value is
+    //    read every frame. The accelerometer is only the fallback (no gyroscope, or until the gyro delivers): its
+    //    gravity is buried in hand shake and needed a heavy low-pass, which was most of the old tilt lag.
     //  * The angle is measured from a LOCKED "down" axis, so a big tilt can never flip the steering, and the screen
     //    is kept from auto-rotating while tilt steering is on (a rotating screen made the steering jump).
-    //  * Every sensor sample is smoothed on its own, with its own time step, by a "one euro" filter: it smooths hard
-    //    when the phone is held still (no jitter) and hardly at all when it turns quickly (no lag). The sensor runs at
-    //    its own rate (often 60 Hz, beating with a 60 fps game: some frames get no sample, the next two). Before,
-    //    the samples were averaged per frame and the filter's speed came from (input - output) / frame time, so a
-    //    frame without a sample and then one with two made the filter open and close: fast turns came in steps.
-    //    Now the speed is the phone's real turn rate, and between samples the filter keeps running on the last one.
+    //  * "Tilt response" (a setting):
+    //    Real-time (default): no smoothing delay. A jitter gate only irons out the sub-0.4 degree tremor of a hand
+    //      holding the phone still: its cut-off climbs with the 6th power of the gap between reading and output, so
+    //      any real turn opens it at once (80 Hz, 2 ms). The angle is carried forward by the gyro's turn rate over the
+    //      sample's age, and the physics steps get a straight ramp from the last frame's angle to this one: no
+    //      staircase and no spring (SteerFilter.Spring off). Only the car's own steering rack speed comes after.
+    //    Smooth: a "one euro" filter (Tilt smoothing setting: smooths hard when still, little when turning quickly)
+    //      and SteerFilter's spring with a fast constant (TiltOmega).
+    //    Every filter uses the exact exponential for its time step, so the feel is the same at 30, 60 or 120 fps.
     //  * Only when the phone lies almost flat is there too little gravity in the screen plane to measure; steering
     //    then fades out. It works normally from about 15 degrees of screen tilt upwards.
-    // Dead zone, angle for full lock and smoothing are settings. The result is ramped smoothly across the physics
-    // steps like the drag steering (SteerFilter.cs).
-    float tiltCenter, tiltSmooth, tiltAxis = float.NaN, tiltAxisT, tiltConf, tiltRawDeg, tiltVel, tiltLastX, tiltSince; bool tiltInit;
+    // Simulated 10 degree step (60 fps, 240 Hz physics): steering command at 63% after 27 ms before (accelerometer +
+    // one euro + spring), 7 ms now (Real-time, 200 Hz gyro; 15 ms with a 60 Hz sensor). Tremor of a still hand
+    // (0.15 deg at 9 Hz): 0.07 deg left at the steering.
+    float tiltCenter, tiltSmooth, tiltAxis = float.NaN, tiltAxisT, tiltConf, tiltRawDeg, tiltVel, tiltLastX, tiltSince, tiltLead; bool tiltInit;
+    bool tiltRealtime = true;            // "Tilt response": Real-time (true) or Smooth (GameManagerSettings.cs)
+    bool tiltGyro;                       // this frame's gravity came from the gyroscope
+    bool steerFromTilt;                  // this frame's steering came from the tilt (ReadInput -> SteerFilter mode)
+    float gravMatch = float.NaN;         // slow average of dot(gyro gravity, accelerometer): +1 same axes, -1 flipped, ~0 unusable
+    float tiltRateVotes, tiltPrevX = float.NaN; // how the gyro's z rate turns the angle (sign), learnt from real turns
     static readonly string[] SmoothNames = { "Off", "Low", "Medium", "High" };
-    static readonly float[] SmoothCut = { 60f, 6f, 3f, 1.5f }; int smoothIdx = 1;
+    static readonly float[] SmoothCut = { 0f, 12f, 6f, 3f }; int smoothIdx = 1; // Hz for the Smooth response; 0 = no filter
+    const float GateBand = 0.4f, GateBandAccel = 1.2f, GateMinHz = 1f, GateMaxHz = 80f; // Real-time jitter gate (degrees, Hz)
+    const float SensorLead = 0.0025f;    // s: average age of the newest gyro sample (half of the 5 ms interval)
+    const double TiltOmega = 400;        // SteerFilter spring for Smooth tilt (rad/s; touch keeps SteerFilter.Omega)
     static readonly string[] SpeedSteerNames = { "Full lock always", "Quick", "Normal", "Calm" };
     static readonly double[] SpeedSteer = { 0.0, 0.25, 0.5, 1.25 }; int speedSteerIdx = 2;
 
+    static float Lp(float hz, float dt) => 1f - Mathf.Exp(-2f * Mathf.PI * hz * dt); // exact one-pole step: frame-rate independent
+
+    // gyroscope on (fastest rate) only while tilt steering is used
+    void TiltSensors(bool on)
+    {
+        gravMatch = float.NaN; tiltRateVotes = 0; tiltPrevX = float.NaN; tiltGyro = false;
+        Input.compensateSensors = true; // accelerometer and gyro both in screen axes (the locked "down" axis expects that)
+        if (!SystemInfo.supportsGyroscope) return;
+        var g = Input.gyro;
+        g.enabled = on;
+        if (on) g.updateInterval = 0.005f; // 200 Hz: the most Android 12+ gives without a special permission; Unity clamps to the device
+    }
+    // the gravity to steer by: gyro-fused when it is live and in the same axes as the accelerometer, else the accelerometer
+    Vector3 TiltGravity()
+    {
+        Vector3 a = Input.acceleration;
+        tiltGyro = false;
+        if (!SystemInfo.supportsGyroscope || !Input.gyro.enabled) return a;
+        Vector3 g = Input.gyro.gravity; float m = g.magnitude, am = a.magnitude;
+        if (!(m > 0.05f)) return a;          // not delivering yet (or NaN)
+        g /= m;                               // g units on some phones, m/s^2 on others
+        if (am > 0.6f && am < 1.4f)
+        {
+            float d = Vector3.Dot(g, a / am);
+            gravMatch = float.IsNaN(gravMatch) ? d : gravMatch + (d - gravMatch) * 0.05f;
+        }
+        if (float.IsNaN(gravMatch) || Mathf.Abs(gravMatch) < 0.8f) return a;
+        tiltGyro = true;
+        return gravMatch < 0 ? -g : g;
+    }
+
     // tilt angle (deg) from one gravity sample; dt: time since the previous sample (the settings' "set straight now" reads the current one)
-    float TiltRaw() => TiltRaw(Input.acceleration, 0);
+    float TiltRaw() => TiltRaw(TiltGravity(), 0);
     float TiltRaw(Vector3 a, float dt)
     {
         float inPlane = Mathf.Sqrt(a.x * a.x + a.y * a.y);
@@ -487,20 +544,62 @@ public partial class GameManager : MonoBehaviour
         tiltRawDeg = invertTilt ? -deg : deg;
         return tiltRawDeg;
     }
-    static float Alpha(float cutoffHz, float dt) => 1f / (1f + 1f / (2f * Mathf.PI * cutoffHz * dt));
-    // one sample into the one euro filter. run: how long the filter runs on it (less than dt when frames without a
-    // sample already ran the filter on the previous one)
+    // one sample into the response filter. run: how long the filter runs on it (less than dt when frames without a
+    // sample already ran it on the previous one)
     void TiltSample(Vector3 a, float dt, float run)
     {
         float x = (TiltRaw(a, dt) - tiltCenter) * tiltConf;
         if (!tiltInit) { tiltSmooth = tiltLastX = x; tiltVel = 0; tiltInit = true; }
-        tiltVel += ((x - tiltLastX) / dt - tiltVel) * Alpha(4f, dt); // the phone's turn rate (deg/s), smoothed
+        tiltVel += ((x - tiltLastX) / dt - tiltVel) * Lp(10f, dt); // the phone's turn rate (deg/s), lightly smoothed
         tiltLastX = x;
-        tiltSmooth += (x - tiltSmooth) * Alpha(SmoothCut[smoothIdx] + 0.18f * Mathf.Abs(tiltVel), run);
+        TiltFilter(x, run);
+    }
+    // Real-time: the jitter gate (returns how open it is, 0..1). Smooth: the one euro filter.
+    float TiltFilter(float x, float dt)
+    {
+        if (tiltRealtime)
+        {
+            float r = Mathf.Abs(x - tiltSmooth) / (tiltGyro ? GateBand : GateBandAccel);
+            r *= r * r; r *= r; // ^6: shut for tremor, wide open for a turn
+            float hz = Mathf.Min(GateMinHz + GateMaxHz * r, GateMaxHz);
+            tiltSmooth += (x - tiltSmooth) * Lp(hz, dt);
+            return Mathf.Min(r, 1f);
+        }
+        float cut = SmoothCut[smoothIdx];
+        if (cut <= 0) tiltSmooth = x;
+        else tiltSmooth += (x - tiltSmooth) * Lp(cut + 0.18f * Mathf.Abs(tiltVel), dt);
+        return 1f;
+    }
+    // Real-time with the gyro: carry the angle forward by the gyro's turn rate over the newest sample's age. The rate's
+    // sign in tilt degrees is learnt from real turns (it depends on the phone and the screen side), none until known.
+    float TiltPredict(float x, float open)
+    {
+        float wz = Input.gyro.rotationRateUnbiased.z * Mathf.Rad2Deg;
+        if (float.IsNaN(wz)) return 0;
+        float xr = invertTilt ? -x : x; // learn on the uninverted angle, so the Tilt direction setting does not unlearn it
+        if (!float.IsNaN(tiltPrevX)) { float d = xr - tiltPrevX; if (Mathf.Abs(d) > 0.3f && Mathf.Abs(wz) > 15f) tiltRateVotes = Mathf.Clamp(tiltRateVotes + (d * wz > 0 ? 1 : -1), -30, 30); }
+        tiltPrevX = xr;
+        if (Mathf.Abs(tiltRateVotes) < 10) return 0;
+        float lead = Mathf.Sign(tiltRateVotes) * wz * SensorLead * tiltConf * (invertTilt ? -1 : 1);
+        return Mathf.Clamp(lead, -1f, 1f) * open; // only while the gate is open: no lead on tremor
     }
     float TiltSteer()
     {
         float frameDt = Mathf.Clamp(Time.unscaledDeltaTime, 0.002f, 0.1f);
+        Vector3 g = TiltGravity();
+        tiltLead = 0;
+        if (tiltGyro)
+        {
+            // the newest fused sample, once per frame (the sensor runs faster than the game: at most ~5 ms old)
+            float x = (TiltRaw(g, frameDt) - tiltCenter) * tiltConf;
+            if (!tiltInit) { tiltSmooth = tiltLastX = x; tiltVel = 0; tiltInit = true; }
+            tiltVel += ((x - tiltLastX) / frameDt - tiltVel) * Lp(10f, frameDt);
+            tiltLastX = x; tiltSince = 0;
+            float open = TiltFilter(x, frameDt);
+            if (tiltRealtime) tiltLead = TiltPredict(x, open);
+            return TiltToSteer();
+        }
+        // accelerometer: every sample on its own time step (the sensor beats with the frame rate)
         int n = Input.accelerationEventCount;
         for (int i = 0; i < n; i++)
         {
@@ -512,19 +611,21 @@ public partial class GameManager : MonoBehaviour
         if (n == 0)
         {
             tiltSince += frameDt;
-            if (!tiltInit || tiltSince > 0.1f) { TiltSample(Input.acceleration, frameDt, frameDt); tiltSince = 0; } // no sample events (editor, some phones): read it per frame
-            else tiltSmooth += (tiltLastX - tiltSmooth) * Alpha(SmoothCut[smoothIdx] + 0.18f * Mathf.Abs(tiltVel), frameDt); // between samples: keep running on the last one
+            if (!tiltInit || tiltSince > 0.1f) { TiltSample(g, frameDt, frameDt); tiltSince = 0; } // no sample events (editor, some phones): read it per frame
+            else TiltFilter(tiltLastX, frameDt); // between samples: keep running on the last one
         }
         return TiltToSteer();
     }
     float TiltToSteer()
     {
-        float dz = tiltDz, range = Mathf.Max(tiltRange, dz + 1f), a = Mathf.Abs(tiltSmooth);
-        return a <= dz ? 0 : Mathf.Clamp(Mathf.Sign(tiltSmooth) * (a - dz) / (range - dz) * steerGain, -1, 1);
+        float t = tiltSmooth + tiltLead;
+        float dz = tiltDz, range = Mathf.Max(tiltRange, dz + 1f), a = Mathf.Abs(t);
+        return a <= dz ? 0 : Mathf.Clamp(Mathf.Sign(t) * (a - dz) / (range - dz) * steerGain, -1, 1);
     }
     // while tilt steering is on the screen must not auto-rotate; with drag steering it may
     void ApplyScreenLock()
     {
+        TiltSensors(tilt);
         if (!tilt) { Screen.orientation = ScreenOrientation.AutoRotation; return; }
         // freeze the screen the way it is right now (never force a side: that could turn the picture upside down)
         var cur = Screen.orientation;
@@ -556,6 +657,8 @@ public partial class GameManager : MonoBehaviour
         acc += dt;
         // steering is read once per frame but the physics takes 4-8 steps per frame: ramp it smoothly across them
         // (SteerFilter.cs) instead of one jump per frame and then nothing (the wheel turned in small steps)
+        // tilt: Real-time = a straight ramp between frames and no spring; Smooth = a fast spring; touch keeps the default
+        steerF.Spring = !(steerFromTilt && tiltRealtime); steerF.omega = steerFromTilt ? TiltOmega : SteerFilter.Omega;
         if (steerReset) { steerF.Reset(input.steer); steerReset = false; }
         steerF.BeginFrame(input.steer, (int)(acc / H), H);
         double wallDv = 0; // biggest speed change from a barrier hit this frame (m/s), for the haptics
@@ -563,10 +666,11 @@ public partial class GameManager : MonoBehaviour
         {
             px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn;
             input.steer = steerF.Step(H);
-            if (pRun != null) PlayerPitStep(); // in the pit lane: driven along the lane at the limiter (PitCrew.cs)
+            if (pRun != null) { PlayerPitStep(); LineCheck(simTime + H); } // in the pit lane: driven along the lane at the limiter (PitCrew.cs); idx is after the step
             else
             {
                 SetSurface();
+                LineCheck(simTime); // the timing line, every step (idx is before the step here)
                 if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
                 car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
                 car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
@@ -636,6 +740,7 @@ public partial class GameManager : MonoBehaviour
         RcFrame(dt); // safety car model, flags, penalties, rival tyre changes (GameManagerRaceControl.cs)
         if (!Paused && raceLaps > 0 && !playground) Record(dt, rx, ry, rh, rd);
         UpdateSkids();
+        LineFrame(); // the racing-line guide (RacingLineView.cs)
         if (weatherFx != null)
         {
             weatherFx.Begin(gfxLevel, Paused ? 0f : (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy));
@@ -739,18 +844,31 @@ public partial class GameManager : MonoBehaviour
         offTime = surface == 2 && lat > track.width / 2 + WorldBuilder.Kerb + 0.9 ? offTime + dt : 0;
         wrongTime = hdiff > 1.75 && !car.reverse ? wrongTime + dt : 0;
         if (wrongTime > 1.2) Recover(); // off the track there are real barriers now; "Back on track" is a button
-        if (prevIdx > track.N * 0.8 && idx < track.N * 0.2)
+    }
+
+    // The timing line, once per physics step (it used to be tested once a frame against prevIdx, but prevIdx is
+    // updated every step, so only a crossing in a frame's LAST step counted: most crossings were missed, the lap
+    // never started (LAST / BEST "--:--.---") and the player fell "+1 LAP" behind in the tower). Every completed lap
+    // is timed and shown, an invalid one (track limits, recovery) too; only valid laps can be the best.
+    void LineCheck(double t)
+    {
+        if (playground || track == null) return;
+        double jx = car.x - lineX, jy = car.y - lineY; // a teleport (restart, shot mode): start again from here
+        if (idx < 0 || lineIdx < 0 || double.IsNaN(lineT) || jx * jx + jy * jy > 50 * 50) { lineIdx = idx; lineX = car.x; lineY = car.y; lineT = t; return; }
+        int dir = TimingLine.Cross(track, lineIdx, idx, lineX, lineY, lineT, car.x, car.y, t, out double at);
+        lineIdx = idx; lineX = car.x; lineY = car.y; lineT = t;
+        if (dir > 0)
         {
             if (lapStart.HasValue)
             {
-                lastLap = simTime - lapStart.Value;
+                lastLap = at - lapStart.Value; lastValid = !cut;
                 if (!cut && (!bestLap.HasValue || lastLap < bestLap)) { bestLap = lastLap; Flash("Best lap! " + Fmt(bestLap)); }
                 else Flash((cut ? "Lap invalid  " : "Lap ") + Fmt(lastLap));
             }
-            lapStart = simTime; lapNo++; pLap++; cut = false; car.NewLap();
+            lapStart = at; lapNo++; pLap++; cut = false; car.NewLap();
             if (boxArmed && !PitLaneOn) { boxArmed = false; if (raceLaps > 0 && pLap <= raceLaps) PitStop(true); } // no pit lane: the old stop at the line
         }
-        else if (prevIdx < track.N * 0.2 && idx > track.N * 0.8) { lapStart = null; pLap--; }
+        else if (dir < 0) { lapStart = null; pLap--; }
     }
 
     // ---------------------------------------------------------------- pit stop (races only)
@@ -808,6 +926,7 @@ public partial class GameManager : MonoBehaviour
             cam.nearClipPlane = ChaseNear;
             return;
         }
+        if (PitCamera()) return; // the player's own pit stop: a short cinematic of the box (PitCrew.cs)
         float speed = (float)System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
         Vector3 pos, look; float fov;
         float lonG = gLon / 9.81f;

@@ -643,7 +643,10 @@ public partial class GameManager
         // row D: last and best
         float half = iw * 0.5f;
         TF(new Rect(x, yy, S(24), S(10)), "LAST", UiKit.Semi, 5.6f, HudFaint);
-        TF(new Rect(x, yy, half - S(3), S(10)), lastSlot.Lap(lastLap ?? double.NaN), UiKit.Semi, 7f, Color.white, TextAnchor.MiddleRight);
+        // LAST: grey when the lap was invalid (still timed), purple = the session's fastest, green = your best, else white
+        Color lc = !lastValid ? HudGrey : lastLap.HasValue && bestLap.HasValue && lastLap.Value == bestLap.Value ? (fastestBy == 0 ? HudPurple : HudGreen) : Color.white;
+        TF(new Rect(x, yy, half - S(3), S(10)), lastSlot.Lap(lastLap ?? double.NaN), UiKit.Semi, 7f, lc, TextAnchor.MiddleRight);
+        if (!lastValid && lastLap.HasValue) UiKit.Rect(new Rect(x + half - S(3) - S(34), yy + S(5), S(34), Mathf.Max(1f, S(0.8f))), HudGrey, 0f); // struck through
         TF(new Rect(x + half + S(3), yy, S(24), S(10)), "BEST", UiKit.Semi, 5.6f, HudFaint);
         TF(new Rect(x + half, yy, half, S(10)), bestSlot.Lap(bestLap ?? double.NaN), UiKit.Semi, 7f, fastestBy == 0 ? HudPurple : HudGreen, TextAnchor.MiddleRight);
     }

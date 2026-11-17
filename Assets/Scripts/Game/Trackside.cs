@@ -409,7 +409,7 @@ public static class Trackside
         int Gap(int a, int b) { int d = Mathf.Abs(a - b); return Mathf.Min(d, N - d); }
 
         // per side flags along the lap: 0 = left (+1), 1 = right (-1)
-        var dirt = new float[2, N]; var fenceZ = new bool[2, N]; var tyreZ = new bool[2, N], tecZ = new bool[2, N];
+        var dirt = new float[2, N]; var fenceZ = new bool[2, N]; var tyreZ = new bool[2, N]; var tecZ = new bool[2, N];
         int SI(int sg) => sg > 0 ? 0 : 1;
         // likely impacts: on the outside, a little after the apex of the faster-than-hairpin corners
         var impacts = new List<int>();

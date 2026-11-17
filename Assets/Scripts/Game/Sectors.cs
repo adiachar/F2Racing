@@ -22,6 +22,33 @@ public static class SectorMap
     }
 }
 
+// The timing line, checked EVERY PHYSICS STEP (not once a frame: a frame runs several 240 Hz steps and the track
+// index moves on each, so a per-frame "was N-1, now 0" test only saw the crossings made in a frame's last step).
+// A crossing is the nearest track point wrapping N-1 -> 0 (forwards) or 0 -> N-1 (backwards), the same test the AI
+// uses (AiDriver.Think), so the lap counter matches the rivals'. The time is placed inside the step where the car
+// passed the plane between points N-1 and 0 (where Track.Nearest switches), so lap times are not rounded to a step.
+public static class TimingLine
+{
+    // +1 crossed forwards, -1 backwards, 0 not. (x0, y0) at time t0 -> (x1, y1) at t1; at = when it crossed.
+    public static int Cross(Track t, int prevIdx, int idx, double x0, double y0, double t0, double x1, double y1, double t1, out double at)
+    {
+        at = t1;
+        if (t == null || prevIdx < 0 || idx < 0 || prevIdx == idx) return 0;
+        int N = t.N;
+        int dir = prevIdx > N * 0.8 && idx < N * 0.2 ? 1 : prevIdx < N * 0.2 && idx > N * 0.8 ? -1 : 0;
+        if (dir == 0 || double.IsNaN(t0) || t0 >= t1) return dir;
+        var a = t.pts[N - 1]; var b = t.pts[0];
+        double mx = (a.x + b.x) * 0.5, my = (a.y + b.y) * 0.5, dx = b.x - a.x, dy = b.y - a.y;
+        double d0 = (x0 - mx) * dx + (y0 - my) * dy, d1 = (x1 - mx) * dx + (y1 - my) * dy;
+        if (d0 != d1)
+        {
+            double f = -d0 / (d1 - d0);
+            if (f >= 0 && f <= 1) at = t0 + (t1 - t0) * f;
+        }
+        return dir;
+    }
+}
+
 // one car's timing: sector crossings this lap, last and best sectors, timing-loop pass times (for the gaps)
 public class CarTiming
 {
