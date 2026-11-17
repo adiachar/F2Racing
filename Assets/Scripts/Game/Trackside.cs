@@ -297,6 +297,7 @@ public static class Trackside
     // the pit lane cars drive (PitLane.cs): entry ramp, fast lane along the garages, exit ramp; null = no pit building
     public static PitLane Lane;
     static Material fenceMat;
+    static Material glassMat;
     static readonly List<Renderer> fenceRs = new List<Renderer>(), optional = new List<Renderer>(), postRs = new List<Renderer>();
 
     static Vector3 P(TrackPoint p, float h = 0f) { return new Vector3((float)p.x, h, (float)p.y); }
@@ -408,7 +409,7 @@ public static class Trackside
         int Gap(int a, int b) { int d = Mathf.Abs(a - b); return Mathf.Min(d, N - d); }
 
         // per side flags along the lap: 0 = left (+1), 1 = right (-1)
-        var dirt = new float[2, N]; var fenceZ = new bool[2, N]; var tyreZ = new bool[2, N];
+        var dirt = new float[2, N]; var fenceZ = new bool[2, N]; var tyreZ = new bool[2, N], tecZ = new bool[2, N];
         int SI(int sg) => sg > 0 ? 0 : 1;
         // likely impacts: on the outside, a little after the apex of the faster-than-hairpin corners
         var impacts = new List<int>();
@@ -438,7 +439,9 @@ public static class Trackside
                 if (near) continue;
                 tyreCorners.Add(apex);
                 int s = SI(Outside(apex));
-                for (int j = -before; j <= after; j++) { tyreZ[s, W(apex + j)] = true; if (!street) fenceZ[s, W(apex + j)] = true; }
+                // the chicanes (parkland, radius under ~45 m): Tecpro-style foam blocks instead of the belted tyre wall
+                bool tec = !street && curvAbs[apex] >= 1f / 45f;
+                for (int j = -before; j <= after; j++) { tyreZ[s, W(apex + j)] = true; tecZ[s, W(apex + j)] = tec; if (!street) fenceZ[s, W(apex + j)] = true; }
             }
         }
 
@@ -1048,6 +1051,24 @@ public static class Trackside
                     Post(A, pole, -D, T, 0.05f, skirt, 3.2f, TracksideArt.PostDark);
                     Box(A, pole + up * 3.2f, T, up, D, 0.35f, 0.35f, 0.05f, TracksideArt.GantryDark, true);
                     Panel(A, pole + up * 3.2f - T * 0.06f, -T, 0.25f, -0.25f, 0.25f, TracksideArt.Sw(TracksideArt.LampYellow));
+                    // the marshals' kit, visible at speed: a yellow and a green flag draped over the parapet (both faces,
+                    // hanging a little proud at the foot), a fire extinguisher and a bin of oil absorbent by the door
+                    if (!low)
+                    {
+                        Vector3 f0 = c - D * 0.84f, f1 = c - D * 0.9f;
+                        int[] fl = { TracksideArt.PaintYellow, TracksideArt.SeatGreen };
+                        for (int q = 0; q < 2; q++)
+                        {
+                            float ta = q == 0 ? -0.72f : 0.18f, tb = ta + 0.52f + 0.06f * Rand(k, 71 + q);
+                            float yb = 0.48f + 0.12f * Rand(k, 73 + q);
+                            Quad(A, f1 + T * ta + up * yb, f1 + T * tb + up * yb, f0 + T * tb + up * 1.16f, f0 + T * ta + up * 1.16f, -D, TracksideArt.Sw(fl[q]));
+                            Quad(A, f1 + T * ta + up * yb + D * 0.01f, f1 + T * tb + up * yb + D * 0.01f, f0 + T * tb + up * 1.16f + D * 0.01f, f0 + T * ta + up * 1.16f + D * 0.01f, D, TracksideArt.Sw(fl[q]));
+                        }
+                        Box(A, c - D * 1.0f + T * 1.05f + up * 0.3f, T, up, D, 0.085f, 0.3f, 0.085f, TracksideArt.StripeRed);
+                        Box(A, c - D * 1.0f + T * 1.05f + up * 0.64f, T, up, D, 0.04f, 0.04f, 0.04f, TracksideArt.TyreBlack);
+                        Box(A, c - D * 0.98f - T * 1.12f + up * 0.32f, T, up, D, 0.26f, 0.32f, 0.22f, TracksideArt.PaintWhite);
+                        Box(A, c - D * 0.98f - T * 1.12f + up * 0.67f, T, up, D, 0.28f, 0.03f, 0.24f, TracksideArt.StripeBlue);
+                    }
                     AddFoot(c, T, 1.3f, 1.3f, 3.6f); AoPad(c, T, D, 1.05f, 1.05f, 0.9f);
                     sideT++;
                     break;
@@ -1357,7 +1378,7 @@ public static class Trackside
             int beltB = forest ? TracksideArt.BeltBlue : TracksideArt.BeltRed;
             for (int sg = -1; sg <= 1; sg += 2)
             {
-                int s = SI(sg), piece = 0;
+                int s = SI(sg), piece = 0, tecNo = 0;
                 bool have = false; Vector3 pf = Vector3.zero, pb = Vector3.zero, pd = Vector3.zero; int pI = 0;
                 for (int i = 0; i <= N; i++)
                 {
@@ -1370,7 +1391,42 @@ public static class Trackside
                     if (ok && have && Vector3.Dot(front - pf, Tan(p)) < 0.1f * ds) ok = false;
                     Vector3 up = Vector3.up;
                     if (ok && have && (front - pf).magnitude < 2.4f && i % Mathf.Max(1, Mathf.RoundToInt(2f / ds)) != 0) continue;
-                    if (ok && have)
+                    if (ok && have && tecZ[s, pI])
+                    {
+                        // Tecpro-style blocks (chicanes): ~1.2 m foam-filled modules, alternately blue and red, bevelled
+                        // vertical and top edges, a white strap band, a dark 4 cm joint between modules; scuffed at impacts
+                        SetChunk(pI);
+                        float len = (front - pf).magnitude;
+                        int nbk = Mathf.Max(1, Mathf.RoundToInt(len / 1.2f));
+                        float bv = 0.08f, yT = hT - bv;
+                        tint = dirt[s, pI] > 0.3f ? new Color(0.82f, 0.8f, 0.78f) : Color.white;
+                        for (int q = 0; q < nbk; q++)
+                        {
+                            float f0 = (float)q / nbk, f1 = (float)(q + 1) / nbk;
+                            Vector3 a0 = Vector3.Lerp(pf, front, f0), b0 = Vector3.Lerp(pf, front, f1);
+                            Vector3 ka = Vector3.Lerp(pb, back, f0), kb = Vector3.Lerp(pb, back, f1);
+                            Vector3 nb = Vector3.Lerp(pd, D, (f0 + f1) * 0.5f).normalized, al = b0 - a0; // nb: away from the track
+                            float bl = al.magnitude; if (bl < 0.3f) continue; al /= bl;
+                            a0 += al * 0.02f; b0 -= al * 0.02f; ka += al * 0.02f; kb -= al * 0.02f;
+                            var rc = TracksideArt.Sw(((tecNo++) & 1) == 0 ? TracksideArt.PaintBlue : TracksideArt.PaintRed);
+                            Vector3 fa = a0 + al * bv, fb = b0 - al * bv, sa = a0 + nb * bv, sb = b0 + nb * bv;
+                            Quad(A, fa + up * skirt, fb + up * skirt, fb + up * 0.66f, fa + up * 0.66f, -nb, rc);
+                            Quad(A, fa + up * 0.66f, fb + up * 0.66f, fb + up * 0.78f, fa + up * 0.78f, -nb, TracksideArt.Sw(TracksideArt.PaintWhite));
+                            Quad(A, fa + up * 0.78f, fb + up * 0.78f, fb + up * yT, fa + up * yT, -nb, rc);
+                            Quad(A, sa + up * skirt, fa + up * skirt, fa + up * yT, sa + up * yT, (-nb - al).normalized, rc);
+                            Quad(A, fb + up * skirt, sb + up * skirt, sb + up * yT, fb + up * yT, (-nb + al).normalized, rc);
+                            Quad(A, fa + up * yT, fb + up * yT, sb + up * hT, sa + up * hT, (up - nb).normalized, rc);
+                            Quad(A, sa + up * yT, fa + up * yT, sa + up * hT, sa + up * hT, (up - nb - al).normalized, rc); // corner facets
+                            Quad(A, fb + up * yT, sb + up * yT, sb + up * hT, sb + up * hT, (up - nb + al).normalized, rc);
+                            Quad(A, sa + up * hT, sb + up * hT, kb + up * hT, ka + up * hT, up, rc);
+                            // the joint: the next module's side in shade
+                            Quad(A, b0 + up * skirt, kb + up * skirt, kb + up * hT, b0 + up * hT, al, TracksideArt.Sw(TracksideArt.TyreBlack));
+                        }
+                        tint = Color.white;
+                        if (decals && !hills) Decal(G, pf - pd * 0.8f, pf, front - D * 0.8f, front, 0.05f, 0, len / 4f, TracksideArt.GrimeCol(TracksideArt.GrimeShade));
+                        piece++;
+                    }
+                    else if (ok && have)
                     {
                         SetChunk(pI);
                         float len = (front - pf).magnitude;
@@ -1386,8 +1442,8 @@ public static class Trackside
                         if (decals && !hills) Decal(G, pf - pd * 0.8f, pf, front - D * 0.8f, front, 0.05f, 0, len / 4f, TracksideArt.GrimeCol(TracksideArt.GrimeShade));
                         piece++;
                     }
-                    if (ok && !have) { SetChunk(k); Quad(A, front + up * skirt, back + up * skirt, back + up * hT, front + up * hT, -Tan(p), TracksideArt.Sw(TracksideArt.TyreBlack)); }
-                    if (!ok && have) { SetChunk(pI); Quad(A, pf + up * skirt, pb + up * skirt, pb + up * hT, pf + up * hT, Tan(t.pts[pI]), TracksideArt.Sw(TracksideArt.TyreBlack)); }
+                    if (ok && !have) { SetChunk(k); Quad(A, front + up * skirt, back + up * skirt, back + up * hT, front + up * hT, -Tan(p), TracksideArt.Sw(tecZ[s, k] ? TracksideArt.PaintBlue : TracksideArt.TyreBlack)); }
+                    if (!ok && have) { SetChunk(pI); Quad(A, pf + up * skirt, pb + up * skirt, pb + up * hT, pf + up * hT, Tan(t.pts[pI]), TracksideArt.Sw(tecZ[s, pI] ? TracksideArt.PaintRed : TracksideArt.TyreBlack)); }
                     have = ok;
                     if (ok) { pf = front; pb = back; pd = D; pI = k; }
                 }
@@ -1603,6 +1659,33 @@ public static class Trackside
                         Decal(G, P(pa) + Da * l0, P(pa) + Da * l1, P(pb) + Db * l0, P(pb) + Db * l1, 0.055f, 0, 2.5f, TracksideArt.GrimeCol(TracksideArt.GrimeDirt));
                     }
                 }
+            // worn grass where the astroturf meets the lawn: wheels dropped off the turf, the mowers' turn and the rain
+            // run-off leave a ragged band of bare soil along its outer edge; patchy along the lap (a slow noise), wider
+            // on the outside of the corner exits and at likely impacts (dirt[])
+            if (!street && t.def != null && t.def.style == CircuitStyle.Parkland)
+            {
+                int st = Mathf.Max(1, Mathf.RoundToInt(3f / ds));
+                for (int sg = -1; sg <= 1; sg += 2)
+                {
+                    int s = SI(sg);
+                    float Wear(int i) => Mathf.PerlinNoise(i * ds * 0.045f, s * 7.3f + 0.5f);
+                    for (int i = 0; i < N; i += st)
+                    {
+                        int ib = W(i + st);
+                        if (InPit(i, sg) || InPit(ib, sg)) continue;
+                        float nA = Wear(i), nB = Wear(i + st), dA = dirt[s, i], dB = dirt[s, ib];
+                        if (nA < 0.34f && nB < 0.34f && dA < 0.2f && dB < 0.2f) continue;
+                        float wA = 0.1f + 1.4f * Mathf.Clamp01(nA - 0.34f) + 0.9f * dA, wB = 0.1f + 1.4f * Mathf.Clamp01(nB - 0.34f) + 0.9f * dB;
+                        var pa = t.pts[i]; var pb = t.pts[ib];
+                        float ea = hw + (sg > 0 ? t.kerbL[i] : t.kerbR[i]) + 2f, eb = hw + (sg > 0 ? t.kerbL[ib] : t.kerbR[ib]) + 2f;
+                        Vector3 Da = Nrm(pa) * sg, Db = Nrm(pb) * sg;
+                        if (grid.MinDist(P(pa) + Da * (ea + wA)) < ea || Off(i, sg) < ea + 0.8f) continue; // another leg close by / no verge
+                        SetChunk(i);
+                        Decal(G, P(pa) + Da * (ea - 0.3f * wA), P(pa) + Da * (ea + 0.7f * wA), P(pb) + Db * (eb - 0.3f * wB), P(pb) + Db * (eb + 0.7f * wB), 0.045f,
+                              i * ds / 5f, (i + st) * ds / 5f, TracksideArt.GrimeCol(TracksideArt.GrimeDirt));
+                    }
+                }
+            }
         }
 
         // ---------------------------------------------------------------- Monza: asphalt run-offs with a painted edge
@@ -1644,7 +1727,7 @@ public static class Trackside
         var parent = new GameObject("Trackside").transform;
         parent.SetParent(root, false);
         Late = new GameObject("TracksideLate");
-        var atlasMat = WorldBuilder.Mat(Color.white, TracksideArt.Atlas(), 0.1f);
+        var atlasMat = WorldBuilder.Mat(Color.white, TracksideArt.Atlas(), 0.1f); glassMat = atlasMat;
         var crowdMat = WorldBuilder.Mat(Color.white, TracksideArt.Crowd(), 0.1f);
         Emit(parent, "Trackside", atlasL, atlasMat, null);
         Emit(parent, "Crowd", crowdL, crowdMat, null);
@@ -1707,7 +1790,9 @@ public static class Trackside
                 foreach (var r in fenceRs) if (r != null) { r.enabled = false; optional.Remove(r); }
             }
         }
+        // glass reflections (Baked.shader F2_GLASS) once the atlas material is on the baked shader; TracksideLod switches them
+        TracksideLod.Glass = glassMat != null && glassMat.shader != null && glassMat.shader.name == "F2/Baked" && WorldBuilder.Gfx >= 2 ? glassMat : null;
         if ((optional.Count > 0 || postRs.Count > 0) && root != null) TracksideLod.Attach(root, optional.ToArray(), postRs.ToArray());
-        fenceMat = null; fenceRs.Clear(); optional.Clear(); postRs.Clear();
+        glassMat = null; fenceMat = null; fenceRs.Clear(); optional.Clear(); postRs.Clear();
     }
 }

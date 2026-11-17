@@ -188,3 +188,58 @@ Still open (by impact per cost):
 4. Mowing stripes that flip with the view direction.
 5. Landmarks: old Lesmo/Ascari bridges, the old banking, the Parabolica tower.
 6. Crowd variety (colour blocking, flags).
+
+## Round 6: road edges, chicane barriers, marshal kit, glass
+
+What the v13 shots and RR3 still showed: asphalt -> kerb -> astroturf -> grass meet in perfectly clean, ruler-straight
+lines (no dirt, no stones, no worn grass); the same belted tyre wall at every slow corner; marshal posts with nothing
+on them; glass that is a flat printed picture of a sky (open item 1 since round 3).
+
+Done (not yet seen in a build):
+
+- **Road edges** (`Road.cginc`, both levels unless noted; new mesh channel uv3 = edge dirt left / right from
+  `WorldBuilder.EdgeDirt`): a dusty soil film reaching 0.5-1.6 m in from the edge with a wandering inner limit, over the
+  kerbs too; strong beside the gravel traps (spread ~30 m downstream, where cars rejoin) and on the outside of every
+  corner exit (10-70 m after the curvature, by how tight it is), a faint drifting base elsewhere. Gravel stones on a
+  6 cm grid in it (single box-filtered stones close up on HQ, their mean colour further away and on Low). A grime strip
+  outside the white line (never swept). **Marbles**: off the line (> 2.2 m from it) where the rubber is heaviest (the
+  corners), a dark speckle of pellets (HQ grains, mean darkening on Low).
+- **Timing loops** (`Road.cginc` `_Loops`): a pair of sealed saw cuts 0.6 m apart across the road at each of the 25
+  loops `Sectors.cs` times (lap / 25) and at the two sector ends (`SectorMap.Ends`), so the timing really happens where
+  the road shows it.
+- **Worn grass at the turf edge** (`Trackside`, grime layer, Medium/High): a ragged band of bare soil along the
+  astroturf's outer edge, patchy along the lap (slow noise), wider on corner exits and at the likely impacts.
+- **Tecpro-style blocks at the chicanes** (`Trackside`, parkland corners tighter than R 45 m, i.e. the Rettifilo and the
+  Roggia at Monza): 1.2 m foam modules alternately blue / red, bevelled vertical and top edges (so the sun picks out
+  each block), a white strap band, a dark joint between modules, scuffed at impacts; coloured end faces. The other slow
+  corners keep the belted tyre wall.
+- **Marshal posts** (Medium/High): a yellow and a green flag draped over the parapet, a red extinguisher and a white
+  bin of absorbent by the door.
+- **Braking boards**: 200 / 150 / 100 / 50 m (the 200 only before braking zones long enough for it), new "2" glyph; the
+  texture grows to 96 x 128.
+- **Glass reflections** (open item 1; `Baked.shader` `F2_GLASS`, Medium/High via `TracksideLod`): the trackside atlas
+  marks glass in its alpha (curtain-wall panes, glazing, balustrades, the dark-glass swatch; drawn blinds barely). Those
+  texels mirror the sky (fog colour at the horizon, deeper blue overhead), the ground below the horizon and the sun
+  (s^64 glint) with Schlick Fresnel (F0 0.04), independent of the bake: shaded glass on the pit building and the stand
+  boxes still shows the bright sky, and the reflection slides as the car passes.
+
+Cost: draw calls **+0** (all in existing layers / materials; the boards keep their two). Vertices: Tecpro ~+2.5k, worn
+grass decals ~+9k (Medium/High), marshal kit ~+60 per post. Pixel: Road HQ ~+45 ALU (no new reads), Road Low ~+20 ALU;
+Baked `F2_GLASS` ~+30 ALU on the trackside atlas only (Medium/High); Low unchanged except the road maths.
+
+Shots to verify: s=850 chase + cockpit (Rettifilo: Tecpro, stones and dust on the exit edge and kerb, marbles off the
+line, 200/150/100/50 boards before it), s=0 chase + tv (pit-building and balcony glass mirroring the sky, timing loops
+on the straight), s=300 chase (worn turf edge, timing loop, marshal post flags), s=2030 chase (Roggia: Tecpro, gravel
+on the edge), s=2500 chase (Lesmo exit dirt). Risks to check first: stones / film too strong (should read as a dusty
+edge, not a gravel road); the loops' contrast far away (box-filtered: should fade, not flicker); glass too bright on
+Medium at grazing angles; Tecpro colours vs the real Monza (blue / red assumed).
+
+Still open (by impact per cost):
+
+1. Procedural `Trackside.Stand` tier AO bands; pit building roof top; real emissive downlights.
+2. Car lighting consistency (CarPaint sky term vs the world's sky; owned by the car engineer this round).
+3. Poly Haven building models near the track; forest-floor undergrowth cards at the near tree line.
+4. Mowing stripes that flip with the view direction.
+5. Landmarks: old Lesmo/Ascari bridges, the old banking, the Parabolica tower.
+6. Crowd variety (colour blocking, flags); marshals at the posts (People*, other engineer).
+7. Post numbers on the marshal posts, painted sector lines on the kerbs.

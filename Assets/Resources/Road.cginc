@@ -25,6 +25,7 @@ struct appdata
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
     float2 uv2 : TEXCOORD2;
+    float2 uv3 : TEXCOORD3;   // edge dirt (left, right) 0..1: gravel stones / dust / dragged-on dirt (WorldBuilder.EdgeDirt)
     float4 color : COLOR;
 };
 struct v2f
@@ -35,6 +36,7 @@ struct v2f
     half3 color : TEXCOORD2;  // baked light (sky/ambient only when the shadow mask is on)
     half3 sunc : TEXCOORD6;   // full sun on this vertex (_F2SunLin x N.L); 0 without the mask
     UNITY_FOG_COORDS(3)
+    float2 dirt : TEXCOORD7;  // edge dirt (left, right)
 #ifdef ROAD_HQ
     float3 view : TEXCOORD4;  // surface -> camera (world)
     half3 n : TEXCOORD5;
@@ -53,6 +55,7 @@ float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: 1 / wid
 half4 _F2SunLin;         // the sun's linear colour x intensity, as baked (0: no mask, the vertex colour is all the light)
 float _HalfWidth, _MipBias;
 float4 _Grid, _SunDir;
+float4 _Loops;           // x: timing-loop pitch (m), y / z: the sector ends (m along)
 half _Wet; // global (Weather.cs)
 
 v2f vert (appdata v)
@@ -73,6 +76,7 @@ v2f vert (appdata v)
     half3 nw = UnityObjectToWorldNormal(v.normal);
     o.sunc = _F2SunLin.rgb * saturate(dot(nw, _SunDir.xyz));
     o.misc.w = v.color.a;                      // the bake's sun visibility (RoadShadow; 1 without the mask)
+    o.dirt = v.uv3;
     UNITY_TRANSFER_FOG(o, o.pos);
 #ifdef ROAD_HQ
     o.view = toCam;
@@ -96,6 +100,19 @@ float Hash1(float n)
     h *= h + 33.33;
     h *= h + h;
     return frac(h);
+}
+
+// small things scattered on a ~6 cm grid (gravel stones, rubber marbles): coverage 0..1 of a round grain in this cell,
+// present in "density" of the cells. cell = position in cells (along wrapped to keep the hash exact); w = cells per pixel
+half Grains(float2 cell, float density, float seed, float w)
+{
+    float2 id = floor(cell), f = frac(cell) - 0.5;
+    float h = Hash1(id.y * 0.917 + Hash1(id.x * 1.37 + seed) * 431.0 + seed * 17.0);
+    float h2 = Hash1(h * 97.3 + seed);
+    float2 o = (float2(h2, frac(h2 * 7.31)) - 0.5) * 0.3;          // off the cell centre
+    float r = 0.18 + 0.17 * frac(h * 13.7);
+    float on = h < density ? 1.0 : 0.0;
+    return (half)(saturate((r - length(f - o)) / max(w, 0.02) + 0.5) * on);
 }
 
 #ifdef ROAD_HQ
@@ -221,6 +238,22 @@ fixed4 frag (v2f i) : SV_Target
     // verge or the kerb has far less contrast to step (no hard, jagged line in bends without MSAA)
     half rimW = (half)min(1.5 * wl, 2.0); // (clamped: no half overflow at the horizon)
     col = lerp(col, _Dust.rgb * 0.45, 0.6 * (half)saturate((abs(lat) - (_HalfWidth - rimW)) / max(rimW, 1e-4)));
+    // grime against the kerb / verge: the strip outside the white line is never swept by tyres (oil, rubber dust)
+    col *= 1.0 - 0.16 * Band(abs(lat), _HalfWidth - 0.16, _HalfWidth + 1.0, wl) * (1.0 - kerbF);
+
+    // ---- marbles: off the line in the corners (where the rubber is heaviest) worn-off pellets lie in a dark speckle;
+    // single pellets close up (HQ), their mean darkening further away (and on Low)
+    float ae = abs(lat);
+    half marbZ = (half)(saturate((i.misc.y - 0.62) * 3.0) * saturate(abs(i.misc.x) - 2.2) * saturate((_HalfWidth - 0.3 - ae) * 2.0)) * (1.0 - kerbF);
+    float2 gc = float2(lat, along - floor(along * (1.0 / 512.0)) * 512.0) * 16.0; // 6.25 cm cells
+    float gw = max(wl, wa) * 16.0;                                               // cells per pixel
+    half grainVis = (half)saturate(1.6 - gw * 1.2);                              // single grains only while > ~1 px
+#ifdef ROAD_HQ
+    half marb = Grains(gc, 0.3 * marbZ, 3.0, gw);
+    col *= 1.0 - marbZ * (0.07 + 0.45 * lerp(0.04, marb, grainVis)) * (1.0 - 0.5 * inPatch);
+#else
+    col *= 1.0 - marbZ * 0.09;
+#endif
 
     // ---- tar: the joints, the patch outline and a wandering crack-sealing "snake" (HQ); dark and glossy
     half tar = joint;
@@ -241,6 +274,10 @@ fixed4 frag (v2f i) : SV_Target
     float c0 = (hc * 2.0 - 1.0) * _HalfWidth, c1 = c0 + 2.0 + 5.0 * hd;
     tar = max(tar, Band(cx, -0.018, 0.018, wa + 0.35 * wl) * Band(lat, c0, c1, wl) * (hc > 0.74 ? 1.0 : 0.0));
 #endif
+    // timing loops: a pair of sealed saw cuts 0.6 m apart across the road, evenly round the lap and at the sector ends
+    float lp = max(_Loops.x, 1.0);
+    float la = min(abs(along - floor(along / lp + 0.5) * lp), min(abs(along - _Loops.y), abs(along - _Loops.z)));
+    tar = max(tar, Band(abs(la - 0.3), -1.0, 0.02, wa) * Band(ae, -1.0, _HalfWidth - 0.2, wl) * 0.8);
     tar *= 1.0 - kerbF;
     col *= 1.0 - 0.42 * tar;
 
@@ -294,6 +331,24 @@ fixed4 frag (v2f i) : SV_Target
     kc = lerp(kc, _Dust.rgb * 0.75, saturate(across * 1.4 - 0.5) * 0.18 * (0.5 + blotch));
 #endif
     col = kerb ? kc : col;
+
+    // ---- edge dirt (uv3, the side this pixel is on): a dusty film reaching 0.5-1.6 m in from the edge (wandering),
+    // over the kerb too, and gravel stones thrown onto it next to the traps and where cars drag it back on
+    float sideL = lat > 0.0 ? 1.0 : 0.0;
+    half ed = (half)lerp(i.dirt.y, i.dirt.x, sideL);
+    float reach = 0.45 + 1.15 * ed + 0.3 * sin(along * 0.23 + sideL * 3.0) + 0.15 * sin(along * 0.71 + sideL);
+    half eb = (half)saturate((ae - (_HalfWidth - reach)) / max(reach * 0.7, 0.2));
+    eb *= eb;
+    half3 soil = _Dust.rgb * half3(0.98, 0.9, 0.78) * (0.8 + 0.3 * grain);
+    col = lerp(col, soil, eb * ed * (0.5 - 0.15 * kerbF) * (0.55 + 0.45 * blotch) * (1.0 - 0.6 * rub));
+    half stoneP = saturate(eb * (ed - 0.25) * 0.75);
+#ifdef ROAD_HQ
+    half st = Grains(gc + 0.5, stoneP, 7.0, gw);
+    half3 stoneC = half3(0.66, 0.62, 0.55) * (0.8 + 0.35 * (half)frac(dot(floor(gc + 0.5), float2(0.37, 0.61))));
+    col = lerp(col, stoneC, lerp(stoneP * 0.12, st, grainVis));
+#else
+    col = lerp(col, half3(0.62, 0.58, 0.52), stoneP * 0.12);
+#endif
 
     // ---- wet: damp already looks well wet off the line; in the damp the racing line has dried (none of that when wet)
     half wv = saturate(_Wet * 1.6);

@@ -12,6 +12,11 @@
 //           seams) and capped so neighbouring cells do not bleed. uv3 = the building's colour (rgb), applied where the
 //           texture's alpha is 1 (plaster, brick, cladding; glass and frames keep theirs), and w = the wall's length in
 //           tiles (0: none): the last 0.075 tile at each end is a lighter corner trim (quoins / pilasters).
+//  F2_GLASS the trackside atlas (TracksideArt.Atlas) on Medium / High (TracksideLod switches it): texels whose alpha is
+//           below 1 are glass (curtain walls, stand boxes, balustrades, cabin windows). They mirror the sky and the
+//           ground with a view-dependent Fresnel term (Schlick, F0 0.04) and the sun in a small glint, whatever the bake
+//           says about their light: shaded glass still shows the bright sky. The sky is worked out from the fog colour
+//           (horizon) and a deeper blue overhead; the sun direction is Sky.cs's _F2HazeSun. Everything else unchanged.
 Shader "F2/Baked"
 {
     Properties
@@ -34,7 +39,7 @@ Shader "F2/Baked"
             #pragma fragment frag
             #pragma target 3.0
             #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
-            #pragma multi_compile_local __ F2_LAND F2_ATLAS
+            #pragma multi_compile_local __ F2_LAND F2_ATLAS F2_GLASS
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
             #include "Grade.cginc"
@@ -47,6 +52,9 @@ Shader "F2/Baked"
                 float2 uv2 : TEXCOORD2;
                 float4 uv3 : TEXCOORD3;
             #endif
+            #if defined(F2_GLASS)
+                float3 normal : NORMAL;
+            #endif
                 float4 color : COLOR;
             };
             struct v2f
@@ -58,6 +66,10 @@ Shader "F2/Baked"
             #if defined(F2_ATLAS)
                 float2 cell : TEXCOORD3;
                 half4 tint : TEXCOORD4;
+            #endif
+            #if defined(F2_GLASS)
+                float3 view : TEXCOORD3; // surface -> camera (world)
+                half3 n : TEXCOORD4;
             #endif
             };
 
@@ -77,6 +89,10 @@ Shader "F2/Baked"
                 o.uv = TRANSFORM_TEX(v.uv, _MainTex);
             #if defined(F2_ATLAS)
                 o.cell = v.uv2; o.tint = v.uv3;
+            #endif
+            #if defined(F2_GLASS)
+                o.view = _WorldSpaceCameraPos - mul(unity_ObjectToWorld, v.vertex).xyz;
+                o.n = UnityObjectToWorldNormal(v.normal);
             #endif
                 o.color = v.color * _Color * 2.0; // stored light 0.5 = full brightness, so sunlit areas can go above 1
                 UNITY_TRANSFER_FOG(o, o.pos);
@@ -115,6 +131,24 @@ Shader "F2/Baked"
                 fixed4 c = tex2D(_MainTex, i.uv);
             #endif
                 c.rgb *= i.color.rgb;
+            #if defined(F2_GLASS)
+                {
+                    // (float maths for the mask and the compares, see F2_LAND)
+                    float gm = saturate(1.0 - c.a);
+                    float3 V = normalize(i.view), N = normalize((float3)i.n);
+                    float3 R = reflect(-V, N);
+                    float fv = 1.0 - saturate(dot(V, N)), f2 = fv * fv;
+                    float fres = 0.04 + 0.96 * f2 * f2 * fv;
+                    half3 hor = unity_FogColor.rgb;
+                    half3 sky = lerp(hor * half3(1.04, 1.02, 1.0), hor * half3(0.52, 0.7, 1.02), (half)saturate(R.y * 1.8));
+                    half3 gnd = hor * half3(0.3, 0.32, 0.27);                        // the ground and tree line mirrored low down
+                    half3 env = lerp(gnd, sky, (half)saturate(R.y * 10.0 + 0.5));
+                    float sd = saturate(dot(R, _F2HazeSun.xyz)); sd *= sd; sd *= sd; sd *= sd; sd *= sd; sd *= sd; sd *= sd; // ^64
+                    float sunOn = _F2HazeSun.w > 0.0 ? 1.0 : 0.0;
+                    half k = (half)(gm * (0.22 + 0.78 * fres));
+                    c.rgb = lerp(c.rgb, env, k) + half3(1.0, 0.93, 0.82) * (half)(sd * 5.0 * sunOn * gm * (0.3 + 0.7 * fres));
+                }
+            #endif
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
                 return c;

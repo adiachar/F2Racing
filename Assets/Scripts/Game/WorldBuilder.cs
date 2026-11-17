@@ -206,6 +206,52 @@ public static class WorldBuilder
         return go;
     }
 
+    // Dirt at the road's edges, per track point: (left, right) 0..1 (Road.shader uv3). Stones and dust thrown onto the
+    // asphalt and the kerbs beside the gravel traps (strongest where a trap ends: cars rejoining drag it back on), and
+    // grass dirt and dust dragged on along the outside of the corner exits, where cars run wide; a faint base elsewhere
+    // that drifts along the lap, so no stretch of edge is perfectly clean.
+    static Vector2[] EdgeDirt(Track t)
+    {
+        int N = t.N; float ds = (float)t.ds;
+        var outp = new Vector2[N];
+        var src = new float[2, N];
+        bool gravel = t.runL != null && t.runR != null;
+        for (int i = 0; i < N; i++)
+        {
+            if (gravel)
+            {
+                src[0, i] = t.runL[i] == SurfaceType.Gravel ? 0.75f : 0f;
+                src[1, i] = t.runR[i] == SurfaceType.Gravel ? 0.75f : 0f;
+            }
+            // the outside of a corner (left-hand bend, curv > 0: the outside is on the right)
+            float k = (float)t.pts[i].curv, w = Mathf.Clamp01((Mathf.Abs(k) - 1f / 400f) * 90f) * 0.55f;
+            int o = k > 0 ? 1 : 0;
+            if (w <= 0f) continue;
+            int after = Mathf.RoundToInt(70f / ds);
+            for (int j = Mathf.RoundToInt(10f / ds); j <= after; j++)
+            {
+                int q = (i + j) % N; float f = w * (1f - (float)j / (after + 1));
+                if (f > src[o, q]) src[o, q] = f;
+            }
+        }
+        // spread along the lap (gravel: ~25 m either way, a little longer downstream where it is dragged back on)
+        int back = Mathf.Max(1, Mathf.RoundToInt(18f / ds)), fwd = Mathf.Max(1, Mathf.RoundToInt(30f / ds));
+        for (int s = 0; s < 2; s++)
+            for (int i = 0; i < N; i++)
+            {
+                float m = 0f;
+                for (int j = -fwd; j <= back; j++)
+                {
+                    float sv = src[s, ((i + j) % N + N) % N]; if (sv <= m) continue;
+                    float f = j < 0 ? 1f + (float)j / (fwd + 1) : 1f - (float)j / (back + 1);
+                    m = Mathf.Max(m, sv * f);
+                }
+                float b = 0.1f + 0.08f * Mathf.Sin(i * ds * 0.011f + s * 2.1f) + 0.05f * Mathf.Sin(i * ds * 0.037f + s * 5.3f);
+                if (s == 0) outp[i].x = Mathf.Clamp01(Mathf.Max(m, b)); else outp[i].y = Mathf.Clamp01(Mathf.Max(m, b));
+            }
+        return outp;
+    }
+
     const float SeaBed = -4f;
     // Ground.shader / Foliage.shader draw the land and the trees (need the baked lighting, like Road.shader)
     public static bool GroundShaded; public static Shader FoliageShader;
@@ -416,7 +462,9 @@ public static class WorldBuilder
                 }
             }
             var v = new List<Vector3>(); var uv = new List<Vector2>(); var uv2 = new List<Vector2>(); var tri = new List<int>();
-            // uv0 = (lateral m, + = left; distance along m), uv2 = (racing-line offset m, rubber 0..1); see Road.shader
+            var uv3 = new List<Vector2>(); var edgeDirt = EdgeDirt(t);
+            // uv0 = (lateral m, + = left; distance along m), uv2 = (racing-line offset m, rubber 0..1), uv3 = edge dirt
+            // (left, right) 0..1; see Road.shader
             const int K = 6;
             for (int i = 0; i <= t.N; i++)
             {
@@ -425,7 +473,7 @@ public static class WorldBuilder
                 for (int c = 0; c <= K; c++)
                 {
                     float lat = Wd / 2 - Wd * c / K;
-                    v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2(lat, d)); uv2.Add(line);
+                    v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2(lat, d)); uv2.Add(line); uv3.Add(edgeDirt[i % t.N]);
                     if (i < t.N && c < K) { int k = i * (K + 1) + c; tri.Add(k); tri.Add(k + K + 1); tri.Add(k + 1); tri.Add(k + K + 1); tri.Add(k + K + 2); tri.Add(k + 1); }
                 }
             }
@@ -448,7 +496,7 @@ public static class WorldBuilder
                     {
                         int pc = side > 0 ? KP - 1 - c : c; float across = kf[pc], g = side > 0 ? 1f - across : across;
                         float lat = left + (right - left) * g;
-                        v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(new Vector2(across, -1));
+                        v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(new Vector2(across, -1)); uv3.Add(edgeDirt[i % t.N]);
                     }
                     if (i < i1)
                         for (int c = 0; c + 1 < KP; c++)
@@ -463,11 +511,16 @@ public static class WorldBuilder
             Runs(i => t.kerbR[i] > 0, (k, j) => KerbRun(k, j, -1));
             // baked like any other surface first (LightBake only lights the plain materials), Road.shader after
             var roadGo = MeshObj("Road", v, uv, tri, asphalt, true, uv2); roadGo.transform.SetParent(root);
+            roadGo.GetComponent<MeshFilter>().sharedMesh.SetUVs(3, uv3);
             roadR = roadGo.GetComponent<MeshRenderer>();
             roadMat = new Material(roadSh) { mainTexture = RoadTex() };
             roadMat.SetFloat("_HalfWidth", Wd / 2);
             // grid slots as GameManager places the cars: slot k at track point N - 14 - 4k, 22 slots, 1.8 m off centre
             roadMat.SetVector("_Grid", new Vector4((float)((t.N - 14) * t.ds), (float)(4 * t.ds), 22, 1.8f));
+            // timing loops (Sectors.cs: CarTiming.Loops evenly round the lap) and the two sector ends, as sealed saw cuts
+            SectorMap.Ends(t.def, out double sf1, out double sf2);
+            float lapM = (float)(t.N * t.ds);
+            roadMat.SetVector("_Loops", new Vector4(lapM / CarTiming.Loops, (float)sf1 * lapM, (float)sf2 * lapM, 0f));
             roadMat.SetVector("_SunDir", -sunGo.transform.forward);
             roadMat.SetColor("_SunCol", sun.color * sun.intensity);
             // sunlit asphalt is a clean mid grey, not black (sRGB 0.38 -> about 0.5 on screen in the sun after the bake)

@@ -4,11 +4,13 @@
 // It also hides the thin-post layer (Armco and fence posts, in ~40 m chunks) beyond ~85 m: a 10-14 cm post is about
 // one pixel wide there and only flickers in and out as the car moves. The distance grows when the camera zooms in
 // (TV views). A few chunks are checked per frame (squared distance to their bounds), so it costs next to nothing.
+// The atlas material's glass reflections (Baked.shader F2_GLASS) follow the same switch: on above Low only.
 using UnityEngine;
 
 public class TracksideLod : MonoBehaviour
 {
     Renderer[] renderers; int state = -1;
+    public static Material Glass; // the trackside atlas material (Trackside.AfterBake), F2_GLASS on above Low
     Renderer[] far; Bounds[] farB; int farNext;
     const float FarDist = 85f; // metres at a 60 degree vertical field of view
 
@@ -42,6 +44,7 @@ public class TracksideLod : MonoBehaviour
         if (s == state) return;
         state = s;
         for (int k = 0; k < renderers.Length; k++) if (renderers[k] != null) renderers[k].enabled = s == 1;
+        if (Glass != null) { if (s == 1) Glass.EnableKeyword("F2_GLASS"); else Glass.DisableKeyword("F2_GLASS"); }
     }
 
     void Far()

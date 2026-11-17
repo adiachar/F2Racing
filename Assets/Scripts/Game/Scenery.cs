@@ -180,17 +180,18 @@ public static class Scenery
         }
     }
 
-    // Braking distance boards (150 / 100 / 50 m) before every real braking zone, on the outside of the corner,
-    // facing the driver. The distances are measured to the turn-in point of the racing line.
+    // Braking distance boards (200 / 150 / 100 / 50 m; the 200 only before the long braking zones) before every real
+    // braking zone, on the outside of the corner, facing the driver. The distances are measured to the turn-in point
+    // of the racing line.
     static readonly string[] Digit = {
-        "01110100011001110101110011000101110", "00100011000010000100001000010001110", "", "", "",
+        "01110100011001110101110011000101110", "00100011000010000100001000010001110", "01110100010000100010001000100011111", "", "",
         "11111100001111000001000011000101110" };
     public static GameObject Boards(Track t, RacingLine line, Transform parent, float wallAt)
     {
-        string[] label = { "150", "100", "50" };
-        var tex = WorldBuilder.Tex(96, 96, (u, v, x, y) =>
+        string[] label = { "200", "150", "100", "50" };
+        var tex = WorldBuilder.Tex(96, 128, (u, v, x, y) =>
         {
-            int row = Mathf.Min(2, y / 32), yy = y - row * 32 - 5; string txt = label[row];
+            int row = Mathf.Min(3, y / 32), yy = y - row * 32 - 5; string txt = label[row];
             int x0 = (96 - txt.Length * 18) / 2 + 1, xx = x - x0;
             bool border = x < 3 || x > 92 || y % 32 < 2 || y % 32 > 29;
             if (!border && xx >= 0 && yy >= 0 && yy < 21 && xx < txt.Length * 18 && xx % 18 < 15)
@@ -215,8 +216,8 @@ public static class Scenery
             if (line.speed[i] - line.speed[e] < 14 || len * t.ds < 35) continue;
             float turn = 0; for (int k = 0; k < 20; k++) turn += (float)line.curv[(e + k) % N];
             float side = turn > 0 ? -1 : 1; // left-hand corner: boards on the right
-            float[] dist = { 150, 100, 50 };
-            for (int b = 0; b < 3; b++)
+            float[] dist = { 200, 150, 100, 50 };
+            for (int b = 0; b < 4; b++)
             {
                 if (dist[b] > len * t.ds + 70) continue; // no 150 m board for a short braking zone
                 int k = ((e - Mathf.RoundToInt(dist[b] / (float)t.ds)) % N + N) % N; var p = t.pts[k];
@@ -224,7 +225,7 @@ public static class Scenery
                 var c0 = new Vector3((float)p.x, 0, (float)p.y);
                 Vector3 a = c0 + nrm * side * inner, d = c0 + nrm * side * (inner + width);
                 Vector3 l = side > 0 ? d : a, r = side > 0 ? a : d; // l = the driver's left
-                float y0 = 0.55f, y1 = 1.25f, v0 = b / 3f, v1 = (b + 1) / 3f;
+                float y0 = 0.55f, y1 = 1.25f, v0 = b / 4f, v1 = (b + 1) / 4f;
                 Quad(face, l + Vector3.up * y0, r + Vector3.up * y0, r + Vector3.up * y1, l + Vector3.up * y1, -tan,
                      new Vector2(0, v0), new Vector2(1, v0), new Vector2(1, v1), new Vector2(0, v1));
                 var w = new Vector2(0.5f, 0.02f);

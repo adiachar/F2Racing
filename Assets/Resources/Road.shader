@@ -5,6 +5,7 @@
 //   uv0 = (lateral offset from the centreline in metres, + = left; distance along the track in metres)
 //   uv2 = road:  (racing-line offset at this row in metres, rubber amount 0..1)
 //         kerb:  (0 at the track edge .. 1 at the outer lip, -1)   <- y < -0.5 marks a kerb vertex
+//   uv3 = edge dirt (left, right) 0..1: dust film, gravel stones (WorldBuilder.EdgeDirt)
 // Paint edges are drawn with box-filtered maths in metres (fwidth), so they stay crisp near and do not
 // shimmer far away, whatever the screen resolution.
 //
@@ -25,6 +26,7 @@ Shader "F2/Road"
         _KerbRed ("Kerb red", Color) = (0.70, 0.14, 0.13, 1)
         _HalfWidth ("Half track width (m)", Float) = 6
         _Grid ("Grid: first slot (m), pitch (m), slots, slot offset (m)", Vector) = (0, 8, 0, 1.8)
+        _Loops ("Timing loops: pitch (m), sector 1 end (m), sector 2 end (m)", Vector) = (100000, -1000, -1000, 0)
         _SunDir ("Towards the sun", Vector) = (0, 1, 0, 0)
         _SunCol ("Sun sheen colour", Color) = (1, 0.95, 0.86, 1)
         _MipBias ("Detail mip bias", Float) = 0.3

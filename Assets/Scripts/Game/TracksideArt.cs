@@ -21,6 +21,8 @@
 //  * Fence: chain-link diamonds and steel cables in alpha for the alpha-tested debris/catch fence; the mip levels keep
 //    (nearly) the mesh's true coverage, which BakedCutout turns into a light veil in the distance (MSAA coverage).
 //  * Grime: soft dark ground decals in four columns (base shadow, tyre mark, dirt, rubber smear).
+//  Atlas alpha: 1 everywhere except glass (glazing, curtain-wall panes, balustrades, the dark-glass swatch), where it
+//  is lower the more mirror-like the glass; Baked.shader's F2_GLASS (Medium / High) reflects the sky there.
 using UnityEngine;
 
 public static class TracksideArt
@@ -177,6 +179,7 @@ public static class TracksideArt
                 {
                     int s = (y / 16) * 16 + x / 16;
                     c = s < Swatch.Length ? Swatch[s] : new Color32(128, 128, 128, 255);
+                    if (s == GlassDark) c.a = 60; // glass (Baked F2_GLASS mirrors the sky in it)
                 }
                 else if (y < 128)
                 {
@@ -194,7 +197,7 @@ public static class TracksideArt
                         // glazing: 2 x 2 panes with mullions, sky reflection brighter at the top
                         bool mull = lx % 32 < 2 || ly % 32 < 2;
                         float k = 0.75f + 0.5f * ly / 64f + 0.05f * n;
-                        c = mull ? new Color32(60, 62, 66, 255) : Mul(new Color32(70, 98, 124, 255), k);
+                        c = mull ? new Color32(60, 62, 66, 255) : Mul(new Color32(70, 98, 124, 70), k); // (alpha < 1: glass, Baked F2_GLASS)
                     }
                     else if (reg == 2)
                     {
@@ -296,7 +299,9 @@ public static class TracksideArt
         var c = Mix(sky, new Color32(236, 240, 244, 255), Mathf.Clamp01((n - 0.58f) * 3f) * (0.35f + 0.65f * t)); // clouds
         float trees = Mathf.Clamp01((0.34f + 0.16f * Noise(lx / 9f, 0f, 403) - t) * 9f);          // the tree line across the track
         c = Mix(c, new Color32(40, 60, 48, 255), trees * 0.85f);
-        if (Hash(pane, 7, 404) > 0.8f && t > 0.42f) c = Mix(c, new Color32(206, 206, 198, 255), 0.75f); // blind
+        bool blind = Hash(pane, 7, 404) > 0.8f && t > 0.42f;
+        if (blind) c = Mix(c, new Color32(206, 206, 198, 255), 0.75f);
+        c.a = (byte)(blind ? 200 : 40); // glass: alpha < 1 (Baked F2_GLASS mirrors the real sky in it; a drawn blind less)
         return Mul(c, (0.95f + 0.06f * Hash(pane, 3, 405)) * (ix < 4 ? 0.82f : 1f));
     }
 
@@ -337,6 +342,7 @@ public static class TracksideArt
         if (ly < 3) return new Color32(120, 122, 126, 255);
         float t = ly / 58f;
         var c = Mix(new Color32(92, 124, 136, 255), new Color32(150, 186, 198, 255), t);
+        c.a = 130; // glass, half mirror (Baked F2_GLASS)
         return Mul(c, 0.95f + 0.08f * Noise(lx / 14f, ly / 10f, 431));
     }
 
