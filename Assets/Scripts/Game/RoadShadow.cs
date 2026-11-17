@@ -166,6 +166,7 @@ public static class RoadShadow
             // cards' whole rectangles on the road: a big dark box with nothing box-shaped beside the track; and 850 leaf
             // quads per tree at 70 % made a heavy grey slab. They get the same dappled crowns as the card trees (below).
             if (mf.name == "EnvModelTrees") continue;
+            if (mf.name == "EnvFarTrees") continue; // (RealWorld's far tree lines: hundreds of metres from the road)
             float T = 0f, minH = 0.5f;
             if (sn == "F2/BakedCutout") T = 0.5f;                       // chain-link fences
             else if (sn == "F2/Foliage") T = 0.3f;                      // hedges, bushes

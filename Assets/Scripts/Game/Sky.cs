@@ -226,7 +226,7 @@ public class Sky : MonoBehaviour
     }
 
     // ---------------------------------------------------------------- aerial perspective (Grade.cginc F2Haze)
-    // Subtle by default; stronger and warmer towards the sun in the morning and evening; none at night; thinner in rain
+    // Gentle by default (afternoon); stronger and warmer towards the sun in the morning and evening; none at night; thinner in rain
     // (the fog is already close then). Same for every circuit; parkland / forest circuits get a little more.
     // Colours are authored like the fog (the on-screen look before the grade) and pushed in linear.
     static Vector3 hazeSun = new Vector3(0.5f, 0.7f, 0.5f); static bool hazeForest;
@@ -238,7 +238,7 @@ public class Sky : MonoBehaviour
             case TimeOfDay.Kind.Morning: strength = 0.28f; sunW = 0.6f; height = 0.0028f; break; // low mist, cool gold
             case TimeOfDay.Kind.Evening: strength = 0.30f; sunW = 0.85f; height = 0.0030f; break;
             case TimeOfDay.Kind.Night:   strength = 0f;    sunW = 0f; break;
-            default:                     strength = 0.10f; sunW = 0.35f; break;
+            default:                     strength = 0.22f; sunW = 0.35f; break; // (was 0.10: far woods kept their near green)
         }
         float w = Weather.Wetness;
         strength *= (hazeForest ? 1.3f : 1f) * (1f - 0.5f * w); sunW *= 1f - w;
@@ -247,7 +247,9 @@ public class Sky : MonoBehaviour
         var lin = warm.linear;
         Shader.SetGlobalVector("_F2HazeSun", new Vector4(hazeSun.x, hazeSun.y, hazeSun.z, sunW));
         Shader.SetGlobalVector("_F2HazeCol", new Vector4(lin.r, lin.g, lin.b, 1f));
-        Shader.SetGlobalVector("_F2HazeP", new Vector4(1f / 1400f, height, strength, 0f));
+        // density 1/1100 m: ~5 % at 400 m, ~10 % at 1 km on top of the linear fog (which only starts at ~350 m), so the
+        // layers between 200 m and the horizon (stands, tree lines, far woods) separate by their tone
+        Shader.SetGlobalVector("_F2HazeP", new Vector4(1f / 1100f, height, strength, 0f));
     }
 
     static void SkyAndFog(Look k)

@@ -4,6 +4,11 @@
 // horizon), two reads of one tiling noise texture (big shapes + detail, scrolling at different speeds), a
 // coverage threshold, thick = darker bases, a bright rim towards the sun, and a band of fog colour at the
 // horizon so the sky always meets the fogged hills in exactly the fog colour.
+// Medium / High (not F2_GRADE_LOW) add two reads: a very slow regional density (clear patches and clumped fields of
+// cumulus instead of an even scatter) and the deck a little towards the sun, so each cloud is lit on its sun side and
+// shaded on the far side (density falling towards the sun = a lit face), with a soft silver lining; plus a broad
+// forward-scatter glow round the sun and a pale lift low down on the sun's side, added under the clouds (premultiplied
+// alpha: an add with alpha 0). Low keeps the original two reads.
 // Output is premultiplied alpha (Blend One OneMinusSrcAlpha).
 Shader "F2/Clouds"
 {
@@ -68,16 +73,36 @@ Shader "F2/Clouds"
                 float2 p = d.xz / (max(h, 0.0) + 0.06);
                 float2 uv1 = p * _Scale + frac(_Time.x * _Wind.xy);
                 float2 uv2 = p * (_Scale * 3.1) + float2(0.3, 0.7) + frac(_Time.x * _Wind.zw);
-                half n = tex2D(_MainTex, uv1).a * 0.72 + tex2D(_MainTex, uv2).a * 0.28;
-
+                half n2 = tex2D(_MainTex, uv2).a;
+                half n = tex2D(_MainTex, uv1).a * 0.72 + n2 * 0.28;
+                half sd = saturate(dot(d, _SunDir.xyz));
+            #if defined(F2_GRADE_LOW)
                 half thr = 1.0 - _Cover;
                 half a = smoothstep(thr - 0.08, thr + 0.22, n);
                 half thick = saturate((n - thr) * 2.2) * 0.85;
                 half3 col = lerp(_LitCol.rgb, _ShadeCol.rgb, thick);
-                // thin edges light up towards the sun
-                half sd = saturate(dot(d, _SunDir.xyz));
-                sd *= sd; sd *= sd; sd *= sd; // ^8
-                col += _SunCol.rgb * (sd * (1.0 - thick) * 0.6);
+                half rim = sd * sd; rim *= rim; rim *= rim; // ^8
+                col += _SunCol.rgb * (rim * (1.0 - thick) * 0.6);
+                half3 glow = (half3)0.0;
+            #else
+                // regional density: fields of cloud and clear gaps (a quarter-speed drift, ~5x the big shapes)
+                half region = tex2D(_MainTex, p * (_Scale * 0.19) + float2(0.61, 0.27) + frac(_Time.x * _Wind.xy * 0.25)).a;
+                half thr = 1.0 - saturate(_Cover + (region - 0.5) * 0.5);
+                half a = smoothstep(thr - 0.1, thr + 0.24, n);
+                half thick = saturate((n - thr) * 2.2);
+                // the deck a step towards the sun: thinner there = this side faces the sun
+                float2 sdir = _SunDir.xz / max(length(_SunDir.xz), 0.05);
+                half ns = tex2D(_MainTex, uv1 + sdir * 0.035).a * 0.72 + n2 * 0.28;
+                half lit = saturate(0.5 + (n - ns) * 5.0);
+                half shade = saturate(thick * 0.6 + (0.55 - lit) * 0.9);
+                half3 col = lerp(_LitCol.rgb, _ShadeCol.rgb, shade);
+                // silver lining on thin edges towards the sun (^8), a softer forward-scatter sheen (^2) through thin cloud
+                half s2 = sd * sd; half rim = s2 * s2; rim *= rim;
+                col += _SunCol.rgb * ((rim * 0.7 + s2 * 0.12) * (1.0 - thick));
+                // sky glow round the sun and a pale lift low on the sun's side (added under the clouds)
+                half low = saturate(1.0 - h * 3.0);
+                half3 glow = _SunCol.rgb * (rim * 0.10 + s2 * 0.05 * low);
+            #endif
                 // far clouds take on the haze colour, and fade out before the horizon
                 col = lerp(col, unity_FogColor.rgb, (1.0 - smoothstep(0.0, 0.3, h)) * 0.65);
                 half ca = a * smoothstep(0.0, 0.16, h);
@@ -90,7 +115,7 @@ Shader "F2/Clouds"
                 // graded like the world (after the haze, so the horizon meets the graded fog of the hills)
                 half aOut = k + hz;
                 half3 rgb = (col * k + unity_FogColor.rgb * hz) / max(aOut, 0.001);
-                return fixed4(F2Grade(rgb) * aOut, aOut);
+                return fixed4(F2Grade(rgb) * aOut + F2GradeAdd(glow) * (1.0 - aOut), aOut);
             }
             ENDCG
         }

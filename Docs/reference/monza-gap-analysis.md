@@ -131,3 +131,60 @@ under roof), s=2500 chase (tree line), s=0 tv.
 Still open (in addition to round 3's list): procedural `Trackside.Stand` gets no tier AO bands yet; real emissive
 downlights (they are white swatches lit by the bake); the pit building's main roof top is a flat swatch (seen only from
 TV cameras).
+
+## Round 5 (after the v13 shots): the land beyond the barriers, sky, distance
+
+What v13 showed: past the fence in the open stretches (s=300 right, the infield lawns) a bare, flat, single-tone lawn
+out to a bare horizon. Cause: the main tree budget (6000 / 3600 / 1800) is spent on the woods and mapped trees within
+~70 m of the track (estimate from the map: the sorted candidates run out at ~70 m), the bands stop at the tree reach,
+and beyond that the woods are flat dark ground. Sky: an even scatter of flat-shaded clouds. Distance: the linear fog
+only starts at ~350 m, so 200-600 m (stands, tree lines) kept their near colour.
+
+Done (not yet seen in a build), all in `RealWorld.cs` unless named:
+
+- **Service roads, marshal huts, service vehicles** (`ServicePlan`, `ServiceMeshes`): where the land 12-30 m behind the
+  barrier is open (grass / park / farmland / gardens; no woods, buildings, stands, landmarks, water, other legs of the
+  lap, insides of tight bends) for 140 m+, a 3.8 m worn-asphalt road runs 19 m behind the barrier, ends curving away
+  into the park. Every 230-420 m on its outer side: a white site cabin with a window band, door and steel roof plus two
+  blue portable toilets, or a parked van + car, cabin + van, or a red fire tender with a white band; all vehicles have
+  wheels, glass and an amber light bar. They are TV-camera solids. Planned in Prepare so the trees keep off them.
+- **Hedges, copses, bushes** (`Outfield`, own budget 2800 / 1600 / 700): hedgerows of squat scrub cards (now and then a
+  hedgerow tree) along land-use boundaries (fields: hedges round them only), copses of mixed park trees with a fringe
+  of bushes where a slow noise field peaks, lone bushes, bushes along the service roads; nearest first, thinning past
+  380 m. The ground under each is darker rough grass in the land colour map (`lflag` bit 4), so they sit in their own
+  shade.
+- **Far tree lines** (`FarTrees`, `EnvFarTrees`): every wood edge facing the circuit, and 40 % of the field boundaries
+  (rows of trees between fields), from 0.78 x the tree reach to the fog's end, gets an opaque silhouette strip every
+  ~16 m: two rounded crowns of their own heights on a shaded foot, poplar spikes now and then, both faces. Opaque (no
+  alpha-test shimmer or mip blobs at 1-2 km, MSAA smooths the outline); colour drifts olive / blue-green per stand.
+- **Terrain swells** (`Undulation`): +-2 m over ~400 m and +-0.8 m over ~125 m in the open land, zero on the circuit's
+  ground and growing over the first ~300 m beyond it; flatter on farmland, none in water. Everything placed afterwards
+  (buildings, roads, trees, huts) takes its height from it; the bake shades the slopes.
+- **Large lawns** (`LandTexture`): a ~80 m lush / thin hue drift on grass and park polygons on top of the existing
+  brightness noise, so a big field is never one flat tone.
+- **Clouds** (`Clouds.shader`, Medium/High; Low unchanged): a slow regional density (clear patches and clumped fields
+  of cumulus), each cloud lit on its sun side and shaded on the far side (the deck sampled a step towards the sun), a
+  soft silver lining and forward-scatter sheen, and a broad glow round the sun with a pale lift low on the sun's side.
+- **Aerial perspective** (`Sky.PushHaze`): afternoon haze 0.10 -> 0.22, density 1/1400 -> 1/1100 m: ~5 % at 400 m,
+  ~10 % at 1 km on top of the linear fog, so the layers between 200 m and the horizon separate. Near colours (RR3
+  targets) untouched; vertex shader only.
+
+Cost: draw calls +1 (`EnvFarTrees`), plus at most a few where a 1 km block had no road / building / tree mesh before
+(the service roads, huts and plants go into the existing per-block meshes and materials) - well inside +8. Vertices
+(High / Medium / Low): plants ~+28k / +15k / +6k, far tree lines ~+33k / +26k / +12k, roads and huts ~+8k; the bake time
+grows by about as much. Pixel: Clouds HQ +2 texture reads and ~25 ALU on sky pixels only; Low unchanged.
+
+Shots to verify: s=300 chase + cockpit (right: service road, hut / vehicles, hedges and copses on the lawn, tree
+line on the horizon), s=1450 and s=2500 chase (far tree lines through the fog, haze on the far woods), s=3920 / 5150
+chase (infield park), any shot looking towards the sun (cloud lighting, sun glow). Risks to check first: a service road
+crossing something it should not (a path through a stand's back, a gravel trap); hedges in front of a stand; the far
+strips' outline at 600-800 m on Medium (they should read as tree tops, not as cut-outs); the cloud glow on Low (none).
+
+Still open (by impact per cost):
+
+1. Sky / environment reflection on glass (pit curtain wall, stand boxes, map buildings).
+2. Procedural `Trackside.Stand` tier AO bands; pit building roof top; real emissive downlights.
+3. Poly Haven building models near the track; forest-floor undergrowth cards at the near tree line.
+4. Mowing stripes that flip with the view direction.
+5. Landmarks: old Lesmo/Ascari bridges, the old banking, the Parabolica tower.
+6. Crowd variety (colour blocking, flags).

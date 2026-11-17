@@ -21,9 +21,13 @@
 //    circuit's palette (Monza: Lombardy plaster colours) in uv3, so glass, frames and shutters keep their own. Within
 //    NearTier of the track (400 m on High): split ground floor, projecting cornice, eave soffits with rafters,
 //    rooftop units; light corner trims everywhere (shader). Farther: one quad per wall, footprint rectangles.
+//  * the open land (round 5): gentle swells away from the track (Undulation), service roads with marshal huts and
+//    parked service vehicles behind the barrier in the open stretches (ServicePlan), hedgerows, copses and bushes in
+//    the fields and parks (Outfield, own budget), and opaque far tree-line silhouettes along the wood edges out to the
+//    fog's end (FarTrees, one extra mesh).
 // Cost: one mesh per material per 1 km block (land, water, roads, buildings, trees), static batched; buildings,
-// roads and trees switched off by distance with LODGroups (no script per frame). Budgets per graphics level keep the
-// vertex count (and so the light bake) small; see Budget().
+// roads and trees switched off by distance with LODGroups (no script per frame); plus one far tree-line mesh. Budgets
+// per graphics level keep the vertex count (and so the light bake) small; see Budget().
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
@@ -219,6 +223,7 @@ public static class RealWorld
         RasterAreas(); Mark("areas");
         SelectBuildings(); Mark("selB");
         SelectRoads(); Mark("selL");
+        ServicePlan(t); Mark("service");
         Heights(); Mark("heights");
         Water(); Mark("water");
         Canopy(); Mark("canopy");
@@ -413,8 +418,25 @@ public static class RealWorld
     }
 
     // ---------------------------------------------------------------- ground heights
+    // Gentle swells in the open land away from the track (the map's heights are a coarse, smoothed grid: dead flat
+    // fields read as a painted sheet). None on the circuit's own ground; growing over the first ~300 m beyond it, so
+    // the far fields roll a little and catch the sun on their slopes (the bake lights them by the terrain's normals).
+    // Low and wide (+-2 m over ~400 m, +-0.8 m over ~120 m): buildings, roads, water and trees all take their heights
+    // from this ground afterwards, so nothing floats. Flatter in water polygons (rivers keep one level).
+    static float und;
+    static float Undulation(float x, float z, float d)
+    {
+        float far = Smooth((d - c0 - 20f) / 300f);
+        if (far <= 0f) return 0f;
+        int kind = KindAt(x, z, out _);
+        if (kind == 5) return 0f;
+        float s = (Noise(x / 410f, z / 410f, 71) - 0.5f) * 4.2f + (Noise(x / 125f + 3.1f, z / 125f, 73) - 0.5f) * 1.6f;
+        if (kind == 2) s *= 0.6f; // farmland is levelled
+        return s * und * far;
+    }
     static void Heights()
     {
+        und = street || env == null ? 0f : Mathf.Clamp(env.rough / 1.2f, 0.4f, 1.8f);
         int n = gnx * gnz; gGround = new float[n]; gW = new float[n];
         var hf = WorldBuilder.Height; float lowR = B * 1.1f + 2f;
         for (int j = 0; j < gnz; j++)
@@ -424,12 +446,14 @@ public static class RealWorld
             {
                 float x = rx0 + i * B; int k = j * gnx + i;
                 float y = HasTerrain ? D.Terrain(x, z) : (hf == null ? -0.1f : WorldBuilder.H(x, z) - 0.15f);
+                float d = Dist(x, z);
+                if (und > 0f) y += Undulation(x, z, d);
                 if (HasTerrain)
                 {
                     float e = Mathf.Min(Mathf.Min(x - rx0, rx1 - x), Mathf.Min(z - rz0, rz1 - z));
                     if (e < 250f) y = Mathf.Lerp(edgeLevel, y, Smooth(e / 250f));
                 }
-                float d = Dist(x, z), w = Smooth((d - c0) / ramp);
+                float w = Smooth((d - c0) / ramp);
                 if (w < 1f)
                 {
                     // the circuit's own ground: below every road within reach of this cell
@@ -620,8 +644,10 @@ public static class RealWorld
             TerrainMeshes(); Mark("terrain");
             WaterMeshes(); Mark("waterM");
             Roads(); Mark("roads");
+            ServiceMeshes(); Mark("service");
             Buildings(); Mark("buildings");
             Trees(); Mark("trees");
+            if (HasVegetation) { Outfield(); FarTrees(); Mark("outfield"); }
             ModelLib.Flush(root); Mark("models"); // (final heights, like the rest of RealWorld)
             var land = LandTexture(); Mark("landtex");
             Emit(root, land); Mark("emit");
@@ -630,7 +656,8 @@ public static class RealWorld
         bufs.Clear();
         FreeGrids(); D = null; // (the flags HasBuildings ... stay for the rest of this load)
         LoadMs += (float)sw.Elapsed.TotalMilliseconds;
-        Debug.Log("RealWorld " + t.def.id + ": " + BuildingCount + " buildings, " + TreeCount + " trees, " + BandCount + " forest-edge cards, " + Vertices + " vertices, " + LoadMs.ToString("F0") + " ms (" + Timing + ")");
+        Debug.Log("RealWorld " + t.def.id + ": " + BuildingCount + " buildings, " + TreeCount + " trees, " + BandCount + " forest-edge cards, " + OutfieldCount + " hedge/copse plants, "
+                  + FarCount + " far tree-line strips, " + svcRuns.Count + " service roads, " + svcProps.Count + " huts/vehicle groups, " + Vertices + " vertices, " + LoadMs.ToString("F0") + " ms (" + Timing + ")");
     }
 
     static void FreeGrids()
@@ -1610,6 +1637,418 @@ public static class RealWorld
         BandCount = count;
     }
     public static int BandCount;
+
+    // ================================================================ the open land beyond the barriers
+    // (round 5: the open stretches showed bare, flat lawns out to a bare horizon)
+    //
+    // Service roads: where the land 12-30 m behind the barrier is open (grass, park, farmland, gardens, wetland; no
+    // woods, buildings, stands, landmarks or water) for 140 m or more, a 3.8 m worn-asphalt service road runs parallel
+    // to the track 19 m behind the barrier, its ends curving away into the park. Along it every 230-420 m stands a
+    // marshal / service hut with portable toilets, or parked service vehicles (van, car, fire tender, with an orange
+    // light bar). Planned in Prepare, so their ground is flagged and the trees keep off; built with the map's roads and
+    // buildings (same meshes and materials: no draw calls).
+    struct SvcProp { public float x, z, ax, az, bx, bz, reach; public int kind, seed; }
+    static readonly List<SvcProp> svcProps = new List<SvcProp>();
+    static readonly List<float[]> svcRuns = new List<float[]>(); // x0, z0, x1, z1, ... of each service road
+    const float SvcHalf = 1.9f;
+    // open, unbuilt land of a kind a service road / hedge can cross
+    static bool Open(float x, float z)
+    {
+        if (x < rx0 + 30f || x > rx1 - 30f || z < rz0 + 30f || z > rz1 - 30f) return false;
+        int k = Texel(x, z); if (k < 0 || (lflag[k] & 2) != 0) return false;
+        int kind = lid[k] == 0 ? 0 : D.aKind[lid[k] - 1];
+        return kind == 0 || kind == 2 || kind == 3 || kind == 8 || kind == 10;
+    }
+    static bool OpenSpot(float x, float z, float r)
+    {
+        return Open(x, z) && !Trackside.Blocked(x, z, r) && PadDist(x, z) > r + 12f
+               && !(Waterfront.HasWater && Waterfront.InWater(x, z)) && Environment.Free(x, z, r);
+    }
+    static void ServicePlan(Track t)
+    {
+        svcRuns.Clear(); svcProps.Clear();
+        if (street || t.N < 200 || lid == null) return;
+        float off = wallLat + 19f;
+        int step = Mathf.Max(1, Mathf.RoundToInt(6f / (float)t.ds)), n = t.N / step, look = Mathf.Max(1, Mathf.RoundToInt(16f / (float)t.ds));
+        int lstep = Mathf.Max(1, look / 4);
+        var ok = new bool[n];
+        for (int side = -1; side <= 1; side += 2)
+        {
+            for (int q = 0; q < n; q++)
+            {
+                int i = q * step; var p = t.pts[i];
+                // the inside of a tight bend: the parallel line would fold over itself
+                float kin = 0f;
+                for (int w = -look; w <= look; w += lstep) kin = Mathf.Max(kin, (float)t.pts[((i + w) % t.N + t.N) % t.N].curv * side);
+                bool good = kin * off < 0.5f;
+                for (int l = 0; good && l < 4; l++)
+                {
+                    float lat = l == 0 ? off - SvcHalf - 3f : l == 1 ? off : l == 2 ? off + SvcHalf + 2f : off + 9f;
+                    float x = (float)(p.x + p.nx * lat * side), z = (float)(p.y + p.ny * lat * side);
+                    good = OpenSpot(x, z, 2.5f);
+                    if (good && l == 0) good = TrackDist(x, z, lat) >= lat - 1.5f; // no other part of the lap nearer
+                }
+                ok[q] = good;
+            }
+            int first = -1; for (int q = 0; q < n; q++) if (!ok[q]) { first = q; break; }
+            if (first < 0) continue; // (open all the way round: no road)
+            var run = new List<int>();
+            for (int c = 1; c <= n; c++)
+            {
+                int q = (first + c) % n;
+                if (ok[q]) { run.Add(q * step); continue; }
+                if (run.Count * step * t.ds >= 140.0) ServiceRun(t, run, side, off, step);
+                run.Clear();
+            }
+        }
+    }
+    static void ServiceRun(Track t, List<int> run, int side, float off, int step)
+    {
+        Vector2 At(int i, float lat)
+        {
+            var p = t.pts[((i % t.N) + t.N) % t.N];
+            return new Vector2((float)(p.x + p.nx * lat * side), (float)(p.y + p.ny * lat * side));
+        }
+        // ends: curving away into the park, as far as the land stays open
+        var pts = new List<Vector2>(); var lead = new List<Vector2>();
+        for (int j = 1; j <= 4; j++) { var a = At(run[0] - j * step, off + 3f * j * j); if (!OpenSpot(a.x, a.y, 2f)) break; lead.Add(a); }
+        for (int j = lead.Count - 1; j >= 0; j--) pts.Add(lead[j]);
+        foreach (int i in run) pts.Add(At(i, off));
+        for (int j = 1; j <= 4; j++) { var a = At(run[run.Count - 1] + j * step, off + 3f * j * j); if (!OpenSpot(a.x, a.y, 2f)) break; pts.Add(a); }
+        var arr = new float[pts.Count * 2];
+        for (int k = 0; k < pts.Count; k++) { arr[k * 2] = pts[k].x; arr[k * 2 + 1] = pts[k].y; }
+        svcRuns.Add(arr);
+        for (int k = 0; k + 1 < pts.Count; k++) MarkSegment(pts[k].x, pts[k].y, pts[k + 1].x, pts[k + 1].y, SvcHalf + 2.5f, 1);
+        // huts and parked vehicles on the outer side of the road
+        float acc = 0f, next = 50f + 110f * Hash(run[0], side + 7);
+        for (int k = 1; k < run.Count - 1; k++)
+        {
+            acc += (float)t.ds * step;
+            if (acc < next) continue;
+            int i = run[k]; var p = t.pts[i];
+            int kind = Mathf.Min(3, (int)(Hash(i, 31) * 4f));
+            float lat = off + SvcHalf + (kind == 3 ? 3.4f : 2.9f), reach = kind == 0 ? 5.2f : kind == 1 ? 5.6f : kind == 2 ? 5.2f : 4.2f;
+            var c = At(i, lat); float ax = (float)p.tx, az = (float)p.ty;
+            if (!OpenSpot(c.x, c.y, 2f) || !OpenSpot(c.x + ax * reach, c.y + az * reach, 1.5f) || !OpenSpot(c.x - ax * reach, c.y - az * reach, 1.5f)) continue;
+            svcProps.Add(new SvcProp { x = c.x, z = c.y, ax = ax, az = az, bx = (float)p.nx * side, bz = (float)p.ny * side, reach = reach, kind = kind, seed = i });
+            MarkSegment(c.x - ax * reach, c.y - az * reach, c.x + ax * reach, c.y + az * reach, 3.2f, 2);
+            acc = 0f; next = 230f + 190f * Hash(i, 33);
+        }
+    }
+
+    static void ServiceMeshes()
+    {
+        var sx = new List<float>(); var sz = new List<float>(); var sd = new List<float>();
+        foreach (var r in svcRuns)
+        {
+            sx.Clear(); sz.Clear(); sd.Clear(); float acc = 0f;
+            for (int k = 0; k < r.Length / 2; k++)
+            {
+                float x = r[k * 2], z = r[k * 2 + 1];
+                if (k > 0) acc += Mathf.Sqrt((x - sx[k - 1]) * (x - sx[k - 1]) + (z - sz[k - 1]) * (z - sz[k - 1]));
+                sx.Add(x); sz.Add(z); sd.Add(acc);
+            }
+            if (sx.Count >= 2) Ribbon(sx, sz, sd, 0, sx.Count - 1, SvcHalf, 0.1f, 0.25f + 0.008f, 0.25f + 0.242f, 8f); // (minor-road asphalt)
+        }
+        foreach (var p in svcProps) ServiceProp(p);
+        curTint = new Vector4(1f, 1f, 1f, 0f);
+    }
+
+    // paint / glass / tyre colours: linear multipliers of the plaster cell (albedo ~0.8)
+    static readonly Vector4 GlassT = new Vector4(0.09f, 0.10f, 0.12f, 0f), TyreT = new Vector4(0.035f, 0.035f, 0.035f, 0f), AmberT = new Vector4(1.1f, 0.42f, 0.02f, 0f);
+    static readonly Vector4[] Paints =
+    {
+        new Vector4(1.0f, 1.0f, 0.98f, 0f), new Vector4(1.0f, 1.0f, 0.98f, 0f), new Vector4(1.0f, 0.24f, 0.03f, 0f), // white, white, safety orange
+        new Vector4(0.68f, 0.70f, 0.72f, 0f), new Vector4(0.06f, 0.10f, 0.26f, 0f), new Vector4(0.80f, 0.68f, 0.08f, 0f), // silver, dark blue, yellow
+    };
+    static void ServiceProp(SvcProp p)
+    {
+        var c = new Vector3(p.x, 0f, p.z); var A = new Vector3(p.ax, 0f, p.az); var Bv = new Vector3(p.bx, 0f, p.bz);
+        float g = Mathf.Min(Ground(p.x, p.z), MeshY(p.x, p.z));
+        for (int s = -1; s <= 1; s += 2) g = Mathf.Min(g, Mathf.Min(Ground(p.x + p.ax * p.reach * s, p.z + p.az * p.reach * s), MeshY(p.x + p.ax * p.reach * s, p.z + p.az * p.reach * s)));
+        var mb = Buf(SBuild, Block(p.x, p.z), 900);
+        int sd = p.seed; Vector4 paint = Paints[(int)(Hash(sd, 41) * Paints.Length) % Paints.Length];
+        switch (p.kind)
+        {
+            case 0: // marshal hut and two portable toilets
+                Hut(mb, c, A, Bv, g, sd);
+                for (int q = 0; q < 2; q++)
+                {
+                    var tc = c + A * (3.15f + q * 1.3f);
+                    Box(mb, tc, A, Bv, 0.6f, 0.6f, g, g + 2.25f, CPlaster, Grey1, new Vector4(0.06f, 0.20f, 0.62f, 0f));
+                    Box(mb, tc, A, Bv, 0.63f, 0.63f, g + 2.25f, g + 2.36f, CPlaster, Grey1, new Vector4(0.95f, 0.95f, 0.93f, 0f));
+                }
+                break;
+            case 1: // a van and a car
+                Vehicle(mb, c - A * 2.75f, A, Bv, 5.2f, 2.0f, 2.35f, g, paint, true);
+                Vehicle(mb, c + A * 2.95f, A, Bv, 4.4f, 1.8f, 1.5f, g, Paints[(int)(Hash(sd, 43) * Paints.Length) % Paints.Length], false);
+                break;
+            case 2: // hut and a van
+                Hut(mb, c - A * 2.3f, A, Bv, g, sd);
+                Vehicle(mb, c + A * 2.45f, A, Bv, 5.2f, 2.0f, 2.35f, g, paint, true);
+                break;
+            default: // fire tender: red, a white band, roller shutters along the sides (the band reads at distance)
+                Vehicle(mb, c, A, Bv, 7.4f, 2.4f, 2.95f, g, new Vector4(0.72f, 0.04f, 0.03f, 0f), true);
+                Box(mb, c - A * 0.5f, A, Bv, 3.0f, 1.23f, g + 1.25f, g + 1.42f, CPlaster, Grey1, new Vector4(1f, 1f, 0.97f, 0f));
+                break;
+        }
+        // (a solid for the TV cameras, like the map's buildings)
+        Trackside.AddSolid(new Vector3(p.x, 0f, p.z), A, p.reach, 1.6f, g - 1f, g + 3.4f, false);
+    }
+    // a white site cabin on a low plinth: a dark window band round it, a door at one end, a flat steel roof with an overhang
+    static void Hut(MB b, Vector3 c, Vector3 A, Vector3 Bv, float g, int seed)
+    {
+        Box(b, c, A, Bv, 1.7f, 1.25f, g - 0.3f, g + 2.55f, CPlaster, Grey1, new Vector4(0.98f, 0.97f, 0.93f, 0f));
+        Box(b, c - A * 0.35f, A, Bv, 1.05f, 1.28f, g + 1.2f, g + 1.95f, CPlaster, Grey1, GlassT);
+        Box(b, c + A * 1.7f + Bv * 0.4f, A, Bv, 0.035f, 0.46f, g + 0.02f, g + 2.08f, CPlaster, Grey1, new Vector4(0.30f, 0.33f, 0.36f, 0f));
+        Box(b, c, A, Bv, 1.95f, 1.5f, g + 2.55f, g + 2.74f, CMetal, Grey1, Hash(seed, 45) < 0.5f ? new Vector4(0.33f, 0.40f, 0.36f, 0f) : new Vector4(0.55f, 0.56f, 0.58f, 0f));
+    }
+    // a parked vehicle: four wheels, the body, glass (van: windscreen and cab windows; car: the glasshouse and a roof),
+    // and an amber light bar on top
+    static void Vehicle(MB b, Vector3 c, Vector3 A, Vector3 Bv, float len, float wid, float hgt, float g, Vector4 paint, bool van)
+    {
+        float hl = len * 0.5f, hw = wid * 0.5f, clear = van ? 0.38f : 0.28f, wr = van ? 0.37f : 0.32f, wx = hl - (van ? 0.95f : 0.82f);
+        for (int s = -1; s <= 1; s += 2)
+            for (int e = -1; e <= 1; e += 2)
+                Box(b, c + A * (wx * s) + Bv * ((hw - 0.12f) * e), A, Bv, wr, 0.15f, g, g + wr * 2f, CPlaster, Grey1, TyreT);
+        float roof;
+        if (van)
+        {
+            Box(b, c, A, Bv, hl, hw, g + clear, g + hgt, CPlaster, Grey1, paint);
+            Box(b, c + A * (hl - 0.36f), A, Bv, 0.38f, hw + 0.03f, g + hgt * 0.55f, g + hgt * 0.86f, CPlaster, Grey1, GlassT);
+            roof = g + hgt;
+        }
+        else
+        {
+            float hb = clear + (hgt - clear) * 0.55f;
+            Box(b, c, A, Bv, hl, hw, g + clear, g + hb, CPlaster, Grey1, paint);
+            Box(b, c - A * (hl * 0.1f), A, Bv, hl * 0.5f, hw - 0.07f, g + hb, g + hgt - 0.07f, CPlaster, Grey1, GlassT);
+            Box(b, c - A * (hl * 0.1f), A, Bv, hl * 0.46f, hw - 0.11f, g + hgt - 0.07f, g + hgt, CPlaster, Grey1, paint);
+            roof = g + hgt;
+        }
+        Box(b, c + A * (van ? hl - 0.7f : 0f), A, Bv, 0.16f, hw * 0.62f, roof, roof + 0.13f, CPlaster, Grey1, AmberT);
+    }
+
+    // Hedges, copses and bushes in the open land (grass, park, farmland, gardens, wetland), from just past the trackside
+    // trees out to the tree reach, with a budget of their own: the main budget goes to the woods and the mapped trees
+    // close to the track, which left the open fields bare. Hedgerows (squat scrub cards, now and then a tree) along the
+    // boundaries between land-use polygons (fields have hedges round them only); copses of mixed trees with a fringe of
+    // bushes where a slow noise field peaks; a few lone bushes. The ground under them is darker, rough grass in the land
+    // colour map (lflag bit 4), so they stand in their own shade instead of on a clean lawn. Same tree meshes: no draw calls.
+    static int OutfieldBudget => gfx <= 1 ? 700 : gfx == 2 ? 1600 : 2800;
+    public static int OutfieldCount, FarCount;
+    struct OCand { public float x, z, d, ax, az; public byte k; } // k: 0 hedge (two bushes along ax, az), 1 copse tree, 2 bush, 3 hedgerow tree
+    static bool RoadOrBuilt(float x, float z) { int k = Texel(x, z); return k >= 0 && (lflag[k] & 3) != 0; }
+    static void Stamp(float x, float z, float r)
+    {
+        int i0 = Mathf.Max(0, (int)((x - r - rx0) / lcx)), i1 = Mathf.Min(lnx - 1, (int)((x + r - rx0) / lcx));
+        int j0 = Mathf.Max(0, (int)((z - r - rz0) / lcz)), j1 = Mathf.Min(lnz - 1, (int)((z + r - rz0) / lcz));
+        float r2 = r * r;
+        for (int j = j0; j <= j1; j++)
+        {
+            float pz = rz0 + (j + 0.5f) * lcz - z;
+            for (int i = i0; i <= i1; i++) { float qx = rx0 + (i + 0.5f) * lcx - x; if (qx * qx + pz * pz <= r2) lflag[j * lnx + i] |= 4; }
+        }
+    }
+    static void Outfield()
+    {
+        OutfieldCount = 0;
+        if (street) return;
+        float reach = TreeReach, near = wallLat + 14f;
+        var rnd = new System.Random(29); var cand = new List<OCand>();
+        for (int j = 1; j < gnz - 1; j++)
+            for (int i = 1; i < gnx - 1; i++)
+            {
+                int cc = Mathf.Min(cnz - 1, j / CH) * cnx + Mathf.Min(cnx - 1, i / CH);
+                if (cDist[cc] > reach) { i = (i / CH + 1) * CH - 1; continue; }
+                float x = rx0 + (i + 0.5f) * B, z = rz0 + (j + 0.5f) * B;
+                float d = Dist(x, z); if (d > reach || d < near) continue;
+                int t0 = Texel(x, z); if (t0 < 0 || (lflag[t0] & 3) != 0) continue;
+                int id0 = lid[t0], kind = id0 == 0 ? 0 : D.aKind[id0 - 1];
+                if (!(kind == 0 || kind == 2 || kind == 3 || kind == 8 || kind == 10)) continue;
+                float fade = d < 380f ? 1f : Mathf.Lerp(1f, 0.45f, (d - 380f) / Mathf.Max(1f, reach - 380f));
+                // a boundary with the next polygon (east, north): a hedge along it
+                for (int dir = 0; dir < 2; dir++)
+                {
+                    float x1 = dir == 0 ? x + B : x, z1 = dir == 0 ? z : z + B;
+                    int t1 = Texel(x1, z1); if (t1 < 0 || lid[t1] == id0) continue;
+                    int k1 = lid[t1] == 0 ? 0 : D.aKind[lid[t1] - 1];
+                    if (k1 == 1 || k1 == 4 || k1 == 5 || k1 == 7 || k1 == 9 || k1 == 11 || (lflag[t1] & 2) != 0) continue; // woods, paving, water: no hedge
+                    float ph = (kind == 2 || k1 == 2 ? 0.7f : kind == 3 || k1 == 3 ? 0.45f : 0.55f) * fade;
+                    if (rnd.NextDouble() > ph) continue;
+                    float hx = (x + x1) * 0.5f, hz = (z + z1) * 0.5f;
+                    cand.Add(new OCand { x = hx, z = hz, d = d, ax = dir == 0 ? 0f : 1f, az = dir == 0 ? 1f : 0f, k = 0 });
+                    if (rnd.NextDouble() < 0.18) cand.Add(new OCand { x = hx, z = hz, d = d + 1f, k = 3 });
+                }
+                if (kind == 2) continue; // (fields: hedges round them only)
+                float cop = Noise(x / 115f, z / 115f, 61) * 0.75f + Noise(x / 37f, z / 37f, 63) * 0.25f;
+                float pt = (cop - 0.63f) * 1.9f * fade, pb = (cop > 0.55f ? 0.18f : 0.025f) * fade;
+                if (kind == 3) { pt *= 0.5f; pb *= 0.6f; }
+                if (pt > 0f && d > near + 25f && rnd.NextDouble() < pt) cand.Add(new OCand { x = x + ((float)rnd.NextDouble() - 0.5f) * B, z = z + ((float)rnd.NextDouble() - 0.5f) * B, d = d, k = 1 });
+                if (rnd.NextDouble() < pb) cand.Add(new OCand { x = x + ((float)rnd.NextDouble() - 0.5f) * B, z = z + ((float)rnd.NextDouble() - 0.5f) * B, d = d, k = 2 });
+            }
+        // bushes along the outer side of the service roads, here and there
+        foreach (var r in svcRuns)
+            for (int k = 1; k + 1 < r.Length / 2; k += 2)
+            {
+                if (rnd.NextDouble() > 0.3) continue;
+                float x0 = r[k * 2 - 2], z0 = r[k * 2 - 1], x1 = r[k * 2 + 2], z1 = r[k * 2 + 3];
+                float tx = x1 - x0, tz = z1 - z0, tl = Mathf.Sqrt(tx * tx + tz * tz); if (tl < 1f) continue;
+                tx /= tl; tz /= tl;
+                // (the outer side: away from the track)
+                float ox = -tz, oz = tx, mx = r[k * 2], mz = r[k * 2 + 1];
+                if (TrackDist(mx + ox * 6f, mz + oz * 6f, 80f) < TrackDist(mx - ox * 6f, mz - oz * 6f, 80f)) { ox = -ox; oz = -oz; }
+                cand.Add(new OCand { x = mx + ox * (SvcHalf + 4.5f), z = mz + oz * (SvcHalf + 4.5f), d = Dist(mx, mz), ax = tx, az = tz, k = 0 });
+            }
+        cand.Sort((a, b) => a.d.CompareTo(b.d));
+        int budget = OutfieldBudget, cards = gfx <= 1 ? 2 : 3;
+        float ts = Mathf.Max(1f, env.treeSize);
+        foreach (var c in cand)
+        {
+            if (OutfieldCount >= budget) break;
+            int n = c.k == 0 ? 2 : 1;
+            for (int q = 0; q < n; q++)
+            {
+                float x = c.x, z = c.z;
+                if (c.k == 0) { float o = (q == 0 ? -0.25f : 0.25f) * B + ((float)rnd.NextDouble() - 0.5f) * 1.2f; x += c.ax * o; z += c.az * o; }
+                float clr = c.k == 2 || c.k == 0 ? 1.5f : 3f;
+                if (TrackDist(x, z, near + 10f) < near + 4f) continue;
+                if (Trackside.Blocked(x, z, clr) || PadDist(x, z) < 8f || (Waterfront.HasWater && Waterfront.InWater(x, z))) continue;
+                if (RoadOrBuilt(x, z) || RoadOrBuilt(x + clr, z) || RoadOrBuilt(x - clr, z) || RoadOrBuilt(x, z + clr) || RoadOrBuilt(x, z - clr)) continue;
+                if (!Environment.Free(x, z, clr)) continue;
+                float y = Mathf.Min(Ground(x, z), MeshY(x, z)) - 0.35f;
+                var mb = Buf(STree, Block(x, z), 12);
+                bool tree = c.k == 1 || c.k == 3;
+                float sz; Color lc;
+                if (tree)
+                {
+                    sz = (0.5f + 0.5f * (float)rnd.NextDouble()) * ts * (c.k == 3 ? 0.9f : 1f);
+                    lc = (rnd.NextDouble() < env.tree2Share ? env.leaf2 : env.leaf).linear;
+                    Environment.EmitTree(mb.v, mb.n, mb.uv, mb.uv2, mb.col, mb.tri, new Vector3(x, y, z), TreeKind.Broadleaf, sz, lc, rnd, c.d > 320f ? 2 : cards);
+                    Stamp(x, z, Mathf.Min(6f, 2.2f * sz));
+                }
+                else
+                {
+                    // hedges a little denser and darker than the lone bushes
+                    sz = c.k == 0 ? 0.95f + 0.4f * (float)rnd.NextDouble() : 0.7f + 0.7f * (float)rnd.NextDouble();
+                    lc = Color.Lerp(env.leaf, env.leaf2, (float)rnd.NextDouble()).linear * (c.k == 0 ? 0.85f : 1f);
+                    Environment.EmitTree(mb.v, mb.n, mb.uv, mb.uv2, mb.col, mb.tri, new Vector3(x, y + 0.15f, z), TreeKind.Scrub, sz, lc, rnd, 2);
+                    Stamp(x, z, 1.7f * sz);
+                }
+                OutfieldCount++;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- far tree lines
+    // Beyond the card trees' reach the woods were flat dark ground, so the horizon past the open fields was a bare line.
+    // Now every wood edge facing the circuit (and some field boundaries: Lombardy's rows of trees between the fields),
+    // from just inside the card trees' reach out to the end of the fog, gets an opaque tree-line silhouette: one upright
+    // strip per ~16 m of edge, its top two rounded crowns of their own heights (now and then a poplar spike), the foot
+    // in the crowns' shade. Opaque triangles, no alpha test: no shimmer or mip blobs at 1-2 km, and MSAA smooths the
+    // outline. Both faces; normals tipped up like the backdrop's so they light evenly; the fog and the aerial
+    // perspective turn them blue-grey with distance. One mesh, one draw call.
+    static MB farMB;
+    struct FCand { public float x, z, d, ox, oz, h; }
+    static void FarTrees()
+    {
+        farMB = null; FarCount = 0;
+        if (street || gEff == null) return;
+        float from = TreeReach * 0.78f, to = Mathf.Min(RenderSettings.fogEndDistance * 1.02f, gfx <= 1 ? 1500f : 2300f);
+        int cap = gfx <= 1 ? 900 : gfx == 2 ? 2000 : 2600;
+        float ch = CanopyHeight(), cx = (bbX0 + bbX1) * 0.5f, cz = (bbZ0 + bbZ1) * 0.5f, keep = Mathf.Min(1f, 1.25f * B / 16f);
+        var rnd = new System.Random(41); var cand = new List<FCand>();
+        const float L = 8f;
+        for (int j = 2; j < gnz - 2; j++)
+            for (int i = 2; i < gnx - 2; i++)
+            {
+                int k = j * gnx + i;
+                float x = rx0 + i * B, z = rz0 + j * B;
+                float ddx = Mathf.Max(Mathf.Max(bbX0 - x, 0f), x - bbX1), ddz = Mathf.Max(Mathf.Max(bbZ0 - z, 0f), z - bbZ1);
+                if (ddx * ddx + ddz * ddz > to * to) continue; // (cheap reject before the field lookup)
+                float e = gEff[k]; Vector2 o; float h;
+                if (e >= L && (gEff[k - 1] < L || gEff[k + 1] < L || gEff[k - gnx] < L || gEff[k + gnx] < L))
+                {
+                    o = new Vector2(gEff[k - 1] - gEff[k + 1], gEff[k - gnx] - gEff[k + gnx]); // out of the wood
+                    h = ch * (0.85f + 0.3f * (float)rnd.NextDouble());
+                }
+                else if (e <= 0f)
+                {
+                    // a field boundary: a row of trees between two fields (only some of them)
+                    int t0 = Texel(x, z), t1 = Texel(x + B, z), t2 = Texel(x, z + B);
+                    if (t0 < 0 || t1 < 0 || t2 < 0 || lid[t0] == 0) continue;
+                    int k0 = D.aKind[lid[t0] - 1]; if (k0 != 2 && k0 != 0 && k0 != 8) continue;
+                    bool bx = lid[t1] != lid[t0], bz = lid[t2] != lid[t0]; if (!bx && !bz) continue;
+                    int other = lid[bx ? t1 : t2]; int ko = other == 0 ? 0 : D.aKind[other - 1];
+                    if (ko != 2 && ko != 0 && ko != 8) continue;
+                    if (Hash(lid[t0] * 7 + other, 211) > 0.4f) continue; // the whole boundary has a row or not
+                    o = bx ? new Vector2(1f, 0f) : new Vector2(0f, 1f);
+                    if (o.x * (cx - x) + o.y * (cz - z) < 0f) o = -o;
+                    h = ch * (0.5f + 0.25f * (float)rnd.NextDouble());
+                }
+                else continue;
+                if (rnd.NextDouble() > keep) continue;
+                if (o.sqrMagnitude < 1e-4f) continue;
+                o.Normalize();
+                var tc = new Vector2(cx - x, cz - z).normalized;
+                if (o.x * tc.x + o.y * tc.y < -0.2f) continue; // edges facing away from the circuit are hidden behind their wood
+                float d = Dist(x, z); if (d < from || d > to) continue;
+                if (Trackside.Blocked(x, z, 8f) || (Waterfront.HasWater && Waterfront.InWater(x, z)) || !Environment.Free(x, z, 8f)) continue;
+                cand.Add(new FCand { x = x, z = z, d = d, ox = o.x, oz = o.y, h = h });
+            }
+        cand.Sort((a, b) => a.d.CompareTo(b.d));
+        var mb = new MB();
+        float w = Mathf.Max(16f, 1.25f * B / keep) * 1.45f;
+        foreach (var c in cand)
+        {
+            if (FarCount >= cap || mb.v.Count > 250000) break;
+            var outward = new Vector3(c.ox, 0f, c.oz); var along = new Vector3(-c.oz, 0f, c.ox);
+            float y = Mathf.Min(Ground(c.x, c.z), MeshY(c.x, c.z)) - 0.4f;
+            float r = (float)rnd.NextDouble(), hue = (float)rnd.NextDouble();
+            var leaf = Color.Lerp(env.leaf, env.leaf2, env.tree2Share * r + 0.25f * (float)rnd.NextDouble()).linear * (0.72f + 0.2f * (float)rnd.NextDouble());
+            if (hue < 0.2f) { leaf.r *= 1.12f; leaf.b *= 0.8f; } else if (hue < 0.4f) { leaf.r *= 0.85f; leaf.b *= 1.1f; } // olive / blue-green stands
+            TreeLine(mb, new Vector3(c.x, y, c.z), along, outward, w * (0.85f + 0.3f * (float)rnd.NextDouble()), c.h, leaf, rnd);
+            FarCount++;
+        }
+        if (mb.tri.Count > 0) farMB = mb;
+    }
+    // one strip of a far tree line: a base 1 m into the ground, the top two rounded crowns (a notch between them), fanned
+    // from the middle of the base; a poplar spike now and then; both faces
+    static void TreeLine(MB b, Vector3 foot, Vector3 along, Vector3 outward, float w, float h, Color leaf, System.Random rnd)
+    {
+        const int P = 9;
+        var nrm = (outward * 0.55f + Vector3.up).normalized;
+        float h1 = h * (0.8f + 0.35f * (float)rnd.NextDouble()), h2 = h * (0.8f + 0.35f * (float)rnd.NextDouble()), split = 0.38f + 0.24f * (float)rnd.NextDouble();
+        Color low = leaf * 0.5f, top = leaf * 1.05f; low.a = top.a = 1f;
+        float hm = Mathf.Max(h1, h2);
+        int k0 = b.v.Count;
+        Vector3 a = foot - along * (w * 0.5f) + Vector3.down, e = foot + along * (w * 0.5f) + Vector3.down, m = foot + Vector3.down;
+        Add(b, a, nrm, low); Add(b, e, nrm, low); Add(b, m, nrm, low);
+        for (int q = 0; q < P; q++)
+        {
+            float u = q / (float)(P - 1), hh;
+            if (u <= split) { float s = 2f * u / split - 1f; hh = h1 * (0.6f + 0.4f * Mathf.Sqrt(Mathf.Max(0f, 1f - s * s))); }
+            else { float s = 2f * (u - split) / (1f - split) - 1f; hh = h2 * (0.6f + 0.4f * Mathf.Sqrt(Mathf.Max(0f, 1f - s * s))); }
+            hh *= 0.96f + 0.08f * (float)rnd.NextDouble();
+            Add(b, foot + along * ((u - 0.5f) * w) + Vector3.up * hh, nrm, Color.Lerp(low, top, 0.55f + 0.45f * hh / hm));
+        }
+        // fan from the middle of the base: a -> top0 .. top8 -> e
+        Tri2(b, k0 + 2, k0, k0 + 3);
+        for (int q = 0; q + 1 < P; q++) Tri2(b, k0 + 2, k0 + 3 + q, k0 + 4 + q);
+        Tri2(b, k0 + 2, k0 + 3 + P - 1, k0 + 1);
+        if (rnd.NextDouble() < env.poplar * 0.8f)
+        {
+            float u = 0.2f + 0.6f * (float)rnd.NextDouble(), pw = 1.7f;
+            int p0 = b.v.Count; var pc = foot + along * ((u - 0.5f) * w) - outward * 0.5f;
+            Add(b, pc - along * pw + Vector3.down, nrm, low); Add(b, pc + along * pw + Vector3.down, nrm, low);
+            Add(b, pc + along * (pw * 0.9f) + Vector3.up * (h * 1.05f), nrm, top); Add(b, pc + Vector3.up * (h * 1.5f), nrm, top);
+            Add(b, pc - along * (pw * 0.9f) + Vector3.up * (h * 1.05f), nrm, top);
+            Tri2(b, p0, p0 + 1, p0 + 2); Tri2(b, p0, p0 + 2, p0 + 3); Tri2(b, p0, p0 + 3, p0 + 4);
+        }
+    }
+    static void Add(MB b, Vector3 p, Vector3 n, Color c) { b.v.Add(p); b.n.Add(n); b.uv.Add(new Vector2(p.x, p.z)); b.col.Add(c); }
+    static void Tri2(MB b, int i, int j, int k) { b.tri.Add(i); b.tri.Add(j); b.tri.Add(k); b.tri.Add(i); b.tri.Add(k); b.tri.Add(j); }
+
     static bool Flagged(float x, float z) { int k = Texel(x, z); return k >= 0 && lflag[k] != 0; }
     static bool Built(float x, float z) { int k = Texel(x, z); return k >= 0 && (lflag[k] & 2) != 0; } // under a building's footprint
 
@@ -1671,6 +2110,16 @@ public static class RealWorld
                 {
                     float cn = Bilinear(gCan, x, z);
                     if (cn > 0.3f) { c = Color.Lerp(Color.Lerp(leafA, leafB, env.tree2Share * n2), soil * 0.55f, 0.35f) * 0.8f; a = 170; } // shaded forest floor
+                }
+                // under hedges, copses and bushes (Outfield): their shade and rough, uncut grass
+                if ((lflag[k] & 4) != 0 && kind != 1) { c *= 0.74f; if (a < 170) a = 170; }
+                // large lawns: slow lush / thin drift (~120 m) so a big field is never one flat tone
+                else if (kind == 0 || kind == 8)
+                {
+                    float n3 = noiseTab[(((int)(z * 0.23f + 0.37f * x + 13f) & 255) << 8) + ((int)(x * 0.21f - 0.3f * z + 171f) & 255)]; // (~140 m blobs, rotated off n1)
+                    float lush = (n3 - 0.5f) * 0.32f;
+                    c = new Color(c.r * (1f - lush * 0.6f), c.g * (1f + lush * 0.25f), c.b * (1f - lush * 0.5f));
+                    c *= 1f - 0.12f * Mathf.Abs(n3 - 0.5f);
                 }
                 float bright = 0.9f + 0.2f * n1;
                 float e = Mathf.Min(Mathf.Min(x - rx0, rx1 - x), ez);
@@ -1768,6 +2217,14 @@ public static class RealWorld
             }
             if (farT != null) Cull(farT.gameObject, far, bCull);
             if (treeT != null) Cull(treeT.gameObject, trees, tCull);
+        }
+        // the far tree lines: one mesh for the whole region (one draw call), never culled by distance
+        if (farMB != null)
+        {
+            // not baked (old phones): vertex colours are not drawn, so the material carries the woods' average colour
+            var fm = WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : Color.Lerp(env.leaf, RenderSettings.fogColor, 0.35f), null, 0f);
+            Make(farMB, "EnvFarTrees", fm, holder);
+            farMB = null;
         }
     }
     static Transform Child(Transform parent, string name) { var go = new GameObject(name); go.transform.SetParent(parent, false); return go.transform; }
