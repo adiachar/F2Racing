@@ -147,8 +147,9 @@ public partial class GameManager
     void ApplyDisplay() { ApplyFrameRate(); ApplyResolution(); }
 
     // ---------------------------------------------------------------- steering and brake shaping, driver aids
-    // touch and tilt steering: the sensitivity is applied where the input is measured (so full lock stays
-    // reachable); this bends the response: exponent 1 = linear, higher = finer near the centre
+    // touch steering: the sensitivity is applied where the input is measured (so full lock stays reachable); this
+    // bends the response: exponent 1 = linear, higher = finer near the centre. Tilt has its own bounded version
+    // (GameManager.TiltCurve) so the curve never steepens the edges of the tilt.
     float ShapeSteer(float s) => steerCurve <= 1.001f ? s : Mathf.Sign(s) * Mathf.Pow(Mathf.Abs(s), steerCurve);
 
     // brake pedal: sensitivity (below 100% a full press no longer gives full braking), then the curve

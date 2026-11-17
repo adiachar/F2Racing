@@ -447,7 +447,7 @@ public partial class GameManager : MonoBehaviour
         pedalBrake = brkT > pedalBrake ? Mathf.Min(brkT, pedalBrake + 8 * dt) : Mathf.Max(brkT, pedalBrake - 12 * dt);
         float steer = steerHeld ? dragSteer : kSteer;
         steerFromTilt = tilt && !steerHeld && kSteer == 0;
-        if (steerFromTilt) steer = ShapeSteer(TiltSteer());
+        if (steerFromTilt) steer = TiltSteer();            // its own smooth curve and soft full lock (TiltToSteer)
         else if (steerHeld) steer = ShapeSteer(steer);       // the keyboard is on/off: no curve
         steer = AssistSteer(steer);
         return new CarInput(steer, pedalGas, pedalBrake);
@@ -616,11 +616,33 @@ public partial class GameManager : MonoBehaviour
         }
         return TiltToSteer();
     }
+    // Tilt angle -> steering, smooth everywhere (no corner anywhere, so nothing snaps; before: a slope step at the dead
+    // zone and a hard clamp at full lock, and the Steering curve was steepest right at the edge):
+    //  * soft dead zone: up to twice the dead zone the response grows from zero slope (quadratic), then it is the
+    //    angle minus the dead zone, as before;
+    //  * sensitivity scales the angle; the Steering curve bends only the inner half (a power curve that runs on as a
+    //    straight line), so a higher curve is finer at the centre but never steeper at the edges (TiltCurve);
+    //  * soft full lock: straight up to 82.5% of the travel, then a quadratic knee that reaches full lock with zero
+    //    slope exactly at "Tilt for full lock". The straight middle is 1.1x the old slope and the steepest part.
+    const float TiltKnee = 0.825f, TiltCurveSplit = 0.5f;
     float TiltToSteer()
     {
-        float t = tiltSmooth + tiltLead;
-        float dz = tiltDz, range = Mathf.Max(tiltRange, dz + 1f), a = Mathf.Abs(t);
-        return a <= dz ? 0 : Mathf.Clamp(Mathf.Sign(t) * (a - dz) / (range - dz) * steerGain, -1, 1);
+        float t = tiltSmooth + tiltLead, a = Mathf.Abs(t);
+        float dz = tiltDz, range = Mathf.Max(tiltRange, dz + 1f);
+        float ad = a < 2f * dz ? a * a / (4f * dz) : a - dz;
+        float z = TiltCurve(ad / (range - dz) * steerGain, steerCurve);
+        const float k = TiltKnee;
+        float y = z < k ? z : z < 1f ? z - (z - k) * (z - k) / (2f * (1f - k)) : (1f + k) * 0.5f;
+        return Mathf.Sign(t) * y * 2f / (1f + k);
+    }
+    // the Steering curve for tilt: v^c up to half the travel, then the tangent line, still reaching 1 at v = 1
+    // (steepest slope c / (0.5 + 0.5c) of linear: 1.43x at the maximum curve 2.5, and that is in the middle)
+    static float TiltCurve(float v, float c)
+    {
+        if (c <= 1.001f) return v;
+        const float p = TiltCurveSplit;
+        float pc1 = Mathf.Pow(p, c - 1f), A = 1f / (pc1 * (p + c * (1f - p)));
+        return v < p ? A * Mathf.Pow(v, c) : A * pc1 * p + c * A * pc1 * (v - p);
     }
     // while tilt steering is on the screen must not auto-rotate; with drag steering it may
     void ApplyScreenLock()
