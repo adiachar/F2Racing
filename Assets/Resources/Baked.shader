@@ -90,7 +90,9 @@ Shader "F2/Baked"
                 fixed4 L = tex2D(_LandTex, (w - _LandRect.xy) * _LandRect.zw);
                 fixed4 d = tex2D(_MainTex, w * _DetailScale);
                 fixed4 m = tex2D(_LandMacro, float2(w.x * 0.8 - w.y * 0.6, w.x * 0.6 + w.y * 0.8) * (1.0 / 48.0));
-                half a = L.a * 3.0;
+                // (compares in float: on GLES3 / Vulkan a compare on half fails FXC's min-precision bytecode check and
+                // Unity drops the whole shader to its Fallback)
+                float a = L.a * 3.0;
                 half k = a < 1.0 ? lerp(d.g, d.r, a) : (a < 2.0 ? lerp(d.r, d.b, a - 1.0) : lerp(d.b, d.r, a - 2.0));
                 half crown = saturate(a - 2.0);
                 fixed4 c = fixed4(L.rgb * (0.55 + 0.9 * k) * lerp(0.88 + 0.24 * m.r, 0.38 + 1.05 * m.g, crown), 1);
@@ -105,8 +107,9 @@ Shader "F2/Baked"
                 float2 a = (float2(idx - cy * 8.0, cy) + (2.0 + frac(i.uv) * 124.0) / 128.0) * float2(0.125, 0.25);
                 fixed4 c = tex2Dlod(_MainTex, float4(a, 0, lod));
                 half3 tc = i.tint.rgb;
-                half e = min(i.uv.x, i.tint.w - i.uv.x);
-                if (i.tint.w > 0.5 && e < 0.075) tc = lerp(tc, half3(1.0, 0.97, 0.9), 0.5);
+                float tw = i.tint.w, e = min(i.uv.x, tw - i.uv.x); // (float compares, see F2_LAND)
+                float trim = (tw > 0.5 && e < 0.075) ? 0.5 : 0.0;
+                tc = lerp(tc, half3(1.0, 0.97, 0.9), (half)trim);
                 c.rgb *= lerp(half3(1, 1, 1), tc, c.a);
             #else
                 fixed4 c = tex2D(_MainTex, i.uv);

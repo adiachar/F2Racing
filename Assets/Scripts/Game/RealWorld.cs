@@ -987,6 +987,8 @@ public static class RealWorld
         curTint = new Vector4(1f, 1f, 1f, 0f);
         if (kind == 4 && dist < 260f && lod < 2 && fill > 0.6f && hl >= 8f && hs >= 3.5f && Stand(b, ocx, ocz, ax, az, hl, hs, gmin, gmax)) return;
         float top = gmin + H;
+        // near the track: a solid for the TV cameras (Trackside.Solids), the footprint's rectangle up to the roof
+        if (dist < 160f) Trackside.AddSolid(new Vector3(ocx, 0f, ocz), new Vector3(ax, 0f, az), hl, hs, gmin - 1f, top + 2.5f, false);
         Facade(kind, H, area, h0, h2, h3);
         bool home = fClass <= 1 || fClass == 6;
         // roof shape: the data's, or a pitched roof on houses where the data has none (most houses in Europe)
@@ -1206,6 +1208,7 @@ public static class RealWorld
         float depth = 2f * hs, frontY = gmin + 2.6f, rise = Mathf.Min(depth * 0.52f, 22f), topY = frontY + rise, roofY = topY + 3.4f;
         float foot = gmin - 0.7f - (gmax - gmin);
         Vector3 FL = cen + F * hs - A * hl, FR = cen + F * hs + A * hl, BL = cen - F * hs - A * hl, BR = cen - F * hs + A * hl;
+        Trackside.AddSolid(cen, A, hl + 0.8f, hs + 1.2f, gmin - 1f, roofY + 3.5f, false); // (roof flags, floodlights)
         var mb = Buf(SBuild, Block(ocx, ocz), 220 + 28 * (Mathf.RoundToInt(2f * hl / 9f) + 3));
         Color conc = C(0.80f, 0.80f, 0.78f), dark = C(0.62f, 0.62f, 0.61f), white = Color.white;
         float k = 0.95f + 0.1f * Hash(b, 77); conc *= k; conc.a = 1f; dark.a = 1f;

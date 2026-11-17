@@ -56,13 +56,19 @@ public static class EnvTex
         return t;
     }
     // per-pixel colour in linear albedo, then scaled so the tile's mean is exactly "mean" (keeps circuit palettes)
-    static Texture2D Albedo(int w, int h, Color mean, System.Func<float, float, int, int, Color> f, int aniso = 4)
+    // alpha: optional linear data in A (else 255)
+    static Texture2D Albedo(int w, int h, Color mean, System.Func<float, float, int, int, Color> f, int aniso = 4, System.Func<float, float, int, int, float> alpha = null)
     {
         var c = new Color[w * h]; double sr = 0, sg = 0, sb = 0;
         for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { var k = f((float)x / w, (float)y / h, x, y); c[y * w + x] = k; sr += k.r; sg += k.g; sb += k.b; }
         float n = w * h, kr = mean.r / Mathf.Max(1e-4f, (float)(sr / n)), kg = mean.g / Mathf.Max(1e-4f, (float)(sg / n)), kb = mean.b / Mathf.Max(1e-4f, (float)(sb / n));
         var px = new Color32[w * h];
-        for (int i = 0; i < px.Length; i++) px[i] = new Color32(S(c[i].r * kr), S(c[i].g * kg), S(c[i].b * kb), 255);
+        for (int i = 0; i < px.Length; i++)
+        {
+            byte a = 255;
+            if (alpha != null) { int x = i % w, y = i / w; a = B(alpha((float)x / w, (float)y / h, x, y)); }
+            px[i] = new Color32(S(c[i].r * kr), S(c[i].g * kg), S(c[i].b * kb), a);
+        }
         return Make(w, h, px, false, aniso);
     }
 
@@ -128,6 +134,9 @@ public static class EnvTex
 
     // RR3 reference: sunlit lawns are warm yellow-olive, not neon green (linear multipliers on the circuit's grass mean)
     static readonly Vector3 GrassTint = new Vector3(1.09f, 0.80f, 1.25f);
+    // GroundDetail's alpha (linear data, mean ~0.5): clumps of ~0.75 m at the 4.5 m tile; Ground.shader HQ reads it
+    // again at the 15 m tile, where the same field makes ~2.6 m patches (tufts / lush and thin patches)
+    static float Clumps(float u, float v, int x, int y) => Mathf.SmoothStep(0f, 1f, (Fbm(u, v, 6, 3, 301) - 0.32f) / 0.36f);
     public static Texture2D GroundDetail(Color albedo)
     {
         if (IsGreen(albedo))
@@ -140,7 +149,7 @@ public static class EnvTex
                     var r = gp.Rel(x, y, 0.45f);
                     float k = 1f + 0.8f * (gp.L(x, y) - 1f);
                     return new Color(Mathf.Max(0.05f, r.r * 0.5f + k * 0.5f), Mathf.Max(0.05f, r.g * 0.5f + k * 0.5f), Mathf.Max(0.05f, r.b * 0.5f + k * 0.5f));
-                }));
+                }, 4, Clumps));
         }
         if (IsGreen(albedo))
             return Count(Albedo(256, 256, albedo, (u, v, x, y) =>
@@ -157,7 +166,7 @@ public static class EnvTex
                 var c = new Color(k * (1f + 0.5f * hue), k, k * (1f - 0.6f * hue));
                 if (Fbm(u, v, 32, 2, 19) > 0.70f) c = new Color(c.r * 0.82f, c.g * 0.95f, c.b * 1.05f); // clover
                 return c;
-            }));
+            }, 4, Clumps));
         // sand / dust / grit (desert circuits, the paved ground of street circuits)
         return Count(Albedo(256, 256, albedo, (u, v, x, y) =>
         {
@@ -166,7 +175,7 @@ public static class EnvTex
             if (r > 0.96f) k += 0.25f; else if (r < 0.03f) k -= 0.3f;
             float ripple = 0.06f * Mathf.Sin((u * 6 + Fbm(u, v, 4, 2, 37) * 2f) * Mathf.PI * 2 * 4);
             return new Color(k + ripple, k + ripple * 0.9f, k * 0.97f + ripple * 0.7f);
-        }));
+        }, 4, (u, v, x, y) => 0.5f)); // (no clumps on sand: neutral)
     }
 
     static Texture2D cMacro;

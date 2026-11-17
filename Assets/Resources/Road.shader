@@ -9,7 +9,8 @@
 // shimmer far away, whatever the screen resolution.
 //
 // Two levels: LOD 300 (Medium/High) = 3 texture reads (5 m detail, 43 m macro, 1.4 m fine aggregate from the global
-//                                     _F2RoadFine) + the shadow mask, sun sheen with glinting stones, tar seams, rubber streaks, Fresnel;
+//                                     _F2RoadFine) + the shadow mask, sun sheen with glinting stones, tar seams, rubber streaks, Fresnel,
+//                                     stone-by-stone sun relief, tyre marks, sealed cracks and paver joints, kerb paint wear;
 //             LOD 150 (Low)         = 1 texture read + the shadow mask, no sheen; section shades, patches and kerb relief are maths only.
 // Both levels also read the sharp sun-shadow mask (_F2RoadShadow, RoadShadow.cs): trees, stands, bridges, fences.
 // RoadSurface.cs picks one from the graphics level and sets _F2RoadFine.

@@ -98,6 +98,21 @@ float Hash1(float n)
     return frac(h);
 }
 
+#ifdef ROAD_HQ
+// one car's pair of tyre marks (wheels ~1.6 m apart): x = metres from the racing line; the pair has its own offset
+// (within +-spread/2) per stretch of len metres, wanders a little, and fades in and out along the stretch (zero at its
+// ends, so the offset can jump there); some stretches have none. Box-filtered with the pixel width w (m).
+half TyrePair(float x, float along, float len, float seed, float spread, float w)
+{
+    float c = floor(along / len), f = along / len - c;
+    float h = Hash1(c * 7.13 + seed * 11.0), h2 = Hash1(c * 3.71 + seed * 5.3);
+    float on = saturate(sin(f * 3.14159) * 3.0 - 0.5) * (h2 > 0.3 ? 1.0 : 0.0);
+    float o = (h - 0.5) * spread + 0.15 * sin(along * 0.047 + seed * 4.0);
+    float xa = abs(x - o), mw = 0.14 + 0.12 * h2;
+    return Band(xa, 0.8 - mw * 0.5, 0.8 + mw * 0.5, w) * (half)(on * (0.55 + 0.45 * h2));
+}
+#endif
+
 fixed4 frag (v2f i) : SV_Target
 {
     float lat = i.uv.x, along = i.uv.y;
@@ -106,21 +121,7 @@ fixed4 frag (v2f i) : SV_Target
     bool kerb = i.misc.y < -0.5;
     half kerbF = kerb ? 1.0 : 0.0;
 
-    // ---- light: ambient + sun x the sharp shadow mask (tree dapples, stands, bridges, fences)
-    float2 sp = float2(lat * _F2RoadShadowP.z + 0.5, along * _F2RoadShadowP.x); // across 0..1, strips along
-    float2 sgx = ddx(sp), sgy = ddy(sp);
-    float strip = floor(sp.y);
-    float2 suv = float2((strip + saturate(sp.x)) * _F2RoadShadowP.y, sp.y - strip);
-#ifdef ROAD_HQ
-    float2 gsc = float2(_F2RoadShadowP.y, 1.0) * 1.5; // a touch of blur: softer penumbrae, no crawling far away
-#else
-    float2 gsc = float2(_F2RoadShadowP.y, 1.0);
-#endif
-    half shade = tex2Dgrad(_F2RoadShadow, suv, sgx * gsc, sgy * gsc).r;
-    half3 light = i.color + i.sunc * (i.misc.w * shade);
-    // ~0.9 in shade, ~1.75 in the sun: how much sun reaches this point (sheen, wet glints)
-    half sunVis = saturate((dot(light, half3(0.3, 0.59, 0.11)) - 1.0) * 1.5);
-
+    // ---- asphalt textures
 #ifdef ROAD_HQ
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy * 0.2, 0, _MipBias));
     half4 mac = tex2D(_MainTex, i.uv.zw);
@@ -134,6 +135,36 @@ fixed4 frag (v2f i) : SV_Target
 #endif
     half fade = i.misc.z;
     half grain = lerp(0.5, d.r, fade * fade);                    // grain only close up: mid / far asphalt is smooth
+
+#ifdef ROAD_HQ
+    half fineFade = saturate(fade * 2.5 - 1.5);                  // only the first ~15 m, gone by ~35 m
+    // fine texels per pixel (1.4 m / 256): stone glints and slopes fade out once a pixel spans several stones, so
+    // nothing crawls at grazing angles
+    half fineTexels = (half)min(max(wl, wa) * (256.0 / 1.4), 1000.0);
+    // ---- micro relief in the sun: the photo aggregate's slopes (BA) tilt the surface stone by stone, so the sunlit
+    // asphalt near the car has real light and shade in it instead of a flat print. Linear (unnormalised) so the mean
+    // brightness is unchanged; the same fade as the glints, none on the kerbs (painted, smooth)
+    half relief = 0.55 * fineFade * saturate(1.5 - fineTexels * 0.125) * (1.0 - 0.7 * kerbF);
+    half ndl0 = max(dot(normalize(i.n), (half3)_SunDir.xyz), 0.25);
+    half sunRelief = clamp(1.0 + dot(half3(fn.b - 0.5, 0.0, fn.a - 0.5), (half3)_SunDir.xyz) * relief / ndl0, 0.5, 1.6);
+#else
+    half sunRelief = 1.0;
+#endif
+
+    // ---- light: ambient + sun x the sharp shadow mask (tree dapples, stands, bridges, fences)
+    float2 sp = float2(lat * _F2RoadShadowP.z + 0.5, along * _F2RoadShadowP.x); // across 0..1, strips along
+    float2 sgx = ddx(sp), sgy = ddy(sp);
+    float strip = floor(sp.y);
+    float2 suv = float2((strip + saturate(sp.x)) * _F2RoadShadowP.y, sp.y - strip);
+#ifdef ROAD_HQ
+    float2 gsc = float2(_F2RoadShadowP.y, 1.0) * 1.5; // a touch of blur: softer penumbrae, no crawling far away
+#else
+    float2 gsc = float2(_F2RoadShadowP.y, 1.0);
+#endif
+    half shade = tex2Dgrad(_F2RoadShadow, suv, sgx * gsc, sgy * gsc).r;
+    half3 light = i.color + i.sunc * (i.misc.w * shade * sunRelief);
+    // ~0.9 in shade, ~1.75 in the sun: how much sun reaches this point (sheen, wet glints)
+    half sunVis = saturate((dot(light, half3(0.3, 0.59, 0.11)) - 1.0) * 1.5);
 
     // ---- paving sections: ~113 m each, a shade apart, a sealed joint across the road between them
     const float SecLen = 113.0;
@@ -158,7 +189,6 @@ fixed4 frag (v2f i) : SV_Target
     tone *= 1.0 + 0.07 * (half)(h1 - 0.5);                       // section shade
     tone *= 1.0 - 0.045 * inPatch;                                // fresh patch: darker binder
 #ifdef ROAD_HQ
-    half fineFade = saturate(fade * 2.5 - 1.5);                  // only the first ~15 m, gone by ~35 m
     tone *= 1.0 + 0.16 * (fn.r - 0.5) * fineFade;                // single stones and the dark binder between them
 #endif
     half3 col = _Asphalt.rgb * tone;
@@ -174,7 +204,13 @@ fixed4 frag (v2f i) : SV_Target
     half streak = (half)(0.5 + 0.5 * sin(xs * 21.0 + sin(xs * 6.3 + along * 0.013) * 1.7));
     rub *= lerp(1.0, 0.65 + 0.7 * streak, (half)saturate(1.0 - wl * 6.0));
 #endif
-    col *= 1.0 - 0.42 * rub; // rubbered, not black: in the sun the line reads as a darker grey
+    col *= 1.0 - 0.48 * rub; // rubbered, not black: in the sun the line reads as a darker grey
+#ifdef ROAD_HQ
+    // ---- tyre marks: single cars' pairs of dark lines along and around the racing line (each pair its own offset per
+    // stretch, wandering, fading in and out), more where the line carries more rubber (corners, braking zones)
+    half marks = TyrePair(xs, along, 41.0, 1.0, 1.3, wl) + TyrePair(xs, along, 67.0, 2.0, 2.8, wl) + TyrePair(xs, along, 29.0, 3.0, 0.7, wl);
+    col *= 1.0 - (half)saturate(marks) * (0.12 + 0.2 * saturate(i.misc.y)) * (0.6 + 0.6 * blotch) * (1.0 - kerbF);
+#endif
 
     // ---- dust off-line: lighter towards the edges where nobody drives (less on fresh patches)
     half edge = smoothstep(_HalfWidth - 3.2, _HalfWidth - 0.3, abs(lat));
@@ -194,6 +230,16 @@ fixed4 frag (v2f i) : SV_Target
     float snakeX = lat - snakeLat;
     half snake = Band(snakeX, -0.025, 0.025, max(fwidth(snakeX), 1e-4)) * Band(sa, 4.0, SecLen - 4.0, wa) * snakeOn;
     tar = max(tar, snake);
+    // longitudinal joint between two paver lanes (some sections): a sealed, slightly wavy line about a third of the way
+    // in from one edge
+    float pj = lat - (h3 > 0.5 ? 1.0 : -1.0) * _HalfWidth * 0.36 - 0.04 * sin(along * 0.11 + h1 * 6.28);
+    tar = max(tar, Band(pj, -0.03, 0.03, wl) * (h2 < 0.55 ? 1.0 : 0.0) * Band(sa, 2.0, SecLen - 2.0, wa));
+    // sealed transverse cracks: in one ~9 m stretch out of four, a wiggly tar line across part of the road
+    float cc = floor(along * (1.0 / 9.0)), hc = Hash1(cc * 1.37 + 5.1), hd = Hash1(cc * 2.91 + 0.7);
+    float cAt = (cc + 0.15 + 0.7 * hd) * 9.0;
+    float cx = along - cAt - 0.22 * sin(lat * 1.3 + hc * 40.0) - 0.05 * sin(lat * 5.3 + hd * 20.0);
+    float c0 = (hc * 2.0 - 1.0) * _HalfWidth, c1 = c0 + 2.0 + 5.0 * hd;
+    tar = max(tar, Band(cx, -0.018, 0.018, wa + 0.35 * wl) * Band(lat, c0, c1, wl) * (hc > 0.74 ? 1.0 : 0.0));
 #endif
     tar *= 1.0 - kerbF;
     col *= 1.0 - 0.42 * tar;
@@ -241,6 +287,11 @@ fixed4 frag (v2f i) : SV_Target
     kc = lerp(kc, _Dust.rgb * 0.4, 0.7 * (half)saturate((across - (1.0 - lipW)) / max(lipW, 1e-4)));
 #ifdef ROAD_HQ
     kc *= 1.0 + 0.08 * (fn.r - 0.5) * fineFade;                       // grit in the paint
+    // worn paint: scuffed patches where the grey base shows, most on the inner half where the wheels ride, and road
+    // dirt thrown onto the outer part
+    half kwear = saturate((d.g * 0.7 + d.r * 0.5 - 0.68 + 0.22 * saturate(1.0 - across * 1.6)) * 5.0);
+    kc = lerp(kc, _Asphalt.rgb * (0.9 + 0.3 * grain), kwear * 0.55);
+    kc = lerp(kc, _Dust.rgb * 0.75, saturate(across * 1.4 - 0.5) * 0.18 * (0.5 + blotch));
 #endif
     col = kerb ? kc : col;
 
@@ -269,9 +320,6 @@ fixed4 frag (v2f i) : SV_Target
     float3 V = normalize(i.view);
     half3 N = normalize(i.n);
     // the stones' own slopes (close up): single stones catch the sun; paint, kerbs and tar fill the texture in
-    // fine texels per pixel (1.4 m / 256): stone glints and slopes fade out once a pixel spans several stones, so
-    // nothing crawls at grazing angles
-    half fineTexels = (half)min(max(wl, wa) * (256.0 / 1.4), 1000.0);
     half bump = 0.45 * fineFade * (1.0 - 0.6 * paint - 0.6 * kerbF) * (1.0 - tar) * saturate(1.5 - fineTexels * 0.125);
     half3 Nb = normalize(N + half3(fn.b - 0.5, 0.0, fn.a - 0.5) * bump);
     half3 R = reflect(-_SunDir.xyz, Nb);

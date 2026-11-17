@@ -1,6 +1,7 @@
 // Ground for phones: grass, terrain, verges with mowing stripes, gravel traps with tyre ruts (Ground.cginc).
 // Lighting is baked into the vertex colours (LightBake.cs); two texture reads per pixel at most.
-// Two levels: LOD 300 (Medium/High) = detail + macro, stripes, barrier wear, gravel ruts;
+// Two levels: LOD 300 (Medium/High) = detail + macro, wandering stripes, barrier wear, gravel ruts, grass clumps / patches /
+//                                     long grass at the barrier / worn soil at the verge edge (detail alpha);
 //             LOD 150 (Low)         = the same two reads with a positive mip bias, stripes, no ruts.
 // EnvSurface.cs picks one from the graphics level.
 Shader "F2/Ground"
@@ -15,6 +16,7 @@ Shader "F2/Ground"
         _Stripe ("Stripes: from m, to m, width m, strength", Vector) = (0, 0, 3, 0)
         _Wall ("Barrier: line m, darkening", Vector) = (-100, 0, 0, 0)
         _Ruts ("Ruts: inner edge m, strength", Vector) = (1000, 0, 0, 0)
+        _Clumps ("Grass clumps from the detail alpha (0 off, 1 on)", Float) = 0
     }
     SubShader
     {

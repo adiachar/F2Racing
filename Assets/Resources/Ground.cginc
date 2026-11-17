@@ -35,6 +35,7 @@ fixed4 _DryTint;      // rgb multiplier of dry patches, a = how much
 float4 _Stripe;       // from (m), to (m), stripe width (m), strength
 float4 _Wall;         // barrier line (m), darkening, -, -
 float4 _Ruts;         // gravel inner edge (m), strength, -, -
+float _Clumps;        // grass only (1): the detail's alpha as clumps / tufts and lush or thin patches (HQ), 0 = off
 sampler2D _F2RoadShadow; // global (RoadShadow.cs): sun shadows in track space, here continued onto verges and run-offs
 float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: 1 / width covered (m), w: half width (m)
 
@@ -59,25 +60,50 @@ fixed4 frag (v2f i) : SV_Target
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, max(_MipBias, 0.0))); // never sharper than the mips: no crawling grass
     // second, larger and turned copy of the same photo detail, averaged in: the 4.5 m tile never shows a repeat
     float2 u2 = float2(i.uv.x * 0.8 - i.uv.y * 0.6, i.uv.x * 0.6 + i.uv.y * 0.8) * 0.29;
-    d.rgb = lerp(d.rgb, tex2Dbias(_MainTex, float4(u2, 0, max(_MipBias, 0.0))).rgb, 0.4);
+    half4 d2 = tex2Dbias(_MainTex, float4(u2, 0, max(_MipBias, 0.0)));
+    d.rgb = lerp(d.rgb, d2.rgb, 0.4);
+    // grass: the alpha holds clumps (~0.75 m at this tile, ~2.6 m patches at the larger one); 0.5 = neutral
+    half tuft = (half)lerp(0.5, d.a, _Clumps), lush = (half)lerp(0.5, d2.a, _Clumps);
 #else
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.6)); // Low: blurrier mips, kinder to the texture cache
 #endif
     half4 mac = tex2D(_MacroTex, i.uv.zw);
     half3 col = d.rgb * (0.80 + 0.40 * mac.r);
     col = lerp(col, col * _DryTint.rgb, mac.g * _DryTint.a);
+#ifdef GROUND_HQ
+    // clumps: the turf is lumpy (darker hollows between tufts), lush darker blue-green patches and thin, paler ones
+    col *= 0.9 + 0.2 * tuft;
+    col *= lerp(half3(1.0, 1.0, 1.0), half3(0.80, 0.87, 0.84), saturate((lush - 0.56) * 3.5));
+    col *= lerp(half3(1.0, 1.0, 1.0), half3(1.10, 1.06, 0.88), saturate((0.40 - lush) * 3.5));
+#endif
 
     // mowing stripes: bands along the track, light / dark as the mower went up and down; box-filtered so they never
     // shimmer, and faded where a band is thinner than a couple of pixels
     half band = (half)saturate((lat - _Stripe.x) * 0.7) * (half)saturate((_Stripe.y - lat) * 0.25);
+#ifdef GROUND_HQ
+    // the mower's lines wander a little, and the contrast comes and goes along the lap (grass leaning one way or
+    // the other, cut on different days)
+    float ph = (lat + 0.22 * sin(i.trk.y * 0.037) + 0.08 * sin(i.trk.y * 0.13)) / _Stripe.z, wp = wl / _Stripe.z;
+    half vary = (half)(0.55 + 0.45 * sin(i.trk.y * 0.0091 + lat * 0.05));
+#else
     float ph = lat / _Stripe.z, wp = wl / _Stripe.z;
+    half vary = 1.0;
+#endif
     half sq = (half)saturate((abs(frac(ph) - 0.5) * 2.0 - 0.5) / max(2.0 * wp, 1e-3) + 0.5);
     half fadeFar = (half)saturate(1.5 - wp * 3.0);
-    col *= 1.0 + _Stripe.w * band * fadeFar * (sq * 2.0 - 1.0) * (0.75 + 0.5 * mac.b);
+    col *= 1.0 + _Stripe.w * band * fadeFar * vary * (sq * 2.0 - 1.0) * (0.75 + 0.5 * mac.b);
 
     // worn, darker strip along the barrier (mowers and marshals cannot reach under it)
     half nb = (half)saturate(1.0 - abs(lat - _Wall.x) * 0.6);
     col *= 1.0 - _Wall.y * nb * nb;
+#ifdef GROUND_HQ
+    // grass only: long, clumpy grass with dry tips at the barrier foot, and bare dusty soil between the tufts along
+    // the verge's inner edge (wheels cut it, marshals walk it)
+    half longG = (half)saturate(1.2 - abs(lat - _Wall.x) * 0.8) * (half)_Clumps;
+    col *= lerp(half3(1.0, 1.0, 1.0), (0.62 + 0.75 * tuft) * half3(1.08, 1.0, 0.78), longG * 0.85);
+    half worn = (half)saturate(1.0 - abs(lat - _Stripe.x) * 1.3) * saturate((0.58 - tuft) * 3.0) * (half)saturate(_Stripe.w * 20.0) * (half)_Clumps;
+    col = lerp(col, half3(0.20, 0.17, 0.12) * (0.8 + 0.4 * mac.r), worn * 0.5);
+#endif
 
 #ifdef GROUND_HQ
     // gravel: churned darker stones near the inner edge, and the ruts of cars that went off, in patches
@@ -94,8 +120,9 @@ fixed4 frag (v2f i) : SV_Target
     // mask, signed by the side (vertex alpha), takes away the sun's share of the baked light where it says shadow
     if (lat > 0.5 && _F2RoadShadowP.z > 0.0)
     {
-        bool left = i.sideSun > 0.5;
-        half sf = (half)saturate(left ? (i.sideSun - 0.55) * 2.222 : i.sideSun * 2.222);
+        float ss = i.sideSun; // (compare in float: a half compare breaks the min-precision bytecode)
+        bool left = ss > 0.5;
+        half sf = (half)saturate(left ? (ss - 0.55) * 2.222 : ss * 2.222);
         float2 sp = float2((left ? lat : -lat) * _F2RoadShadowP.z + 0.5, i.trk.y * _F2RoadShadowP.x);
         float2 sgx = ddx(sp), sgy = ddy(sp);
         float strip = floor(sp.y);

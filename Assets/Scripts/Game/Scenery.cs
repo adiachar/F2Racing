@@ -94,6 +94,7 @@ public static class Scenery
                 for (int k = 0; k < N; k += 2) { var q = t.pts[k]; float dx = (float)q.x - bx, dy = (float)q.y - by; if (dx * dx + dy * dy < need) { free = false; break; } }
                 if (!free || Environment.Reserved(bx, by, Mathf.Max(width, depth) * 0.6f) || Waterfront.InWater(bx, by) || Trackside.Blocked(bx, by, Mathf.Max(width, depth) * 0.5f) || Waterfront.InTunnel(bx, by)) continue;
                 var c = new Vector3(bx, 0, by);
+                Trackside.AddSolid(c, new Vector3((float)p.tx, 0, (float)p.ty), width / 2 + 0.4f, depth / 2 + 0.4f, -1f, height + 1f, true); // (TV cameras)
                 var tx = new Vector3((float)p.tx, 0, (float)p.ty) * (width / 2);
                 var nx = new Vector3((float)p.nx, 0, (float)p.ny) * (depth / 2);
                 var up = Vector3.up * height;

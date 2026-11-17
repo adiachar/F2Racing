@@ -50,3 +50,52 @@ scale on the boards, the balcony guests' height on the pit building.
 - Start straight: feather banners behind the fence where there is no stand or pit; trees round map buildings
   within 380 m of the track (gardens), so houses no longer stand in a bare field.
 - Still open: Poly Haven building models, undergrowth cards, Armco depth, kerb wear.
+
+## Round 3 (after the v11 shots)
+
+Done (not yet seen in a build):
+
+- **TV camera inside an object (v11 #3, s=300).** The camera for that stretch stood ~25 m past a banner bridge and its
+  long lens looked straight into the banner. Placement is now tested against volumes: `Trackside.Solids` (oriented
+  boxes: procedural stands, pit building + canopy + podium, screens, TV towers, cranes + booms, masts, marshal posts,
+  motorhomes, feather banners, start gantry posts + beam, banner bridges; `RealWorld` map buildings within 160 m and map
+  stands; street-circuit town blocks) plus the model trees (crown + trunk). `GameManager.BuildTvCams` rejects a spot
+  inside any solid (1.5 m margin) and counts blocked lines of sight (solids and the ground) to the road over the whole
+  stretch the camera films (previous camera to 15 m past this one, every 12 m); candidates up to 48 m along the track,
+  +3 / +6 m higher, the other side; the first fully clear one wins, else the least blocked. `Trackside.Tall` is no
+  longer used for this.
+- **Road close up (HQ):** stone-by-stone sun relief (the photo aggregate's slopes now modulate the diffuse sun, not only
+  the sheen); tyre marks: three families of single-car mark pairs around the racing line (own offset per stretch,
+  wandering, fading in/out, stronger in corners); more rubber on the line (straights 0.45 -> 0.55, darkening 0.42 -> 0.48);
+  sealed transverse cracks (one 9 m stretch in four) and a longitudinal paver joint in some sections.
+- **Kerbs:** rounded raised profile in the mesh (6 columns: rounded nose, rising top, rounded outer fall) so the baked and
+  sun light change across them; HQ paint wear (scuffed patches showing the grey base, mostly on the inner half) and dirt
+  on the outer part.
+- **Grass (HQ, grass material only, `_Clumps`):** the detail texture's alpha is a clump field read at both tiles: lumpy
+  tufts (~0.75 m), lush darker and thin paler patches (~2.6 m); mowing stripes wander and their contrast varies along the
+  lap; long clumpy grass with dry tips at the barrier foot; bare dusty soil between tufts along the verge's inner edge.
+- **Armco (Medium/High):** real W-beam (two ridges, valley, rolled edges, 31 x 7.5 cm) in the near-only post layer
+  (hidden beyond ~85 m); a flat face at the valley depth in the atlas layer stands for it far away. Low keeps the V.
+- **Contact shadows** on the ground round stands, TV towers, cranes, marshal posts and motorhomes (grime decal layer,
+  Medium/High).
+- **Precision fix:** `Baked.shader` (F2_LAND, F2_ATLAS) and `Ground.cginc` compared half values; now float (the same
+  min-precision bytecode failure that dropped CarPaint to its fallback).
+
+Cost: draw calls +0 (all in existing layers/materials). Vertices: kerbs x3 (~+15k at Monza), W-beams ~+45k in the
+distance-culled post layer, flat far faces replace two faces per beam piece. Pixel cost: Road HQ ~+60 ALU (no new
+reads), Ground HQ alpha of the existing second read (no new reads); Low unchanged.
+
+Shots to verify: s=300 tv (no board; camera moved or raised), s=0 tv and 2500 tv; s=0 / 300 chase and cockpit (road
+relief in the sun, tyre marks, cracks, kerb profile, grass clumps / stripes / barrier grass), s=2500 chase (Armco
+W-profile at the right, kerb wear), any stand from a chase cam (contact shadow at its foot).
+
+Still open (next rounds, by impact per cost):
+
+1. Sky / environment reflection on glass (pit building curtain wall, stand boxes, map buildings): needs a view-dependent
+   term in `Baked.shader` for the glass texels (atlas alpha mask) - medium effort.
+2. Grandstand and pit-straight flat surfaces: map-stand roofs and back walls still large single-tone quads; pit wall
+   concrete is one repeating block texture; add panel seams, rust/streak variation per bay and AO under roof edges.
+3. Poly Haven building models near the track; forest-floor / undergrowth cards at the tree line.
+4. Mowing stripes that flip light/dark with the view direction (needs the track direction in the ground shader).
+5. Old Lesmo/Ascari bridges, the old banking, the Parabolica tower (landmarks).
+6. Crowd variety (colour blocking, flags).

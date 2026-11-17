@@ -314,6 +314,7 @@ public static class WorldBuilder
             float stripeFrom = Wd / 2 + Kerb + (t.def != null && t.def.style == CircuitStyle.Parkland ? 2f : 0f);
             grass.SetVector("_Stripe", new Vector4(stripeFrom, wallLat + 7f, 3.2f, green && !Street(t) ? 0.16f : 0f));
             grass.SetVector("_Wall", new Vector4(wallLat, 0.16f, 0, 0));
+            grass.SetFloat("_Clumps", green ? 1f : 0f); // (EnvTex.GroundDetail's alpha: clumps and patches)
         }
         Height = t.h != null || t.bank != null ? new HeightField(t) : null; // banked corners tilt the road (HeightField)
         Waterfront.Prepare(t);
@@ -410,7 +411,7 @@ public static class WorldBuilder
                 for (int k = -Win; k <= Win; k++) sum += System.Math.Abs(rl.curv[((k % t.N) + t.N) % t.N]);
                 for (int i = 0; i < t.N; i++)
                 {
-                    rub[i] = 0.45f + 0.55f * Mathf.Clamp01((float)(sum / (2 * Win + 1)) * 45f);
+                    rub[i] = 0.55f + 0.45f * Mathf.Clamp01((float)(sum / (2 * Win + 1)) * 45f);
                     sum += System.Math.Abs(rl.curv[(i + Win + 1) % t.N]) - System.Math.Abs(rl.curv[((i - Win) % t.N + t.N) % t.N]);
                 }
             }
@@ -428,24 +429,34 @@ public static class WorldBuilder
                     if (i < t.N && c < K) { int k = i * (K + 1) + c; tri.Add(k); tri.Add(k + K + 1); tri.Add(k + 1); tri.Add(k + K + 1); tri.Add(k + K + 2); tri.Add(k + 1); }
                 }
             }
-            // kerbs in the same mesh (uv2.y = -1 marks them; uv2.x = 0 at the track edge .. 1 at the raised outer lip)
+            // kerbs in the same mesh (uv2.y = -1 marks them; uv2.x = 0 at the track edge .. 1 at the raised outer lip).
+            // A rounded profile across (six columns): a rounded nose at the track edge, a top rising gently to the raised
+            // outer lip and a rounded fall at the back; the baked and the sun light change across it, so it reads as a
+            // raised kerb, not a painted strip
+            float[] kf = { 0f, 0.07f, 0.25f, 0.6f, 0.86f, 1f }, kh = { 0.04f, 0.062f, 0.072f, 0.085f, 0.09f, 0.068f };
+            int KP = kf.Length;
             void KerbRun(int i0, int i1, float side)
             {
                 float inner = side * Wd / 2, outer = side * (Wd / 2 + Kerb);
                 float left = Mathf.Max(inner, outer), right = Mathf.Min(inner, outer);
-                float hl = side > 0 ? 0.09f : 0.05f, hr = side > 0 ? 0.05f : 0.09f, al = side > 0 ? 1f : 0f;
                 int start = v.Count;
                 for (int i = i0; i <= i1; i++)
                 {
                     var p = t.pts[i % t.N]; float d = (float)(i * t.ds);
-                    v.Add(W(p.x + p.nx * left, p.y + p.ny * left, hl)); uv.Add(new Vector2(left, d)); uv2.Add(new Vector2(al, -1));
-                    v.Add(W(p.x + p.nx * right, p.y + p.ny * right, hr)); uv.Add(new Vector2(right, d)); uv2.Add(new Vector2(1 - al, -1));
-                    if (i < i1)
+                    // columns from left to right: on the left-hand kerb (side > 0) the outer lip is at the left
+                    for (int c = 0; c < KP; c++)
                     {
-                        int k = start + (i - i0) * 2;
-                        tri.Add(k); tri.Add(k + 2); tri.Add(k + 1);
-                        tri.Add(k + 2); tri.Add(k + 3); tri.Add(k + 1);
+                        int pc = side > 0 ? KP - 1 - c : c; float across = kf[pc], g = side > 0 ? 1f - across : across;
+                        float lat = left + (right - left) * g;
+                        v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(new Vector2(across, -1));
                     }
+                    if (i < i1)
+                        for (int c = 0; c + 1 < KP; c++)
+                        {
+                            int k = start + (i - i0) * KP + c;
+                            tri.Add(k); tri.Add(k + KP); tri.Add(k + 1);
+                            tri.Add(k + KP); tri.Add(k + KP + 1); tri.Add(k + 1);
+                        }
                 }
             }
             Runs(i => t.kerbL[i] > 0, (k, j) => KerbRun(k, j, 1));

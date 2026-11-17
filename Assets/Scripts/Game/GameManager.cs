@@ -883,34 +883,55 @@ public partial class GameManager : MonoBehaviour
     int tvFor = -2, tvCur = -1, tvCarIdx = -1; bool tvFree; // tvFree: no circuit (playground): one camera leap-frogs ahead of the car
     Vector3 tvPos, tvLook, tvLookVel, tvPrevCar; float tvFov = 30; int tvLastFrame = -10; bool tvWasOn;
 
+    // Candidate positions are tested against the solids of everything standing round the track (Trackside.Solids:
+    // stands, pit building, screens, towers, cranes, masts, banners, bridges, map buildings and stands; plus the model
+    // trees' crowns): the camera must not stand inside one, and its lines of sight to the road over the whole stretch it
+    // films (from the previous camera to 15 m past this one) must not pass through one or through the ground. In v11 a
+    // long lens looked straight into a banner bridge 25 m away (a yellow board filled the frame). If the first spot is
+    // blocked: up to 48 m along the track either way, 3 or 6 m higher, the other side; else the least blocked.
+    static readonly List<Trackside.Solid> tvNear = new List<Trackside.Solid>();
+    // (shift along the track in 12 m steps, 3 m raises, other side?, cost), cheapest first
+    struct TvCand { public int x, y, z; public float w; }
+    static readonly TvCand[] TvCands = MakeTvCands();
+    static TvCand[] MakeTvCands()
+    {
+        var l = new List<TvCand>();
+        for (int sd = 0; sd < 2; sd++) for (int rz = 0; rz < 3; rz++) for (int sh = -4; sh <= 4; sh++)
+            l.Add(new TvCand { x = sh, y = rz, z = sd, w = Mathf.Abs(sh) + rz * 1.3f + sd * 2.5f + (sh < 0 ? 0.1f : 0f) });
+        l.Sort((a, b) => a.w.CompareTo(b.w));
+        return l.ToArray();
+    }
     void BuildTvCams()
     {
         tvPts.Clear(); tvAt.Clear(); tvCur = -1; tvCarIdx = -1; tvFor = playground ? -1 : builtFor;
         if (track == null || playground) return;
         var rnd = new System.Random(builtFor * 131 + 7);
         int count = Mathf.Max(3, Mathf.RoundToInt((float)(track.length / 250))), every = track.N / count, span = Mathf.Max(1, (int)(40 / track.ds));
+        int N = track.N; float ds = (float)track.ds;
         double hw = track.width / 2;
+        int W(int i) => ((i % N) + N) % N;
+        // all solids with absolute heights (Trackside's are above the draped ground), and the model trees: trunk + crown
+        var all = new List<Trackside.Solid>(Trackside.Solids.Count + ModelLib.TreeFeet.Count * 2);
+        foreach (var so in Trackside.Solids)
+        {
+            var s2 = so;
+            if (s2.rel) { float g = WorldBuilder.H(s2.cx, s2.cz); s2.y0 += g; s2.y1 += g; s2.rel = false; }
+            all.Add(s2);
+        }
+        for (int k = 0; k < ModelLib.TreeFeet.Count; k++)
+        {
+            var f = ModelLib.TreeFeet[k]; float r = ModelLib.TreeWidth[k] * 0.38f;
+            all.Add(new Trackside.Solid { cx = f.x, cz = f.z, tx = 1f, tz = 0f, hl = r, hd = r, y0 = f.y + f.w * 0.32f, y1 = f.y + f.w * 0.95f });
+            all.Add(new Trackside.Solid { cx = f.x, cz = f.z, tx = 1f, tz = 0f, hl = 0.35f, hd = 0.35f, y0 = f.y - 0.5f, y1 = f.y + f.w * 0.35f });
+        }
+        double wall = Traffic.WallOffset(track); bool over = wall - hw > 4;
+        int prevAt = -1, step12 = Mathf.Max(1, Mathf.RoundToInt(12f / ds));
+        var tgt = new List<Vector3>();
         for (int c = 0; c < count; c++)
         {
-            int at = c * every;
-            // not beside a gantry post, bridge column, tower, mast or screen (Trackside.Tall): a pole right in front of
-            // the lens blocked the start-line camera. Move on down the track 12 m at a time until 25 m clear of them all.
-            double wallT = Traffic.WallOffset(track);
-            for (int tryN = 0; tryN < 8; tryN++)
-            {
-                var q = track.pts[at % track.N]; bool clear = true;
-                for (int sdT = -1; sdT <= 1 && clear; sdT += 2)
-                {
-                    double qx = q.x + q.nx * sdT * wallT, qy = q.y + q.ny * sdT * wallT;
-                    foreach (var tall in Trackside.Tall)
-                        if ((tall.x - qx) * (tall.x - qx) + (tall.z - qy) * (tall.z - qy) < 25.0 * 25.0) { clear = false; break; }
-                }
-                if (clear) break;
-                at = (at + Mathf.Max(1, (int)(12 / track.ds))) % track.N;
-            }
-            var tp = track.pts[at];
+            int at0 = c * every;
             // curv > 0 = a left-hander, whose outside is to the right (-normal); on straights alternate sides
-            double cv = 0; for (int j = -span; j <= span; j++) cv += track.pts[((at + j) % track.N + track.N) % track.N].curv;
+            double cv = 0; for (int j = -span; j <= span; j++) cv += track.pts[W(at0 + j)].curv;
             cv /= 2 * span + 1;
             double side = System.Math.Abs(cv) > 0.002 ? (cv > 0 ? -1 : 1) : (c % 2 == 0 ? 1 : -1);
             double off = hw + 25 + rnd.NextDouble() * 15; float up = 4 + (float)rnd.NextDouble() * 4;
@@ -918,18 +939,66 @@ public partial class GameManager : MonoBehaviour
             // leaning in): a camera 25-40 m out and 4-8 m up looked THROUGH the mesh (and, at the pits, stood inside the pit
             // building). Real TV cameras stand on platforms right behind the fence and shoot over it: 1.2 m behind the
             // barrier line, 6.6-8.2 m up, which clears the fence top for a car anywhere on the road.
-            double wall = Traffic.WallOffset(track); bool over = wall - hw > 4;
             if (over) { off = wall + 1.2; up = 6.6f + (up - 4f) * 0.4f; }
-            // keep clear of other parts of the circuit (hairpins, parallel straights): other side, then the minimum offset
-            bool ok = false; double cx = 0, cy = 0;
-            for (int t = 0; t < 4 && !ok; t++)
+            // what this camera films: from the previous camera (its cut point) to 15 m past this one, every ~12 m, the
+            // car's height over the centreline
+            int from = prevAt >= 0 ? prevAt : at0 - every, back = Mathf.RoundToInt(15f / ds);
+            int len = W(at0 + 4 * step12 + back - (from - back));
+            tgt.Clear();
+            for (int j = 0; j <= len; j += step12)
             {
-                double sd = t % 2 == 0 ? side : -side, o = t < 2 || over ? off : hw + 25;
-                cx = tp.x + tp.nx * sd * o; cy = tp.y + tp.ny * sd * o;
-                ok = track.Nearest(cx, cy).dist > (over ? wall - 0.5 : hw + 20);
+                var q = track.pts[W(from - back + j)];
+                tgt.Add(new Vector3((float)q.x, WorldBuilder.H(q.x, q.y) + 0.9f, (float)q.y));
             }
-            if (!ok) continue;
-            tvPts.Add(new Vector3((float)cx, WorldBuilder.H(cx, cy) + up, (float)cy)); tvAt.Add(at);
+            // the solids anywhere near that stretch (bounding box of the targets, grown by the camera's offset)
+            float x0 = float.MaxValue, z0 = float.MaxValue, x1 = float.MinValue, z1 = float.MinValue;
+            foreach (var v in tgt) { x0 = Mathf.Min(x0, v.x); z0 = Mathf.Min(z0, v.z); x1 = Mathf.Max(x1, v.x); z1 = Mathf.Max(z1, v.z); }
+            float grow = (float)off + 20f; x0 -= grow; z0 -= grow; x1 += grow; z1 += grow;
+            tvNear.Clear();
+            foreach (var so in all)
+            {
+                float e = Mathf.Max(so.hl, so.hd);
+                if (so.cx + e >= x0 && so.cx - e <= x1 && so.cz + e >= z0 && so.cz - e <= z1) tvNear.Add(so);
+            }
+            // candidates in order of preference (TvCands); the first with every line clear wins, else the lowest
+            // cost + 4 per blocked line
+            float bestCost = float.MaxValue; Vector3 bestPos = Vector3.zero; int bestAt = -1;
+            foreach (var cd in TvCands)
+            {
+                int shift = cd.x, rz = cd.y, sd = cd.z; float cost = cd.w;
+                if (cost >= bestCost) break;
+                int at = W(at0 + shift * step12);
+                var tp = track.pts[at];
+                double sdv = sd == 0 ? side : -side, o = off;
+                double cx = tp.x + tp.nx * sdv * o, cy = tp.y + tp.ny * sdv * o;
+                // clear of other parts of the circuit (hairpins, parallel straights)
+                if (track.Nearest(cx, cy).dist <= (over ? wall - 0.5 : hw + 20))
+                {
+                    if (over) continue;
+                    o = hw + 25; cx = tp.x + tp.nx * sdv * o; cy = tp.y + tp.ny * sdv * o;
+                    if (track.Nearest(cx, cy).dist <= hw + 20) continue;
+                }
+                var pos = new Vector3((float)cx, WorldBuilder.H(cx, cy) + up + rz * 3f, (float)cy);
+                bool inside = false;
+                foreach (var so in tvNear) if (Trackside.Hits(so, pos, pos, 1.5f)) { inside = true; break; }
+                if (inside) continue;
+                int blocked = 0;
+                foreach (var v in tgt)
+                {
+                    bool hit = false;
+                    // the ground (hills, crests) at three points along the line
+                    for (int u = 1; u <= 3 && !hit; u++) { var m = Vector3.Lerp(pos, v, u * 0.25f); hit = WorldBuilder.H(m.x, m.z) > m.y - 0.3f; }
+                    // the last 2 m before the car are road (kerbs, barriers): only solids from the camera to there
+                    var vEnd = Vector3.MoveTowards(v, pos, 2f);
+                    if (!hit) foreach (var so in tvNear) if (Trackside.Hits(so, pos, vEnd, 0.2f)) { hit = true; break; }
+                    if (hit && cost + ++blocked * 4f >= bestCost) break; // (no better than the best so far)
+                }
+                float total = cost + blocked * 4f;
+                if (total < bestCost) { bestCost = total; bestPos = pos; bestAt = at; }
+                if (blocked == 0) break;
+            }
+            if (bestAt < 0) continue;
+            tvPts.Add(bestPos); tvAt.Add(bestAt); prevAt = bestAt;
         }
     }
 

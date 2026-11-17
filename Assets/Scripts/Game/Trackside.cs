@@ -50,6 +50,8 @@ public static class Trackside
     static Color tint = Color.white;
     static readonly int[] BoldAds = { 1, 6, 4, 0, 15, 12, 3, 8, 13, 2 };
     static bool aoOn = true;
+    // Armco W-beam profile (Medium / High): heights up the 0.31 m beam and depth behind its front plane (m)
+    static readonly float[] WY = { 0f, 0.075f, 0.155f, 0.235f, 0.31f }, WDep = { 0.035f, 0f, 0.075f, 0f, 0.035f };
     const float AoH = 1.4f, AoMin = 0.58f;
 
     static void SetChunk(int i)
@@ -166,6 +168,22 @@ public static class Trackside
         Quad(m, b - f - s + up * y0, b + f - s + up * y0, b + f - s + up * y1, b - f - s + up * y1, -along, r);
     }
     // flat ground decal strip piece (y = h) between lateral lines; r = grime column, v along
+    // contact shadow on the ground round a box footprint (centre c, half lengths hl along T and hd along D): four strips
+    // of the grime layer's shade column, darkest at the wall, gone w metres out. Medium / High (the decal layer is
+    // hidden on Low); the bake's own contact AO only exists at the ground mesh's vertices, metres apart.
+    static bool decalsOn;
+    static void AoPad(Vector3 c, Vector3 T, Vector3 D, float hl, float hd, float w)
+    {
+        if (!decalsOn) return;
+        T.y = 0f; D.y = 0f; T.Normalize(); D.Normalize();
+        for (int k = 0; k < 4; k++)
+        {
+            Vector3 n = k == 0 ? D : k == 1 ? -D : k == 2 ? T : -T, a = k < 2 ? T : D;
+            float dist = k < 2 ? hd : hl, half = (k < 2 ? hl : hd) + w * 0.5f;
+            Vector3 p0 = c + n * dist - a * half, p1 = c + n * dist + a * half;
+            Decal(G, p0 + n * w, p0, p1 + n * w, p1, 0.05f, 0f, 1f, TracksideArt.GrimeCol(TracksideArt.GrimeShade));
+        }
+    }
     static void Decal(MB m, Vector3 a0, Vector3 a1, Vector3 b0, Vector3 b1, float h, float va, float vb, Vector4 r)
     {
         // a0/b0 = the "u = 0" edge, a1/b1 = the "u = 1" edge; a = start, b = end
@@ -226,17 +244,52 @@ public static class Trackside
         }
         return false;
     }
-    static void AddFoot(Vector3 c, Vector3 along, float hl, float hd)
+    // top > 0: the footprint is also a solid that high (m above the ground), see Solids
+    static void AddFoot(Vector3 c, Vector3 along, float hl, float hd, float top = 0f)
     {
         var a = new Vector2(along.x, along.z).normalized;
         feet.Add(new Foot { c = new Vector2(c.x, c.z), t = a, hl = hl, hd = hd });
+        if (top > 0f) AddSolid(c, along, hl, hd, -1f, top, true);
+    }
+
+    // ---------------------------------------------------------------- solids (what a TV camera must not stand in or look through)
+    // Oriented boxes round everything that stands beside the track: stands, the pit building, screens, towers, cranes,
+    // masts, banners, bridges (here), map buildings and stands (RealWorld). rel = y0 / y1 are above the local ground
+    // (Trackside builds at y 0 and is draped later); else absolute. GameManager.BuildTvCams tests its candidate camera
+    // positions and their lines of sight to the road against them (and against the model trees' crowns).
+    public struct Solid { public float cx, cz, tx, tz, hl, hd, y0, y1; public bool rel; }
+    public static readonly List<Solid> Solids = new List<Solid>();
+    public static void AddSolid(Vector3 c, Vector3 along, float hl, float hd, float y0, float y1, bool rel)
+    {
+        var a = new Vector2(along.x, along.z); if (a.sqrMagnitude < 1e-8f) a = Vector2.right; a.Normalize();
+        Solids.Add(new Solid { cx = c.x, cz = c.z, tx = a.x, tz = a.y, hl = hl, hd = hd, y0 = y0, y1 = y1, rel = rel });
+    }
+    // does the segment a-b pass through s (absolute heights) grown by pad on every side? (slab test in the box's frame;
+    // a == b tests a point)
+    public static bool Hits(in Solid s, Vector3 a, Vector3 b, float pad)
+    {
+        float ax = a.x - s.cx, az = a.z - s.cz, bx = b.x - s.cx, bz = b.z - s.cz;
+        float au = ax * s.tx + az * s.tz, av = -ax * s.tz + az * s.tx, bu = bx * s.tx + bz * s.tz, bv = -bx * s.tz + bz * s.tx;
+        float t0 = 0f, t1 = 1f;
+        return Slab(au, bu, -s.hl - pad, s.hl + pad, ref t0, ref t1) && Slab(av, bv, -s.hd - pad, s.hd + pad, ref t0, ref t1)
+            && Slab(a.y, b.y, s.y0 - pad, s.y1 + pad, ref t0, ref t1);
+    }
+    static bool Slab(float a, float b, float lo, float hi, ref float t0, ref float t1)
+    {
+        float d = b - a;
+        if (Mathf.Abs(d) < 1e-6f) return a >= lo && a <= hi;
+        float u0 = (lo - a) / d, u1 = (hi - a) / d;
+        if (u0 > u1) { float tmp = u0; u0 = u1; u1 = tmp; }
+        if (u0 > t0) t0 = u0;
+        if (u1 < t1) t1 = u1;
+        return t0 <= t1;
     }
 
     // objects that must not go into the light bake's shadow map (see-through fence, ground decals): WorldBuilder parents
     // this holder to the world only after LightBake.AddOccluders
     public static GameObject Late;
-    // tall things standing at the barrier line (gantry posts, bridge columns, towers, masts, screens): the TV cameras
-    // (GameManager.BuildTvCams) keep away from them so none stands right in front of a lens
+    // tall things standing at the barrier line (gantry posts, bridge columns, towers, masts, screens); the TV cameras
+    // now test against Solids instead (their volumes, and the lines of sight)
     public static readonly List<Vector3> Tall = new List<Vector3>();
     // pit boxes (one per garage bay): where a car stops in the working lane. Used by PitCrew.cs. Rebuilt with the circuit.
     public struct PitBay { public Vector3 centre, fwd, side; public float garageDist; public int idx; } // side = towards the garage; garageDist = from centre to the garage front
@@ -294,7 +347,7 @@ public static class Trackside
     // ================================================================ build
     public static void Build(Track t, Transform root, bool street)
     {
-        Bays.Clear(); Lane = null; feet.Clear(); Tall.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
+        Bays.Clear(); Lane = null; feet.Clear(); Tall.Clear(); Solids.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
         if (t == null || t.N < 8 || root == null) return;
         int N = t.N; float ds = (float)t.ds;
         float hw = (float)t.width * 0.5f, kerb = WorldBuilder.Kerb;
@@ -305,7 +358,7 @@ public static class Trackside
         float skirt = hills ? -1.0f : 0f; // on hills walls reach a little below the street so no gap shows on slopes
         var cutSh = Resources.Load<Shader>("BakedCutout");
         bool fences = !low && WorldBuilder.BakeReady && cutSh != null && cutSh.isSupported;
-        bool decals = !low && Resources.Load<Material>("Shadow") != null;
+        bool decals = !low && Resources.Load<Material>("Shadow") != null; decalsOn = decals;
         var grid = new Grid(t, 25f); var big = new Grid(t, 60f);
         atlasL = new Layer(); crowdL = new Layer(); fenceL = new Layer(); grimeL = new Layer(); postL = new Layer();
         chunkPts = Mathf.Max(20, Mathf.RoundToInt(250f / ds)); postPts = Mathf.Max(8, Mathf.RoundToInt(40f / ds));
@@ -554,6 +607,8 @@ public static class Trackside
                 }
                 // (the team pit-wall stands are PitGarage.cs)
                 AddFoot((ca + cb) * 0.5f + D * ((laneIn + backL) * 0.5f), T, bay * 0.5f + 0.5f, (backL - laneIn) * 0.5f + 0.5f);
+                AddSolid((ca + cb) * 0.5f + D * ((laneOut + backL) * 0.5f), T, bay * 0.5f + 0.3f, (backL - laneOut) * 0.5f + 1.5f, -1f, garH + 5.5f, true); // the building
+                AddSolid((ca + cb) * 0.5f + D * (laneOut - 1.75f), T, bay * 0.5f + 0.3f, 1.9f, 4.3f, 5.1f, true); // canopy over the working lane
             }
             // Monza: the podium cantilevered from the pit building's roof out over the pit lane, the pit wall and part of
             // the track, just past the line: slab with an advertiser fascia and glass balustrade, the three steps, a light roof
@@ -574,6 +629,7 @@ public static class Trackside
                     for (int q = 0; q < 3; q++)
                         Box(A, front + D * 3.5f + T * stepAt[q] + up * (y + 0.45f + stepH[q] * 0.5f), T, up, D, 0.9f, stepH[q] * 0.5f, 0.8f, TracksideArt.PaintWhite);
                     Box(A, mid + up * (y + 4.6f), T, up, D, hlP + 0.5f, 0.15f, hd + 0.5f, TracksideArt.RoofWhite, true);
+                    AddSolid(mid, T, hlP + 0.6f, hd + 0.6f, y - 1f, y + 4.9f, true);
                     // spectators on the podium slab behind the balustrade, and along the pit-building roof terrace
                     Standing(front + D * 0.7f - T * (hlP - 0.5f), front + D * 0.7f + T * (hlP - 0.5f), y + 0.45f, 1.7f, D, 1, 4242);
                     Standing(front + D * 1.9f - T * (hlP - 1.5f), front + D * 1.9f + T * (hlP - 1.5f), y + 0.45f, 1.7f, D, 0, 4243);
@@ -627,7 +683,7 @@ public static class Trackside
                         SetChunk(i);
                         Box(A, c + up * 1.9f, T, up, D, 6.5f, 1.9f, 1.3f, TracksideArt.BuildWhite);
                         Box(A, c + up * 1.2f, T, up, D, 6.52f, 0.25f, 1.32f, stripe[(k + r) % stripe.Length]);
-                        AddFoot(c, T, 7f, 1.6f);
+                        AddFoot(c, T, 7f, 1.6f, 3.9f); AoPad(c, T, D, 6.5f, 1.3f, 1.2f);
                     }
             }
         }
@@ -663,7 +719,7 @@ public static class Trackside
             aoOn = true;
             Panel(A, qc - qD * 0.03f, -qD, hwS, y1, y1 + 0.9f, TracksideArt.Ad(BoldAds[screenNo % BoldAds.Length]));
             screenNo++;
-            AddFoot(qc + qD * 0.4f, qT, hwS + 0.5f, 1.2f); Tall.Add(qc);
+            AddFoot(qc + qD * 0.4f, qT, hwS + 0.5f, 1.2f, y1 + 1.0f); Tall.Add(qc);
             return true;
         }
         bool Stand(int i, int sg, float halfL, int rows, bool roof)
@@ -872,7 +928,8 @@ public static class Trackside
                     int span = Mathf.RoundToInt((halfL + 10f) / ds), s = SI(sg);
                     for (int j = -span; j <= span; j++) fenceZ[s, W(i + j)] = true;
                 }
-                AddFoot(O + D * (depth * 0.5f), T, halfL + 1f, depth * 0.5f + 1.5f);
+                AddFoot(O + D * (depth * 0.5f), T, halfL + 1f, depth * 0.5f + 1.5f, backTop + 3f);
+                AoPad(O + D * (depth * 0.5f), T, D, halfL, depth * 0.5f, 1.8f);
                 return true;
             }
             return false;
@@ -942,7 +999,7 @@ public static class Trackside
                     Post(A, pole, -D, T, 0.05f, skirt, 3.2f, TracksideArt.PostDark);
                     Box(A, pole + up * 3.2f, T, up, D, 0.35f, 0.35f, 0.05f, TracksideArt.GantryDark, true);
                     Panel(A, pole + up * 3.2f - T * 0.06f, -T, 0.25f, -0.25f, 0.25f, TracksideArt.Sw(TracksideArt.LampYellow));
-                    AddFoot(c, T, 1.3f, 1.3f);
+                    AddFoot(c, T, 1.3f, 1.3f, 3.6f); AoPad(c, T, D, 1.05f, 1.05f, 0.9f);
                     sideT++;
                     break;
                 }
@@ -992,7 +1049,7 @@ public static class Trackside
                 Box(A, c - D * 0.5f + up * (th + 0.75f), T, up, D, 0.06f, 0.65f, 0.06f, TracksideArt.PostDark);
                 Box(A, c - D * 0.5f - T * 0.2f + up * (th + 1.55f), T, up, D, 0.5f, 0.17f, 0.15f, TracksideArt.GantryDark, true);
                 Box(A, c - D * 0.5f - T * 0.78f + up * (th + 1.55f), T, up, D, 0.1f, 0.12f, 0.12f, TracksideArt.GlassDark, true);
-                AddFoot(c, T, hf + 1f, hf + 1f); Tall.Add(c);
+                AddFoot(c, T, hf + 1f, hf + 1f, th + 2.2f); Tall.Add(c); AoPad(c, T, D, hf, hf, 1.0f);
                 camNo++;
             }
             // recovery cranes: yellow carrier, cab, outriggers, the boom raised over the barrier
@@ -1025,7 +1082,8 @@ public static class Trackside
                 Vector3 tip = foot + bx * 10.6f;
                 Box(A, tip - up * 1.6f, T, up, D, 0.02f, 1.6f, 0.02f, TracksideArt.PostDark);
                 Box(A, tip - up * 3.35f, T, up, D, 0.12f, 0.16f, 0.12f, TracksideArt.LampRed, true);
-                AddFoot(c, T, 4.2f, 1.8f); Tall.Add(c);
+                AddFoot(c, T, 4.2f, 1.8f, 3.2f); Tall.Add(c); AoPad(c, T, D, 3.6f, 1.2f, 1.3f);
+                AddSolid(c - D * 4.2f, T, 0.7f, 4.6f, 2f, 9.8f, true); // the boom, out over the barrier
                 cranes++;
             }
             // floodlight masts: a tall pole with a rack of lamps, about every 450 m, alternating sides, behind the fence
@@ -1046,7 +1104,7 @@ public static class Trackside
                 for (int q = 0; q < 6; q++)
                     Panel(A, c - D * 0.38f + T * ((q % 3 - 1) * 0.95f), -D, 0.36f, mh + (q < 3 ? 0.05f : 0.75f), mh + (q < 3 ? 0.55f : 1.25f), TracksideArt.Sw(TracksideArt.PaintWhite));
                 aoOn = true;
-                AddFoot(c, T, 0.8f, 0.8f); Tall.Add(c);
+                AddFoot(c, T, 0.8f, 0.8f, mh + 1.6f); Tall.Add(c);
             }
             // feather banners along the start straight where there is neither a stand nor the pits: a 6.5 m pole with a
             // tall narrow flag in the advertisers' colours every 22 m, behind the fence (the straight looked bare there)
@@ -1066,6 +1124,7 @@ public static class Trackside
                     Panel(A, c + T * 0.45f, -D, 0.4f, 2.2f, 6.4f, TracksideArt.Sw(fcol));
                     Panel(A, c + T * 0.45f + D * 0.01f, D, 0.4f, 2.2f, 6.4f, TracksideArt.Sw(fcol));
                     aoOn = true;
+                    AddSolid(c + T * 0.45f, T, 0.55f, 0.3f, -1f, 6.6f, true);
                 }
         }
 
@@ -1141,9 +1200,25 @@ public static class Trackside
                             {
                                 float f0 = (float)q / nr, f1 = (float)(q + 1) / nr;
                                 Vector3 qa = Vector3.Lerp(a, b, f0), qb = Vector3.Lerp(a, b, f1), qd = Vector3.Lerp(da, db, f0), qe = Vector3.Lerp(da, db, f1);
-                                Vector3 ra = qa + qd * 0.05f, rb = qb + qe * 0.05f; // recessed middle
-                                Quad(A, qa + up * yb, qb + up * yb, rb + up * ym, ra + up * ym, -mid - up * 0.5f, rLo);
-                                Quad(A, ra + up * ym, rb + up * ym, qb + up * yt, qa + up * yt, -mid + up * 0.5f, rHi);
+                                if (low)
+                                {
+                                    Vector3 ra = qa + qd * 0.05f, rb = qb + qe * 0.05f; // recessed middle
+                                    Quad(A, qa + up * yb, qb + up * yb, rb + up * ym, ra + up * ym, -mid - up * 0.5f, rLo);
+                                    Quad(A, ra + up * ym, rb + up * ym, qb + up * yt, qa + up * yt, -mid + up * 0.5f, rHi);
+                                    continue;
+                                }
+                                // Medium / High: the real W profile (two ridges, the valley between them, rolled edges; 31 cm
+                                // tall, 7.5 cm deep) in the near-only post layer (hidden beyond ~85 m, TracksideLod), and a
+                                // flat face at the valley's depth in the atlas layer that stands for it far away
+                                Quad(A, qa + qd * WDep[2] + up * yb, qb + qe * WDep[2] + up * yb, qb + qe * WDep[2] + up * yt, qa + qd * WDep[2] + up * yt, -mid, TracksideArt.Armco);
+                                float hk = (yt - yb) / 0.31f;
+                                for (int e = 0; e < 4; e++)
+                                {
+                                    float y0 = yb + WY[e] * hk, y1 = yb + WY[e + 1] * hk, d0 = WDep[e] - 0.004f, d1 = WDep[e + 1] - 0.004f;
+                                    Vector3 fn = -mid + up * ((WDep[e + 1] - WDep[e]) / Mathf.Max(0.01f, y1 - y0));
+                                    Quad(Pm, qa + qd * d0 + up * y0, qb + qe * d0 + up * y0, qb + qe * d1 + up * y1, qa + qd * d1 + up * y1, fn,
+                                         TracksideArt.Sub(TracksideArt.Armco, 0f, 1f, e * 0.25f, (e + 1) * 0.25f));
+                                }
                             }
                             tint = Color.white;
                         }
@@ -1281,8 +1356,10 @@ public static class Trackside
             {
                 Box(A, c + Nn * (po * sg) + up * (postH * 0.5f + skirt * 0.5f), Nn, up, T, 0.3f, postH * 0.5f - skirt * 0.5f, 0.3f, TracksideArt.GantryWhite);
                 Tall.Add(c + Nn * (po * sg));
+                AddSolid(c + Nn * (po * sg), T, 0.5f, 0.5f, -1f, postH + 0.3f, true);
             }
             Box(A, c + up * beamY, Nn, up, T, po + 0.3f, 0.45f, 0.5f, TracksideArt.GantryWhite, true);
+            AddSolid(c - T * 0.2f, Nn, po + 0.4f, 0.75f, beamY - 2.1f, beamY + 0.6f, true); // beam and light panel
             // advertiser on both faces of the beam
             Panel(A, c + up * 0f - T * 0.52f, -T, po * 0.6f, beamY - 0.42f, beamY + 0.42f, TracksideArt.Ad(1));
             Panel(A, c + T * 0.52f, T, po * 0.6f, beamY - 0.42f, beamY + 0.42f, TracksideArt.Ad(4));
@@ -1348,7 +1425,8 @@ public static class Trackside
                         aoOn = true;
                     }
                 bn++;
-                AddFoot(cL, T, 1f, 1f); AddFoot(cR, T, 1f, 1f); Tall.Add(cL); Tall.Add(cR);
+                AddFoot(cL, T, 1f, 1f, deckY + 0.6f); AddFoot(cR, T, 1f, 1f, deckY + 0.6f); Tall.Add(cL); Tall.Add(cR);
+                AddSolid(c, Nn, po + 0.7f, 1.3f, deckY - 0.5f, deckY + 3.1f, true); // deck and banners across the track (a long lens looked straight into one)
             }
         }
 
