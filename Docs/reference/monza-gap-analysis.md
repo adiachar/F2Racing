@@ -99,3 +99,35 @@ Still open (next rounds, by impact per cost):
 4. Mowing stripes that flip light/dark with the view direction (needs the track direction in the ground shader).
 5. Old Lesmo/Ascari bridges, the old banking, the Parabolica tower (landmarks).
 6. Crowd variety (colour blocking, flags).
+
+## Round 4 (after the v12 shots)
+
+Done (not yet seen in a build):
+
+- **Deep red cars read pink** (Scarlet Dart, cockpit/chase). The clear coat added the sky (bright, blue-white) over the
+  paint as a flat add; from the cockpit the sidepod and nose tops are seen at a grazing angle and mirror the bright sky
+  overhead, so G and B rose under a deep red. `CarPaint.KeepHue` (both levels): the reflection keeps its luminance but,
+  on saturated paint, its dim part takes the paint's hue; bright reflections (clouds, horizon glare) and the true grazing
+  silhouette stay a neutral mirror; white/grey/black/carbon unchanged. Fresnel F0 0.05 -> 0.04, a touch steeper at
+  grazing. Livery zones, gloss and the float-compare rule untouched.
+- **Map grandstands** (`RealWorld.Stand`): rake in 3-8 tiers with alternating seat-colour bands (four colour pairs per
+  stand) and strong AO darkening the rows under the roof towards the back (also gives the bake vertices for the roof's
+  shadow); a cross gangway at ~40 % (concrete band, dark riser, white rail); a lattice truss along the roof front
+  (chords + diagonals every ~3 m); slim columns on every other aisle; darker roof underside; rake angle, roof height and
+  roof colour vary per stand.
+- **Pit podium** (the brown slab over the start, chase/cockpit): underside of cool-grey composite panels in a ~3 m grid,
+  four steel beams, rows of downlights, a dark shadow gap and white trim on the fascia, sponsor boards on both ends.
+  Pit-building soffit: three panels per bay and two downlights instead of one flat swatch.
+- **Tree lines** (`Foliage.shader` HQ): at mid distance the alpha cut-off follows the painted shade (gaps between clumps
+  open, lit clumps stay), so crowns break into lobes instead of mip-rounded blobs; per-vertex colour drift in ~2.5 m
+  patches (yellower / bluer, lighter / darker) inside each crown. No extra reads.
+
+Cost: draw calls +0. Vertices: a few hundred per map stand, ~150 per pit bay, ~200 on the podium. Pixel: CarPaint
+~10 ALU, Foliage ~6 ALU (HQ only).
+
+Shots: s=0 chase + cockpit (red car colour, podium underside), s=300 chase (stands both sides: bands, truss, shade
+under roof), s=2500 chase (tree line), s=0 tv.
+
+Still open (in addition to round 3's list): procedural `Trackside.Stand` gets no tier AO bands yet; real emissive
+downlights (they are white swatches lit by the bake); the pit building's main roof top is a flat swatch (seen only from
+TV cameras).

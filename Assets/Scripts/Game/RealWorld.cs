@@ -1205,7 +1205,8 @@ public static class RealWorld
         float f = Vector3.Dot(F, toT); if (Mathf.Abs(f) < 0.55f) return false; // the track is off an end
         if (f < 0) F = -F;
         Vector3 up = Vector3.up, cen = new Vector3(ocx, 0f, ocz);
-        float depth = 2f * hs, frontY = gmin + 2.6f, rise = Mathf.Min(depth * 0.52f, 22f), topY = frontY + rise, roofY = topY + 3.4f;
+        // each stand its own rake and roof height (a row of identical wedges read as blocks from a distance)
+        float depth = 2f * hs, frontY = gmin + 2.6f, rise = Mathf.Min(depth * (0.42f + 0.16f * Hash(b, 79)), 22f), topY = frontY + rise, roofY = topY + 2.9f + 1.6f * Hash(b, 80);
         float foot = gmin - 0.7f - (gmax - gmin);
         Vector3 FL = cen + F * hs - A * hl, FR = cen + F * hs + A * hl, BL = cen - F * hs - A * hl, BR = cen - F * hs + A * hl;
         Trackside.AddSolid(cen, A, hl + 0.8f, hs + 1.2f, gmin - 1f, roofY + 3.5f, false); // (roof flags, floodlights)
@@ -1222,8 +1223,28 @@ public static class RealWorld
         // raked seating: one tile = 4 rows (3.6 m of slope) x 4 m
         float slope = Mathf.Sqrt(depth * depth + rise * rise) / TileH(CCrowd), across = 2f * hl / TileW(CCrowd);
         Vector3 rakeN = (F * rise / depth + up).normalized;
-        Quad(mb, FL + up * frontY, FR + up * frontY, BR + up * topY, BL + up * topY, rakeN,
-             new Vector2(0, 0), new Vector2(across, 0), new Vector2(across, slope), new Vector2(0, slope), CellUv(CCrowd), white, white, white, white);
+        // the rake in tiers (vertices for the bake to put the roof's shadow on, and colour bands): seat colours alternate
+        // tier by tier in this stand's two seat colours, and the rows under the roof go darker towards the back (the
+        // roof's shade and the closed back: strong AO that reads at 300 m)
+        Color[,] seatPair = { { C(1.00f, 0.86f, 0.80f), C(0.82f, 0.86f, 1.00f) }, { C(0.92f, 0.98f, 0.86f), C(1.00f, 0.96f, 0.84f) },
+                              { C(1.00f, 0.84f, 0.84f), C(0.94f, 0.94f, 0.96f) }, { C(0.84f, 0.90f, 1.02f), C(1.00f, 0.95f, 0.88f) } };
+        int sp = (int)(Hash(b, 81) * 3.999f);
+        float rakeLen = Mathf.Sqrt(depth * depth + rise * rise);
+        int tiers = Mathf.Clamp(Mathf.RoundToInt(rakeLen / 4.5f), 3, 8);
+        Color TierCol(int tq, float u)
+        {
+            float shade = Mathf.Lerp(1f, 0.5f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.18f, 1f, u)));
+            Color sc = seatPair[sp, tq & 1] * shade; sc.a = 1f; return sc;
+        }
+        for (int tq = 0; tq < tiers; tq++)
+        {
+            float u0 = (float)tq / tiers, u1 = (float)(tq + 1) / tiers;
+            Vector3 a0 = Vector3.Lerp(FL, BL, u0) + up * (frontY + rise * u0), b0 = Vector3.Lerp(FR, BR, u0) + up * (frontY + rise * u0);
+            Vector3 a1 = Vector3.Lerp(FL, BL, u1) + up * (frontY + rise * u1), b1 = Vector3.Lerp(FR, BR, u1) + up * (frontY + rise * u1);
+            Color c0 = TierCol(tq, u0), c1 = TierCol(tq, u1);
+            Quad(mb, a0, b0, b1, a1, rakeN, new Vector2(0, slope * u0), new Vector2(across, slope * u0), new Vector2(across, slope * u1), new Vector2(0, slope * u1),
+                 CellUv(CCrowd), c0, c0, c1, c1);
+        }
         // stair aisles up the rake every ~9 m (bare concrete between the seat blocks), a dark vomitory mouth on every
         // other one, and a white rail along the front: the seating reads as blocks of people, not one noisy slab
         Vector2 flat = new Vector2(0.5f, 0.5f);
@@ -1245,6 +1266,17 @@ public static class RealWorld
             }
         }
         Quad(mb, FL + F * 0.06f + up * (frontY - 0.1f), FR + F * 0.06f + up * (frontY - 0.1f), FR + F * 0.06f + up * (frontY + 0.55f), FL + F * 0.06f + up * (frontY + 0.55f), F, flat, flat, flat, flat, pl, rail, rail, rail, rail);
+        // a cross gangway about 40 % up the rake (a long horizontal concrete band with a dark riser and a white rail): the
+        // structure that splits a big stand into a lower and an upper tier
+        if (rakeLen > 13f)
+        {
+            float gu0 = 0.4f, gu1 = 0.4f + 1.5f / rakeLen;
+            Vector3 g0 = Vector3.Lerp(FL, BL, gu0) + up * (frontY + rise * gu0) + rakeN * 0.09f, g1 = Vector3.Lerp(FL, BL, gu1) + up * (frontY + rise * gu1) + rakeN * 0.09f;
+            Vector3 wA = A * (2f * hl);
+            Quad(mb, g0 - rakeN * 0.5f, g0 - rakeN * 0.5f + wA, g0 + wA, g0, F, flat, flat, flat, flat, pl, mouth, mouth, mouth, mouth);
+            Quad(mb, g0, g0 + wA, g1 + wA, g1, rakeN, new Vector2(0, 0), new Vector2(2f * hl / bw, 0), new Vector2(2f * hl / bw, 0.3f), new Vector2(0, 0.3f), cc, step, step, step, step);
+            Quad(mb, g0 + F * 0.05f + up * 0.55f, g0 + F * 0.05f + up * 0.55f + wA, g0 + F * 0.05f + up * 1.0f + wA, g0 + F * 0.05f + up * 1.0f, F, flat, flat, flat, flat, pl, rail, rail, rail, rail);
+        }
         // ends: the space under the rake closed with ribbed steel in the stand's own colour (no white wedge up to the roof:
         // above the rake the end is open), a white raker beam along the slope
         Color[] liv = { C(0.44f, 0.54f, 0.72f), C(0.42f, 0.58f, 0.48f), C(0.66f, 0.68f, 0.72f), C(0.72f, 0.50f, 0.44f) };
@@ -1264,13 +1296,40 @@ public static class RealWorld
         // fascia, tapered steel beams under it every ~9 m
         Vector3 rf = F * (hs - depth * 0.78f), lift = up * 0.8f, ov = A * 0.5f;
         Vector3 r0 = BL - ov + up * (roofY + 0.3f), r1 = BR + ov + up * (roofY + 0.3f), r2 = cen + rf + A * hl + ov + up * (roofY + 0.3f) + lift, r3 = cen + rf - A * hl - ov + up * (roofY + 0.3f) + lift;
-        Color roofC = C(0.80f, 0.82f, 0.85f); roofC.a = 1f; Color under = C(0.5f, 0.5f, 0.5f); under.a = 1f;
+        Color[] roofs = { C(0.80f, 0.82f, 0.85f), C(0.62f, 0.64f, 0.67f), C(0.70f, 0.74f, 0.71f), C(0.74f, 0.70f, 0.66f) };
+        Color roofC = roofs[(int)(Hash(b, 82) * 3.999f)]; roofC.a = 1f; Color under = C(0.32f, 0.32f, 0.34f); under.a = 1f;
         float ru = 2f * hl / TileW(CMetal), rv = depth * 0.78f / TileW(CMetal);
         Quad(mb, r0, r1, r2, r3, up, new Vector2(0, 0), new Vector2(ru, 0), new Vector2(ru, rv), new Vector2(0, rv), CellUv(CMetal), roofC, roofC, roofC, roofC);
         Quad(mb, r0 - up * 0.35f, r1 - up * 0.35f, r2 - up * 0.35f, r3 - up * 0.35f, -up, flat, flat, flat, flat, pl, under, under, under, under);
         Quad(mb, r3 - up * 1.0f, r2 - up * 1.0f, r2, r3, F, flat, flat, flat, flat, pl, rail, rail, rail, rail);
         Quad(mb, r3 - up * 1.0f, r2 - up * 1.0f, r2 - F * 0.5f - up * 0.35f, r3 - F * 0.5f - up * 0.35f, -up, flat, flat, flat, flat, pl, under, under, under, under);
         Color beam = C(0.86f, 0.87f, 0.88f), beamLo = C(0.6f, 0.61f, 0.63f);
+        // a lattice truss along the roof's front edge, under the fascia (top and bottom chords, diagonals every ~3 m): the
+        // steelwork reads against the dark shade under the roof from far down the straight
+        {
+            Vector3 tA = r3 - up * 1.0f + F * 0.02f, tB = r2 - up * 1.0f + F * 0.02f; const float td = 1.5f, tw2 = 0.12f;
+            Quad(mb, tA - up * 0.16f, tB - up * 0.16f, tB, tA, F, flat, flat, flat, flat, pl, beam, beam, beam, beam);
+            Quad(mb, tA - up * td, tB - up * td, tB - up * (td - 0.16f), tA - up * (td - 0.16f), F, flat, flat, flat, flat, pl, beamLo, beamLo, beam, beam);
+            int nd = Mathf.Max(2, Mathf.RoundToInt((tB - tA).magnitude / 3f));
+            for (int q = 0; q < nd; q++)
+            {
+                Vector3 p0 = Vector3.Lerp(tA, tB, (float)q / nd), p1 = Vector3.Lerp(tA, tB, (float)(q + 1) / nd);
+                Vector3 top = (q & 1) == 0 ? p0 : p1, bot = ((q & 1) == 0 ? p1 : p0) - up * td, side = A * tw2;
+                Quad(mb, bot - side, bot + side, top + side, top - side, F, flat, flat, flat, flat, pl, beamLo, beamLo, beam, beam);
+            }
+        }
+        // slim columns from the rake up to the truss on every other aisle (vertical rhythm along the stand)
+        for (int q = 1; q < aisles; q += 2)
+        {
+            float a = -hl + 2f * hl * q / aisles;
+            float uc = 0.22f;
+            Vector3 cb = Vector3.Lerp(FL, BL, uc) + A * a + up * (frontY + rise * uc), ct = cen + rf + A * a + up * (roofY + 0.3f - 2.5f) + lift * 0.9f;
+            ct = new Vector3(cb.x, ct.y, cb.z);
+            Vector3 hc = A * 0.14f;
+            Quad(mb, cb - hc, cb + hc, ct + hc, ct - hc, F, flat, flat, flat, flat, pl, beamLo, beamLo, beam, beam);
+            Quad(mb, cb + hc, cb + hc - F * 0.28f, ct + hc - F * 0.28f, ct + hc, A, flat, flat, flat, flat, pl, beamLo, beamLo, beamLo, beamLo);
+            Quad(mb, cb - hc - F * 0.28f, cb - hc, ct - hc, ct - hc - F * 0.28f, -A, flat, flat, flat, flat, pl, beamLo, beamLo, beamLo, beamLo);
+        }
         for (int q = 0; q <= aisles; q++)
         {
             float a = Mathf.Clamp(-hl + 2f * hl * q / aisles, -hl + 0.3f, hl - 0.3f);

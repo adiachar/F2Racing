@@ -570,7 +570,24 @@ public static class Trackside
                 Wall(A, L0 + oE, R0 + oE, roofY - fascia, roofY, fwdFace,
                      monza && b % 6 == 3 ? TracksideArt.NameSign : b % 6 == 0 ? TracksideArt.Ad(b / 6 * 5 + 2) : TracksideArt.Sw(TracksideArt.RoofWhite));
                 aoOn = true;
-                Quad(A, fa + oE + up * (roofY - fascia), fb + oE + up * (roofY - fascia), fb + oS + up * (roofY - fascia), fa + oS + up * (roofY - fascia), -up, TracksideArt.Sw(TracksideArt.RoofUnder));
+                // soffit: cool-grey composite panels (three per bay) with two downlights, not one flat brown slab
+                tint = new Color(0.84f, 0.87f, 0.92f);
+                for (int q = 0; q < 3; q++)
+                {
+                    Vector3 sa0 = Vector3.Lerp(fa, fb, q / 3f), sb0 = Vector3.Lerp(fa, fb, (q + 1) / 3f), yS = up * (roofY - fascia);
+                    Quad(A, sa0 + oE + yS, sb0 + oE + yS, sb0 + oS + yS, sa0 + oS + yS, -up, TracksideArt.PanelWall);
+                }
+                tint = Color.white;
+                if (!low)
+                {
+                    aoOn = false;
+                    for (int q = 0; q < 2; q++)
+                    {
+                        Vector3 lc = Vector3.Lerp(fa, fb, 0.25f + 0.5f * q) - D * 0.2f + up * (roofY - fascia - 0.02f);
+                        Quad(A, lc - T * 0.3f - D * 0.12f, lc + T * 0.3f - D * 0.12f, lc + T * 0.3f + D * 0.12f, lc - T * 0.3f + D * 0.12f, -up, TracksideArt.Sw(TracksideArt.PaintWhite));
+                    }
+                    aoOn = true;
+                }
                 // guests on the balcony
                 if (!low && Rand(b, 91) < 0.45f)
                     Standing(L0 + oB * 0.45f + (R0 - L0) * 0.08f, R0 + oB * 0.45f - (R0 - L0) * 0.08f, y2 + 0.3f, 1.7f, D, Rand(b, 92) < 0.5f ? 0 : 1, 9100 + b);
@@ -629,6 +646,38 @@ public static class Trackside
                     for (int q = 0; q < 3; q++)
                         Box(A, front + D * 3.5f + T * stepAt[q] + up * (y + 0.45f + stepH[q] * 0.5f), T, up, D, 0.9f, stepH[q] * 0.5f, 0.8f, TracksideArt.PaintWhite);
                     Box(A, mid + up * (y + 4.6f), T, up, D, hlP + 0.5f, 0.15f, hd + 0.5f, TracksideArt.RoofWhite, true);
+                    // the slab seen from below (the chase and cockpit cameras pass right under it): cool-grey composite
+                    // panels in a ~3 m grid, four steel beams across, rows of downlights; a dark shadow gap and a white
+                    // trim round the advertiser fascia, sponsor boards on both ends
+                    {
+                        float yu = y - 0.47f;
+                        int nu = Mathf.Max(1, Mathf.RoundToInt(2f * hlP / 3f)), nv = Mathf.Max(1, Mathf.RoundToInt(2f * hd / 3f));
+                        tint = new Color(0.82f, 0.85f, 0.90f);
+                        for (int iu = 0; iu < nu; iu++)
+                            for (int iv = 0; iv < nv; iv++)
+                            {
+                                Vector3 q0 = mid + T * (-hlP + 2f * hlP * iu / nu) + D * (-hd + 2f * hd * iv / nv) + up * yu;
+                                Vector3 du = T * (2f * hlP / nu), dv = D * (2f * hd / nv);
+                                Quad(A, q0, q0 + du, q0 + du + dv, q0 + dv, -up, TracksideArt.PanelWall);
+                            }
+                        tint = Color.white;
+                        for (int k = 0; k < 4; k++)
+                            Box(A, mid + T * (-hlP + 2f * hlP * (k + 0.5f) / 4f) + up * (yu - 0.25f), T, up, D, 0.16f, 0.25f, hd - 0.15f, TracksideArt.Steel, true);
+                        aoOn = false;
+                        for (int k = 0; k < 4; k++)
+                            for (int r = 0; r < Mathf.Max(1, Mathf.RoundToInt(2f * hd / 2.6f)); r++)
+                            {
+                                float al = -hlP + 2f * hlP * (k + 0.5f) / 4f + hlP / 4f, ac = -hd + 1.3f + 2.6f * r;
+                                if (al > hlP - 0.6f || ac > hd - 0.5f) continue;
+                                Vector3 lc = mid + T * al + D * ac + up * (yu - 0.01f);
+                                Quad(A, lc - T * 0.22f - D * 0.22f, lc + T * 0.22f - D * 0.22f, lc + T * 0.22f + D * 0.22f, lc - T * 0.22f + D * 0.22f, -up, TracksideArt.Sw(TracksideArt.PaintWhite));
+                            }
+                        Panel(A, front - D * 0.03f, -D, hlP + 0.02f, y - 0.62f, y - 0.46f, TracksideArt.Sw(TracksideArt.GantryDark));
+                        Panel(A, front - D * 0.035f, -D, hlP + 0.02f, y + 0.41f, y + 0.5f, TracksideArt.Sw(TracksideArt.PaintWhite));
+                        Panel(A, mid + T * (hlP + 0.03f), T, hd - 0.2f, y - 0.42f, y + 0.42f, TracksideArt.Ad(3));
+                        Panel(A, mid - T * (hlP + 0.03f), -T, hd - 0.2f, y - 0.42f, y + 0.42f, TracksideArt.Ad(10));
+                        aoOn = true;
+                    }
                     AddSolid(mid, T, hlP + 0.6f, hd + 0.6f, y - 1f, y + 4.9f, true);
                     // spectators on the podium slab behind the balustrade, and along the pit-building roof terrace
                     Standing(front + D * 0.7f - T * (hlP - 0.5f), front + D * 0.7f + T * (hlP - 0.5f), y + 0.45f, 1.7f, D, 1, 4242);

@@ -1,7 +1,8 @@
 // Car paint for phones: one pass, no textures. The look aims at the polished "showroom" cars of mobile racers:
 //  * base colour lit by the car's sun (with a little wrap, so the flanks never go dead-dark) and the sky (SH),
-//  * a clear coat that mirrors the sky probe almost unblurred on glossy paint; Fresnel F0 0.05 with an x^4 rise
-//    (a touch broader than Schlick's x^5), so the sky reads on the flanks and not only at the silhouette,
+//  * a clear coat that mirrors the sky probe almost unblurred on glossy paint; Fresnel F0 0.04 with an x^4 rise
+//    (a touch broader than Schlick's x^5), so the sky reads on the flanks and not only at the silhouette; colour-
+//    preserving on saturated paint (KeepHue): deep reds stay red instead of going pink under the sky,
 //  * below the horizon the coat reflects the road instead of the sky, which gives the body its horizon line:
 //    crisp on glossy paint, soft on rubber (the line's width follows the gloss),
 //  * a sun highlight whose size follows the gloss (exp2 mapping: broad soft sheen on rubber, tight on metal, a
@@ -95,6 +96,21 @@ Shader "F2/CarPaint"
         float sec = saturate(sideSec + engSec + noseSec + stripeSec);
         float acc = saturate(sideAcc + engAcc + noseAcc + stripeAcc) * (1.0 - sec);
         return float2(sec, acc);
+    }
+    // Colour-preserving clear coat. A plain white-ish add of the sky over a saturated paint turned the deep red of
+    // "Scarlet Dart" pink wherever the coat reflects a lot (the sidepod and nose tops seen from the cockpit, at a
+    // grazing angle, mirror the bright sky overhead). Real deep paint keeps its hue: the coat's dim, diffuse sky goes
+    // back out through the pigment. So the reflection's luminance is kept but, for saturated paint, the dim part of it
+    // takes the paint's hue; bright reflections (clouds, the horizon glare) and the true grazing silhouette stay a
+    // neutral mirror. White, grey, black and carbon (no chroma) are unchanged. graze = (1 - N.V)^4.
+    half3 KeepHue(half3 refl, half3 base, half graze)
+    {
+        half mx = max(base.r, max(base.g, base.b)), mn = min(base.r, min(base.g, base.b));
+        half sat = saturate((mx - mn) / max(mx, 0.02));
+        half lr = dot(refl, half3(0.2126, 0.7152, 0.0722));
+        half3 hue = base / max(mx, 0.02);
+        half k = 0.8 * sat * sat * (1.0 - graze) * saturate(1.7 - lr * 1.4);
+        return lerp(refl, hue * lr, k);
     }
     #if defined(_MERGED)
         UNITY_INSTANCING_BUFFER_START(CarProps)
@@ -350,7 +366,8 @@ Shader "F2/CarPaint"
                 env *= lerp(0.35, 1.0, _CarLit) * (0.3 + 0.7 * ao) * envTint;
                 env *= 1.0 - 0.2 * saturate((coatK - 0.9) * 20.0); // paint's mirror coat adds a little less white: deep colours stay deep (no step() on a half: see the top)
                 half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
-                half f = 0.05 + 0.95 * x2 * x2;
+                // Fresnel by viewing angle: F0 0.04 (lacquer), the x^4 rise (sky on the flanks), a touch steeper at grazing
+                half f = 0.04 + 0.96 * x2 * x2 * (0.75 + 0.25 * x);
                 half coat = max(saturate(f * coatK * (1.0 + 0.35 * _Wet) + 0.03 * _Wet), coatMin);
                 half3 H = normalize(L + V);
                 float nh = saturate(dot((float3)N, (float3)H));
@@ -360,7 +377,7 @@ Shader "F2/CarPaint"
                 // a second, much tighter sun glint on glossy paint (the crisp hot spot of a polished clear coat)
                 spec += (half)pow(nh, 2048.0) * ndl * 14.0 * saturate((gloss - 0.8) * 6.0);
                 spec *= specK * ao;
-                half3 col = diff * (1.0 - coat) + env * (coat + metal * base) + spec * _LightColor0.rgb * (coatK + metal) + emis;
+                half3 col = diff * (1.0 - coat) + KeepHue(env * coat, base, x2 * x2) + env * (metal * base) + spec * _LightColor0.rgb * (coatK + metal) + emis;
                 fixed4 c = fixed4(col, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
@@ -403,8 +420,9 @@ Shader "F2/CarPaint"
             {
                 float4 pos : SV_POSITION;
                 half3 diff : TEXCOORD0;   // light on the base colour (sun + sky, less what the coat reflects)
-                half3 add : TEXCOORD1;    // coat reflection + sun highlight
-                half3 envM : TEXCOORD2;   // metallic reflection (tinted by the base colour per pixel)
+                half3 add : TEXCOORD1;    // coat reflection (KeepHue per pixel)
+                half4 envM : TEXCOORD2;   // metallic reflection (tinted by the base colour per pixel); w = (1 - N.V)^4
+                half spec : TEXCOORD7;    // sun highlight x (coat + metal), times the light colour per pixel
                 float3 op : TEXCOORD3;    // object position, for the livery split and the helmet visor
                 float ny : TEXCOORD4;     // object normal y
                 float4 col : COLOR;       // baked AO (r), disc mask (g), part ID (a, merged); float: feeds step()
@@ -443,14 +461,15 @@ Shader "F2/CarPaint"
                 env *= lerp(0.35, 1.0, _CarLit);
                 env *= 1.0 - 0.2 * saturate((coat0 - 0.9) * 20.0); // (as the full pass)
                 half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
-                float coat = max(saturate((0.05 + 0.95 * x2 * x2) * coat0 * (1.0 + 0.35 * _Wet) + 0.03 * _Wet), 0.22 * mir);
+                float coat = max(saturate((0.04 + 0.96 * x2 * x2 * (0.75 + 0.25 * x)) * coat0 * (1.0 + 0.35 * _Wet) + 0.03 * _Wet), 0.22 * mir);
                 half nh = saturate(dot(N, normalize(L + V)));
                 half sp = min(exp2(3.0 + 6.0 * gloss), 128.0); // (per vertex: no tighter than the mesh can show)
                 half spec = pow(nh, sp) * ndl * min(sp * 0.02, 3.0);
                 half wrapL = saturate((dot(N, L) + 0.2) * (1.0 / 1.2));
                 o.diff = (wrapL * _LightColor0.rgb + ShadeSH9(half4(N, 1))) * (1.0 - metal0 * 0.85) * (1.0 - 0.12 * _Wet) * (1.0 - coat);
-                o.add = env * coat + spec * _LightColor0.rgb * (coat0 + metal0);
-                o.envM = env * metal0;
+                o.add = env * coat;
+                o.spec = spec * (coat0 + metal0);
+                o.envM = half4(env * metal0, x2 * x2);
                 o.op = v.vertex.xyz; o.ny = v.normal.y;
                 o.col = v.color;
                 UNITY_TRANSFER_FOG(o, o.pos);
@@ -495,7 +514,7 @@ Shader "F2/CarPaint"
                 float mirP = _Mirror;
                 #endif
                 base = lerp(base, half3(0.05, 0.052, 0.056), mirP * step(0.45, abs(i.op.x))); // mirror glass
-                half3 c3 = base * i.diff * ao + (i.add + i.envM * base) * (0.3 + 0.7 * ao) + emis;
+                half3 c3 = base * i.diff * ao + (KeepHue(i.add, base, i.envM.w) + i.spec * _LightColor0.rgb + i.envM.rgb * base) * (0.3 + 0.7 * ao) + emis;
                 fixed4 c = fixed4(c3, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb);
