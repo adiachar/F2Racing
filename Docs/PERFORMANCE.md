@@ -2,6 +2,90 @@
 
 This is a static audit. It was done without an editor or a phone, so every number below is an estimate from the code, the asset sizes and the `Tools/PhysicsCheck` timings. Check the numbers on a device with the checklist at the end.
 
+## Rendering architecture audit (Nov 2026): track-sector visibility
+
+The sections further down are older (Sept-Oct); the quality tiers and Auto now live in `GameManager.cs`
+(`SetGraphics`, `AutoQuality`) and `GameManagerPerf.cs` (`ApplyPerfLevel`). This section is the newer world-render pass.
+
+### How to measure (headless or on a phone)
+
+- **On a phone**: Settings > GRAPHICS > **Render stats (debug)** (off by default). Top-left overlay, refreshed twice a second
+  (`Assets/Scripts/Game/PerfStats.cs`): engine draw calls / batches / SetPass / triangles (ProfilerRecorder, "n/a" where
+  the player has no counters), world renderers drawn + triangles **now** and **before** (frustum only, i.e. what
+  Unity alone would draw without the sector sets), other renderers (cars, people, sky), alpha-tested card overdraw in
+  screens (now / before), distinct materials and shader variants drawn, the sector and how many renderers its set
+  hides, texture memory (runtime-generated part separately; readable textures count twice) and mesh memory.
+- **Headless**: `python3 Tools/PerfAudit/audit.py --out /tmp/perf` runs the WebGL shot harness for Low/Medium/High at
+  Monza s = 0, 1450, 2500, 5150 with `stats=1`; the game logs one `PERF_STATS` line per shot and the script prints a
+  markdown table (+ `perf_audit.json`). `--parse console.log` re-reads an old run. The overlay is in the PNGs too.
+
+### Findings (static, from the code)
+
+| # | Finding | Cost |
+|---|---|---|
+| 1 | **Circuit-wide single meshes** are never frustum-culled: the card trees (`Trees`, up to 2500 trees x 2-3 cards + 3000 wood-band cards on the 10 procedural circuits), `EnvProps`, `EnvBlocks`, `Town`/`TownRoofs`, the procedural `Terrain` grid (~180 x 180 cells), RealWorld's `EnvFarTrees` (whole region, Monza). Every vertex is shaded every frame, behind the camera too. | the largest single vertex cost on procedural circuits; ~60-75% of it is off-screen at any moment |
+| 2 | **RealWorld blocks were 1-1.3 km** (EB = 2 on Medium/High). Buildings, roads and trees are LOD-culled per block by distance to the *block centre*, so a block whose near edge is 700 m away kept trees 1.7 km away; frustum culling worked on 1 km pieces. | Monza: most visible building / tree vertices are beyond the intended reach |
+| 3 | **Trackside chunks** (250 m, atlas, crowd, fences) have no distance limit at all; only the posts (TracksideLod, 85 m). | draw calls and vertices of 1-2 km-away barriers, a pixel tall |
+| 4 | **No occlusion**: hills (Spa, Austria, Suzuka, the Brianza terrain round Monza) hide whole sectors of the circuit that are still drawn. | circuit-dependent |
+| 5 | **Shader variants**: every world shader used `multi_compile_fog` (4 fog variants) but the game only ever uses linear fog (Sky.cs). | 2x the world-shader variants: memory, load-time warm-up |
+| 6 | **RealLand** colour map (RealWorld) is RGBA32 with mips: 1280^2 = 8.7 MB on Medium, 2048^2 = 22 MB on High, read on every terrain pixel. The model atlas and wheel atlas were already compressed; the other generated textures are small or already non-readable. | memory + texture bandwidth |
+| 7 | Already good: rivals merged + instanced, player car LOD, people LOD (LOD1 > 40 m, hidden > 230 m), posts LOD, foliage LOD 150 on Low (no alpha-to-coverage, no sway, mip bias), static batching of the world, all big generated textures non-readable. | - |
+
+### What was changed
+
+- **`SectorVisibility.cs`** (hooked by one line in `WorldBuilder.Build`, before static batching):
+  1. *Split*: any world mesh wider than 600 m with 2000+ triangles (not under a LODGroup, no scripts/children, not
+     the `Road`) is cut into tiles of >= 256 m and >= ~600 triangles by triangle centre, keeping every vertex attribute
+     in its format (normals, colours, uv0-3). Same pixels, but now frustum-culled per tile (finding 1).
+  2. *View sets* (the GT / F1 approach): the lap is cut into 50 m sectors. A sector's camera region = its centreline
+     +-15 m, half width + 30 m each side (pit lane, chase offsets), 3 m below to 9 m above the road. A renderer is in the
+     sector's set unless from the whole region it is (a) under 0.5 px (High) / 0.8 px (Medium) / 1.3 px (Low) of
+     contrast at 1080p and a 45 degree lens, measured by the height of the tallest thing in it (per 16 m cell, not
+     its bounds) and the dry haze (finding 3), or (b) behind the terrain: a horizon profile (256 directions x 64 steps
+     of 36 m) from 9 eye points per sector over a lower bound of the terrain, 2 m margin, top face of the bounds tested,
+     never within 200 m, only when the terrain has 15 m+ relief (finding 4). Ground-like layers (terrain, road,
+     verges, water, far tree lines, flat ribbons) are never size-culled.
+  3. *Run time*: the camera's nearest centreline point picks the sector; only renderers whose state changes are
+     touched (`Renderer.forceRenderingOff`, so TracksideLod's and the LODGroups' own switching is untouched). TV/replay
+     zoom under 44 degrees, the test pad, menu views and any camera outside the region draw everything as before.
+     Cost: ~120 point distance checks per frame; one pass over the renderers per sector change (every ~0.6 s at 300 km/h).
+  Since a set is a superset of what can be seen from anywhere in its region, there is no popping by construction:
+  what goes is either under a pixel or behind a hill.
+- **RealWorld blocks** = one terrain chunk (512 m High, 640 m Medium, 768 m Low; were 1024 / 1280 / 768): 4x finer
+  frustum and distance culling of buildings, roads and trees on High/Medium (finding 2).
+- **RealLand** compressed on Low/Medium (`Texture2D.Compress`, ETC2/DXT5: 8.7 -> 2.2 MB on Medium); High keeps RGBA32.
+- **Fog variants**: Baked, BakedCutout, Foliage, Road, Ground use `multi_compile __ FOG_LINEAR` (2 variants instead of
+  4; halves those shaders' variant count). The car / FX shaders were left alone.
+- **Debug overlay + headless audit** (above).
+
+### Before / after (estimates; confirm with `audit.py`, numbers are per frame, Medium, chase view)
+
+| | Before | After (expected) |
+|---|---|---|
+| Procedural circuit, circuit-wide meshes (trees, props, town, terrain) | 100% of their vertices | ~25-45% (only the tiles in the frustum) |
+| Monza, RealWorld buildings/trees beyond their reach still drawn (block granularity) | blocks of 1.28 km | blocks of 640 m: ~half the overshoot |
+| Monza, `EnvFarTrees` (whole region, never culled) | 100% | ~30-40% (tiles in the frustum) |
+| Trackside chunks 1.5-2.5 km away (sub-pixel barriers) | drawn | culled by the sector sets |
+| Hilly circuits, sectors behind hills | drawn | culled when hidden from the whole sector region |
+| World shader variants (5 shaders) | x4 fog | x2 fog |
+| RealLand memory, Medium / Low | 8.7 / 5.6 MB | 2.2 / 1.4 MB |
+| Draw calls | - | up a little where tiles add pieces (split meshes, 4x RealWorld blocks), down where sets cull; static batching keeps SetPass calls unchanged |
+| Load time | - | + the split and the sets: tens of ms flat, ~0.1-0.3 s on a phone with occlusion (logged: "SectorVisibility ... ms") |
+
+### Considered, not done (and why)
+
+- **Alpha-to-coverage only on High**: Medium has 4x MSAA, and A2C *is* the anti-aliasing of the foliage edges there;
+  turning it off makes the tree line crawl (a visible loss). Low already has no A2C (Foliage LOD 150).
+- **Distance-faded detail reads** in Ground/Baked: the second detail read is already Medium/High only (LOD 300 vs 150);
+  far pixels read the top mips (cache-resident), so skipping them saves ALU only, and a branch around a sample needs
+  explicit gradients, which are half-rate on some Mali GPUs.
+- **Camera-distance LOD for ModelLib trees** (LOD0 near the track seen from 1 km): needs a second mesh per 100 m block
+  and dithered cross-fade in Foliage.shader; next step if the overlay shows model-tree triangles high.
+- **Far plane = fog end**: Unity's fog uses view depth, so at the screen edge an object is fully fogged only at
+  ~1.47x fog end (2870 m at Monza), beyond today's 2500 m far plane: no gain.
+- **EnvTex atlas compression** belongs with the EnvTex caching work (other engineer): `Compress` must run before the
+  textures are made non-readable there.
+
 ## Budget per graphics level
 
 The target phone is a low-end Android phone (Cortex-A53/A55 CPU, Mali-G52 / Adreno 610 class GPU, 3-4 GB RAM, 720p-1080p screen).
@@ -236,3 +320,90 @@ These apply on Low:
 12. **Optional profiler pass.** Use a Development build with the Unity Profiler over USB. Look for:
     - GC.Alloc in `GameManager.Update` / `OnGUI`: it should be about 0 B per frame in a race. Qualifying shows a few strings when a time changes.
     - Render-thread draw calls: below the budget above.
+
+## CPU & load
+
+Measured offline on the build machine (.NET 8, x64, 2 cores, `DOTNET_TieredCompilation=0`). A phone running IL2CPP on ARM is roughly 6-10x slower per core. New bench modes in `Tools/PhysicsCheck`:
+
+- `dotnet run -c Release -- perf [circuit]`: the game's per-tick loop for 22 cars (car 0 = player), ms per 240 Hz tick by part, and bytes allocated. `LOD=1` turns on the rivals' level of detail.
+- `dotnet run -c Release -- loadperf`: the pure-C# load steps of every circuit (track, racing line, height field, 300k ground samples).
+- `LOD=1 dotnet run -c Release -- race`: the AI race with the rival LOD (car 0 stands in for the player); prints the share of rival steps run.
+
+### Physics and AI per frame
+
+Where the time goes (Monza-size circuit, 22 cars, per 240 Hz tick, before): `car.Step` about 17-22 µs (75%), `Think` + walls about 5 µs, ground grade (`HeightField.Grade`) about 3.3 µs, `Nearest` + `WheelContact` about 1 µs, car-to-car contact 0.3 µs. **0 bytes allocated per tick** (checked with `GC.GetAllocatedBytesForCurrentThread` over 43,200 ticks). There is no LINQ, no per-step array and no string work in the simulation.
+
+| Change | Before | After |
+|---|---|---|
+| `HeightField.Sample` (the player's grade every tick, the rivals' at 60 Hz, and every terrain/scenery vertex at load): the 9 `Dictionary<long, List<int>>` lookups per sample replaced with a flat bucket grid (same buckets, same order) | 1019 ms / 3.3M samples | **327 ms** (3.1x) |
+| Rival physics LOD (`AiLod`, below), 22 cars, Monza, `perf`, best of 3 | 23.7 µs/tick | **19.2 µs/tick** (LOD only after 60 s of the 3-minute run) |
+| Same, over the full AI race (`race`, 11 circuits) | 100% of rival steps | **64.7%** of rival steps |
+
+**Rival level of detail (`AiLod` in `AiDriver.cs`, used by `GameManager.StepRivals` / `PickRivalRates`).** Replaces `GameManagerPerf.RivalCoarse` (120 Hz only; that method is now unused). From one minute after the start, a rival outside the camera's detail range runs at:
+
+- 240 Hz within 150 m (along the track) of the player;
+- 120 Hz beyond 150 m;
+- 60 Hz beyond 400 m when no other car is within 60 m of it, so contacts are resolved on fresh positions.
+
+Time stays exact. The car counts the ticks it is behind, and its next step covers all of them, so it never gains or loses time. It is drawn that much further forward (`RivalBehind`). Back in range, it catches up in one step. The player's car is never touched.
+
+Fairness check (`race`, 11 circuits × 20 drivers, against the plain 240 Hz run):
+
+- Without damage: same finishing position for 220/220 drivers. Best laps differ by -0.002 s on average (0.013 s mean absolute). 2 resets in both runs.
+- With `DAMAGE=full`: 198/220 drivers finish in the same place. Mean best-lap change: -0.44 s. These figures are the same as the old 120 Hz scheme (`COARSE=1`: 198/220, -0.44 s). With damage on, any perturbation sends the contacts down a different path, so the run is chaotic. No NaN, no extra resets.
+
+**Calibration and race output are IDENTICAL** with the LOD off (`dotnet run` and `race`, diffed apart from the timing columns). The player's physics is unchanged bit for bit. The `HeightField` changes give bit-identical heights (checksum over 300k samples equal to the last digit).
+
+### Audio
+
+- `EngineAudio` per sample: the turbo whistle, gearbox whine (2 harmonics), MGU-K whine (2) and kerb thump called `Mathf.Sin` (a double-precision sin) on every sample, up to 6 per sample at 48 kHz.
+- They now read a 4096-step sine table with linear interpolation (`SinCyc`). The error is under 3e-7, about 130 dB down, so it is inaudible.
+- The biquad coefficients were already updated only every 32 samples. `RivalAudio` has no per-sample transcendental functions.
+
+### HUD and game loop (allocations)
+
+- Checked: `RaceHud` / `UiKit` already format every number through cached strings (`HudNum`, `HudSlot`, `UiKit.Caps`). `GUI.Label(string)` uses `GUIContent.Temp`, so it does not allocate.
+- Only event banners (pit stop, fastest lap) build a string, once per event.
+- No `GetComponent`, `Find` or LINQ runs per frame in the loop.
+- Nothing needed changing here.
+
+### People
+
+- `People.AnimDue` controls how often the pit-lane people (`PeoplePits`) are animated:
+  - every frame within 30 m;
+  - every 2nd frame to 60 m;
+  - every 4th frame to 120 m, staggered per person;
+  - beyond that, the last pose holds.
+- Before: every frame to 40 m, then every 2nd frame to 120 m. That is about half the clip sampling and bone writes for the people 60-120 m away.
+
+### Load time
+
+| Step (pure C#, all 11 circuits) | Before | After |
+|---|---|---|
+| `HeightField` terrain grid (every 5 m cell × every 8 m track point) | 2041 ms | **779 ms** on 2 cores (2.6x); about 4-6x on a 4-8 core phone |
+| 300k ground samples (stand-in for terrain/scenery draping) | 1019 ms | **327 ms** |
+
+- **HeightField grid**:
+  - Blocks of 8×8 cells that are surely more than 382 m from the circuit are filled straight with the base level. This is exactly what the formula gives there: u = 1.
+  - The other rows run in `Parallel.For`.
+  - The grid is cached on disk per circuit (`LoadCache.cs`, `persistentDataPath/gen`, key = hash of the sampled points + `GridVersion`, at most 24 files, about 1 MB each). A second load of the same circuit skips the grid.
+- **LightBake** per-vertex bake: meshes of 4096+ vertices are baked in parallel chunks of 2048 vertices.
+  - Each vertex only reads the roof map, height field, track and lamps. The colours are set on the main thread.
+  - The only difference: each chunk starts its `Track.Nearest` search afresh, which can only make it more exact.
+  - It logs `LightBake: N vertices in X ms (cores)`.
+  - Expected: 1-3 s → about 0.3-0.8 s on a 4-core phone.
+- **EnvTex** procedural textures (`Albedo`): the pixel functions run in parallel rows. The mean is still summed in pixel order, so the textures are bit-identical. They were already made once per run and uploaded non-readable.
+- **RoadShadow**: the mask read-back runs in parallel rows. The triangle rasterisation stays serial, because it writes a shared grid. It already logged its time.
+- Not measured: Unity-side steps (mesh upload, RealWorld, ModelLib, people rigs). Read the `LightBake:` / `RoadShadow:` lines in `adb logcat -s Unity` on a device.
+
+### Memory
+
+- Generated textures (`EnvTex`, `RoadShadow` mask) were already uploaded with `Apply(…, makeNoLongerReadable: true)`.
+- World meshes must stay readable, because `RoadShadow` reads them and static batching runs after the bake. Making them non-readable after batching belongs to the batching code (GPU owner).
+- `LightBake` still writes `Color` (float4) vertex colours. A 16-bit format would save 8 bytes per world vertex. It is not changed.
+
+### Not done (CPU/load)
+
+- **Smooth loading progress**: the circuit is built in one frame (`GameManager.StartSession` → `WorldBuilder.Build`). A real progress bar needs the build split into stages over several frames, which touches WorldBuilder and the GPU-owned builders. It is listed as the next step. The parallel steps above shorten that frame instead.
+- `RacingLine.Compute` (100-230 ms per circuit and car class here) could be cached per circuit and class the same way as the height field.
+- `FormulaCar.Step` micro-optimisations (`Math.Pow` → multiplications) were not done, because they change the last bits of the player's physics.

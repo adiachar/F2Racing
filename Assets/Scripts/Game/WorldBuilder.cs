@@ -719,6 +719,7 @@ public static class WorldBuilder
         if (roadR != null) { if (LightBake.Active) roadR.sharedMaterial = roadMat; else RoadShaded = false; }
         if (roadR != null && LightBake.Active) RoadShadow.Build(t, root.gameObject, roadR, sun); // sharp sun shadows on the road (before batching)
         EnvSurface.Attach(root.gameObject, GroundShaded ? groundSh : null, FoliageShader); // Low: LOD 150 (mip bias, no sway)
+        SectorVisibility.Prepare(t, root.gameObject); // cut circuit-wide meshes into tiles, per-sector view sets (SectorVisibility.cs)
         StaticBatchingUtility.Combine(root.gameObject);
 
         // one reflection capture of sky + ground, rendered once: cheap, and makes the paint look real

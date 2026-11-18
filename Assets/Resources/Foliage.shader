@@ -89,7 +89,7 @@ Shader "F2/Foliage"
             #pragma vertex vert
             #pragma fragment frag
             #pragma target 3.0
-            #pragma multi_compile_fog
+            #pragma multi_compile __ FOG_LINEAR // the game only uses linear fog (Sky.cs): 2 variants, not 4 (multi_compile_fog)
             v2f vert (appdata v) { return vertF(v, 1.0); }
             fixed4 frag (v2f i) : SV_Target
             {
@@ -124,7 +124,7 @@ Shader "F2/Foliage"
             #pragma vertex vert
             #pragma fragment frag
             #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
-            #pragma multi_compile_fog
+            #pragma multi_compile __ FOG_LINEAR // the game only uses linear fog (Sky.cs): 2 variants, not 4 (multi_compile_fog)
             v2f vert (appdata v)
             {
                 v2f o;

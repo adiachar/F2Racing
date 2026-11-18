@@ -181,8 +181,9 @@ public static class RoadShadow
         }
 
         // read the world grid into the track-space texture
+        // (load time: rows in parallel; LightAt only reads the finished grid, no Unity API)
         var px = new byte[W * Hs];
-        for (int r = 0; r < rows; r++)
+        System.Threading.Tasks.Parallel.For(0, rows, r =>
         {
             var q = rowP[r]; int st = r / Hs, row = r - st * Hs, o = row * W + st * C;
             for (int j = 0; j < C; j++)
@@ -190,7 +191,7 @@ public static class RoadShadow
                 float l = -half + (j + 0.5f) * dL;
                 px[o + j] = (byte)Mathf.Clamp(LightAt(q.x + q.z * l, q.y + q.w * l) + 0.5f, 0f, 255f);
             }
-        }
+        });
 
         // split the road's baked light into ambient (rgb) and sun visibility (a)
         Color sunLin = sun.color.linear * sun.intensity;

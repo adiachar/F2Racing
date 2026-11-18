@@ -200,6 +200,7 @@ public static class LightBake
     public static void Apply(GameObject root)
     {
         if (!Active) return;
+        var sw = System.Diagnostics.Stopwatch.StartNew(); int verts = 0;
         if (night) PlaceLamps(); else lamps = null;
         foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
         {
@@ -215,45 +216,60 @@ public static class LightBake
             bool hasN = n != null && n.Length == v.Length; int hint = -1, hint2 = -1;
             bool groundShade = (mf.name == "Verge" || mf.name == "Gravel") && track != null && !night; // alpha: sign + sun share for the shadow mask (Ground.cginc)
             bool foliage = sn == "F2/Foliage"; bool cards = mf.name == "Trees" && v.Length % 4 == 0;
-            for (int i = 0; i < v.Length; i++)
-            {
-                Vector3 p = v[i], nn = hasN ? n[i] : Vector3.up;
-                // merged meshes share vertices between a wall and its top / the ground, so their smooth normals lean
-                // upwards: push the sideways part out so walls keep a clear sun side and shade side
-                if (nn.y < 0.92f && nn.y > -0.5f) { nn.x *= 1.5f; nn.z *= 1.5f; nn.Normalize(); }
-                float ndl = Mathf.Max(0, Vector3.Dot(nn, toSun));
-                float sun = ndl > 0.01f ? SunSoft(p.x + nn.x * 0.2f, p.z + nn.z * 0.2f, p.y + 0.05f) : 0;
-                float ao = Open(p.x + nn.x * 0.3f, p.z + nn.z * 0.3f, p.y, nn, out float contact);
-                // hemisphere: sky from above, warm bounce from the ground below, half of each on a wall
-                Color amb = Color.Lerp(Bounce, Sky, 0.5f + 0.5f * nn.y) * AmbGain;
-                Color sunPart = SunCol * (ndl * sun);
-                Color c = sunPart + amb * ao;
-                // dark where it meets the ground: contact darkening on the sun side as well (fill from a bright sky never reaches a crease)
-                c *= 1f - 0.3f * contact;
-                if (foliage || cards)
+            // load time: the bake of one vertex only reads (the roof map, the height field, the track, the lamps) and
+            // writes its own colour, so big meshes are baked in parallel chunks (pure math, no Unity API off the main
+            // thread; mesh.colors is set below on the main thread). Each chunk starts its Nearest() search afresh.
+            if (v.Length >= 2 * BakeChunk)
+                System.Threading.Tasks.Parallel.For(0, (v.Length + BakeChunk - 1) / BakeChunk, ch =>
                 {
-                    // crowns and bushes: the interior and the trunk end are shaded, the top catches the light
-                    float hAbove = cards ? (i & 3) < 2 ? 0f : 1f : Mathf.Clamp01((p.y - WorldBuilder.H(p.x, p.z)) / 3f);
-                    c *= 0.5f + 0.5f * Mathf.SmoothStep(0f, 1f, cards ? hAbove * 0.8f + 0.2f * ao : hAbove);
-                }
-                if (night && lamps != null) c += Flood(p, nn) * (1f - 0.35f * contact);
-                // inside a tunnel: no sky, warm lamp light instead (darker into the corners)
-                if (sun < 0.5f && Roof(p.x, p.z) - p.y > 1f && Roof(p.x, p.z) - p.y < 9f && Waterfront.InTunnel(p.x, p.z)) c = (amb * 0.15f + LampCol) * TunnelAo(p, ref hint);
-                float alpha = 1f;
-                if (groundShade)
-                {
-                    // sign of the side (+ = left) and the sun's share of this light, for Ground.cginc's shadow-mask lookup
-                    var q = track.Nearest(p.x, p.z, hint2); hint2 = q.idx;
-                    float sf = Mathf.Clamp01((sunPart.r * 0.3f + sunPart.g * 0.59f + sunPart.b * 0.11f) / Mathf.Max(0.001f, c.r * 0.3f + c.g * 0.59f + c.b * 0.11f));
-                    alpha = q.lateral >= 0 ? 0.55f + 0.45f * sf : 0.45f * sf;
-                }
-                col[i] = new Color(c.r * 0.5f, c.g * 0.5f, c.b * 0.5f, alpha); // the shader doubles it
-            }
-            mesh.colors = col;
+                    int h1 = -1, h2 = -1, e = System.Math.Min(v.Length, (ch + 1) * BakeChunk);
+                    for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref h1, ref h2);
+                });
+            else
+                for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref hint, ref hint2);
+            mesh.colors = col; verts += v.Length;
             if (!own) r.sharedMaterial.shader = shader;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
         }
         if (night && lamps != null) BuildPosts(root.transform);
+        Debug.Log("LightBake: " + verts + " vertices in " + sw.ElapsedMilliseconds + " ms (" + System.Environment.ProcessorCount + " cores)");
+    }
+
+    const int BakeChunk = 2048;
+    // the light of vertex i (rgb halved: the shader doubles it; alpha: the ground's shadow-mask data)
+    static Color BakeVertex(int i, Vector3[] v, Vector3[] n, bool hasN, bool groundShade, bool foliage, bool cards, ref int hint, ref int hint2)
+    {
+        Vector3 p = v[i], nn = hasN ? n[i] : Vector3.up;
+        // merged meshes share vertices between a wall and its top / the ground, so their smooth normals lean
+        // upwards: push the sideways part out so walls keep a clear sun side and shade side
+        if (nn.y < 0.92f && nn.y > -0.5f) { nn.x *= 1.5f; nn.z *= 1.5f; nn.Normalize(); }
+        float ndl = Mathf.Max(0, Vector3.Dot(nn, toSun));
+        float sun = ndl > 0.01f ? SunSoft(p.x + nn.x * 0.2f, p.z + nn.z * 0.2f, p.y + 0.05f) : 0;
+        float ao = Open(p.x + nn.x * 0.3f, p.z + nn.z * 0.3f, p.y, nn, out float contact);
+        // hemisphere: sky from above, warm bounce from the ground below, half of each on a wall
+        Color amb = Color.Lerp(Bounce, Sky, 0.5f + 0.5f * nn.y) * AmbGain;
+        Color sunPart = SunCol * (ndl * sun);
+        Color c = sunPart + amb * ao;
+        // dark where it meets the ground: contact darkening on the sun side as well (fill from a bright sky never reaches a crease)
+        c *= 1f - 0.3f * contact;
+        if (foliage || cards)
+        {
+            // crowns and bushes: the interior and the trunk end are shaded, the top catches the light
+            float hAbove = cards ? (i & 3) < 2 ? 0f : 1f : Mathf.Clamp01((p.y - WorldBuilder.H(p.x, p.z)) / 3f);
+            c *= 0.5f + 0.5f * Mathf.SmoothStep(0f, 1f, cards ? hAbove * 0.8f + 0.2f * ao : hAbove);
+        }
+        if (night && lamps != null) c += Flood(p, nn) * (1f - 0.35f * contact);
+        // inside a tunnel: no sky, warm lamp light instead (darker into the corners)
+        if (sun < 0.5f && Roof(p.x, p.z) - p.y > 1f && Roof(p.x, p.z) - p.y < 9f && Waterfront.InTunnel(p.x, p.z)) c = (amb * 0.15f + LampCol) * TunnelAo(p, ref hint);
+        float alpha = 1f;
+        if (groundShade)
+        {
+            // sign of the side (+ = left) and the sun's share of this light, for Ground.cginc's shadow-mask lookup
+            var q = track.Nearest(p.x, p.z, hint2); hint2 = q.idx;
+            float sf = Mathf.Clamp01((sunPart.r * 0.3f + sunPart.g * 0.59f + sunPart.b * 0.11f) / Mathf.Max(0.001f, c.r * 0.3f + c.g * 0.59f + c.b * 0.11f));
+            alpha = q.lateral >= 0 ? 0.55f + 0.45f * sf : 0.45f * sf;
+        }
+        return new Color(c.r * 0.5f, c.g * 0.5f, c.b * 0.5f, alpha); // the shader doubles it
     }
 
     // the roof map cannot see a tunnel's walls (its roof covers them), so the tunnel's contact shadow comes from the

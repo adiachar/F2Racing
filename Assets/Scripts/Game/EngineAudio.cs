@@ -160,6 +160,17 @@ public class EngineAudio : MonoBehaviour
     readonly float[] wt = new float[6];
     readonly Biquad raspF = new Biquad(), chuffF = new Biquad();
     uint seed = 22222;
+    // CPU: one cycle of a sine as a 4096-step table with linear interpolation (error < 3e-7, ~130 dB down: inaudible),
+    // for the oscillators that run every sample (whistle, gear whine, MGU-K, kerb thump); Mathf.Sin is a double sin
+    const int SinN = 4096; static readonly float[] SinT = MakeSin();
+    static float[] MakeSin() { var t = new float[SinN + 1]; for (int i = 0; i <= SinN; i++) t[i] = (float)System.Math.Sin(i * 2 * System.Math.PI / SinN); return t; }
+    // sin(2 pi ph)
+    static float SinCyc(float ph)
+    {
+        ph -= Mathf.Floor(ph); // any phase (the kerb thump's runs past 1)
+        float x = ph * SinN; int i = (int)x; if (i < 0) i = 0; else if (i >= SinN) i = SinN - 1;
+        float a = SinT[i]; return a + (SinT[i + 1] - a) * (x - i);
+    }
     float Noise() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return (seed & 0xFFFFFF) / 8388608f - 1f; }
     static float Fin(float v, float def) => float.IsNaN(v) || float.IsInfinity(v) ? def : v;
     static float Ramp(float x, float a, float b) { float t = Mathf.Clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); }
@@ -627,7 +638,7 @@ public class EngineAudio : MonoBehaviour
                 float tv1 = 1 + 0.3f * vView;
                 // turbo whistle and compressor hiss
                 whistlePh += (whBase + boost * whSpan) * cpD / fs; if (whistlePh >= 1) whistlePh -= 1;
-                engine += Mathf.Sin((float)whistlePh * 6.2831853f) * boost * boost * whLvl * tv1;
+                engine += SinCyc((float)whistlePh) * boost * boost * whLvl * tv1;
                 float hs = boost * curThr;
                 if (hs > 0.02f) engine += compF.Run(Noise()) * hs * whLvl * 1.6f * tv1;
                 // wastegate / blow-off "chuff" after a lift (no MGU-H to soak up the boost any more)
@@ -646,15 +657,15 @@ public class EngineAudio : MonoBehaviour
             if (gearG > 1e-5f)
             {
                 gearPh += gearF0 / fs; if (gearPh >= 1) gearPh -= 1;
-                float ga = (float)gearPh * 6.2831853f;
-                engine += (Mathf.Sin(ga) + 0.5f * Mathf.Sin(3 * ga)) * gearG;
+                float gp = (float)gearPh, g3 = gp * 3f; g3 -= (int)g3;
+                engine += (SinCyc(gp) + 0.5f * SinCyc(g3)) * gearG;
             }
             // ---- MGU-K whine (F1) ----
             if (ersG > 1e-5f)
             {
                 ersPh += ersF * cpD / fs; if (ersPh >= 1) ersPh -= 1;
-                float a = (float)ersPh * 6.2831853f;
-                float w = Mathf.Sin(a) + Mathf.Sin(a + a) * (0.3f - 0.18f * ersHm);   // deploy: brighter 2nd harmonic
+                float ep = (float)ersPh, e2 = ep * 2f; e2 -= (int)e2;
+                float w = SinCyc(ep) + SinCyc(e2) * (0.3f - 0.18f * ersHm);   // deploy: brighter 2nd harmonic
                 w *= 1 + ersHm * 0.35f * Noise();                                      // harvest: grittier
                 engine += w * ersG;
             }
@@ -709,7 +720,7 @@ public class EngineAudio : MonoBehaviour
                 // sausage kerbs: a heavy thump per hump
                 if (Noise() * 0.5f + 0.5f < sausP) { sausEnv = 0.7f + 0.3f * Mathf.Abs(Noise()); thumpPh = 0; }
                 sausEnv *= sausDecay; thumpPh += 70.0 / fs;
-                fxCar += Mathf.Sin((float)thumpPh * 6.2831853f) * sausEnv * tSaus;
+                fxCar += SinCyc((float)thumpPh) * sausEnv * tSaus;
             }
             if (gravG > 1e-4f || grassG > 1e-4f)
             {

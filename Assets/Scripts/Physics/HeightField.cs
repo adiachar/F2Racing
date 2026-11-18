@@ -15,8 +15,19 @@ namespace FormulaSim
     public class HeightField
     {
         const double Cell = 5, Bucket = 16;
-        readonly double x0, y0; readonly int nx, ny; readonly float[] g;
-        readonly Track t; readonly Dictionary<long, List<int>> hash = new Dictionary<long, List<int>>();
+        readonly double x0, y0; readonly int nx, ny; float[] g;
+        readonly Track t;
+        // track points by 16 m bucket, as a flat grid (CSR: bucket b holds bIdx[bStart[b] .. bStart[b + 1]), in the
+        // order of the points): the same buckets and the same order as the old Dictionary<long, List<int>>, so
+        // Sample gives bit-identical heights, without 9 hash lookups per sample (the physics calls it every tick)
+        readonly long bx0, by0; readonly int bnx, bny; readonly int[] bStart, bIdx;
+        // CPU: the terrain grid is the slow part of a load (every 5 m cell weighs every 8 m track point: ~200 M
+        // operations at a 7 km circuit). Rows run in parallel (pure math, no Unity API), and blocks of cells that are
+        // certainly more than 380 m from the circuit (where the formula gives exactly the base level) are filled
+        // directly. Both give the same numbers as the plain loop. GridCache (set by the game) stores the grid per
+        // circuit on disk, so the next load of the same circuit skips it.
+        public static Func<string, int, float[]> GridLoad; public static Action<string, float[]> GridSave;
+        public const int GridVersion = 1;
         readonly double[] th, tb; // heights of the track points (zeros on a flat circuit), tan(bank) (null = none)
         public readonly double baseHeight, Shoulder;
         // most the banking lowers any point of the road or shoulder below its centreline (0 = no banking)
@@ -35,23 +46,46 @@ namespace FormulaSim
             x0 = bb.minX - Margin; y0 = bb.minY - Margin;
             nx = (int)Math.Ceiling((bb.maxX - bb.minX + 2 * Margin) / Cell) + 1; ny = (int)Math.Ceiling((bb.maxY - bb.minY + 2 * Margin) / Cell) + 1;
             g = new float[nx * ny];
-            for (int i = 0; i < t.N; i++)
             {
-                long key = Key(t.pts[i].x, t.pts[i].y);
-                if (!hash.TryGetValue(key, out var l)) hash[key] = l = new List<int>();
-                l.Add(i);
+                long mnx = long.MaxValue, mny = long.MaxValue, mxx = long.MinValue, mxy = long.MinValue;
+                var kx = new long[t.N]; var ky = new long[t.N];
+                for (int i = 0; i < t.N; i++)
+                {
+                    kx[i] = (long)Math.Floor(t.pts[i].x / Bucket); ky[i] = (long)Math.Floor(t.pts[i].y / Bucket);
+                    mnx = Math.Min(mnx, kx[i]); mny = Math.Min(mny, ky[i]); mxx = Math.Max(mxx, kx[i]); mxy = Math.Max(mxy, ky[i]);
+                }
+                bx0 = mnx; by0 = mny; bnx = (int)(mxx - mnx + 1); bny = (int)(mxy - mny + 1);
+                bStart = new int[bnx * bny + 1]; bIdx = new int[t.N];
+                for (int i = 0; i < t.N; i++) bStart[(int)(ky[i] - by0) * bnx + (int)(kx[i] - bx0) + 1]++;
+                for (int b = 0; b < bnx * bny; b++) bStart[b + 1] += bStart[b];
+                var fill = (int[])bStart.Clone();
+                for (int i = 0; i < t.N; i++) bIdx[fill[(int)(ky[i] - by0) * bnx + (int)(kx[i] - bx0)]++] = i;
             }
             int step = Math.Max(1, (int)Math.Round(8 / t.ds)), m = (t.N + step - 1) / step;
             var px = new double[m]; var py = new double[m]; var ph = new double[m];
             double lo = double.MaxValue;
             for (int i = 0; i < m; i++) { var p = t.pts[i * step]; px[i] = p.x; py[i] = p.y; ph[i] = th[i * step]; lo = Math.Min(lo, ph[i]); }
             baseHeight = lo;
-            for (int j = 0; j < ny; j++)
+            string key = GridLoad != null || GridSave != null ? CacheKey(px, py, ph) : null;
+            var cached = GridLoad?.Invoke(key, nx * ny);
+            if (cached != null && cached.Length == nx * ny) { g = cached; return; }
+            // blocks of 8 x 8 cells whose nearest point is surely beyond 382 m: u = 1 there, so the cell is exactly lo
+            const int B = 8; int bxN = (nx + B - 1) / B, byN = (ny + B - 1) / B; var far = new bool[bxN * byN];
+            double half = Math.Sqrt(2) * B * Cell / 2 + 1, farD = 382 + half;
+            for (int bj = 0; bj < byN; bj++) for (int bi = 0; bi < bxN; bi++)
             {
-                double y = y0 + j * Cell;
-                for (int i = 0; i < nx; i++)
+                double cx = x0 + (bi * B + (B - 1) / 2.0) * Cell, cy = y0 + (bj * B + (B - 1) / 2.0) * Cell, dm = double.MaxValue;
+                for (int k = 0; k < m; k++) { double dx = px[k] - cx, dy = py[k] - cy, d2 = dx * dx + dy * dy; if (d2 < dm) dm = d2; }
+                far[bj * bxN + bi] = dm > farD * farD;
+            }
+            var gg = g; float flo = (float)lo; int nxL = nx; double x0L = x0, y0L = y0;
+            void Row(int j)
+            {
+                double y = y0L + j * Cell;
+                for (int i = 0; i < nxL; i++)
                 {
-                    double x = x0 + i * Cell, sw = 0, sh = 0, dmin = double.MaxValue;
+                    if (far[(j / B) * bxN + i / B]) { gg[j * nxL + i] = flo; continue; }
+                    double x = x0L + i * Cell, sw = 0, sh = 0, dmin = double.MaxValue;
                     for (int k = 0; k < m; k++)
                     {
                         double dx = px[k] - x, dy = py[k] - y, d2 = dx * dx + dy * dy;
@@ -61,12 +95,23 @@ namespace FormulaSim
                     }
                     // far from the circuit the land settles to the lowest level (flat ground for the test pad)
                     double u = Math.Min(1, Math.Max(0, (Math.Sqrt(dmin) - 120) / 260)); u = u * u * (3 - 2 * u);
-                    g[j * nx + i] = (float)(sh / sw * (1 - u) + lo * u);
+                    gg[j * nxL + i] = (float)(sh / sw * (1 - u) + lo * u);
                 }
             }
+            System.Threading.Tasks.Parallel.For(0, ny, Row);
+            GridSave?.Invoke(key, g);
         }
 
-        static long Key(double x, double y) => ((long)Math.Floor(x / Bucket) << 32) ^ ((long)Math.Floor(y / Bucket) & 0xffffffffL);
+        // what the grid depends on: the sampled points, their heights and the grid's size (FNV-1a over the bits)
+        string CacheKey(double[] px, double[] py, double[] ph)
+        {
+            ulong h = 14695981039346656037UL;
+            void Mix(double v) { h ^= (ulong)BitConverter.DoubleToInt64Bits(v); h *= 1099511628211UL; }
+            Mix(x0); Mix(y0); Mix(nx); Mix(ny); Mix(px.Length);
+            for (int k = 0; k < px.Length; k++) { Mix(px[k]); Mix(py[k]); Mix(ph[k]); }
+            return $"hf{GridVersion}_{(t.def != null ? t.def.id : "t")}_{h:x16}";
+        }
+
 
         double Terrain(double x, double y)
         {
@@ -80,13 +125,23 @@ namespace FormulaSim
         {
             // nearest track point, from the 3 x 3 buckets around (covers everything within 16 m)
             int best = -1; double bd = double.MaxValue;
-            for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
-                if (hash.TryGetValue(Key(x + dx * Bucket, y + dy * Bucket), out var l))
-                    for (int q = 0; q < l.Count; q++)
+            var pts = t.pts;
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                long ky = (long)Math.Floor((y + dy * Bucket) / Bucket) - by0;
+                if (ky < 0 || ky >= bny) continue;
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    long kx = (long)Math.Floor((x + dx * Bucket) / Bucket) - bx0;
+                    if (kx < 0 || kx >= bnx) continue;
+                    int b = (int)ky * bnx + (int)kx;
+                    for (int q = bStart[b], qe = bStart[b + 1]; q < qe; q++)
                     {
-                        var p = t.pts[l[q]]; double d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
-                        if (d < bd) { bd = d; best = l[q]; }
+                        int pi = bIdx[q]; var p = pts[pi]; double d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+                        if (d < bd) { bd = d; best = pi; }
                     }
+                }
+            }
             double blendEnd = Shoulder + 5;
             if (best < 0 || bd >= blendEnd * blendEnd) return Terrain(x, y);
             var pb = t.pts[best];

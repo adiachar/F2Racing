@@ -135,6 +135,18 @@ public static class People
         o.p = Vector3.LerpUnclamped(C.p[a], C.p[b], u);
     }
     public static float Length(int clip) => clips[clip].len;
+
+    // CPU: animation rate by distance (sampling a clip and writing 22 bone transforms is the cost): every frame within
+    // 30 m, every 2nd frame to 60 m, every 4th to AnimFar (a person there is under ~25 px tall at 720p); beyond it the
+    // last pose holds. `slot` staggers the people so the work spreads evenly over the frames.
+    public const float AnimFar = 120f;
+    public static bool AnimDue(float dist, int frame, int slot)
+    {
+        if (dist < 30f) return true;
+        if (dist < 60f) return ((frame + slot) & 1) == 0;
+        if (dist < AnimFar) return ((frame + slot) & 3) == 0;
+        return false;
+    }
     // o = a .. b by w (o may be a or b)
     public static void Blend(PoseBuf a, PoseBuf b, float w, PoseBuf o)
     {

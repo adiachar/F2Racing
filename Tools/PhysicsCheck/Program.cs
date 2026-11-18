@@ -770,6 +770,76 @@ if (args.Length > 1 && args[0] == "race" && args[1] == "strat")
 // ---- race test: dotnet run -- race [fuel | sc] ("fuel": start on a 70 kg race fuel load instead of qualifying trim;
 // "sc": force a safety car on lap 2 and check the queue, no overtaking and the restart). RC=on: race control and
 // tyre strategy on in the plain race test too (default off: the legacy race test).
+// ---- load-time parts that are pure C#: dotnet run -c Release -- loadperf ----
+if (args.Length > 0 && args[0] == "loadperf")
+{
+    double tb = 0, tl = 0, th = 0, ts = 0; double chk = 0;
+    foreach (var def in FormulaSim.Circuits.All)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew(); var t = def.Build(); double a = sw.Elapsed.TotalMilliseconds;
+        var line = RacingLine.Compute(t, new CarConfig()); double b = sw.Elapsed.TotalMilliseconds;
+        var hf = new HeightField(t); double c = sw.Elapsed.TotalMilliseconds;
+        // the world builder samples the ground for every terrain / scenery vertex: 200k samples as a stand-in
+        var bb = t.Bounds(); var rng = new Random(1); double s0 = sw.Elapsed.TotalMilliseconds;
+        for (int i = 0; i < 200000; i++) chk += hf.Sample(bb.minX + (bb.maxX - bb.minX) * rng.NextDouble(), bb.minY + (bb.maxY - bb.minY) * rng.NextDouble());
+        for (int i = 0; i < 100000; i++) { var p = t.pts[i % t.N]; chk += hf.Sample(p.x + p.nx * (i % 13 - 6), p.y + p.ny * (i % 13 - 6)); }
+        double d = sw.Elapsed.TotalMilliseconds;
+        Console.WriteLine($"  {def.name,-28} track {a,6:F0} ms  racing line {b - a,6:F0} ms  height field {c - b,6:F0} ms  300k samples {d - s0,5:F0} ms");
+        tb += a; tl += b - a; th += c - b; ts += d - s0;
+    }
+    Console.WriteLine($"  total: track {tb:F0} ms, racing line {tl:F0} ms, height field {th:F0} ms, samples {ts:F0} ms (checksum {chk:R})");
+    return;
+}
+
+// ---- CPU cost per 240 Hz tick: dotnet run -c Release -- perf [circuit] ----
+// The game's loop for 22 cars (car 0 = "player": Nearest + WheelContact every tick; 21 rivals: Think, wall and
+// contact at 60 Hz, WheelContact at 60 Hz, Step at 240 Hz). Prints ms per tick by part and bytes allocated per tick.
+// LOD=1: the rivals' level of detail (AiLod) on, as the game runs them.
+if (args.Length > 0 && args[0] == "perf")
+{
+    string cid = args.Length > 1 ? args[1] : "monza"; int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == cid);
+    var t = FormulaSim.Circuits.All[ti].Build(); var line = RacingLine.Compute(t, new CarConfig()); var hf = t.h != null ? new HeightField(t) : null;
+    bool lod = Environment.GetEnvironmentVariable("LOD") == "1";
+    int n = 22; var ds = new List<AiDriver>();
+    for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k % DriverProfile.Grid.Length], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
+    double wall = Traffic.WallOffset(t); var lods = new AiLod[n]; var want = new int[n]; for (int k = 0; k < n; k++) { lods[k] = new AiLod(); want[k] = 1; }
+    var sw = new System.Diagnostics.Stopwatch[5]; for (int k = 0; k < 5; k++) sw[k] = new System.Diagnostics.Stopwatch();
+    string[] part = { "Think+wall (60 Hz)", "contact + LOD pick (60 Hz)", "Nearest+WheelContact", "car.Step", "grade (HeightField)" };
+    long alloc0 = 0; double time = 0; int steps = 0, ticks = 240 * 180, warm = 240 * 20, pIdx = ds[0].idx;
+    var all = new System.Diagnostics.Stopwatch();
+    for (int s = 0; s < ticks + warm; s++)
+    {
+        if (s == warm) { foreach (var w in sw) w.Reset(); all.Restart(); alloc0 = GC.GetAllocatedBytesForCurrentThread(); }
+        if (steps++ % 4 == 0)
+        {
+            sw[0].Start(); for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].idx >= 0) Traffic.Wall(ds[k].car, t.pts[ds[k].idx], ds[k].lateral, wall); } sw[0].Stop();
+            sw[1].Start(); for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) Traffic.Collide(ds[i].car, ds[j].car);
+            if (lod) for (int k = 1; k < n; k++) want[k] = time > 60 ? AiLod.WantFor(t, pIdx, k, ds) : 1; sw[1].Stop();
+            sw[4].Start(); if (hf != null) for (int k = 1; k < n; k++) ds[k].car.grade = hf.Grade(ds[k].car.x, ds[k].car.y, ds[k].car.heading); sw[4].Stop();
+        }
+        sw[2].Start();
+        { var c0 = ds[0].car; var nr = t.Nearest(c0.x, c0.y, pIdx); pIdx = nr.idx; WheelContact.Update(t, line, c0, nr.idx, nr.lateral, 0.5, 0); }
+        if (steps % 4 == 1) for (int k = 1; k < n; k++) WheelContact.Update(t, line, ds[k].car, ds[k].idx, ds[k].lateral, 0.5, 0);
+        sw[2].Stop();
+        sw[4].Start(); if (hf != null) ds[0].car.grade = hf.Grade(ds[0].car.x, ds[0].car.y, ds[0].car.heading); sw[4].Stop();
+        sw[3].Start();
+        ds[0].car.Step(ds[0].LastInput, H);
+        for (int k = 1; k < n; k++)
+        {
+            var d = ds[k];
+            if (lod && lods[k].Tick(d.car, d.LastInput, H, want[k])) continue;
+            d.car.Step(d.LastInput, H);
+        }
+        sw[3].Stop();
+        time += H;
+    }
+    all.Stop(); long bytes = GC.GetAllocatedBytesForCurrentThread() - alloc0;
+    Console.WriteLine($"perf {FormulaSim.Circuits.All[ti].name}, {n} cars, {ticks / 240} s at 240 Hz{(lod ? ", AI LOD on" : "")}: {all.Elapsed.TotalMilliseconds * 1000 / ticks:F1} us per tick ({all.Elapsed.TotalMilliseconds * 1000 / ticks / n:F2} us per car-tick), {all.Elapsed.TotalMilliseconds * 1000 / ticks * 4:F0} us per 60 fps frame");
+    for (int k = 0; k < 5; k++) Console.WriteLine($"  {part[k],-24} {sw[k].Elapsed.TotalMilliseconds * 1000 / ticks,7:F2} us/tick");
+    Console.WriteLine($"  allocated {bytes} bytes in {ticks} ticks ({(double)bytes / ticks:F1} B/tick)");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "race")
 {
     bool scTest = args.Length > 1 && args[1] == "sc";
@@ -789,6 +859,10 @@ if (args.Length > 0 && args[0] == "race")
         return g * t.ds > 150;
     }
     if (coarse) Console.WriteLine("COARSE: cars more than 150 m from car 0 stepped at 120 Hz");
+    // LOD=1: the game's rival level of detail (AiLod: 120 Hz beyond 150 m, 60 Hz beyond 400 m when alone) with car 0
+    // standing in for the player; prints the share of rival steps saved
+    bool lodOn = Environment.GetEnvironmentVariable("LOD") == "1"; long lodSteps = 0, lodTicks = 0;
+    if (lodOn) Console.WriteLine($"LOD: AiLod, {AiLod.Gap2} m -> 120 Hz, {AiLod.Gap4} m and alone ({AiLod.Alone} m) -> 60 Hz");
     for (int ti = 0; ti < tracks.Length; ti++)
     {
         if (only != null && !only.Contains(FormulaSim.Circuits.All[ti].id)) continue;
@@ -803,6 +877,7 @@ if (args.Length > 0 && args[0] == "race")
         double time = 0; int steps = 0, recov = 0, hits = 0; var rec = new int[n]; var where = new List<string>();
         double tMin = 999, tMaxF = 0, tMaxR = 0, tSumF = 0, tSumR = 0; int tN = 0;
         var lagged = new bool[n]; // COARSE: car k is one 240 Hz tick behind
+        var lods = new AiLod[n]; var want = new int[n]; for (int k = 0; k < n; k++) { lods[k] = new AiLod(); want[k] = 1; }
         var sw = System.Diagnostics.Stopwatch.StartNew();
         while (scTest ? time < 3000 && (greenAt < 0 || ds.Max(d => d.lap) <= greenLap) : time < 6 * 130 && ds.Min(d => d.lap) < 5)
         {
@@ -825,6 +900,7 @@ if (args.Length > 0 && args[0] == "race")
                     }
                 }
                 for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (Traffic.Collide(ds[i].car, ds[j].car)) hits++;
+                if (lodOn) for (int k = 1; k < n; k++) want[k] = time > 60 ? AiLod.WantFor(t, ds[0].idx, k, ds) : 1;
             }
             if (steps % 240 == 0) { var c0 = ds[0].car; tMin = Math.Min(tMin, Math.Min(c0.tyreTF, c0.tyreTR)); tMaxF = Math.Max(tMaxF, c0.tyreTF); tMaxR = Math.Max(tMaxR, c0.tyreTR); if (time > 60) { tSumF += c0.tyreTF; tSumR += c0.tyreTR; tN++; } }
             for (int k = 0; k < n; k++)
@@ -834,6 +910,7 @@ if (args.Length > 0 && args[0] == "race")
                 // COARSE=1: the game's far-rival saving (GameManagerPerf.cs) with car 0 standing in for the player and camera
                 // (as RivalCoarse: skip a tick, then 2 ticks at once; a car leaving 120 Hz while a tick behind catches up)
                 bool cs = coarse && k > 0 && time > 60 && Coarse(t, ds[0], d);
+                if (lodOn && k > 0) { lodTicks++; if (lods[k].Tick(d.car, d.LastInput, H, want[k])) { if (lods[k].lag == 0) lodSteps++; continue; } lodSteps++; d.car.Step(d.LastInput, H); continue; }
                 if (lagged[k]) { d.car.Step(d.LastInput, 2 * H); lagged[k] = false; }
                 else if (cs) lagged[k] = true;
                 else d.car.Step(d.LastInput, H);
@@ -860,6 +937,7 @@ if (args.Length > 0 && args[0] == "race")
         foreach (var d in ds.OrderByDescending(d => d.progress))
             Console.WriteLine($"  P{pos++,-2} {d.who.name,-13} pace {d.who.pace:F2} best {d.bestLap:F2} resets {rec[ds.IndexOf(d)]}");
     }
+    if (lodOn) Console.WriteLine($"LOD: rivals stepped {lodSteps} times in {lodTicks} car-ticks ({100.0 * lodSteps / Math.Max(1, lodTicks):F1}%; 100% = all at 240 Hz)");
     if (scTest) Console.WriteLine($"SAFETY CAR: {scPass} of {scRuns} circuits PASS");
     Console.WriteLine($"TOTAL (damage {(dmgFull ? "full" : "off")}, race control {(rcOn ? "on" : "off")}): {totalResets} resets, {totalHits} damaging impacts, {totalStops} pit stops");
     return;

@@ -25,7 +25,7 @@
 //    parked service vehicles behind the barrier in the open stretches (ServicePlan), hedgerows, copses and bushes in
 //    the fields and parks (Outfield, own budget), and opaque far tree-line silhouettes along the wood edges out to the
 //    fog's end (FarTrees, one extra mesh).
-// Cost: one mesh per material per 1 km block (land, water, roads, buildings, trees), static batched; buildings,
+// Cost: one mesh per material per terrain-chunk block (512-768 m; land, water, roads, buildings, trees), static batched; buildings,
 // roads and trees switched off by distance with LODGroups (no script per frame); plus one far tree-line mesh. Budgets
 // per graphics level keep the vertex count (and so the light bake) small; see Budget().
 using System.Collections.Generic;
@@ -575,7 +575,9 @@ public static class RealWorld
     static void ChunkSteps()
     {
         cnx = (gnx - 2) / CH + 1; cnz = (gnz - 2) / CH + 1;
-        EB = B <= 10f ? 2 : 1; // mesh blocks of about 1-1.3 km
+        EB = 1; // mesh blocks of one terrain chunk (512-768 m; was 1-1.3 km): the frustum and the LODGroup distance
+                // cull of buildings, roads and trees work on 4x smaller pieces (a block 700 m away no longer keeps
+                // trees 1.7 km away drawn); static batching keeps the extra draws free of state changes
         cStep = new int[cnx * cnz]; cDist = new float[cnx * cnz];
         float k = gfx <= 1 ? 0.6f : gfx == 2 ? 0.75f : 1f; int stride = Mathf.Max(1, trk.N / 400);
         for (int cj = 0; cj < cnz; cj++)
@@ -2128,7 +2130,12 @@ public static class RealWorld
             }
         }
         var tex = new Texture2D(lnx, lnz, TextureFormat.RGBA32, true, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 4, name = "RealLand" };
-        tex.SetPixels32(px); tex.Apply(true, true);
+        tex.SetPixels32(px);
+        // Low / Medium: GPU-compressed (ETC2 / DXT5, 8 bits per texel instead of 32: 1280^2 = 2.2 MB instead of 8.7 MB, and
+        // a quarter of the texture bandwidth on every terrain pixel). The map is smooth (~3 m per texel, multiplied by the
+        // detail texture), so the block coding does not show; High keeps the exact RGBA32 map.
+        if (gfx <= 2 && (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))) { tex.Apply(true, false); tex.Compress(true); tex.Apply(false, true); }
+        else tex.Apply(true, true);
         return tex;
     }
     // colour (linear albedo) and ground detail of a land-use polygon (alpha: 0 paved, 85 grass, 170 rough, 255 canopy)

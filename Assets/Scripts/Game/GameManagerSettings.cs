@@ -278,6 +278,7 @@ public partial class GameManager
         gfx.Toggle("Shadows", "Live shadows from cars and scenery. Off = faster.", true, () => shadowsOn, v => { shadowsOn = v; ApplyGraphics(gfxLevel); })
             .LockedWhen(() => LightBake.Active ? "This circuit has its shadows baked in: nothing to switch." : gfxLevel <= 1 ? "Shadows are off at the Low graphics level." : null);
         gfx.Toggle("Show FPS", "Frames per second (and the resolution share when it is lowered), top right under the buttons.", true, () => showFps, v => showFps = v);
+        gfx.Toggle("Render stats (debug)", "Draw calls, triangles, culling sectors, card overdraw and memory, top left. For testing only.", false, () => PerfStats.Show, v => PerfStats.Show = v);
 
         // ---- AUDIO
         var aud = new SettingsUI.Tab("AUDIO");

@@ -496,4 +496,56 @@ namespace FormulaSim
             return hit;
         }
     }
+    // Level of detail for a rival's physics (CPU). A rival far from the player (and away from the camera) is
+    // stepped less often with a longer step, as GT / F1 games do for cars you cannot see: 120 Hz beyond Gap2 m along
+    // the track, 60 Hz beyond Gap4 m when no other car is within Alone m of it. Time stays exact: the car is `lag`
+    // 240 Hz ticks behind the race clock and the next step covers all of them, so it never gains or loses time; when it
+    // comes back (closer, in view, near another car) it catches up in one step and runs at 240 Hz again.
+    // The player's car is never stepped here. Checked with Tools/PhysicsCheck "race" (LOD=1) and "perf".
+    public sealed class AiLod
+    {
+        public static double Gap2 = 150, Gap4 = 400, Alone = 60;   // m along the track
+        public int lag;                                            // 240 Hz ticks behind the race clock
+        public int rate = 1;                                       // ticks per step now (1, 2 or 4)
+        public object owner;                                       // the driver this belongs to (the game resets on a new one)
+
+        // rate a rival should run at: gap = metres along the track to the player (0 = keep 240 Hz),
+        // nearest = metres along the track to the nearest other car
+        public static int Want(double gap, double nearest) => gap > Gap4 && nearest > Alone ? 4 : gap > Gap2 ? 2 : 1;
+
+        // one 240 Hz tick of the race clock; true = handled here (stepped with the longer step, or skipped)
+        public bool Tick(FormulaCar car, CarInput input, double h, int want)
+        {
+            rate = want;
+            if (want <= 1 && lag == 0) return false;               // the caller steps it at 240 Hz
+            lag++;
+            if (lag >= want) { car.Step(input, lag * h); lag = 0; }
+            return true;
+        }
+        // the rate for rival `me` (60 Hz is enough to call it): gap to the player's track point and to the nearest other
+        // car, both along the track (a car closer than Alone to another one stays at 120 Hz at most, so contacts
+        // are resolved on fresh positions). playerIdx < 0 or me.idx < 0: 240 Hz.
+        public static int WantFor(Track t, int playerIdx, AiDriver me, IList<AiDriver> cars)
+        {
+            if (playerIdx < 0 || me.idx < 0) return 1;
+            double gap = Gap(t, playerIdx, me.idx);
+            if (gap <= Gap2) return 1;
+            double nearest = gap;
+            if (gap > Gap4)
+                for (int j = 0; j < cars.Count && nearest > Alone; j++)
+                {
+                    var o = cars[j]; if (o == me || o.idx < 0) continue;
+                    double g = Gap(t, o.idx, me.idx); if (g < nearest) nearest = g;
+                }
+            return Want(gap, nearest);
+        }
+        public static int WantFor(Track t, int playerIdx, int k, IList<AiDriver> cars) => WantFor(t, playerIdx, cars[k], cars);
+        static double Gap(Track t, int a, int b) { int g = Math.Abs(a - b); g = Math.Min(g, t.N - g); return g * t.ds; }
+
+        // overload for the bench: gap only
+        public bool Tick(FormulaCar car, CarInput input, double h, double gap, double nearest = 1e9) => Tick(car, input, h, Want(gap, nearest));
+
+        public double Behind(double h) => lag * h;                 // s: the car's state is this old (drawn this far ahead)
+        public void Reset() { lag = 0; rate = 1; }
+    }
 }

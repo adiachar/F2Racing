@@ -2,7 +2,7 @@
 // garage desks and on the pit-wall stands (headsets, seated, now and then talking), a mechanic in each detailed garage
 // (arms folded / working at the trolley), and a few team members walking along the garage fronts (they turn back
 // before a box where a stop is on). Placed by PitGarage (Spot) in the detailed bays; rigs from People.cs.
-// Cost: animated only within ~120 m of the camera (every other frame beyond ~40 m, with the LOD1 mesh), frozen beyond,
+// Cost: animated only within ~120 m of the camera (People.AnimDue: every frame within 30 m, every 2nd to 60 m, every 4th beyond; LOD1 mesh beyond 40 m), frozen beyond,
 // hidden beyond ~230 m; one contact-shadow mesh for all of them.
 using System.Collections.Generic;
 using UnityEngine;
@@ -77,8 +77,7 @@ public sealed class PeoplePits : MonoBehaviour
             if (d > 230f) { r.Show(false); continue; }
             r.Show(true);
             r.SetLod(d > 40f ? 1 : 0);
-            bool animate = d < 120f || !ag.posed;
-            if (animate && d > 40f && ag.posed && ((frame + i) & 1) == 1) animate = false;
+            bool animate = !ag.posed || People.AnimDue(d, frame, i); // rate by distance (People.AnimDue)
             if (animate) { Pose(ag, now); ag.posed = true; }
             if (d < 120f)
             {

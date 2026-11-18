@@ -27,7 +27,7 @@ Shader "F2/Ground"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #pragma multi_compile_fog
+            #pragma multi_compile __ FOG_LINEAR // the game only uses linear fog (Sky.cs): 2 variants, not 4 (multi_compile_fog)
             #pragma target 3.0
             #define GROUND_HQ 1
             #include "Ground.cginc"
@@ -44,7 +44,7 @@ Shader "F2/Ground"
             #pragma vertex vert
             #pragma fragment frag
             #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
-            #pragma multi_compile_fog
+            #pragma multi_compile __ FOG_LINEAR // the game only uses linear fog (Sky.cs): 2 variants, not 4 (multi_compile_fog)
             #pragma target 3.0
             #include "Ground.cginc"
             ENDCG

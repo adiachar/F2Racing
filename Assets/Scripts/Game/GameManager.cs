@@ -360,6 +360,7 @@ public partial class GameManager : MonoBehaviour
                 if (rivals[i].idx >= 0) Traffic.Wall(rivals[i].car, track.pts[rivals[i].idx], rivals[i].lateral, wallAt);
             }
             RcStep(); // race control sees every car (GameManagerRaceControl.cs)
+            PickRivalRates(); // physics level of detail for far rivals (below)
             for (int i = 0; i < rivals.Count; i++)
             {
                 if (rivals[i].InPit) continue; // cars in the pit lane touch nobody
@@ -371,12 +372,34 @@ public partial class GameManager : MonoBehaviour
         for (int i = 0; i < rivals.Count; i++)
         {
             var d = rivals[i];
-            if (d.InPit) { if (i < rivalLag.Length) rivalLag[i] = 0; d.PitStep(H, simTime); continue; } // the pit lane (PitLane.cs)
+            if (d.InPit) { if (i < rivalLod.Length) rivalLod[i].Reset(); d.PitStep(H, simTime); continue; } // the pit lane (PitLane.cs)
             if (aiTick % 4 == 1) { WheelContact.Update(track, line, d.car, d.idx, d.lateral, rubber, marbles); Weather.Apply(track, line, d.car, d.idx, d.lateral, d.tyreSet); }
-            if (RivalCoarse(i, d)) continue; // far from the camera and the player: 120 Hz (GameManagerPerf.cs)
+            if (i < rivalLod.Length && rivalLod[i].Tick(d.car, RivalStartInput(i, d), H, rivalRate[i])) continue; // far: 120 / 60 Hz
             d.car.Step(RivalStartInput(i, d), H); // held until lights out + reaction time, then the launch clutch
         }
     }
+
+    // ---------------------------------------------------------------- rival physics level of detail (AiLod, AiDriver.cs)
+    // CPU: from one minute after the start (the lap-1 pack stays at 240 Hz), a rival outside the camera's detail range
+    // (rivalNear) runs at 120 Hz beyond 150 m along the track from the player, and at 60 Hz beyond 400 m when no other
+    // car is within 60 m of it. Time stays exact: it steps all the ticks it skipped at once, and is drawn that much
+    // further forward (RivalBehind). Back in range it catches up in one step. The player's car is never touched.
+    // This replaces GameManagerPerf.RivalCoarse (120 Hz only), which is no longer called.
+    // Checked offline: Tools/PhysicsCheck "race" with LOD=1 (same finishing order, best laps +-0.01 s on average).
+    AiLod[] rivalLod = new AiLod[0]; int[] rivalRate = new int[0];
+    void PickRivalRates()
+    {
+        if (rivalLod.Length != rivals.Count)
+        {
+            rivalLod = new AiLod[rivals.Count]; rivalRate = new int[rivals.Count];
+            for (int i = 0; i < rivalLod.Length; i++) { rivalLod[i] = new AiLod(); rivalRate[i] = 1; }
+        }
+        for (int i = 0; i < rivals.Count; i++) if (rivalLod[i].owner != rivals[i]) { rivalLod[i].Reset(); rivalLod[i].owner = rivals[i]; } // a new session
+        bool on = !replaying && !playground && raceTime > Countdown + 60 && idx >= 0;
+        for (int i = 0; i < rivals.Count; i++)
+            rivalRate[i] = on && i < rivalNear.Count && !rivalNear[i] && !rivals[i].InPit ? AiLod.WantFor(track, idx, rivals[i], rivals) : 1;
+    }
+    double RivalBehind(int i) => i < rivalLod.Length ? rivalLod[i].Behind(H) : 0;
 
     int Position()
     {
@@ -754,7 +777,7 @@ public partial class GameManager : MonoBehaviour
             if (near != rivalNear[i]) { rivalNear[i] = near; rivalModels[i].gameObject.SetActive(near); if (rivalFar[i] != null) rivalFar[i].gameObject.SetActive(!near); }
             var rm = near ? rivalModels[i] : rivalFar[i];
             // drawn at the same in-between moment as the player's car, or they would shake against it
-            double back = (1 - acc / H) * H - RivalLag(i), cch = System.Math.Cos(c.heading), csh = System.Math.Sin(c.heading);
+            double back = (1 - acc / H) * H - RivalBehind(i), cch = System.Math.Cos(c.heading), csh = System.Math.Sin(c.heading);
             rm.Apply(c.x - (c.vx * cch - c.vy * csh) * back, c.y - (c.vx * csh + c.vy * cch) * back, c.heading - c.r * back, c.delta, rivalSpin[i], rivalSpin[i], 0, 0);
             rm.SetBrake(c.brake > 0.05);
             rm.Feed(c, dt);

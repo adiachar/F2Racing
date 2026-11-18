@@ -59,16 +59,22 @@ public static class EnvTex
     // alpha: optional linear data in A (else 255)
     static Texture2D Albedo(int w, int h, Color mean, System.Func<float, float, int, int, Color> f, int aniso = 4, System.Func<float, float, int, int, float> alpha = null)
     {
+        // load time: the per-pixel functions are pure math (noise, photo arrays; no Unity API), so the rows run in
+        // parallel; the mean is still summed in pixel order, so the texture is bit-identical to the serial loop
         var c = new Color[w * h]; double sr = 0, sg = 0, sb = 0;
-        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { var k = f((float)x / w, (float)y / h, x, y); c[y * w + x] = k; sr += k.r; sg += k.g; sb += k.b; }
+        System.Threading.Tasks.Parallel.For(0, h, y => { for (int x = 0; x < w; x++) c[y * w + x] = f((float)x / w, (float)y / h, x, y); });
+        for (int i = 0; i < c.Length; i++) { var k = c[i]; sr += k.r; sg += k.g; sb += k.b; }
         float n = w * h, kr = mean.r / Mathf.Max(1e-4f, (float)(sr / n)), kg = mean.g / Mathf.Max(1e-4f, (float)(sg / n)), kb = mean.b / Mathf.Max(1e-4f, (float)(sb / n));
         var px = new Color32[w * h];
-        for (int i = 0; i < px.Length; i++)
+        System.Threading.Tasks.Parallel.For(0, h, y =>
         {
-            byte a = 255;
-            if (alpha != null) { int x = i % w, y = i / w; a = B(alpha((float)x / w, (float)y / h, x, y)); }
-            px[i] = new Color32(S(c[i].r * kr), S(c[i].g * kg), S(c[i].b * kb), a);
-        }
+            for (int x = 0, i = y * w; x < w; x++, i++)
+            {
+                byte a = 255;
+                if (alpha != null) a = B(alpha((float)x / w, (float)y / h, x, y));
+                px[i] = new Color32(S(c[i].r * kr), S(c[i].g * kg), S(c[i].b * kb), a);
+            }
+        });
         return Make(w, h, px, false, aniso);
     }
 

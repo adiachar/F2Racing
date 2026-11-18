@@ -171,6 +171,7 @@ public class DebugShots : MonoBehaviour
             if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)) spots.Add(v);
         if (spots.Count == 0) spots.Add(300);
         Title("SHOT_BOOT");
+        PerfStats.FromQuery(q); // stats=1: render stats overlay + a PERF_STATS console line per shot (PerfStats.cs)
         ShotsCanvas(Mathf.Clamp(GetInt(q, "w", 1280), 64, 8192), Mathf.Clamp(GetInt(q, "h", 720), 64, 8192));
     }
     internal void Fail(string msg) { error = msg; Debug.LogWarning("[Shots] " + msg); }
@@ -204,6 +205,7 @@ public class DebugShots : MonoBehaviour
                 float wait = settle + (n == 0 ? warm : 0f), ts = Time.realtimeSinceStartup;
                 int f0 = Time.frameCount;
                 while (Time.frameCount - f0 < 8 || Time.realtimeSinceStartup - ts < wait) yield return null;
+                PerfStats.ShotLog($"s={s.ToString("0", CultureInfo.InvariantCulture)} cam={cam}");
                 Title($"SHOT_READY {n} {count} s={s.ToString("0", CultureInfo.InvariantCulture)} cam={cam}");
                 float tr = Time.realtimeSinceStartup;
                 if (ack) { while (ShotsAck() < n && Time.realtimeSinceStartup - tr < ackTimeout) yield return null; }
