@@ -100,26 +100,10 @@ public static class LightBake
             }
             if (mf.name == "Trees") { TreeCards(mesh.vertices); continue; }
             var v = mesh.vertices; var t = mesh.triangles;
-            for (int k = 0; k + 2 < t.Length; k += 3)
-            {
-                Vector3 a = v[t[k]], b = v[t[k + 1]], c = v[t[k + 2]];
-                Edge(a, b); Edge(b, c); Edge(c, a);
-                // inside of the triangle (roofs, ground)
-                float minX = Mathf.Min(a.x, Mathf.Min(b.x, c.x)), maxX = Mathf.Max(a.x, Mathf.Max(b.x, c.x)), minZ = Mathf.Min(a.z, Mathf.Min(b.z, c.z)), maxZ = Mathf.Max(a.z, Mathf.Max(b.z, c.z));
-                if (maxX - minX < cell && maxZ - minZ < cell) continue;
-                float den = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
-                if (Mathf.Abs(den) < 1e-6f) continue;
-                int i0 = Mathf.Max(0, (int)((minX - x0) / cell)), i1 = Mathf.Min(nx - 1, (int)((maxX - x0) / cell)), j0 = Mathf.Max(0, (int)((minZ - z0) / cell)), j1 = Mathf.Min(nz - 1, (int)((maxZ - z0) / cell));
-                for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++)
-                {
-                    float px = x0 + (i + 0.5f) * cell, pz = z0 + (j + 0.5f) * cell;
-                    float wa = ((b.z - c.z) * (px - c.x) + (c.x - b.x) * (pz - c.z)) / den, wb = ((c.z - a.z) * (px - c.x) + (a.x - c.x) * (pz - c.z)) / den, wc = 1 - wa - wb;
-                    if (wa < 0 || wb < 0 || wc < 0) continue;
-                    float y = wa * a.y + wb * b.y + wc * c.y; int q = j * nx + i;
-                    if (y > roof[q]) { roof[q] = y; if (y > maxH) maxH = y; }
-                }
-            }
+            for (int k = 0; k + 2 < t.Length; k += 3) Occluder(v[t[k]], v[t[k + 1]], v[t[k + 2]]);
         }
+        // GPU-instanced model trees and shrubs (ModelInstancing.cs): the same triangles the merged meshes had, world space
+        var mi = ModelInstancing.ForRoot(root); if (mi != null) mi.AddOccluders();
         // model trees (ModelLib.cs): the far ones are two upright impostor cards, thin lines in this map; give every one
         // the round crown the card trees get
         for (int k = 0; k < ModelLib.TreeFeet.Count; k++)
@@ -129,6 +113,26 @@ public static class LightBake
                 if ((x - f.x) * (x - f.x) + (z - f.z) * (z - f.z) <= rad * rad) Put(x, z, h);
         }
     }
+    // one world triangle into the roof map: its edges, and its inside (roofs, ground)
+    public static void Occluder(Vector3 a, Vector3 b, Vector3 c)
+    {
+        if (!Active) return;
+        Edge(a, b); Edge(b, c); Edge(c, a);
+        float minX = Mathf.Min(a.x, Mathf.Min(b.x, c.x)), maxX = Mathf.Max(a.x, Mathf.Max(b.x, c.x)), minZ = Mathf.Min(a.z, Mathf.Min(b.z, c.z)), maxZ = Mathf.Max(a.z, Mathf.Max(b.z, c.z));
+        if (maxX - minX < cell && maxZ - minZ < cell) return;
+        float den = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+        if (Mathf.Abs(den) < 1e-6f) return;
+        int i0 = Mathf.Max(0, (int)((minX - x0) / cell)), i1 = Mathf.Min(nx - 1, (int)((maxX - x0) / cell)), j0 = Mathf.Max(0, (int)((minZ - z0) / cell)), j1 = Mathf.Min(nz - 1, (int)((maxZ - z0) / cell));
+        for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++)
+        {
+            float px = x0 + (i + 0.5f) * cell, pz = z0 + (j + 0.5f) * cell;
+            float wa = ((b.z - c.z) * (px - c.x) + (c.x - b.x) * (pz - c.z)) / den, wb = ((c.z - a.z) * (px - c.x) + (a.x - c.x) * (pz - c.z)) / den, wc = 1 - wa - wb;
+            if (wa < 0 || wb < 0 || wc < 0) continue;
+            float y = wa * a.y + wb * b.y + wc * c.y; int q = j * nx + i;
+            if (y > roof[q]) { roof[q] = y; if (y > maxH) maxH = y; }
+        }
+    }
+
     // tree cards (Environment.Trees: quads of foot-left, foot-right, top-right, top-left): the upright cards would only
     // mark thin lines in the map, so each card stands for a round crown instead, a third of its width across, at
     // four fifths of its height
@@ -231,11 +235,28 @@ public static class LightBake
             if (!own) r.sharedMaterial.shader = shader;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
         }
+        // GPU-instanced model trees and shrubs (ModelInstancing.cs): every instance vertex lit exactly like the merged meshes
+        var mi = ModelInstancing.ForRoot(root); if (mi != null) verts += mi.Bake();
         if (night && lamps != null) BuildPosts(root.transform);
         Debug.Log("LightBake: " + verts + " vertices in " + sw.ElapsedMilliseconds + " ms (" + System.Environment.ProcessorCount + " cores)");
     }
 
     const int BakeChunk = 2048;
+    // foliage vertices that are not in a mesh (ModelInstancing: world positions and normals of every instance vertex):
+    // the same light as a vertex of a mesh on F2/Foliage gets in Apply (rgb halved, alpha 1), in the same parallel chunks
+    public static void BakeFoliage(Vector3[] v, Vector3[] n, Color[] col)
+    {
+        if (!Active || v == null || col == null) return;
+        bool hasN = n != null && n.Length == v.Length; int hint = -1, hint2 = -1;
+        if (v.Length >= 2 * BakeChunk)
+            FormulaSim.Par.For(0, (v.Length + BakeChunk - 1) / BakeChunk, ch =>
+            {
+                int h1 = -1, h2 = -1, e = System.Math.Min(v.Length, (ch + 1) * BakeChunk);
+                for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, false, true, false, ref h1, ref h2);
+            });
+        else
+            for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, false, true, false, ref hint, ref hint2);
+    }
     // the light of vertex i (rgb halved: the shader doubles it; alpha: the ground's shadow-mask data)
     static Color BakeVertex(int i, Vector3[] v, Vector3[] n, bool hasN, bool groundShade, bool foliage, bool cards, ref int hint, ref int hint2)
     {

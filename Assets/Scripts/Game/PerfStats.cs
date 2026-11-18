@@ -158,6 +158,7 @@ public class PerfStats : MonoBehaviour
         sb.Append("  world drawn=").Append(wDrawn).Append(" draws=").Append(wDraws).Append(" tris=").Append(wTris);
         sb.Append("  before drawn=").Append(wBefore).Append(" tris=").Append(wTrisBefore);
         sb.Append("  other drawn=").Append(oDrawn).Append(" tris=").Append(oTris);
+        sb.Append("  inst draws=").Append(ModelInstancing.Draws).Append(" shown=").Append(ModelInstancing.Shown).Append('/').Append(ModelInstancing.Cur != null ? ModelInstancing.Count : 0).Append(" tris=").Append(ModelInstancing.Tris);
         sb.Append("  cards now=").Append(cardNow.ToString("0.00")).Append(" before=").Append(cardBefore.ToString("0.00"));
         sb.Append("  mats=").Append(mats).Append(" variants=").Append(variants);
         if (sv != null)
@@ -175,7 +176,7 @@ public class PerfStats : MonoBehaviour
         if (!Show || Event.current.type != EventType.Repaint) return;
         if (style == null) style = new GUIStyle(GUI.skin.label) { fontSize = Mathf.Max(11, Screen.height / 60), wordWrap = false };
         style.fontSize = Mathf.Max(11, Screen.height / 60);
-        float w = Screen.height * 0.75f, h = style.fontSize * 1.35f * 11;
+        float w = Screen.height * 0.75f, h = style.fontSize * 1.35f * 12;
         GUI.depth = -100;
         var c = GUI.color; GUI.color = new Color(0, 0, 0, 0.55f); GUI.DrawTexture(new Rect(4, Screen.height * 0.18f, w, h), Texture2D.whiteTexture); GUI.color = c;
         GUI.Label(new Rect(10, Screen.height * 0.18f + 4, w - 12, h - 8), text, style);

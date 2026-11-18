@@ -172,6 +172,7 @@ public class DebugShots : MonoBehaviour
         if (spots.Count == 0) spots.Add(300);
         Title("SHOT_BOOT");
         PerfStats.FromQuery(q); // stats=1: render stats overlay + a PERF_STATS console line per shot (PerfStats.cs)
+        ModelInstancing.FromQuery(q); // inst=0: model trees merged as before (A/B against the GPU-instanced ones)
         ShotsCanvas(Mathf.Clamp(GetInt(q, "w", 1280), 64, 8192), Mathf.Clamp(GetInt(q, "h", 720), 64, 8192));
     }
     internal void Fail(string msg) { error = msg; Debug.LogWarning("[Shots] " + msg); }

@@ -12,6 +12,9 @@
 // Foliage.shader (alpha to coverage on Medium/High, sway, back-light), props the diffuse material the bake turns into
 // Baked.shader. Per-instance tint (leaf colour, shade) rides in the vertex colour through BakeTint like the card trees.
 // Vertex budgets per graphics level keep the cost at a handful of draw calls (static batching merges them by material).
+// GPU instancing (ModelInstancing.cs, where the device can): the LOD 0 / LOD 1 trees and the shrubs are not merged but
+// drawn as instances of one shared mesh per model and LOD, each switching LOD by its camera distance (the impostor-only
+// trees and the lamps stay merged: a few vertices each). Budgets, placement and random numbers are the same either way.
 using System.Collections.Generic;
 using UnityEngine;
 using FormulaSim;
@@ -108,7 +111,7 @@ public static class ModelLib
         public readonly List<int> tri = new List<int>();
     }
     static readonly Dictionary<long, List<Buf>> bufs = new Dictionary<long, List<Buf>>();
-    static bool active, propsDone; static int gfxLevel;
+    static bool active, propsDone, inst; static int gfxLevel;
     // vertex budgets (this build): LOD0 trees, LOD1 trees, impostors, shrubs, props
     static readonly int[] used = new int[5]; static int[] cap = new int[5];
     public static int TreeCount, ShrubCount, PropCount, Vertices, DrawMeshes;
@@ -117,7 +120,7 @@ public static class ModelLib
     // every model tree of this build: foot (x, y, z) and height in w, and its crown width (RoadShadow.cs draws their
     // shadows as dappled crowns; the meshes themselves, leaf quads and impostor cards, are not projected)
     public static readonly List<Vector4> TreeFeet = new List<Vector4>(); public static readonly List<float> TreeWidth = new List<float>();
-    public static void Reset() { TreeFeet.Clear(); TreeWidth.Clear(); bufs.Clear(); active = false; propsDone = false; for (int i = 0; i < used.Length; i++) used[i] = 0; TreeCount = ShrubCount = PropCount = Vertices = DrawMeshes = 0; LodCount[0] = LodCount[1] = LodCount[2] = 0; }
+    public static void Reset() { ModelInstancing.ResetQueue(); inst = false; TreeFeet.Clear(); TreeWidth.Clear(); bufs.Clear(); active = false; propsDone = false; for (int i = 0; i < used.Length; i++) used[i] = 0; TreeCount = ShrubCount = PropCount = Vertices = DrawMeshes = 0; LodCount[0] = LodCount[1] = LodCount[2] = 0; }
 
     // Medium and High only, with the baked lighting and the foliage shader; false = keep the card trees
     public static bool Begin(int gfx)
@@ -125,6 +128,7 @@ public static class ModelLib
         if (active) return true;
         if (gfx < 2 || !WorldBuilder.BakeReady || WorldBuilder.FoliageShader == null || !Load()) return false;
         gfxLevel = gfx; active = true;
+        inst = ModelInstancing.Usable(); // decided once per build, before the first instance
         bool hi = gfx >= 3;
         cap = hi ? new[] { 90000, 100000, 16000, 24000, 8000 } : new[] { 54000, 62000, 10000, 14000, 5000 };
         return true;
@@ -150,6 +154,13 @@ public static class ModelLib
     static void Put(Model m, int lod, int budget, Vector3 pos, float yaw, float sxz, float sy, Color leafTint, float shade, float sway, float phase)
     {
         var l = m.lods[lod];
+        if (inst && m.kind != 2 && lod < 2)
+        {
+            // instanced (ModelInstancing.cs): the instance is kept, its vertices are not copied; the budgets count the same
+            ModelInstancing.Queue(m, lod, pos, yaw, sxz, sy, leafTint, shade, sway, phase);
+            used[budget] += l.v.Length; Vertices += l.v.Length;
+            return;
+        }
         float c = Mathf.Cos(yaw), s = Mathf.Sin(yaw);
         var b = Room(m.kind, pos.x, pos.z, l.v.Length);
         int o = b.v.Count; float invH = 1f / Mathf.Max(0.01f, m.height);
@@ -249,10 +260,11 @@ public static class ModelLib
     // leaves them alone: they are at their final height and keep their bent normals).
     public static void Flush(Transform parent)
     {
-        if (!active || bufs.Count == 0) { bufs.Clear(); return; }
+        if (!active || (bufs.Count == 0 && ModelInstancing.QueueCount == 0)) { bufs.Clear(); ModelInstancing.ResetQueue(); return; }
         Material fm = Environment.FoliageMaterial(); fm.mainTexture = atlas; fm.name = "ModelFoliage";
         Material pm = WorldBuilder.Mat(Color.white, atlas, 0.1f); pm.name = "ModelProps";
         var holder = new GameObject("Models").transform; holder.SetParent(parent, false);
+        ModelInstancing.Flush(holder, fm, Lod0Dist, Lod1Dist, ModelsByKind(0), ModelsByKind(1));
         foreach (var kv in bufs)
         {
             int kind = (int)(kv.Key >> 40);
@@ -273,8 +285,16 @@ public static class ModelLib
             }
         }
         bufs.Clear();
-        Debug.Log("ModelLib: " + TreeCount + " trees (LOD0 " + LodCount[0] + ", LOD1 " + LodCount[1] + ", impostor " + LodCount[2] + "), " + ShrubCount + " shrubs, " + PropCount + " props, "
+        Debug.Log("ModelLib: " + (inst ? "instanced " + ModelInstancing.LastCount + " (" + ModelInstancing.LastMeshes + " shared meshes), " : "") + TreeCount + " trees (LOD0 " + LodCount[0] + ", LOD1 " + LodCount[1] + ", impostor " + LodCount[2] + "), " + ShrubCount + " shrubs, " + PropCount + " props, "
                   + Vertices + " vertices (trees " + (used[0] + used[1] + used[2]) + ", shrubs " + used[3] + ", props " + used[4] + "), " + DrawMeshes + " meshes");
+    }
+
+    // the loaded models of one kind (0 trees, 1 shrubs), in name order (stable species indices for ModelInstancing)
+    static Model[] ModelsByKind(int kind)
+    {
+        var names = kind == 0 ? treeNames : shrubNames; if (names == null) return new Model[0];
+        var r = new Model[names.Length]; for (int i = 0; i < names.Length; i++) r[i] = models[names[i]];
+        return r;
     }
 
     // shrubs along the fences and lamps in the paddock (Scenery.cs): once per build, while the ground is known

@@ -29,6 +29,8 @@
 //     replay cameras far off the track or zoomed under 44 degrees, the start menu's high views) everything is drawn,
 //     exactly as before.
 // PerfStats.cs reads the per-renderer numbers kept here (triangles, alpha-tested card area) for the debug overlay.
+// Instanced items (ModelInstancing.cs: GPU-instanced model trees and shrubs, no renderers): their world boxes go through
+// the same size and terrain tests into a second set of bitsets; ModelInstancing asks ExtraOn(k) for the current sector.
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
@@ -60,6 +62,9 @@ public class SectorVisibility : MonoBehaviour
     public long TrisAll; public int AvgSet;
 
     Track t; float[] trackY; int sectorPts; ulong[] sets; int words; bool[] off; int hint = -1, applied = -2;
+    // instanced items (ModelInstancing): world boxes, size reach, per-sector bitsets
+    Bounds[] xBox; float[] xReach; ulong[] xSets; int xWords;
+    public int ExtraCount => xBox != null ? xBox.Length : 0;
 
     // ================================================================ build
     public static void Prepare(Track track, GameObject root)
@@ -68,6 +73,7 @@ public class SectorVisibility : MonoBehaviour
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var sv = root.AddComponent<SectorVisibility>();
         sv.t = track; sv.Gfx = WorldBuilder.Gfx;
+        var mi = ModelInstancing.ForRoot(root); sv.xBox = mi != null ? mi.Boxes : null;
         try
         {
             sv.SplitAll(root);
@@ -236,6 +242,13 @@ public class SectorVisibility : MonoBehaviour
             Reach[i] = SizeReach(k * Mathf.Max(thick, 0.1f), px);
         }
         Cards = cards.ToArray();
+        // instanced items: one tree or shrub each, its height is the box's (the same rules as a renderer's)
+        int xn = ExtraCount; xReach = new float[xn];
+        for (int i = 0; i < xn; i++)
+        {
+            float thick = xBox[i].size.y;
+            xReach[i] = thick > 25f ? float.PositiveInfinity : SizeReach(k * Mathf.Max(thick, 0.1f), px);
+        }
     }
 
     // farthest distance at which an object `kh` pixel-metres tall still shows PxMin pixels of contrast through the haze
@@ -309,6 +322,7 @@ public class SectorVisibility : MonoBehaviour
         Sectors = (N + sectorPts - 1) / sectorPts;
         words = (n + 63) >> 6;
         sets = new ulong[Sectors * words];
+        int xn = ExtraCount; xWords = (xn + 63) >> 6; xSets = xn > 0 ? new ulong[Sectors * xWords] : null;
         BuildOccluder();
         int margin = Mathf.RoundToInt(AlongMargin / (float)t.ds);
         var prof = Occlusion ? new float[9 * Az * Steps] : null; var eyes = new Vector3[9];
@@ -323,6 +337,16 @@ public class SectorVisibility : MonoBehaviour
                 tops.Add(new Vector3(b.min.x + (a + 0.5f) * b.size.x / nx, b.max.y, b.min.z + (c + 0.5f) * b.size.z / nz));
         }
         tStart[n] = tops.Count;
+        var xStart = new int[xn + 1];
+        for (int i = 0; i < xn; i++)
+        {
+            xStart[i] = tops.Count;
+            if (!Occlusion) continue;
+            var b = xBox[i]; int nx = Mathf.Clamp(Mathf.CeilToInt(b.size.x / 48f), 1, 6), nz = Mathf.Clamp(Mathf.CeilToInt(b.size.z / 48f), 1, 6);
+            for (int a = 0; a < nx; a++) for (int c = 0; c < nz; c++)
+                tops.Add(new Vector3(b.min.x + (a + 0.5f) * b.size.x / nx, b.max.y, b.min.z + (c + 0.5f) * b.size.z / nz));
+        }
+        xStart[xn] = tops.Count;
         long total = 0;
         for (int s = 0; s < Sectors; s++)
         {
@@ -363,6 +387,16 @@ public class SectorVisibility : MonoBehaviour
                 sets[baseW + (i >> 6)] |= 1UL << (i & 63); count++;
             }
             total += count;
+            int xw = s * xWords;
+            for (int i = 0; i < xn; i++)
+            {
+                var b = xBox[i];
+                float dx = Mathf.Max(0f, Mathf.Max(b.min.x - hi.x, lo.x - b.max.x)), dy = Mathf.Max(0f, Mathf.Max(b.min.y - hi.y, lo.y - b.max.y)), dz = Mathf.Max(0f, Mathf.Max(b.min.z - hi.z, lo.z - b.max.z));
+                float d = Mathf.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (d > xReach[i]) continue;
+                if (Occlusion && d > OccNear && !SeenFromAny(eyes, prof, tops, xStart[i], xStart[i + 1])) continue;
+                xSets[xw + (i >> 6)] |= 1UL << (i & 63);
+            }
         }
         AvgSet = Sectors > 0 ? (int)(total / Sectors) : 0;
         occ = null;
@@ -468,6 +502,13 @@ public class SectorVisibility : MonoBehaviour
             if (!want) hidden++;
         }
         Hidden = hidden;
+    }
+
+    // instanced item k in the set of the sector applied this frame (true outside every region, or without sets)
+    public bool ExtraOn(int k)
+    {
+        if (xSets == null || sets == null || applied < 0 || k < 0 || k >= ExtraCount) return true;
+        return ((xSets[applied * xWords + (k >> 6)] >> (k & 63)) & 1UL) != 0;
     }
 
     // the sector whose camera region holds the camera, or -1 (draw everything)

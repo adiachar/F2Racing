@@ -31,6 +31,84 @@ Report from a Redmi Note 12 Pro 5G (Dimensity 1080, Mali-G68 MC4, 2400x1080, 120
   texture, no extra pixel lights, no full-screen effects; clouds/glare draw after the opaques on sky pixels only; MSAA kept.
 - On the phone: Auto should settle on "40 FPS LOCK" (or 60) within ~5 s of the green light and stay there.
 
+## GPU instancing of repeated objects (Nov 2026)
+
+Question: draw repeated objects (trees, shrubs, crowd, posts, lamps, trackside props) with GPU instancing instead of
+merged static meshes, with no visible change and no physics change. Answer per category, from the code and the
+baseline `shoot.py --cam chase,cockpit,far --s 300,850,1450,2500 --quality High --param stats=1` (Monza; the WebGL
+build ran the Medium model budgets: `ModelLib: 1324 trees (LOD0 13, LOD1 61, impostor 1250), 35 shrubs, 16 props`).
+Baseline: 97-135 draw calls, 46-56 SetPass, 0.65-0.77 M triangles a frame, mesh memory 86.3 MB, textures 38.3 MB.
+
+The key fact: **every world vertex carries its own baked light** (LightBake: a sun ray march over the roof map with
+soft shadows, ambient occlusion rings, crown self-shading, night floodlights), and the world is already static-batched
+by material. So (a) a merged mesh is already a handful of draw calls, instancing cannot cut many more; (b) a plain
+per-instance colour or light probe would change the look (a crown's sun side, its self-shadow, the shade of a nearby
+building all vary per leaf clump). Instancing pays only where one mesh of thousands of vertices is repeated: memory
+(one mesh instead of N copies), per-instance culling and per-instance LOD.
+
+| Category | Mesh size | Copies | Decision | Why |
+|---|---|---|---|---|
+| Model trees LOD 0 / LOD 1 (ModelLib, Poly Haven) | 3.9k / 1.0k verts | 13 / 61 (Medium), ~23 / ~99 (High) | **instanced** | big meshes, few species: 7.5 MB (Medium) / 12.6 MB (High) of merged copies, plus their CPU copies and static-batch copy; and now LOD by camera distance |
+| Model shrubs | 360-440 verts | 35 / ~60 | **instanced** | same reasons, 2 meshes |
+| Model-tree impostors (static LOD 2) | 8 verts | 1250 | merged (as before) | 8 vertices per instance is less than the per-instance data and setup; already 0 extra draws |
+| Street lamps (ModelLib props) | 312 verts | 16-25 | merged | 5k vertices in all, in the paddock only (1-2 draws); would need an instanced Baked.shader |
+| Card trees, wood bands (Environment / RealWorld) | 8-12 verts | thousands | merged | quads; see impostors |
+| Grandstand crowd (Trackside, TracksideArt.Crowd) | texture strips | - | merged | there is no person mesh: the crowd is a painted texture on one quad per row section (2 triangles for ~16 seats). 3D people (People.cs LOD1, ~300 triangles) in the seats would be 20-40k spectators x 300 = 6-12 M triangles, a new look and 10x the frame's triangles |
+| Pit people / crew (People.cs, PitCrew, PeoplePits) | 0.3-1.3k tris, skinned | ~30 | unchanged | each is animated with its own pose (22 bones); instancing needs per-instance bone palettes (GPU skinning by texture), a separate project |
+| Posts, fence posts, Armco profile, marshal posts, boards (Trackside / Scenery / TracksideArt) | 12-24 verts, every one a different size | thousands | merged | tiny boxes of varying height and width with per-vertex AO and bake; instancing small meshes is slower than merged on Mali / Adreno |
+
+### What was built (`ModelInstancing.cs`, `FoliageInst.shader`, `Foliage.cginc`)
+
+- **Build**: `ModelLib.Put` queues LOD 0 / LOD 1 trees and shrubs (`ModelInstancing.Queue`) instead of copying their
+  vertices; budgets, LOD choice, placement and every random number are unchanged (the same trees in the same places,
+  `TreeFeet` unchanged, so the tree collision solids and road shadows are the same). `Flush` makes 13 shared meshes
+  (5 species x LOD 0/1, ONE mesh holding all five impostors, 2 shrubs; ~25k vertices, non-readable) and per instance
+  a matrix, a box, a sway code and its texel ranges.
+- **Light, exactly as before**: `LightBake.AddOccluders` rasterises each instance's triangles into the roof map (the
+  same triangles the merged mesh had; refactored into `LightBake.Occluder`), and `LightBake.Apply` bakes every instance
+  vertex of every LOD it may show (`LightBake.BakeFoliage`: the same `BakeVertex`, same world position and normal
+  arithmetic as `ModelLib.Put`, same parallel chunks) and multiplies the BakeTint leaf / wood tint in. The result is an
+  RGBA half-float texture 2048 wide (`ModelInstBake`, ~1.1 MB Medium / ~1.9 MB High) that `FoliageInst.shader` reads
+  per vertex (texel = instance base + vertex index in uv1.x). The shading itself is `Foliage.cginc`, now shared by
+  Foliage.shader and FoliageInst.shader (moved, not changed), so the pixels are the same maths.
+- **Drawing** (`LateUpdate`, after SectorVisibility): per instance, the sector set (`SectorVisibility.ExtraOn`: each
+  instance's box goes through the same size / terrain tests as a renderer, a second bitset per 50 m sector), the
+  frustum, then the LOD by camera distance: full mesh within `ModelLib.Lod0Dist` (48 m High / 36 m Medium), LOD 1 to
+  `Lod1Dist` (100 m), impostor beyond; the switch is a dithered cross-fade (screen-space interleaved gradient noise,
+  complementary for the two LODs) over the 8 / 12 m beyond each distance, so within it the finer mesh is always whole;
+  never finer than the build gave the tree; a zoomed lens (TV, under 45 degrees) scales the distance down. Up to 13
+  `Graphics.DrawMeshInstanced` calls with a `MaterialPropertyBlock` array `_Inst` (texel base, sway phase, sway amount
+  + 4 x species, fade); arrays, blocks and planes are allocated at load: 0 bytes per frame. (DrawMeshInstanced rather
+  than RenderMeshInstanced: per-instance MaterialPropertyBlock arrays are documented for it.)
+- **Fallback**: `SystemInfo.supportsInstancing`, vertex texture reads (shader level 3.0), RGBA half textures, 2048 px
+  textures and `FoliageInst` supported, else ModelLib merges exactly as before. Shot parameter `inst=0` forces the
+  merged path for A/B pictures. `BuildScript` adds `FoliageInstInstanced.mat` / `CarPaintInstanced.mat` with GPU
+  instancing on, so the INSTANCING_ON variants survive Unity's default "Strip Unused" instancing stripping (all the
+  game's materials are made at runtime; the CarPaint one also protects the rivals' instancing).
+- **Stats**: the overlay / `PERF_STATS` line has `inst draws= shown=/n tris=`; `audit.py` prints them.
+
+### Expected numbers (estimates: confirm with `audit.py` / the overlay)
+
+| Monza, chase | Before (measured) | After (estimate) |
+|---|---|---|
+| Mesh memory (overlay, readable counted twice) | 86.3 MB | ~66-72 MB (-15 MB merged copies + their static-batch copies, +1 MB shared meshes); High ~ -25-35 MB |
+| Texture memory | 38.3 MB | +1.1 MB (bake texture; High +1.9 MB) |
+| Draw calls | 97-135 | about the same: +6-10 instanced calls, -3-6 merged shrub blocks; SetPass +1-2. Not fewer: the merged trees were already one call per 400 m block |
+| Triangles | 0.65-0.77 M | -10-40 k (LOD 0 trees beyond 56 m drop to LOD 1, LOD 1 beyond 112 m to the impostor; per-tree culling instead of per 400 m block) |
+| CPU per frame | - | ~0.05 ms (~110 instances: sector bit, AABB test, distance) + 6-13 draw submissions |
+| Load | LightBake 795k vertices, 477 ms (WebGL, 1 core) | +~65k vertices baked (the fallback LODs), ~+40 ms there, ~+10-20 ms on a 4-core phone |
+
+### Risks
+
+- Not compiled here (no Unity): the C# passes the syntax check; the shaders were checked by reading. First build:
+  watch for FoliageInst compile errors and for the `ModelLib: instanced N` log line.
+- The far LODs are new for these trees at those distances (they existed for trees farther from the track): a LOD 0
+  tree at the fence now shows as LOD 1 from 56 m and as two cards from 112 m. Compare `inst=0` and default shots;
+  if a switch shows, widen `Fade0` / `Fade1` or raise the distances in `ModelInstancing`.
+- The bake is stored as half floats (the same precision as the shader's half colour interpolator: invisible).
+- If the instancing variants were stripped anyway, the instanced trees would draw at the wrong place: check one
+  device build (trees present and in place at Monza on Medium/High).
+
 ## Rendering architecture audit (Nov 2026): track-sector visibility
 
 The sections further down are older (Sept-Oct); the quality tiers and Auto now live in `GameManager.cs`
@@ -108,8 +186,7 @@ The sections further down are older (Sept-Oct); the quality tiers and Auto now l
 - **Distance-faded detail reads** in Ground/Baked: the second detail read is already Medium/High only (LOD 300 vs 150);
   far pixels read the top mips (cache-resident), so skipping them saves ALU only, and a branch around a sample needs
   explicit gradients, which are half-rate on some Mali GPUs.
-- **Camera-distance LOD for ModelLib trees** (LOD0 near the track seen from 1 km): needs a second mesh per 100 m block
-  and dithered cross-fade in Foliage.shader; next step if the overlay shows model-tree triangles high.
+- ~~**Camera-distance LOD for ModelLib trees**~~: done with GPU instancing (see "GPU instancing of repeated objects").
 - **Far plane = fog end**: Unity's fog uses view depth, so at the screen edge an object is fully fogged only at
   ~1.47x fog end (2870 m at Monza), beyond today's 2500 m far plane: no gain.
 - **EnvTex atlas compression** belongs with the EnvTex caching work (other engineer): `Compress` must run before the

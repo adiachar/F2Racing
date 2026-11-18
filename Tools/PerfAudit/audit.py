@@ -73,7 +73,8 @@ def main():
     cols = [("tier", "tier"), ("s", "s"), ("cam", "cam"), ("world.drawn", "world drawn"), ("world.tris", "world tris"),
             ("before.drawn", "before"), ("before.tris", "before tris"), ("other.drawn", "other"), ("other.tris", "other tris"),
             ("cards.now", "cards"), ("cards.before", "cards before"), ("mats", "mats"), ("variants", "variants"),
-            ("hidden", "hidden"), ("tex", "tex"), ("mesh", "mesh"), ("gpu.draws", "draws"), ("gpu.setpass", "setpass")]
+            ("hidden", "hidden"), ("tex", "tex"), ("mesh", "mesh"), ("gpu.draws", "draws"), ("gpu.setpass", "setpass"),
+            ("inst.draws", "inst draws"), ("inst.shown", "inst shown"), ("inst.tris", "inst tris")]
     print("| " + " | ".join(c[1] for c in cols) + " |")
     print("|" + "---|" * len(cols))
     for r in rows:

@@ -47,6 +47,17 @@ public static class BuildScript
             var sh = Shader.Find("Legacy Shaders/Diffuse");
             if (sh != null) AssetDatabase.CreateAsset(new Material(sh), "Assets/Resources/Diffuse.mat");
         }
+        // GPU instancing variants: with the default "Strip Unused" instancing setting Unity keeps a shader's
+        // INSTANCING_ON variants only if a material in the build has GPU instancing on. The game makes its materials at
+        // runtime, so these two assets keep them: the instanced model trees (FoliageInst, ModelInstancing.cs) and the
+        // rivals' shared car material (CarPaint, CarModel.CreateMergedRival)
+        foreach (var nm in new[] { "FoliageInst", "CarPaint" })
+        {
+            string mp = "Assets/Resources/" + nm + "Instanced.mat";
+            if (File.Exists(mp)) continue;
+            var sh = AssetDatabase.LoadAssetAtPath<Shader>("Assets/Resources/" + nm + ".shader");
+            if (sh != null) AssetDatabase.CreateAsset(new Material(sh) { enableInstancing = true }, mp);
+        }
         if (!File.Exists("Assets/Resources/Shadow.mat"))
             AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Transparent")), "Assets/Resources/Shadow.mat");
         if (!File.Exists(ScenePath))
