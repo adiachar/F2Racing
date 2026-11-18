@@ -7,7 +7,7 @@ namespace FormulaSim
     public static class Par
     {
         // true by default; the WebGL player has no worker threads, and Parallel.For there can hang the page
-        public static bool Enabled = Environment.ProcessorCount > 1;
+        public static bool Enabled = System.Environment.ProcessorCount > 1;
 
         public static void For(int from, int to, Action<int> body)
         {
