@@ -122,7 +122,7 @@ public sealed class MenuStudio
         kg.transform.rotation = Quaternion.LookRotation(new Vector3(0.5f, -0.62f, 0.6f));
         var key = kg.AddComponent<Light>();
         key.type = LightType.Directional; key.color = new Color(1f, 0.95f, 0.88f); key.intensity = 1.15f;
-        key.shadows = LightShadows.None; key.cullingMask = 1 << Layer; key.renderMode = LightRenderMode.ForceImportant;
+        key.shadows = LightShadows.None; key.cullingMask = 1 << Layer; key.renderMode = LightRenderMode.ForcePixel;
         // fill (cool, camera right), rim (from behind, above), floor bounce and a dark garage ambient
         var s = new SphericalHarmonicsL2();
         s.Clear();
