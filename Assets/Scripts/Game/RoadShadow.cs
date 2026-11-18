@@ -183,7 +183,7 @@ public static class RoadShadow
         // read the world grid into the track-space texture
         // (load time: rows in parallel; LightAt only reads the finished grid, no Unity API)
         var px = new byte[W * Hs];
-        System.Threading.Tasks.Parallel.For(0, rows, r =>
+        FormulaSim.Par.For(0, rows, r =>
         {
             var q = rowP[r]; int st = r / Hs, row = r - st * Hs, o = row * W + st * C;
             for (int j = 0; j < C; j++)

@@ -98,7 +98,7 @@ namespace FormulaSim
                     gg[j * nxL + i] = (float)(sh / sw * (1 - u) + lo * u);
                 }
             }
-            System.Threading.Tasks.Parallel.For(0, ny, Row);
+            FormulaSim.Par.For(0, ny, Row);
             GridSave?.Invoke(key, g);
         }
 

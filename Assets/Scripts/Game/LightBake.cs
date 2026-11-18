@@ -220,7 +220,7 @@ public static class LightBake
             // writes its own colour, so big meshes are baked in parallel chunks (pure math, no Unity API off the main
             // thread; mesh.colors is set below on the main thread). Each chunk starts its Nearest() search afresh.
             if (v.Length >= 2 * BakeChunk)
-                System.Threading.Tasks.Parallel.For(0, (v.Length + BakeChunk - 1) / BakeChunk, ch =>
+                FormulaSim.Par.For(0, (v.Length + BakeChunk - 1) / BakeChunk, ch =>
                 {
                     int h1 = -1, h2 = -1, e = System.Math.Min(v.Length, (ch + 1) * BakeChunk);
                     for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref h1, ref h2);

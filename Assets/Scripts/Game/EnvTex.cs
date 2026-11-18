@@ -62,11 +62,11 @@ public static class EnvTex
         // load time: the per-pixel functions are pure math (noise, photo arrays; no Unity API), so the rows run in
         // parallel; the mean is still summed in pixel order, so the texture is bit-identical to the serial loop
         var c = new Color[w * h]; double sr = 0, sg = 0, sb = 0;
-        System.Threading.Tasks.Parallel.For(0, h, y => { for (int x = 0; x < w; x++) c[y * w + x] = f((float)x / w, (float)y / h, x, y); });
+        FormulaSim.Par.For(0, h, y => { for (int x = 0; x < w; x++) c[y * w + x] = f((float)x / w, (float)y / h, x, y); });
         for (int i = 0; i < c.Length; i++) { var k = c[i]; sr += k.r; sg += k.g; sb += k.b; }
         float n = w * h, kr = mean.r / Mathf.Max(1e-4f, (float)(sr / n)), kg = mean.g / Mathf.Max(1e-4f, (float)(sg / n)), kb = mean.b / Mathf.Max(1e-4f, (float)(sb / n));
         var px = new Color32[w * h];
-        System.Threading.Tasks.Parallel.For(0, h, y =>
+        FormulaSim.Par.For(0, h, y =>
         {
             for (int x = 0, i = y * w; x < w; x++, i++)
             {
