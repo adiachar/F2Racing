@@ -84,6 +84,14 @@ namespace FormulaSim
         // charge (a full battery could not harvest any more anyway).
         public double ersMapSoc = 0.6;
         public double ersClipMinKmh = 250;   // a negative deployMap (superclip zone) harvests above this speed
+        // 2026 Overtake Mode (replaces DRS; FormulaCar.otArmed / otOn, armed by OvertakeRule): within 1 s of the car ahead
+        // at a detection point, the driver may deploy up to otEnergy extra MGU-K energy a lap (its own allowance, not
+        // from the battery), and full 350 kW is allowed up to otFullKmh (then down to zero at otZeroKmh) instead of the
+        // normal ramp-down from 290 km/h. Boost button (FormulaCar.boostOn): full MGU-K power from the battery, whatever
+        // the energy-management map says, while the charge is above boostMinSoc. Both only flat out.
+        public double otEnergy = 0.5e6;      // J per lap
+        public double otFullKmh = 337, otZeroKmh = 355;
+        public double boostMinSoc = 0.05;
         public double shiftTime = 0.03;
         // ---- feel: turbo lag, tyre relaxation, downshift kick (all 0 = off, as in the JS prototype) ----
         // turbo without MGU-H: boost follows the throttle with a lag (d boost/dt = (throttle - boost) / tau); off boost
@@ -382,7 +390,17 @@ namespace FormulaSim
         // rest does not select reverse (it did after 0.6 s, so every car reversed off its slot before lights out)
         public bool gridHold;
         public double deployMap = 1;        // -1..2 deploy map here (set by the game / AI from RacingLine.deploy; see CarConfig.ersMapSoc)
-        public void NewLap() { ersHarvested = 0; fuelLastLap = fuelThisLap; fuelThisLap = 0; }
+        // Overtake Mode and boost (CarConfig.otEnergy). otArmed: set by the game (OvertakeRule); otOn, boostOn: the driver's
+        // buttons (player or AI); otActive / boostActive: in use this step (read-outs). otEnergy: overtake energy left this
+        // lap (J, NaN = full); the new lap's allowance is given at the next detection point (otRefill), so a section that
+        // runs across the line does not get two.
+        public bool otArmed, otOn, boostOn, otActive, boostActive, otRefill;
+        public double otEnergy = double.NaN;
+        public int otIdx = -1;              // track point at OvertakeRule's last look at this car
+        public double OtLeft => double.IsNaN(otEnergy) ? cfg.otEnergy : otEnergy;
+        public double OtFrac => cfg.otEnergy > 0 ? Clamp(OtLeft / cfg.otEnergy, 0, 1) : 0;
+        public void OtRefill() { otEnergy = cfg.otEnergy; otRefill = false; }
+        public void NewLap() { ersHarvested = 0; fuelLastLap = fuelThisLap; fuelThisLap = 0; otRefill = true; }
 
         // ---------- damage ----------
         public Damage damage;               // always recorded; changes the physics only with cfg.damage
@@ -533,6 +551,15 @@ namespace FormulaSim
             double kmh = Math.Abs(v) * 3.6, f = kmh <= 290 ? 1 : kmh <= 340 ? (1800 - 5 * kmh) / 350 : kmh < 345 ? (345 - kmh) / 5 * (100.0 / 350) : 0;
             if (fade && kmh > c.ersFadeFrom) f = Math.Min(f, 1 - (1 - c.ersFadeFrac) * Math.Min(1, (kmh - c.ersFadeFrom) / (c.ersFadeTo - c.ersFadeFrom)));
             return c.ersPower * f;
+        }
+
+        // MGU-K power allowed in Overtake Mode: full to otFullKmh (337 km/h), then linearly down to zero at otZeroKmh
+        public static double OvertakePowerAt(CarConfig c, double v)
+        {
+            double kmh = Math.Abs(v) * 3.6;
+            if (kmh <= c.otFullKmh) return c.ersPower;
+            if (kmh >= c.otZeroKmh) return 0;
+            return c.ersPower * (c.otZeroKmh - kmh) / (c.otZeroKmh - c.otFullKmh);
         }
 
         // full-throttle MGU-K power for this speed and state of charge (0..1): + = deploy, - = superclip harvest (W)
@@ -875,7 +902,8 @@ namespace FormulaSim
             }
             if (kick > 0) { double fk = Math.Min(kick / 0.06, kick / dt); kick -= fk * dt; if (vx > 1) fdrive -= fk; else kick = 0; }
             // ---------- hybrid (MGU-K + battery) ----------
-            double fK = 0, harvestW = 0;
+            double fK = 0, harvestW = 0, otW = 0, pKNow = 0; // otW: part of the MGU-K power pKNow paid from the overtake allowance
+            otActive = boostActive = false;
             if (c.ersPower > 0)
             {
                 if (double.IsNaN(ersEnergy)) ersEnergy = c.ersCapacity;
@@ -887,6 +915,24 @@ namespace FormulaSim
                 double pK = managed ? ErsFull(c, vx, ersEnergy / c.ersCapacity, deployMap) : 0, vK = Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
                 double kStart = ersStart * ersStart;
                 if (pK > 0) pK *= kStart;
+                if (managed && thr >= 0.9 && (boostOn || otOn))
+                {
+                    // boost: full power from the battery (FIA ramp-down only), no map, no superclip
+                    if (boostOn && ersEnergy > c.ersCapacity * c.boostMinSoc)
+                    {
+                        double pb = ErsPowerAt(c, vx, false) * kStart;
+                        if (pb > pK) pK = pb;
+                        boostActive = true;
+                    }
+                    // Overtake Mode: what the car would deploy anyway comes from the battery, the rest (up to the overtake
+                    // power curve) from this lap's overtake allowance
+                    if (otOn && otArmed && OtLeft > 0)
+                    {
+                        double po = OvertakePowerAt(c, vx) * kStart, pBase = ersEnergy > 0 ? Math.Max(pK, 0) : 0;
+                        if (po > pBase) { otW = po - pBase; pK = po; otActive = true; }
+                    }
+                }
+                pKNow = pK;
                 double pMax = managed ? pIce / thr : 0;     // ICE crank power available now (with the boost there is)
                 if (managed && thr >= 0.9 && pK < 0)
                 {
@@ -909,7 +955,7 @@ namespace FormulaSim
                     double more = (1 - thr) * pMax; fdrive += more * c.driveEff / vK; pIce += more;
                 }
                 else if (managed && thr >= 0.9 && pK <= 0) { }
-                else if (!standingStart && !reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && ersEnergy > 0)
+                else if (!standingStart && !reverse && shiftTimer <= 0 && thr > 0 && rpm < c.redline && (ersEnergy > 0 || otW > 0))
                 {
                     fK = thr * c.driveEff * (managed ? pK : ErsPowerAt(c, vx) * kStart) / Math.Max(Math.Abs(wR) * c.wheelRadius, 15);
                     fdrive += fK;
@@ -1044,7 +1090,15 @@ namespace FormulaSim
                 // the battery only pays for electric drive that reaches the road (traction control cuts the rest)
                 double used = fK > 0 && fdrive > 0 ? Math.Min(fK, Math.Max(FxRl, 0) * fK / fdrive) * Math.Abs(vx) / c.driveEff : 0;
                 double got = Math.Min(harvestW * dt, Math.Max(0, Math.Min(c.ersCapacity - ersEnergy, c.ersHarvestLap - ersHarvested)));
-                ersEnergy = Clamp(ersEnergy - used * dt + got, 0, c.ersCapacity); ersHarvested += got;
+                double fromBatt = used;
+                if (otW > 0 && pKNow > 0)
+                {
+                    // the overtake share is paid from the lap's overtake allowance, the rest from the battery
+                    double otUse = used * Math.Min(1, otW / pKNow);
+                    otEnergy = Math.Max(0, OtLeft - otUse * dt);
+                    fromBatt = used - otUse;
+                }
+                ersEnergy = Clamp(ersEnergy - fromBatt * dt + got, 0, c.ersCapacity); ersHarvested += got;
                 ersKw = (used - got / dt) / 1000;
             }
 

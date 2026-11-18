@@ -9,6 +9,9 @@
 //  * dash (bottom centre): one slim glass bar: shift-light strip (green -> red -> blue), speed, big gear, battery
 //    with deploy / harvest state, tyre quad (temperature colour, tread fill). Beside it, when there is room,
 //    tyre / brake temperatures and fuel. Above it: X-MODE, TOW, YELLOW, BOX chips
+//  * BOOST and OVERTAKE buttons (right, above the brake pedal): boost = full MGU-K power while held; Overtake Mode
+//    (2026, replaces DRS) lights up when armed at a detection point, a tap uses it, the ring is the energy left
+//  * local mini-map (GameManager.cs: DrawMiniMap) under the race card
 //  * banners (top centre): fastest lap, pit stop, track limits, jump start, flags; they slide in and out
 // Sector and gap bookkeeping is in Sectors.cs. Number strings come from tables filled once (HudNum) or are rebuilt only
 // when their value changes (HudSlot); text widths are measured once per value, so drawing allocates nothing per frame.
@@ -67,6 +70,7 @@ public partial class GameManager
         DrawRaceCard();
         DrawTower();
         DrawWheel(speed);
+        DrawErsButtons();
         DrawBanners();
         DrawRcHud(); // VSC delta, safety car and blue-flag read-outs (GameManagerRaceControl.cs)
         DrawFps();
@@ -81,8 +85,8 @@ public partial class GameManager
         float ch = playground ? S(42) : hudSectors ? S(85) : S(70);
         cardRect = new Rect(Mathf.Round(hudR - cw), hudT, cw, ch);
         btnRight = cardRect.x - S(8);
-        float ms = S(80);
-        mapRect = new Rect(Mathf.Round(hudR - ms), cardRect.yMax + S(6), ms, ms);
+        float mw = S(84), mh = S(92); // local mini-map: taller than wide (300 m ahead, 150 m behind); ends above the gas pedal
+        mapRect = new Rect(Mathf.Round(hudR - mw), cardRect.yMax + S(6), mw, mh);
     }
 
     void HudInit()
@@ -357,6 +361,9 @@ public partial class GameManager
         hudPitSeen = pitStops;
         if (jumped && !hudJumpSeen) Banner("JUMP START", "+" + JumpPenalty.ToString("0") + " s TIME PENALTY", HudAccent);
         hudJumpSeen = jumped;
+        // Overtake Mode armed at a detection point
+        if (car.otArmed && !otBannerSeen) Banner("OVERTAKE AVAILABLE", "TAP OVERTAKE  ·  +0.5 MJ", HudPurple);
+        otBannerSeen = car.otArmed;
 
         // yellow flag: a stopped car up to 400 m ahead of you
         yellowCheckT -= dt;
@@ -707,7 +714,9 @@ public partial class GameManager
         float soc = double.IsNaN(car.ersEnergy) ? 1f : Mathf.Clamp01((float)(car.ersEnergy / car.cfg.ersCapacity));
         double kw = double.IsNaN(car.ersKw) ? 0 : car.ersKw;
         string mode; Color mc;
-        if (kw > 5) { mode = "DEPLOY"; mc = HudBlue; }
+        if (car.otActive && kw > 5) { mode = "OVERTAKE"; mc = HudPurple; }
+        else if (car.boostActive && kw > 5) { mode = "BOOST"; mc = HudCyan; }
+        else if (kw > 5) { mode = "DEPLOY"; mc = HudBlue; }
         else if (kw < -5 && car.throttle > 0.5) { mode = "SUPERCLIP"; mc = HudAmber; }
         else if (kw < -5) { mode = "HARVEST"; mc = HudGreen; }
         else { mode = ""; mc = HudGrey; }
@@ -787,6 +796,230 @@ public partial class GameManager
             }
         }
         TF(new Rect(px0, dy + S(38), pw, S(9)), Weather.TyreName(carSet), UiKit.Semi, 5.8f, SetCol[Mathf.Clamp(carSet, 0, SetCol.Length - 1)]);
+    }
+
+    // ---------------------------------------------------------------- Overtake Mode and boost (FormulaCar.otOn / boostOn)
+    // Overtake Mode (2026, replaces DRS): FormulaSim.OvertakeRule arms a car that crosses a detection point within 1 s of
+    // the car ahead; armed, a tap on OVERTAKE deploys the lap's extra 0.5 MJ with full power to 337 km/h (tap again to
+    // stop and save the rest; it also stops on the brakes and at the next detection point). BOOST: full MGU-K power from
+    // the battery, whatever the energy map says, while held (charge above 5 %). Keys: Shift / B boost, O / Q overtake.
+    // The buttons read the touches themselves (like the pedals): IMGUI only follows one finger, and the right thumb is
+    // usually on the gas.
+    OvertakeRule otRule; RacingLine otLine; double otRace;
+    bool otLatch, otBannerSeen; int boostFinger = -1;
+    bool ErsButtonsShown => car != null && car.cfg.ersPower > 0 && !replaying && !menuOpen && (ui == null || !ui.Showing);
+    // OVERTAKE right of BOOST, both above the brake pedal (left of the gas pedal, below the mini-map)
+    Rect OvertakeRect
+    {
+        get
+        {
+            float d = S(44), x = Mathf.Min(GasRect.x - S(10) - d, UiKit.Safe.xMax - S(8) - d);
+            return new Rect(Mathf.Round(x), Mathf.Round(Mathf.Max(UiKit.Safe.y + S(4), Screen.height - S(136) - d)), d, d);
+        }
+    }
+    Rect BoostRect { get { var o = OvertakeRect; return new Rect(o.x - o.width - S(8), o.y, o.width, o.height); } }
+
+    // 60 times a second (StepRivals): every car past the detection points
+    void OvertakeTick()
+    {
+        if (track == null || line == null || playground || car == null) return;
+        if (otRule == null || otRule.track != track || otLine != line) { otRule = new OvertakeRule(track, line); otLine = line; }
+        if (raceTime < otRace - 0.5) otRule.Reset(); // a restart
+        otRace = raceTime;
+        bool race = raceLaps > 0 && quali == null && (raceCtl == null || !raceCtl.NoOvertaking);
+        otRule.Update(car, pRun != null ? -1 : idx, simTime, race && pLap >= 2);
+        for (int i = 0; i < rivals.Count; i++) { var d = rivals[i]; otRule.Update(d.car, d.InPit ? -1 : d.idx, simTime, race && d.lap >= 2); }
+    }
+
+    // once a frame, before the physics steps (Update): the two buttons into the player's car
+    void ErsButtonsInput()
+    {
+        if (car == null) return;
+        bool boost = false, tap = false;
+        if (ErsButtonsShown && !Paused)
+        {
+            float m = S(4);
+            var b = BoostRect; var o = OvertakeRect;
+            var bHit = new Rect(b.x - m, b.y - m, b.width + 2 * m, b.height + 2 * m);
+            var oHit = new Rect(o.x - m, o.y - m, o.width + 2 * m, o.height + 2 * m);
+            bool held = false;
+            for (int ti = 0, tn = Input.touchCount; ti < tn; ti++)
+            {
+                var t = Input.GetTouch(ti);
+                var p = new Vector2(t.position.x, Screen.height - t.position.y);
+                bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
+                if (t.phase == TouchPhase.Began) { if (bHit.Contains(p)) boostFinger = t.fingerId; else if (oHit.Contains(p)) tap = true; }
+                if (t.fingerId == boostFinger && !ended) held = true;
+            }
+            if (!held) boostFinger = -1;
+            boost = held;
+            if (Input.touchCount == 0)
+            {
+                var mp = new Vector2(Input.mousePosition.x, Screen.height - Input.mousePosition.y);
+                if (Input.GetMouseButton(0) && bHit.Contains(mp)) boost = true;
+                if (Input.GetMouseButtonDown(0) && oHit.Contains(mp)) tap = true;
+            }
+            if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.B)) boost = true;
+            if (Input.GetKeyDown(KeyCode.O) || Input.GetKeyDown(KeyCode.Q)) tap = true;
+        }
+        else boostFinger = -1;
+        if (tap)
+        {
+            if (otLatch) otLatch = false;
+            else if (car.otArmed && car.OtLeft > 1) otLatch = true;
+            else Flash(car.otArmed ? "Overtake energy used" : "Overtake not available");
+        }
+        if (!car.otArmed || car.OtLeft <= 0 || car.brake > 0.3) otLatch = false;
+        car.otOn = otLatch; car.boostOn = boost;
+    }
+
+    void DrawErsButtons()
+    {
+        if (!ErsButtonsShown) return;
+        float t = Time.unscaledTime, pulse = 0.5f + 0.5f * Mathf.Sin(t * 6f);
+        Color glass = new Color(0.05f, 0.06f, 0.08f, 0.66f), edge = new Color(1f, 1f, 1f, 0.16f);
+
+        // BOOST: glass; blue while it deploys, dim when the battery is too low
+        var b = BoostRect;
+        float soc = double.IsNaN(car.ersEnergy) ? 1f : Mathf.Clamp01((float)(car.ersEnergy / car.cfg.ersCapacity));
+        bool bOk = soc > car.cfg.boostMinSoc, bOn = car.boostOn;
+        var bb = UiKit.Scale(b, bOn ? 0.93f : 1f);
+        if (car.boostActive) UiKit.Rect(UiKit.Scale(bb, 1.16f), new Color(HudBlue.r, HudBlue.g, HudBlue.b, 0.22f), 999f);
+        Disc(bb, car.boostActive ? new Color(HudBlue.r * 0.8f, HudBlue.g * 0.8f, HudBlue.b * 0.8f, 0.9f) : bOn ? new Color(0.18f, 0.19f, 0.23f, 0.88f) : glass);
+        UiKit.Outline(bb, bOk ? new Color(HudBlue.r, HudBlue.g, HudBlue.b, 0.55f) : edge, 999f, 0.8f);
+        TF(new Rect(bb.x, bb.y - S(3), bb.width, bb.height), "BOOST", UiKit.Bold, 7f, bOk ? Color.white : HudFaint, TextAnchor.MiddleCenter);
+        TF(new Rect(bb.x, bb.y + S(7), bb.width, bb.height), HudNum.Pct(Mathf.RoundToInt(soc * 100)), UiKit.Semi, 5.6f, bOk ? HudGrey : HudRed, TextAnchor.MiddleCenter);
+
+        // OVERTAKE: grey until armed, then pulsing purple / cyan; solid cyan while it deploys; the ring = energy left
+        var o = OvertakeRect;
+        bool armed = car.otArmed, on = car.otOn, act = car.otActive;
+        var ob = UiKit.Scale(o, on ? 0.93f : 1f);
+        Color hot = Color.Lerp(HudPurple, HudCyan, pulse);
+        if (armed) UiKit.Rect(UiKit.Scale(ob, 1.22f), new Color(hot.r, hot.g, hot.b, on ? 0.30f : 0.14f + 0.16f * pulse), 999f);
+        Color fill = !armed ? glass : act ? new Color(HudCyan.r * 0.85f, HudCyan.g * 0.85f, HudCyan.b * 0.85f, 0.92f) : on ? new Color(HudPurple.r, HudPurple.g, HudPurple.b, 0.9f) : new Color(hot.r * 0.7f, hot.g * 0.7f, hot.b * 0.7f, 0.85f);
+        Disc(ob, fill);
+        UiKit.Outline(ob, armed ? new Color(1f, 1f, 1f, 0.45f) : edge, 999f, 0.8f);
+        Color tc = armed ? (act ? new Color(0.03f, 0.04f, 0.06f) : Color.white) : HudFaint;
+        TF(new Rect(ob.x, ob.y - S(3), ob.width, ob.height), "OVERTAKE", UiKit.Bold, 5.6f, tc, TextAnchor.MiddleCenter);
+        TF(new Rect(ob.x, ob.y + S(7), ob.width, ob.height), HudNum.Pct(Mathf.RoundToInt((float)car.OtFrac * 100)), UiKit.Semi, 5.6f, armed ? tc : HudFaint, TextAnchor.MiddleCenter);
+        // energy ring (GL, clipped to nothing: the whole screen)
+        if (GlBegin(new Rect(0, 0, Screen.width, Screen.height)))
+        {
+            float r0 = o.width * 0.5f + S(2.2f), r1 = r0 + S(1.7f);
+            GlRing(o.center.x, o.center.y, r0, r1, 1f, new Color(1f, 1f, 1f, 0.10f));
+            float f = (float)car.OtFrac;
+            if (f > 0.002f) GlRing(o.center.x, o.center.y, r0, r1, f, armed ? (act ? HudCyan : HudPurple) : new Color(0.55f, 0.58f, 0.64f, 0.7f));
+            GlEnd();
+        }
+    }
+
+    // ---------------------------------------------------------------- GL drawing in OnGUI (mini-map, energy ring)
+    // Triangles in GUI pixels (y down), clipped to a rectangle on the CPU (Sutherland-Hodgman), so nothing spills out
+    // of a panel. Repaint only; scratch arrays are fixed, nothing is allocated per frame.
+    static Material glMat;
+    static Material GlMat
+    {
+        get
+        {
+            if (glMat == null)
+            {
+                var sh = Shader.Find("Hidden/Internal-Colored");
+                if (sh == null || !sh.isSupported) sh = Shader.Find("Sprites/Default");
+                if (sh == null) return null;
+                glMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave };
+                if (glMat.HasProperty("_SrcBlend")) glMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                if (glMat.HasProperty("_DstBlend")) glMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                if (glMat.HasProperty("_Cull")) glMat.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+                if (glMat.HasProperty("_ZWrite")) glMat.SetInt("_ZWrite", 0);
+                if (glMat.HasProperty("_ZTest")) glMat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+            }
+            return glMat;
+        }
+    }
+    float glX0, glY0, glX1, glY1; Color glCol = Color.white;
+    static readonly float[] glAx = new float[16], glAy = new float[16], glBx = new float[16], glBy = new float[16];
+    bool GlBegin(Rect clip)
+    {
+        if (Event.current.type != EventType.Repaint) return false;
+        var m = GlMat; if (m == null) return false;
+        glX0 = clip.xMin; glY0 = clip.yMin; glX1 = clip.xMax; glY1 = clip.yMax;
+        m.SetPass(0);
+        GL.PushMatrix(); GL.LoadPixelMatrix(0, Screen.width, Screen.height, 0);
+        GL.Begin(GL.TRIANGLES);
+        return true;
+    }
+    static void GlEnd() { GL.End(); GL.PopMatrix(); }
+    void GlColor(Color c) { glCol = c; glCol.a *= GUI.color.a; }
+    // convex polygon in glAx / glAy (n points) -> clipped -> a triangle fan
+    void GlEmit(int n)
+    {
+        n = ClipEdge(glAx, glAy, n, glBx, glBy, 0, glX0); if (n < 3) return;
+        n = ClipEdge(glBx, glBy, n, glAx, glAy, 1, glX1); if (n < 3) return;
+        n = ClipEdge(glAx, glAy, n, glBx, glBy, 2, glY0); if (n < 3) return;
+        n = ClipEdge(glBx, glBy, n, glAx, glAy, 3, glY1); if (n < 3) return;
+        GL.Color(glCol);
+        for (int i = 1; i + 1 < n; i++)
+        {
+            GL.Vertex3(glAx[0], glAy[0], 0f); GL.Vertex3(glAx[i], glAy[i], 0f); GL.Vertex3(glAx[i + 1], glAy[i + 1], 0f);
+        }
+    }
+    // one clip edge: side 0 x >= v, 1 x <= v, 2 y >= v, 3 y <= v
+    static int ClipEdge(float[] ix, float[] iy, int n, float[] ox, float[] oy, int side, float v)
+    {
+        int m = 0;
+        for (int i = 0; i < n; i++)
+        {
+            int j = i + 1 == n ? 0 : i + 1;
+            float ax = ix[i], ay = iy[i], bx = ix[j], by = iy[j];
+            float da = side == 0 ? ax - v : side == 1 ? v - ax : side == 2 ? ay - v : v - ay;
+            float db = side == 0 ? bx - v : side == 1 ? v - bx : side == 2 ? by - v : v - by;
+            if (da >= 0f && m < ox.Length) { ox[m] = ax; oy[m] = ay; m++; }
+            if ((da >= 0f) != (db >= 0f) && m < ox.Length)
+            {
+                float k = da / (da - db);
+                ox[m] = ax + (bx - ax) * k; oy[m] = ay + (by - ay) * k; m++;
+            }
+        }
+        return m;
+    }
+    void GlQuad(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy)
+    {
+        glAx[0] = ax; glAy[0] = ay; glAx[1] = bx; glAy[1] = by; glAx[2] = cx; glAy[2] = cy; glAx[3] = dx; glAy[3] = dy;
+        GlEmit(4);
+    }
+    void GlTri(float ax, float ay, float bx, float by, float cx, float cy)
+    {
+        glAx[0] = ax; glAy[0] = ay; glAx[1] = bx; glAy[1] = by; glAx[2] = cx; glAy[2] = cy;
+        GlEmit(3);
+    }
+    // a line w pixels wide
+    void GlLine(float ax, float ay, float bx, float by, float w)
+    {
+        float dx = bx - ax, dy = by - ay, l = Mathf.Sqrt(dx * dx + dy * dy);
+        if (l < 1e-3f) return;
+        float nx = -dy / l * w * 0.5f, ny = dx / l * w * 0.5f;
+        GlQuad(ax + nx, ay + ny, bx + nx, by + ny, bx - nx, by - ny, ax - nx, ay - ny);
+    }
+    // a disc (12-gon)
+    void GlDisc(float cx, float cy, float r)
+    {
+        const int K = 12;
+        for (int i = 0; i < K; i++) { float a = i * (Mathf.PI * 2f / K); glAx[i] = cx + Mathf.Cos(a) * r; glAy[i] = cy + Mathf.Sin(a) * r; }
+        GlEmit(K);
+    }
+    // a ring from 12 o'clock clockwise over frac of the turn, between radii r0 and r1
+    void GlRing(float cx, float cy, float r0, float r1, float frac, Color c)
+    {
+        GlColor(c);
+        const int K = 48;
+        int n = Mathf.Max(1, Mathf.CeilToInt(K * Mathf.Clamp01(frac)));
+        float a0 = -Mathf.PI * 0.5f, span = Mathf.PI * 2f * Mathf.Clamp01(frac);
+        for (int i = 0; i < n; i++)
+        {
+            float aa = a0 + span * i / n, ab = a0 + span * (i + 1) / n;
+            float ca = Mathf.Cos(aa), sa = Mathf.Sin(aa), cb = Mathf.Cos(ab), sb = Mathf.Sin(ab);
+            GlQuad(cx + ca * r0, cy + sa * r0, cx + ca * r1, cy + sa * r1, cx + cb * r1, cy + sb * r1, cx + cb * r0, cy + sb * r0);
+        }
     }
 
     // ---------------------------------------------------------------- banners and messages

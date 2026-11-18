@@ -31,6 +31,9 @@ public partial class GameManager
     int fpsIdx = 1; float resPct = 100; bool shadowsOn = true, showFps = true;
     // audio (percent)
     float volMaster = 100, volEngine = 100, volFx = 100, volTyres = 100;
+    // team radio (the radio itself is TeamRadio.cs): 0 Full, 1 Key info, 2 Off; PlayerPrefs "teamRadio"
+    int teamRadioMode;
+    static readonly string[] TeamRadioNames = { "Full", "Key info", "Off" };
     // game
     int unitsIdx; bool hudInfo = true, hudMap = true, hudTower = true, hudSectors = true, hudDelta = true;
 
@@ -87,6 +90,7 @@ public partial class GameManager
         damageMode = LoadI("damage", 1, 2);
         flagsMode = LoadI("flags", 1, 1); raceDistIdx = LoadI("raceDist", 0, RaceDistNames.Length - 1);
         fpsIdx = LoadI("fps", 1, 1); resPct = LoadF("resScale", 100, 50, 100); shadowsOn = PlayerPrefs.GetInt("shadows", 1) == 1; showFps = PlayerPrefs.GetInt("showFps", 1) == 1;
+        teamRadioMode = LoadI("teamRadio", 0, 2);
         volMaster = LoadF("volMaster", 100, 0, 100); volEngine = LoadF("volEngine", 100, 0, 100); volFx = LoadF("volFx", 100, 0, 100); volTyres = LoadF("volTyres", 100, 0, 100);
         unitsIdx = LoadI("units", 0, 1); hudInfo = PlayerPrefs.GetInt("hudInfo", 1) == 1; hudMap = PlayerPrefs.GetInt("hudMap", 1) == 1;
         hudTower = PlayerPrefs.GetInt("hudTower", 1) == 1; hudSectors = PlayerPrefs.GetInt("hudSectors", 1) == 1; hudDelta = PlayerPrefs.GetInt("hudDelta", 1) == 1;
@@ -114,6 +118,7 @@ public partial class GameManager
         PlayerPrefs.SetInt("damage", damageMode);
         PlayerPrefs.SetInt("flags", flagsMode); PlayerPrefs.SetInt("raceDist", raceDistIdx);
         PlayerPrefs.SetInt("fps", fpsIdx); PlayerPrefs.SetFloat("resScale", resPct); PlayerPrefs.SetInt("shadows", shadowsOn ? 1 : 0); PlayerPrefs.SetInt("showFps", showFps ? 1 : 0);
+        PlayerPrefs.SetInt("teamRadio", teamRadioMode);
         PlayerPrefs.SetFloat("volMaster", volMaster); PlayerPrefs.SetFloat("volEngine", volEngine); PlayerPrefs.SetFloat("volFx", volFx); PlayerPrefs.SetFloat("volTyres", volTyres);
         PlayerPrefs.SetInt("units", unitsIdx); PlayerPrefs.SetInt("hudInfo", hudInfo ? 1 : 0); PlayerPrefs.SetInt("hudMap", hudMap ? 1 : 0);
         PlayerPrefs.SetInt("hudTower", hudTower ? 1 : 0); PlayerPrefs.SetInt("hudSectors", hudSectors ? 1 : 0); PlayerPrefs.SetInt("hudDelta", hudDelta ? 1 : 0);
@@ -287,6 +292,8 @@ public partial class GameManager
         aud.Slider("Engine volume", "Engine, turbo and the hybrid motor.", 0, 100, 5, 100, () => volEngine, v => { volEngine = v; ApplyAudio(); }, Pct);
         aud.Slider("Tyre volume", "Scrub, squeal, lock-ups and wheelspin.", 0, 100, 5, 100, () => volTyres, v => { volTyres = v; ApplyAudio(); }, Pct);
         aud.Slider("Effects volume", "Wind, kerbs, gravel and grass.", 0, 100, 5, 100, () => volFx, v => { volFx = v; ApplyAudio(); }, Pct);
+        aud.Choice("Team radio", "Your race engineer. Full: gaps, tyres, pace and strategy. Key info: only what matters (pit calls, flags, damage, Overtake Mode). Off: silent.",
+            TeamRadioNames, 0, () => teamRadioMode, v => { teamRadioMode = Mathf.Clamp(v, 0, 2); PlayerPrefs.SetInt("teamRadio", teamRadioMode); });
 
         // ---- GAME
         var game = new SettingsUI.Tab("GAME");
@@ -301,7 +308,8 @@ public partial class GameManager
             () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset();
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
         game.Choice("Driver read-out", "Tyres, brakes and fuel beside the steering-wheel display.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
-        game.Choice("Mini-map", "The circuit map in the top-right corner.", hideShow, 1, () => hudMap ? 1 : 0, v => hudMap = v == 1);
+        game.Choice("Mini-map", "Local: the track round your car (300 m ahead), turned to your heading, with the cars near you. Top right.", new[] { "Local", "Off" }, 0,
+            () => hudMap ? 0 : 1, v => hudMap = v == 0);
         game.Toggle("Timing tower", "Order, gaps and tyres on the left in a race. Tap it for gap / interval, the arrow for all cars.", true, () => hudTower, v => hudTower = v);
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);

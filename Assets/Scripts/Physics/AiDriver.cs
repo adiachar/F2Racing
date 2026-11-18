@@ -131,12 +131,17 @@ namespace FormulaSim
         double offsetTarget, lapPace = 1, mistakeT, stuckT, offT, speedCap = double.MaxValue;
         bool wasBraking; int prevIdx = -1;
         CarInput input;
+        // Overtake Mode and boost (FormulaCar.otOn / boostOn). Own dice, so the driving's random sequence (lap pace,
+        // mistakes) is the same as without them. aheadGap / behindGap: m along the track to the nearest car (this Think).
+        readonly Random ersRng;
+        bool otSave, otWasArmed, boostWant, wasStraight;
+        double aheadGap, behindGap;
 
         // difficulty scales every rival (1 = real pace)
         public AiDriver(Track track, RacingLine line, CarConfig cfg, DriverProfile who, AiTuning tune, double difficulty = 1, int seed = 1)
         {
             this.track = track; this.line = line; this.who = who; this.tune = tune;
-            rng = new Random(seed * 7919 + 13);
+            rng = new Random(seed * 7919 + 13); ersRng = new Random(seed * 104729 + 7);
             var c = cfg.Clone(); c.tc = TcMode.High; c.abs = true; c.autoShift = true; c.steerSpeed = 14; c.steerReturn = 16;
             car = new FormulaCar(c); car.SeedDamage(seed);
             double grip = tune.grip * difficulty * (0.86 + 0.14 * who.pace), brake = tune.brakeUse * difficulty * (0.84 + 0.16 * who.pace);
@@ -171,7 +176,7 @@ namespace FormulaSim
         public CarInput Think(double dt, double simTime, IList<AiDriver> others, FormulaCar player, int playerIdx, double playerLateral)
         {
             int N = track.N;
-            if (pit != null) { recovered = false; input = new CarInput(0, 0, 0); return input; } // in the pit lane: PitStep drives the car
+            if (pit != null) { recovered = false; car.otOn = car.boostOn = false; input = new CarInput(0, 0, 0); return input; } // in the pit lane: PitStep drives the car
             var near = track.Nearest(car.x, car.y, idx);
             prevIdx = idx < 0 ? near.idx : idx; idx = near.idx; lateral = near.lateral;
             double v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
@@ -215,13 +220,14 @@ namespace FormulaSim
             if (deploy != null) car.deployMap = deploy[idx];   // the same energy rule as the player's car, with its own map
 
             // ---- traffic: look for a car close ahead or alongside ----
-            speedCap = double.MaxValue; bool alongside = false; double want = 0; bool blocked = false;
+            speedCap = double.MaxValue; bool alongside = false; double want = 0; bool blocked = false; aheadGap = behindGap = 1e9;
             // overtaking needs a straight: no pulling out where the line is curving
             bool straight = Math.Abs(line.curv[idx]) < 0.004 && Math.Abs(line.curv[(idx + 15) % N]) < 0.006;
             void See(int oIdx, double oLat, double oV)
             {
                 int d = oIdx - idx; if (d > N / 2) d -= N; else if (d < -N / 2) d += N;
                 double gap = d * track.ds, side = oLat - lateral;
+                if (gap > 1.5 && gap < aheadGap) aheadGap = gap; else if (gap < -1.5 && -gap < behindGap) behindGap = -gap;
                 if (gap > -5.5 && gap < 5.5 && Math.Abs(side) < 3.2) { alongside = true; if (Math.Abs(side) < 2.3) want += side > 0 ? -0.8 : 0.8; }
                 if (gap <= 1.5 || Math.Abs(side) > 2.2) return;
                 double closing = v - oV;
@@ -308,6 +314,15 @@ namespace FormulaSim
                 brk = Clamp(ff / car.cfg.brakeForce - err * tune.kBrk, 0, 1);
             }
             if (brk > 0.02) thr = 0;
+            ErsButtons(v, straight && !noPass && !blueFlag && !capped, brakingZone);
+            if ((car.otOn || car.boostOn) && !brakingZone && v > 40 && Math.Abs(car.r * v) < 6)
+            {
+                // the extra power takes the car over its own speed profile: stay flat while the profile does not fall
+                // within the next 0.6 s (then the normal control sheds the extra speed before the brake point)
+                bool clear = true; int nL = (int)Math.Round(v * 0.6 / track.ds); double vIp = V(ip);
+                for (int k = 0; k <= nL && clear; k += 4) clear = V((ip + k) % N) >= vIp - 0.5;
+                if (clear) { thr = 1; brk = 0; }
+            }
             // on a straight, below target, with the line accelerating here and ahead: flat out (a feathered 90-97 %
             // throttle keeps the 2026 wings half shut and spends the battery at part throttle)
             if (!capped && err > -1.5 && brk <= 0.02 && v > 40 && Math.Abs(car.r * v) < 6 && line.phase[idx] > 0)
@@ -413,6 +428,26 @@ namespace FormulaSim
             }
         }
 
+        // Overtake Mode: used when armed on a straight to attack the car ahead, or (now and then, the calmer drivers)
+        // saved to defend against a car close behind. Boost: now and then on a straight with a car close ahead or behind
+        // and charge to spare, decided once per straight.
+        void ErsButtons(double v, bool racing, bool brakingZone)
+        {
+            var c = car.cfg;
+            if (c.ersPower <= 0 || (rc != null && rc.NoOvertaking)) { car.otOn = car.boostOn = false; otWasArmed = car.otArmed; wasStraight = false; return; }
+            bool onStraight = racing && !brakingZone && v > 40 && line.phase != null && line.phase[idx] > 0;
+            if (car.otArmed && !otWasArmed) otSave = ersRng.NextDouble() < 0.3 * (1 - who.aggression);
+            otWasArmed = car.otArmed;
+            bool attack = aheadGap < 30 + 0.8 * v, defend = behindGap < 25;
+            car.otOn = car.otArmed && onStraight && car.OtLeft > 0 && (otSave ? defend : attack || defend);
+            double soc = double.IsNaN(car.ersEnergy) ? 1 : car.ersEnergy / c.ersCapacity;
+            if (onStraight && !wasStraight)
+                boostWant = (aheadGap < 30 || behindGap < 20) && soc > 0.4 && ersRng.NextDouble() < 0.25 + 0.4 * who.aggression;
+            wasStraight = onStraight;
+            if (!onStraight || soc < 0.25 || (aheadGap > 60 && behindGap > 40)) boostWant = false;
+            car.boostOn = boostWant;
+        }
+
         public CarInput LastInput => input;
         double RefLap => line.lapTime > 0 ? line.lapTime : 90;
         static double Clamp(double v, double a, double b) => v < a ? a : v > b ? b : v;
@@ -496,6 +531,83 @@ namespace FormulaSim
             return hit;
         }
     }
+    // 2026 Overtake Mode detection (replaces DRS). Detection points sit Before m ahead of the start of the longest
+    // flat-out runs of the racing line (its accelerate phase; at most two a lap, a quarter of a lap apart at least).
+    // A car that crosses a point within Window s of the last car to cross it (any car, lapped ones too, as with DRS)
+    // is armed until the next point; the new lap's energy allowance is given at the first point after the line.
+    // The game calls Update for every car about 60 times a second; the headless tools never do, so nothing is armed there.
+    public sealed class OvertakeRule
+    {
+        public const double Window = 1.0, Before = 150;
+        public readonly int[] points;
+        public readonly Track track;
+        readonly double[] lastT;
+
+        public OvertakeRule(Track t, RacingLine line, int maxPoints = 2)
+        {
+            track = t;
+            int N = t.N; var ph = line != null && line.phase != null && line.phase.Length == N ? line.phase : null;
+            var found = new List<int>();
+            if (ph != null)
+            {
+                // runs of accelerate phase, short gaps (< 40 m) bridged; start the scan where the line is not accelerating
+                int s0 = -1; for (int i = 0; i < N && s0 < 0; i++) if (ph[i] <= 0) s0 = i;
+                var runs = new List<(int start, int len)>();
+                if (s0 >= 0)
+                {
+                    int bridge = (int)Math.Round(40 / t.ds), start = -1, end = -1;
+                    for (int k = 1; k <= N; k++)
+                    {
+                        int i = (s0 + k) % N;
+                        if (ph[i] > 0)
+                        {
+                            if (start < 0) start = k;
+                            else if (k - end > bridge) { runs.Add((start, end - start + 1)); start = k; }
+                            end = k;
+                        }
+                    }
+                    if (start >= 0) runs.Add((start, end - start + 1));
+                    runs.Sort((a, b) => b.len.CompareTo(a.len));
+                    for (int r = 0; r < runs.Count && found.Count < maxPoints; r++)
+                    {
+                        if (r > 0 && runs[r].len < 0.45 * runs[0].len) break;
+                        int p = (((s0 + runs[r].start - (int)Math.Round(Before / t.ds)) % N) + N) % N;
+                        bool apart = true;
+                        foreach (int q in found) { int d = Math.Abs(q - p); if (Math.Min(d, N - d) < N / 4) apart = false; }
+                        if (apart) found.Add(p);
+                    }
+                }
+            }
+            if (found.Count == 0) found.Add(0);   // the line itself
+            found.Sort();
+            points = found.ToArray(); lastT = new double[points.Length];
+            Reset();
+        }
+
+        public void Reset() { for (int i = 0; i < lastT.Length; i++) lastT[i] = double.NaN; }
+
+        // the car is at track point idx at time t. allowed = false: never armed now (lap 1, safety car / VSC, pit lane).
+        public void Update(FormulaCar car, int idx, double t, bool allowed)
+        {
+            int N = track.N, prev = car.otIdx; car.otIdx = idx;
+            if (idx < 0) { car.otArmed = false; return; }
+            if (prev < 0) return;
+            int step = ((idx - prev) % N + N) % N;
+            if (step == 0 || step > N / 2) return;    // standing still or going backwards
+            for (int k = 0; k < points.Length; k++)
+            {
+                int d = ((points[k] - prev) % N + N) % N;
+                if (d == 0 || d > step) continue;
+                // crossed detection point k
+                double gap = t - lastT[k];
+                lastT[k] = t;
+                if (car.otRefill || double.IsNaN(car.otEnergy)) car.OtRefill();
+                car.otArmed = allowed && gap <= Window;   // NaN (nobody crossed yet) is not within the window
+            }
+            if (!allowed) car.otArmed = false;
+        }
+    }
+
     // Level of detail for a rival's physics (CPU). A rival far from the player (and away from the camera) is
     // stepped less often with a longer step, as GT / F1 games do for cars you cannot see: 120 Hz beyond Gap2 m along
     // the track, 60 Hz beyond Gap4 m when no other car is within Alone m of it. Time stays exact: the car is `lag`

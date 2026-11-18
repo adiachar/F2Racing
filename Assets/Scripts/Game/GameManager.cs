@@ -107,50 +107,164 @@ public partial class GameManager : MonoBehaviour
         if (lineGo != null) lineGo.SetActive(showLine && !playground);
     }
 
-    // mini-map: the circuit outline drawn once into a small texture; the car is a dot on top
-    Texture2D miniTex; float mmMinX, mmMinY, mmScale; const int MM = 128;
+    // Local mini-map (the panel under the race card, RaceHud.cs: mapRect): only the track round the car, MmAhead m ahead
+    // and MmBehind m behind, turned so the car's heading (filtered: no jitter) points up, the car low in the middle.
+    // Built once per circuit: the centre line every ~4 m with its normal and half width; the pit lane and grey blocks
+    // for the big buildings beside the track (grandstands, pit building: Trackside.Solids) as soon as they exist.
+    // Drawn with GL triangles clipped to the panel on the CPU (RaceHud.cs: GlBegin); nothing is allocated per frame.
+    const float MmAhead = 300f, MmBehind = 150f;
+    float[] mmX, mmY, mmNx, mmNy, mmHw, mmLx, mmLy, mmRx, mmRy; bool[] mmVis; int mmN; Track mmFor;
+    float[] mmPitX, mmPitY; int mmPitN; PitLane mmLane;
+    float[] mmBlk; int mmBlkN, mmSolidsSeen = -1;
+    float mmHx = float.NaN, mmHy, mmCx, mmCy;            // filtered heading (unit vector), the car's last place
+    Color[] mmCol = new Color[0]; AiDriver[] mmOwner = new AiDriver[0];
     void BuildMiniMap()
     {
-        if (miniTex == null) { miniTex = new Texture2D(MM, MM, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp }; }
-        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
-        foreach (var q in track.pts) { minX = System.Math.Min(minX, q.x); maxX = System.Math.Max(maxX, q.x); minY = System.Math.Min(minY, q.y); maxY = System.Math.Max(maxY, q.y); }
-        float span = (float)System.Math.Max(maxX - minX, maxY - minY);
-        mmScale = (MM - 12) / span;
-        mmMinX = (float)(minX + maxX) / 2 - span / 2; mmMinY = (float)(minY + maxY) / 2 - span / 2;
-        var mmPx = new Color32[MM * MM];
-        foreach (var q in track.pts)
+        int N = track.N, step = Mathf.Max(1, Mathf.RoundToInt(4f / (float)track.ds));
+        mmN = N / step;
+        mmX = new float[mmN]; mmY = new float[mmN]; mmNx = new float[mmN]; mmNy = new float[mmN]; mmHw = new float[mmN];
+        mmLx = new float[mmN]; mmLy = new float[mmN]; mmRx = new float[mmN]; mmRy = new float[mmN]; mmVis = new bool[mmN];
+        for (int k = 0; k < mmN; k++)
         {
-            int cx = 6 + (int)(((float)q.x - mmMinX) * mmScale), cy = 6 + (int)(((float)q.y - mmMinY) * mmScale);
-            for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
-            {
-                int ix = cx + dx, iy = cy + dy;
-                if (ix >= 0 && iy >= 0 && ix < MM && iy < MM) mmPx[iy * MM + ix] = new Color32(255, 255, 255, 220);
-            }
+            var p = track.pts[k * step];
+            mmX[k] = (float)p.x; mmY[k] = (float)p.y; mmNx[k] = (float)p.nx; mmNy[k] = (float)p.ny; mmHw[k] = (float)track.HalfWidth(k * step);
         }
-        miniTex.SetPixels32(mmPx); miniTex.Apply(false);
+        mmFor = track; mmLane = null; mmPitN = 0; mmSolidsSeen = -1; mmBlkN = 0; mmHx = float.NaN;
+    }
+    // the pit lane's fast lane, entry to exit, every 4 m
+    void BuildMmPit()
+    {
+        mmLane = Trackside.Lane; mmPitN = 0;
+        if (mmLane == null || mmLane.track != track) return;
+        int n = (int)((mmLane.sExit - mmLane.sEntry) / 4) + 1;
+        if (mmPitX == null || mmPitX.Length < n) { mmPitX = new float[n]; mmPitY = new float[n]; }
+        for (int i = 0; i < n; i++)
+        {
+            double u = mmLane.sEntry + i * 4.0;
+            mmLane.Pos(u, mmLane.BaseLat(u), out double x, out double y);
+            mmPitX[i] = (float)x; mmPitY[i] = (float)y;
+        }
+        mmPitN = n;
+    }
+    // big boxes beside the track (stands, pit garages, buildings): their four corners (world x / z = physics x / y)
+    void BuildMmBlocks()
+    {
+        var sol = Trackside.Solids; mmSolidsSeen = sol.Count; mmBlkN = 0;
+        const int Max = 192;
+        if (mmBlk == null) mmBlk = new float[Max * 8];
+        for (int i = 0; i < sol.Count && mmBlkN < Max; i++)
+        {
+            var b = sol[i];
+            if (b.hl * b.hd < 20f || Mathf.Max(b.hl, b.hd) < 4f || Mathf.Min(b.hl, b.hd) < 2f) continue; // posts, boards, canopies, bridges
+            float tx = b.tx * b.hl, tz = b.tz * b.hl, nx = -b.tz * b.hd, nz = b.tx * b.hd;
+            int o = mmBlkN * 8;
+            mmBlk[o] = b.cx + tx + nx; mmBlk[o + 1] = b.cz + tz + nz; mmBlk[o + 2] = b.cx - tx + nx; mmBlk[o + 3] = b.cz - tz + nz;
+            mmBlk[o + 4] = b.cx - tx - nx; mmBlk[o + 5] = b.cz - tz - nz; mmBlk[o + 6] = b.cx + tx - nx; mmBlk[o + 7] = b.cz + tz - nz;
+            mmBlkN++;
+        }
     }
     void DrawMiniMap()
     {
-        if (miniTex == null || playground) return;
+        if (playground || track == null || car == null) return;
+        if (mmFor != track || mmX == null) BuildMiniMap();
         var m = mapRect; Glass(m, 12f);                      // under the race card, top right (RaceHud.cs: HudLayout)
-        float pad = S(6), size = m.width - 2 * pad, x = m.x + pad, y = m.y + pad;
-        // texture rows go bottom-up, GUI goes top-down: flip vertically (physics +y = north = up on screen)
-        var old = GUI.color; GUI.color = new Color(1f, 1f, 1f, 0.78f) * old;
-        GUI.DrawTextureWithTexCoords(new Rect(x, y, size, size), miniTex, new Rect(0, 0, 1, 1));
-        GUI.color = old;
-        float k = size / MM;
-        var p0 = track.pts[0];
-        float sx = x + (6 + ((float)p0.x - mmMinX) * mmScale) * k, sy = y + size - (6 + ((float)p0.y - mmMinY) * mmScale) * k;
-        UiKit.Rect(new Rect(sx - S(1), sy - S(3.5f), S(2), S(7)), Color.white, 1f); // start / finish
-        float rd = S(4.6f);
-        foreach (var d in rivals)
+        if (Event.current.type != EventType.Repaint) return;
+        if (mmLane != Trackside.Lane) BuildMmPit();
+        if (mmSolidsSeen != Trackside.Solids.Count) BuildMmBlocks();
+        if (mmOwner.Length != rivals.Count) { mmOwner = new AiDriver[rivals.Count]; mmCol = new Color[rivals.Count]; }
+        for (int i = 0; i < rivals.Count; i++)
+            if (mmOwner[i] != rivals[i]) { mmOwner[i] = rivals[i]; mmCol[i] = Livery.TeamColour(TeamIndex(rivals[i].who)); }
+
+        // heading: a unit vector eased towards the car's (frame-rate independent), snapped after a reset or a jump
+        float ch = Mathf.Cos((float)car.heading), sh = Mathf.Sin((float)car.heading), px = (float)car.x, py = (float)car.y;
+        if (float.IsNaN(mmHx) || (px - mmCx) * (px - mmCx) + (py - mmCy) * (py - mmCy) > 2500f) { mmHx = ch; mmHy = sh; }
+        else
         {
-            float rx = x + (6 + ((float)d.car.x - mmMinX) * mmScale) * k, ry = y + size - (6 + ((float)d.car.y - mmMinY) * mmScale) * k;
-            UiKit.Rect(new Rect(rx - rd * 0.5f, ry - rd * 0.5f, rd, rd), new Color(d.who.r, d.who.g, d.who.b), 999f);
+            float e = 1f - Mathf.Exp(-Mathf.Min(Time.unscaledDeltaTime, 0.1f) * 4f);
+            float hx = mmHx + (ch - mmHx) * e, hy = mmHy + (sh - mmHy) * e, hl = Mathf.Sqrt(hx * hx + hy * hy);
+            if (hl > 1e-3f) { mmHx = hx / hl; mmHy = hy / hl; } else { mmHx = ch; mmHy = sh; }
         }
-        float cx = x + (6 + ((float)car.x - mmMinX) * mmScale) * k, cy = y + size - (6 + ((float)car.y - mmMinY) * mmScale) * k;
-        UiKit.Rect(new Rect(cx - S(4.5f), cy - S(4.5f), S(9), S(9)), Color.white, 999f);
-        UiKit.Rect(new Rect(cx - S(3.2f), cy - S(3.2f), S(6.4f), S(6.4f)), new Color(1f, 0.16f, 0.1f), 999f);
+        mmCx = px; mmCy = py;
+
+        float pad = S(5);
+        var inner = new Rect(m.x + pad, m.y + pad, m.width - 2 * pad, m.height - 2 * pad);
+        float k = inner.height / (MmAhead + MmBehind), ox = inner.center.x, oy = inner.yMax - MmBehind * k;
+        float fx = mmHx, fy = mmHy;
+        // world -> panel: right of the car = +X, ahead = -Y
+        // X = ox + ((x - px) fy - (y - py) fx) k, Y = oy - ((x - px) fx + (y - py) fy) k
+        float qx = px + fx * (MmAhead - MmBehind) * 0.5f, qy = py + fy * (MmAhead - MmBehind) * 0.5f;
+        float halfW = inner.width * 0.5f / k, halfL = (MmAhead + MmBehind) * 0.5f;
+        float R = Mathf.Sqrt(halfW * halfW + halfL * halfL) + 25f, R2 = R * R;
+        if (!GlBegin(inner)) return;
+
+        // buildings
+        GlColor(new Color(0.55f, 0.58f, 0.64f, 0.38f));
+        for (int b = 0; b < mmBlkN; b++)
+        {
+            int o = b * 8; float cx = (mmBlk[o] + mmBlk[o + 4]) * 0.5f - qx, cy = (mmBlk[o + 1] + mmBlk[o + 5]) * 0.5f - qy;
+            if (cx * cx + cy * cy > R2) continue;
+            float ax = mmBlk[o] - px, ay = mmBlk[o + 1] - py, bx = mmBlk[o + 2] - px, by = mmBlk[o + 3] - py;
+            float cx2 = mmBlk[o + 4] - px, cy2 = mmBlk[o + 5] - py, dx = mmBlk[o + 6] - px, dy = mmBlk[o + 7] - py;
+            GlQuad(ox + (ax * fy - ay * fx) * k, oy - (ax * fx + ay * fy) * k, ox + (bx * fy - by * fx) * k, oy - (bx * fx + by * fy) * k,
+                   ox + (cx2 * fy - cy2 * fx) * k, oy - (cx2 * fx + cy2 * fy) * k, ox + (dx * fy - dy * fx) * k, oy - (dx * fx + dy * fy) * k);
+        }
+        // pit lane
+        GlColor(new Color(0.75f, 0.78f, 0.84f, 0.55f));
+        float wPit = Mathf.Max(1f, S(1.1f));
+        for (int i = 0; i + 1 < mmPitN; i++)
+        {
+            float ax = mmPitX[i] - qx, ay = mmPitY[i] - qy; if (ax * ax + ay * ay > R2) continue;
+            ax = mmPitX[i] - px; ay = mmPitY[i] - py; float bx = mmPitX[i + 1] - px, by = mmPitY[i + 1] - py;
+            GlLine(ox + (ax * fy - ay * fx) * k, oy - (ax * fx + ay * fy) * k, ox + (bx * fy - by * fx) * k, oy - (bx * fx + by * fy) * k, wPit);
+        }
+        // track: the edges of every point in range (at least ~4.4 units wide, so it reads on a phone)
+        float minHw = S(2.2f) / k;
+        for (int i = 0; i < mmN; i++)
+        {
+            float dx = mmX[i] - qx, dy = mmY[i] - qy;
+            bool v = dx * dx + dy * dy < R2; mmVis[i] = v; if (!v) continue;
+            float hw = Mathf.Max(mmHw[i], minHw);
+            float lx = mmX[i] + mmNx[i] * hw - px, ly = mmY[i] + mmNy[i] * hw - py, rx = mmX[i] - mmNx[i] * hw - px, ry = mmY[i] - mmNy[i] * hw - py;
+            mmLx[i] = ox + (lx * fy - ly * fx) * k; mmLy[i] = oy - (lx * fx + ly * fy) * k;
+            mmRx[i] = ox + (rx * fy - ry * fx) * k; mmRy[i] = oy - (rx * fx + ry * fy) * k;
+        }
+        GlColor(new Color(0.20f, 0.22f, 0.27f, 0.92f));
+        for (int i = 0; i < mmN; i++)
+        {
+            int j = i + 1 == mmN ? 0 : i + 1; if (!mmVis[i] || !mmVis[j]) continue;
+            GlQuad(mmLx[i], mmLy[i], mmLx[j], mmLy[j], mmRx[j], mmRy[j], mmRx[i], mmRy[i]);
+        }
+        GlColor(new Color(0.92f, 0.94f, 0.97f, 0.85f));
+        float wEdge = Mathf.Max(1f, S(0.8f));
+        for (int i = 0; i < mmN; i++)
+        {
+            int j = i + 1 == mmN ? 0 : i + 1; if (!mmVis[i] || !mmVis[j]) continue;
+            GlLine(mmLx[i], mmLy[i], mmLx[j], mmLy[j], wEdge);
+            GlLine(mmRx[i], mmRy[i], mmRx[j], mmRy[j], wEdge);
+        }
+        if (mmVis[0]) { GlColor(Color.white); GlLine(mmLx[0], mmLy[0], mmRx[0], mmRy[0], Mathf.Max(1.5f, S(1.4f))); } // start / finish
+
+        // rivals in team colours; the cars just ahead and behind in the running order get a white ring
+        int ahead = -1, behind = -1;
+        for (int r = 0; r < ordN; r++) if (ord[r] == 0) { if (r > 0) ahead = ord[r - 1] - 1; if (r + 1 < ordN) behind = ord[r + 1] - 1; break; }
+        float rd = S(2.7f), rr = S(4.1f);
+        for (int i = 0; i < rivals.Count; i++)
+        {
+            var c = rivals[i].car; float dx = (float)c.x - px, dy = (float)c.y - py;
+            float sx = ox + (dx * fy - dy * fx) * k, sy = oy - (dx * fx + dy * fy) * k;
+            if (sx < inner.xMin - rr || sx > inner.xMax + rr || sy < inner.yMin - rr || sy > inner.yMax + rr) continue;
+            if (i == ahead || i == behind) { GlColor(i == ahead ? Color.white : new Color(1f, 1f, 1f, 0.7f)); GlDisc(sx, sy, rr); }
+            GlColor(new Color(0.03f, 0.035f, 0.05f, 0.9f)); GlDisc(sx, sy, rd + S(0.6f));
+            GlColor(mmCol[i]); GlDisc(sx, sy, rd);
+        }
+        // the player: an arrow pointing up, white outline, racing red
+        float a = S(5.2f);
+        GlColor(Color.white);
+        GlTri(ox, oy - a * 1.25f, ox - a * 0.95f, oy + a, ox, oy + a * 0.45f); GlTri(ox, oy - a * 1.25f, ox, oy + a * 0.45f, ox + a * 0.95f, oy + a);
+        a *= 0.62f;
+        GlColor(new Color(1f, 0.16f, 0.1f));
+        GlTri(ox, oy - a * 1.25f, ox - a * 0.95f, oy + a, ox, oy + a * 0.45f); GlTri(ox, oy - a * 1.25f, ox, oy + a * 0.45f, ox + a * 0.95f, oy + a);
+        GlEnd();
     }
 
     // Graphics level (a setting). Auto starts at Medium and steps down if the phone cannot hold about 50 fps.
@@ -348,6 +462,7 @@ public partial class GameManager : MonoBehaviour
         if (raceTime >= Countdown && aiTick++ % 4 == 0)
         {
             UpdateTow();
+            OvertakeTick(); // Overtake Mode detection points (RaceHud.cs, FormulaSim.OvertakeRule)
             // rubber build-up from every car's distance
             double dist = System.Math.Abs(car.vx) * 4 * H; foreach (var r in rivals) dist += System.Math.Abs(r.car.vx) * 4 * H;
             rubber = System.Math.Min(1, rubber + dist / (track.length * 25));
@@ -709,6 +824,7 @@ public partial class GameManager : MonoBehaviour
         if (Paused) dt = 0; // the settings menu and the front end pause the game
         if (hitT > 0) hitT -= dt;
         var input = ReadInput(dt);
+        ErsButtonsInput(); // BOOST and OVERTAKE buttons into the car (RaceHud.cs)
         acc += dt;
         // steering is read once per frame but the physics takes 4-8 steps per frame: ramp it smoothly across them
         // (SteerFilter.cs) instead of one jump per frame and then nothing (the wheel turned in small steps)
