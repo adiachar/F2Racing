@@ -29,18 +29,28 @@ public static class UiKit
     }
 
     // ---------- palette ----------
-    public static readonly Color Ink = new Color(0.027f, 0.035f, 0.051f, 1f);            // #07090D page background
-    public static readonly Color PanelCol = new Color(0.055f, 0.063f, 0.086f, 0.86f);    // glass panel
-    public static readonly Color PanelHi = new Color(0.10f, 0.11f, 0.14f, 0.92f);        // raised / selected panel
+    // Colour roles (one meaning each; contrast of text on Base: TextCol ~15:1, Sub ~7:1, Faint ~4.6:1):
+    //  * neutrals: Base (cool charcoal page), Surface / SurfaceHi (cards, raised), Line (hairlines), TextCol (off-white),
+    //    Sub (one quiet grey for secondary text), Faint (captions only)
+    //  * Accent (racing red #E10600): ONLY the primary action (RACE / START / NEXT) and the selected state. Never decoration.
+    //  * Info (cyan): progress, XP, live data. Good (green): "good" only (safety rating, personal best). Warn (amber):
+    //    warnings only. Purple / Gold / Silver / Bronze: timing conventions (fastest lap, podium) on timing screens.
+    //  At most one of these accents on a screen besides red.
+    public static readonly Color Base = new Color(0.071f, 0.078f, 0.094f, 1f);           // #121418 page background (cool charcoal)
+    public static readonly Color Ink = Base;                                               // (older name)
+    public static readonly Color Surface = new Color(0.098f, 0.106f, 0.125f, 0.92f);      // card
+    public static readonly Color SurfaceHi = new Color(0.135f, 0.145f, 0.168f, 0.95f);    // raised / selected card
+    public static readonly Color PanelCol = new Color(0.086f, 0.094f, 0.112f, 0.90f);    // glass panel
+    public static readonly Color PanelHi = SurfaceHi;                                      // raised / selected panel
     public static readonly Color Line = new Color(1f, 1f, 1f, 0.08f);                    // hairlines and outlines
-    public static readonly Color TextCol = new Color(0.97f, 0.97f, 0.98f, 1f);
-    public static readonly Color Sub = new Color(0.62f, 0.66f, 0.72f, 1f);               // secondary text
-    public static readonly Color Faint = new Color(0.42f, 0.45f, 0.51f, 1f);             // tertiary text
-    public static readonly Color Accent = new Color(0.882f, 0.024f, 0f, 1f);             // #E10600 racing red
+    public static readonly Color TextCol = new Color(0.94f, 0.945f, 0.955f, 1f);         // off-white
+    public static readonly Color Sub = new Color(0.64f, 0.67f, 0.71f, 1f);               // secondary text (quiet grey)
+    public static readonly Color Faint = new Color(0.50f, 0.53f, 0.57f, 1f);             // captions (still >= 4.5:1 on Base)
+    public static readonly Color Accent = new Color(0.882f, 0.024f, 0f, 1f);             // #E10600 racing red: action / selected only
     public static readonly Color AccentHi = new Color(1f, 0.20f, 0.12f, 1f);
-    public static readonly Color Info = new Color(0f, 0.82f, 1f, 1f);                    // cyan: live data, selection
-    public static readonly Color Good = new Color(0.13f, 0.77f, 0.37f, 1f);              // green (personal best)
-    public static readonly Color Warn = new Color(0.98f, 0.80f, 0.08f, 1f);              // yellow
+    public static readonly Color Info = new Color(0f, 0.78f, 0.95f, 1f);                 // cyan: progress, XP, live data
+    public static readonly Color Good = new Color(0.20f, 0.78f, 0.42f, 1f);              // green: good (safety rating, personal best)
+    public static readonly Color Warn = new Color(0.98f, 0.74f, 0.16f, 1f);              // amber: warnings
     public static readonly Color Purple = new Color(0.66f, 0.33f, 0.97f, 1f);            // overall best
     public static readonly Color Gold = new Color(1f, 0.80f, 0.32f, 1f);                 // podium P1
     public static readonly Color Silver = new Color(0.80f, 0.83f, 0.88f, 1f);            // podium P2
@@ -190,7 +200,7 @@ public static class UiKit
         GUI.DrawTexture(r, t, ScaleMode.StretchToFill, true, 0f, GUI.color, 0f, rad);
     }
 
-    static readonly Color panelTop = new Color(0.085f, 0.095f, 0.125f, 0.90f);
+    static readonly Color panelTop = new Color(0.112f, 0.120f, 0.140f, 0.92f);
     // the standard glass card: shadow, body, a faint top highlight and a hairline edge
     public static void Panel(Rect r, float radius = 12f, float alpha = 1f, bool shadow = true)
     {
@@ -231,7 +241,7 @@ public static class UiKit
         var o = GUI.color; GUI.color = c * o; GUI.DrawTexture(r, RadialTex, ScaleMode.StretchToFill, true); GUI.color = o;
     }
 
-    static readonly Color bgTop = new Color(0.035f, 0.045f, 0.066f, 0.88f), bgBottom = new Color(0.012f, 0.016f, 0.024f, 0.97f);
+    static readonly Color bgTop = new Color(0.082f, 0.090f, 0.108f, 0.92f), bgBottom = new Color(0.052f, 0.057f, 0.070f, 0.98f);
     static readonly Color leftShade = new Color(0f, 0f, 0f, 0.38f), clear = new Color(0f, 0f, 0f, 0f);
     // the dark page behind a menu: gradient, side shade, a red and a blue light, angled "speed" slashes, vignette.
     // opacity fades all of it (the 3D scene shows through a little at 1).

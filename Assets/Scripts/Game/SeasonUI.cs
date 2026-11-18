@@ -43,7 +43,7 @@ public sealed class SeasonUI
     struct Frame { public float x0, x1, w, top, by, bh; }
     static Frame Page()
     {
-        UiKit.Backdrop(1f);
+        MenuUI.Plain();
         var s = UiKit.Safe; var f = new Frame();
         f.x0 = s.x + U(22); f.x1 = s.xMax - U(22); f.w = f.x1 - f.x0; f.top = s.y + U(14);
         f.bh = U(46); f.by = s.yMax - U(14) - f.bh;
@@ -54,9 +54,9 @@ public sealed class SeasonUI
     static void Header(string scr, Frame f, float w, string eyebrow, string title, string sub)
     {
         float e0 = UiKit.Enter(scr, 0), e1 = UiKit.Enter(scr, 1), e2 = UiKit.Enter(scr, 2);
-        UiKit.PushAlpha(e0); UiKit.Eyebrow(new Rect(f.x0, f.top, w, U(16)), eyebrow, UiKit.AccentHi, 9.5f); UiKit.PopAlpha();
+        UiKit.PushAlpha(e0); UiKit.Eyebrow(new Rect(f.x0, f.top, w, U(16)), eyebrow, UiKit.Faint, 9f); UiKit.PopAlpha();
         UiKit.PushAlpha(e1);
-        UiKit.Text(UiKit.Rise(new Rect(f.x0 - U(1), f.top + U(12), w, U(42)), e1, 12f), title, UiKit.Black, UiKit.Fit(title, UiKit.Black, 34f, w, 20f), UiKit.TextCol);
+        UiKit.Text(UiKit.Rise(new Rect(f.x0 - U(1), f.top + U(12), w, U(42)), e1, 12f), title, UiKit.Bold, UiKit.Fit(title, UiKit.Bold, 30f, w, 18f), UiKit.TextCol);
         UiKit.PopAlpha();
         if (sub != null) { UiKit.PushAlpha(e2); UiKit.Text(new Rect(f.x0, f.top + U(54), w, U(18)), sub, UiKit.Semi, UiKit.Fit(sub, UiKit.Semi, 12f, w, 9f), UiKit.Sub); UiKit.PopAlpha(); }
     }
@@ -98,7 +98,7 @@ public sealed class SeasonUI
             {
                 bool up = prev > i + 1;
                 drvMove[i] = up ? "+" + (prev - i - 1) : "-" + (i + 1 - prev);
-                moveCol[i] = up ? UiKit.Good : new Color(1f, 0.38f, 0.36f);
+                moveCol[i] = up ? UiKit.Good : UiKit.Sub; // gains good (green), drops quiet grey
             }
         }
         teamPts = new string[ts.Length]; teamDrivers = new string[ts.Length];
@@ -142,9 +142,9 @@ public sealed class SeasonUI
         card = UiKit.Slide(card, ec, 20f);
         UiKit.Panel(card, 14f);
         UiKit.Bar(new Rect(card.x + U(10), card.y + U(12), U(4), ch - U(24)), Season.TeamColour(d.team));
-        UiKit.Text(new Rect(card.x + U(22), card.y, U(90), ch), statPos, UiKit.Black, 34f, UiKit.TextCol);
-        float tx = card.x + U(22) + UiKit.Width(statPos, UiKit.Black, 34f) + U(12), tw = card.xMax - U(10) - tx;
-        UiKit.Tag(new Rect(tx, card.y + U(12), UiKit.TagWidth(statPts, 9.5f), U(18)), statPts, UiKit.Accent, Color.white, 9.5f);
+        UiKit.Text(new Rect(card.x + U(22), card.y, U(90), ch), statPos, UiKit.Bold, 32f, UiKit.TextCol);
+        float tx = card.x + U(22) + UiKit.Width(statPos, UiKit.Bold, 32f) + U(12), tw = card.xMax - U(10) - tx;
+        UiKit.Tag(new Rect(tx, card.y + U(12), UiKit.TagWidth(statPts, 9.5f), U(18)), statPts, new Color(1, 1, 1, 0.14f), UiKit.TextCol, 9.5f);
         UiKit.Text(new Rect(tx, card.y + U(32), tw, U(16)), statTeam, UiKit.Bold, UiKit.Fit(statTeam, UiKit.Bold, 12f, tw, 9f), UiKit.TextCol);
         UiKit.Text(new Rect(tx, card.y + U(47), tw, U(14)), statMate, UiKit.Regular, UiKit.Fit(statMate, UiKit.Regular, 9.5f, tw, 8f), UiKit.Sub);
         UiKit.PopAlpha();
@@ -265,7 +265,7 @@ public sealed class SeasonUI
             UiKit.Text(new Rect(x + cw * 0.12f + gw + U(8), y, cw * 0.3f, rh), calCircuit[r], UiKit.Regular, fs * 0.85f, UiKit.Faint);
             var rr = new Rect(x + cw * 0.55f, y, cw * 0.43f, rh);
             if (done) UiKit.Text(rr, calRes[r], UiKit.Semi, fs * 0.92f, UiKit.Sub, TextAnchor.MiddleRight);
-            else if (next) { float w = UiKit.TagWidth("NEXT", 8.5f); UiKit.Tag(new Rect(rr.xMax - w, y + rh * 0.5f - U(8), w, U(16)), "NEXT", UiKit.Accent, Color.white, 8.5f); }
+            else if (next) { float w = UiKit.TagWidth("NEXT", 8.5f); UiKit.Tag(new Rect(rr.xMax - w, y + rh * 0.5f - U(8), w, U(16)), "NEXT", new Color(1, 1, 1, 0.14f), UiKit.TextCol, 8.5f); }
         }
     }
 
@@ -316,7 +316,6 @@ public sealed class SeasonUI
             UiKit.Outline(dr, Color.Lerp(new Color(1, 1, 1, 0.07f), UiKit.Accent, s), 14f, 0.7f + 0.6f * s);
             var col = Season.TeamColour(t);
             UiKit.Bar(new Rect(dr.x + U(12), dr.y + U(12), dr.width - U(24), U(4)), col);
-            UiKit.Glow(new Rect(dr.x - dr.width * 0.2f, dr.y - dr.height * 0.6f, dr.width * 1.4f, dr.height * 1.2f), UiKit.A(col, 0.10f + 0.12f * s));
             float px = dr.x + U(12), w = dr.width - U(24);
             UiKit.Text(new Rect(px, dr.y + U(22), w, U(20)), Season.Teams[t], UiKit.Bold, UiKit.Fit(Season.Teams[t], UiKit.Bold, 13.5f, w, 9f), UiKit.TextCol);
             UiKit.Text(new Rect(px, dr.yMax - U(36), w, U(14)), teamLine1[t], UiKit.Regular, UiKit.Fit(teamLine1[t], UiKit.Regular, 10f, w, 8f), UiKit.Sub);
@@ -364,10 +363,10 @@ public sealed class SeasonUI
         const string scr = "quali";
         var f = Page();
         float e0 = UiKit.Enter(scr, 0), e1 = UiKit.Enter(scr, 1), e2 = UiKit.Enter(scr, 2);
-        UiKit.PushAlpha(e0); UiKit.Eyebrow(new Rect(f.x0, f.top, f.w, U(16)), qHead, UiKit.AccentHi, 9.5f); UiKit.PopAlpha();
+        UiKit.PushAlpha(e0); UiKit.Eyebrow(new Rect(f.x0, f.top, f.w, U(16)), qHead, UiKit.Faint, 9f); UiKit.PopAlpha();
         UiKit.PushAlpha(e1);
-        UiKit.Text(UiKit.Rise(new Rect(f.x0 - U(2), f.top + U(10), U(160), U(66)), e1, 14f), qPos, UiKit.Black, 62f, UiKit.TextCol);
-        float bx = f.x0 + UiKit.Width(qPos, UiKit.Black, 62f) + U(12);
+        UiKit.Text(UiKit.Rise(new Rect(f.x0 - U(2), f.top + U(10), U(160), U(66)), e1, 14f), qPos, UiKit.Bold, 58f, UiKit.TextCol);
+        float bx = f.x0 + UiKit.Width(qPos, UiKit.Bold, 58f) + U(12);
         UiKit.Text(new Rect(bx, f.top + U(30), f.w * 0.5f, U(18)), qOf, UiKit.Bold, 12.5f, UiKit.Sub);
         UiKit.PopAlpha();
 

@@ -1,11 +1,11 @@
 // MenuUI.cs — the front end, drawn with IMGUI (UiKit.cs design system) from GameManager.OnGUI. One job per page:
-//  * Home (Page.Start, MenuHome.cs): the player's driver standing in the 3D studio (MenuStudio.cs), driver card,
-//    Inbox / Settings icons, OFFLINE / ONLINE tiles left, DRIVER / GARAGE tiles right, one big red RACE (the last mode
-//    and circuit, straight to Setup), the daily challenge and the licence credits.
+//  * Home (Page.Start, MenuHome.cs): the player's driver standing in the 3D studio (MenuStudio.cs) with the car,
+//    driver card, Settings, OFFLINE and DRIVER tiles, one big red RACE (the last mode and circuit, straight to
+//    Setup) and the licence credits.
 //  * Play (MenuPlay.cs): 1 Mode · 2 Circuit · 3 Setup, one screen each, Back top-left (and Android back / Escape),
 //    Next bottom-right. Championship skips the circuit (its calendar decides) and opens the season hub (SeasonUI.cs).
-//  * Driver / Garage (MenuDriver.cs): the driver profile (name, number, country, level, safety rating, stats) and the
-//    car (class, livery).
+//  * Driver (MenuDriver.cs): the driver profile (name, number, country, level, safety rating, stats).
+// Colour roles (UiKit palette): charcoal page, off-white text, red only for the main action and the selected state.
 //  * Loading: centred circuit name, a thin red shimmer and a tip; drawn for one frame before the (slow) build. The
 //    menu's 3D is released before it and the unused assets are purged on it (once).
 //  * Results: your position large, points / championship tags, a podium for the top 3 with team colours, and a
@@ -21,8 +21,8 @@ using UnityEngine;
 public sealed partial class MenuUI
 {
     // Start = the Home page. Play = the Mode / Circuit / Setup flow (step).
-    public enum Page { None, Start, Loading, Results, Season, QualiResult, Play, Driver, Garage }
-    // Livery: the Garage changed Livery.PlayerIndex (GameManager puts it on the car)
+    public enum Page { None, Start, Loading, Results, Season, QualiResult, Play, Driver }
+    // Livery: Setup changed Livery.PlayerIndex (GameManager puts it on the car)
     public enum Choice { None, RaceAgain, Replay, Settings, StartRace, Livery }
 
     // game mode (saved as "gameMode"): a quick race, a race weekend (qualifying + race), or the championship (SeasonUI.cs)
@@ -188,9 +188,8 @@ public sealed partial class MenuUI
     readonly MenuStudio studio = new MenuStudio();
     int releaseFrame = -1, drawFrame = -10; bool purged = true, escDue, restyleDue;
     int navDir = 1; const int KeyNav = 0x5A20;
-    string toast; float toastT = -10f;
 
-    static bool StudioPage(Page p) => p == Page.Start || p == Page.Play || p == Page.Driver || p == Page.Garage || p == Page.Season;
+    static bool StudioPage(Page p) => p == Page.Start || p == Page.Play || p == Page.Driver || p == Page.Season;
     // the livery the driver's suit shows: the team's in a championship, else the player's own
     Livery PlayerLivery()
     {
@@ -216,25 +215,9 @@ public sealed partial class MenuUI
                 else if (step == StepCircuit) GoPlay(StepMode, -1);
                 else GoHome();
                 break;
-            case Page.Driver: case Page.Garage: case Page.Results: GoHome(); break;
+            case Page.Driver: case Page.Results: GoHome(); break;
             case Page.Season: GoPlay(StepSetup, -1); break;
         }
-    }
-
-    void Toast(string s) { toast = s; toastT = Time.unscaledTime; }
-    void DrawToast()
-    {
-        float a = Time.unscaledTime - toastT;
-        if (toast == null || a > 2f) return;
-        float k = Mathf.Clamp01(a / 0.15f) * Mathf.Clamp01((2f - a) / 0.3f);
-        float w = UiKit.Width(toast, UiKit.Semi, 11.5f) + U(36), h = U(34);
-        var r = new Rect(Screen.width * 0.5f - w * 0.5f, UiKit.Safe.y + U(64) - U(6) * (1f - k), w, h);
-        UiKit.PushAlpha(k);
-        UiKit.Shadow(r, 999f, 8f, 0.4f, 2f);
-        UiKit.Rect(r, new Color(0.13f, 0.14f, 0.18f, 0.96f), 999f);
-        UiKit.Outline(r, new Color(1, 1, 1, 0.14f), 999f, 0.7f);
-        UiKit.Text(r, toast, UiKit.Semi, 11.5f, UiKit.TextCol, TextAnchor.MiddleCenter);
-        UiKit.PopAlpha();
     }
 
     // content of a page or step slides in from the side it was entered from (header and backdrop stay)
@@ -265,7 +248,7 @@ public sealed partial class MenuUI
         if (ev.type == EventType.Repaint && studio.Alive)
         {
             if (restyleDue) { restyleDue = false; studio.Restyle(playerCar, PlayerLivery()); }
-            int shot = page == Page.Start ? MenuStudio.ShotHome : page == Page.Driver ? MenuStudio.ShotDriver : page == Page.Garage ? MenuStudio.ShotGarage : MenuStudio.ShotHidden;
+            int shot = page == Page.Start ? MenuStudio.ShotHome : page == Page.Driver ? MenuStudio.ShotDriver : MenuStudio.ShotHidden;
             studio.Tick(shot, page == Page.Start);
         }
         if (escDue) { escDue = false; Back(); }
@@ -276,13 +259,11 @@ public sealed partial class MenuUI
             case Page.Start: ch = DrawHome(ref map); break;
             case Page.Play: ch = DrawPlay(ref map, ref cls, ref riv, ref diff, loaded, loadedFor); break;
             case Page.Driver: DrawDriverPage(); break;
-            case Page.Garage: ch = DrawGarage(ref cls); break;
             case Page.Loading: DrawLoading(map); break;
             case Page.Results: ch = DrawResults(); break;
             case Page.Season: ch = season.DrawHub(ref map); break;
             case Page.QualiResult: ch = season.DrawQuali(); break;
         }
-        DrawToast();
         return ch;
     }
 
@@ -379,7 +360,7 @@ public sealed partial class MenuUI
         var c = cards[k];
         var pv = k < previews.Length ? previews[k] : null;
         float thumb = pv != null ? U(44) : 0f, tx = r.x + U(12), tw = r.width - U(22) - thumb;
-        UiKit.Text(new Rect(tx, r.y + U(6), tw, U(14)), c.number, UiKit.Black, 10f, Color.Lerp(UiKit.Faint, UiKit.AccentHi, s));
+        UiKit.Text(new Rect(tx, r.y + U(6), tw, U(14)), c.number, UiKit.Bold, 10f, Color.Lerp(UiKit.Faint, UiKit.TextCol, s));
         UiKit.Text(new Rect(tx, r.y + U(19), tw, U(18)), c.name, UiKit.Bold, UiKit.Fit(c.name, UiKit.Bold, 12.5f, tw, 9.5f), Color.Lerp(UiKit.Sub, UiKit.TextCol, s));
         UiKit.Text(new Rect(tx, r.y + U(36), tw, U(14)), c.country, UiKit.Regular, 9f, UiKit.Faint);
         if (pv != null)
@@ -508,8 +489,7 @@ public sealed partial class MenuUI
         SectorMark(P(pv.s2), dr.center, "S3");
         // start / finish: red dot in a white ring, and an arrow for the direction of travel
         var s = P(pv.start);
-        UiKit.Glow(new Rect(s.x - U(16), s.y - U(16), U(32), U(32)), UiKit.A(UiKit.Accent, 0.6f));
-        UiKit.Dot(s, 5f, Color.white); UiKit.Dot(s, 3.4f, UiKit.Accent);
+        UiKit.Dot(s, 5f, Color.white); UiKit.Dot(s, 3.2f, UiKit.Info); // start / finish (info, not red)
         var m = GUI.matrix;
         var ap = s + pv.dir * U(14);
         GUIUtility.RotateAroundPivot(Mathf.Atan2(pv.dir.y, pv.dir.x) * Mathf.Rad2Deg, ap);
@@ -530,21 +510,21 @@ public sealed partial class MenuUI
     {
         float sw = Screen.width, sh = Screen.height;
         UiKit.Rect(new Rect(0, 0, sw, sh), UiKit.Ink);
-        UiKit.Backdrop(1f);
+        Plain();
         var info = cards[Mathf.Clamp(map, 0, cards.Length - 1)];
         float cy = sh * 0.46f;
         var pv = map >= 0 && map < previews.Length ? previews[map] : null; // only when already built: no extra build here
         if (pv != null) { UiKit.PushAlpha(0.16f); DrawMap(new Rect(sw * 0.5f - sh * 0.55f, cy - sh * 0.36f, sh * 1.1f, sh * 0.72f), pv, false); UiKit.PopAlpha(); }
         string kind = quali ? "Loading  ·  qualifying" : practice ? (map == playgroundIdx ? "Loading  ·  test area" : "Loading  ·  practice") : "Loading  ·  race";
-        UiKit.Eyebrow(new Rect(0, cy - U(54), sw, U(16)), kind, UiKit.AccentHi, 10f, TextAnchor.MiddleCenter);
-        UiKit.Text(new Rect(0, cy - U(40), sw, U(56)), info.upper, UiKit.Black, UiKit.Fit(info.upper, UiKit.Black, 50f, sw * 0.8f, 26f), UiKit.TextCol, TextAnchor.MiddleCenter);
+        UiKit.Eyebrow(new Rect(0, cy - U(54), sw, U(16)), kind, UiKit.Faint, 9.5f, TextAnchor.MiddleCenter);
+        UiKit.Text(new Rect(0, cy - U(40), sw, U(56)), info.upper, UiKit.Bold, UiKit.Fit(info.upper, UiKit.Bold, 44f, sw * 0.8f, 24f), UiKit.TextCol, TextAnchor.MiddleCenter);
         UiKit.Text(new Rect(0, cy + U(14), sw, U(20)), info.country, UiKit.Semi, 13.5f, UiKit.Sub, TextAnchor.MiddleCenter);
         // thin progress track with a moving shimmer
         float bw = U(220), bx = sw * 0.5f - bw * 0.5f, byy = cy + U(48), bh = Mathf.Max(2f, U(2.5f));
         UiKit.Rect(new Rect(bx, byy, bw, bh), new Color(1, 1, 1, 0.08f), 2f);
         float ph = Mathf.Repeat(Time.unscaledTime * 0.9f, 1f), seg = 0.32f;
         float a0 = Mathf.Clamp01(ph * (1f + seg) - seg), a1 = Mathf.Clamp01(ph * (1f + seg));
-        if (a1 > a0) UiKit.Rect(new Rect(bx + bw * a0, byy, bw * (a1 - a0), bh), UiKit.Accent, 2f);
+        if (a1 > a0) UiKit.Rect(new Rect(bx + bw * a0, byy, bw * (a1 - a0), bh), UiKit.Info, 2f); // progress: cyan
         // tip
         string tip = Tips[tipIdx];
         float tw = UiKit.Width(tip, UiKit.Semi, 11f), tagW = UiKit.TagWidth("TIP"), total = tagW + U(10) + tw, tx = sw * 0.5f - total * 0.5f, ty = sh - U(58);
@@ -581,7 +561,7 @@ public sealed partial class MenuUI
     Choice DrawResults()
     {
         if (!ReferenceEquals(noteParsed, resultNote)) ParseNote();
-        UiKit.Backdrop(1f);
+        Plain();
         var safe = UiKit.Safe;
         float M = U(22), x0 = safe.x + M, x1 = safe.xMax - M, W = x1 - x0, top = safe.y + U(14);
         int n = results.Length;
@@ -606,14 +586,14 @@ public sealed partial class MenuUI
         // ---- header: eyebrow, big position, tags, note
         float e0 = UiKit.Enter(scr, 0), e1 = UiKit.Enter(scr, 1), e2 = UiKit.Enter(scr, 2);
         UiKit.PushAlpha(e0);
-        UiKit.Eyebrow(new Rect(x0, top, headW, U(16)), resHead, UiKit.AccentHi, 9.5f);
+        UiKit.Eyebrow(new Rect(x0, top, headW, U(16)), resHead, UiKit.Faint, 9f);
         UiKit.PopAlpha();
         UiKit.PushAlpha(e1);
         var big = UiKit.Rise(new Rect(x0 - U(2), top + U(10), U(160), U(66)), e1, 14f);
-        UiKit.Text(big, resPosStr, UiKit.Black, 62f, UiKit.TextCol);
-        float bx = x0 + UiKit.Width(resPosStr, UiKit.Black, 62f) + U(12);
+        UiKit.Text(big, resPosStr, UiKit.Bold, 58f, UiKit.TextCol);
+        float bx = x0 + UiKit.Width(resPosStr, UiKit.Bold, 58f) + U(12);
         float tagX = bx;
-        if (notePts != null) { float w = UiKit.TagWidth(notePts, 10f); UiKit.Tag(new Rect(tagX, top + U(24), w, U(20)), notePts, UiKit.Accent, Color.white, 10f); tagX += w + U(6); }
+        if (notePts != null) { float w = UiKit.TagWidth(notePts, 10f); UiKit.Tag(new Rect(tagX, top + U(24), w, U(20)), notePts, new Color(1, 1, 1, 0.14f), UiKit.TextCol, 10f); tagX += w + U(6); }
         if (noteChamp != null) { float w = UiKit.TagWidth(noteChamp, 9f); UiKit.Tag(new Rect(tagX, top + U(24), w, U(20)), noteChamp, new Color(1, 1, 1, 0.12f), UiKit.TextCol, 9f); tagX += w + U(6); }
         float ly = notePts != null || noteChamp != null ? top + U(48) : top + U(30);
         UiKit.Text(new Rect(bx, ly, x0 + headW - bx, U(18)), resOfStr, UiKit.Bold, 13f, UiKit.Sub);
@@ -698,7 +678,7 @@ public sealed partial class MenuUI
         UiKit.Bar(new Rect(r.x + U(10), r.y + U(8), r.width - U(20), U(3)), row.colour);
         Color medal = pos == 0 ? UiKit.Gold : pos == 1 ? UiKit.Silver : UiKit.Bronze;
         float px = r.x + U(10), w = r.width - U(20);
-        UiKit.Text(new Rect(px, r.y + U(14), w, U(30)), Ord[pos + 1], UiKit.Black, 26f, medal);
+        UiKit.Text(new Rect(px, r.y + U(14), w, U(30)), Ord[pos + 1], UiKit.Bold, 24f, medal);
         UiKit.Text(new Rect(px, r.yMax - U(38), w, U(18)), row.name, UiKit.Bold, UiKit.Fit(row.name, UiKit.Bold, 12.5f, w, 9f), UiKit.TextCol);
         UiKit.Text(new Rect(px, r.yMax - U(21), w, U(14)), pos == 0 ? resTimeStr : gaps[pos], UiKit.Semi, 10f, UiKit.Sub);
     }

@@ -133,7 +133,8 @@ public sealed class SettingsUI
         return evt == EvUp && clickId == id && Hit(sr);
     }
     static readonly Color accTop = new Color(1f, 0.16f, 0.09f, 1f), accBottom = new Color(0.78f, 0.02f, 0f, 1f);
-    static readonly Color panelTop = new Color(0.075f, 0.085f, 0.11f, 0.97f), panelBottom = new Color(0.045f, 0.052f, 0.07f, 0.97f);
+    static readonly Color panelTop = new Color(0.105f, 0.113f, 0.133f, 0.97f), panelBottom = new Color(0.078f, 0.085f, 0.102f, 0.97f); // UiKit charcoal family
+    static readonly Color sliderFill = new Color(0.80f, 0.82f, 0.86f, 0.85f);
     const int KeyTabHl = 0x5E77AB, KeyTabSwitch = 0x5E77AC;
 
     void Set(Item it, float v)
@@ -190,20 +191,19 @@ public sealed class SettingsUI
 
         // ---- frame: dimmed page, one big glass sheet
         bool inRace = !string.IsNullOrEmpty(subtitle);
-        UiKit.Backdrop(inRace ? 0.82f : 1f, !inRace);
+        MenuUI.Plain(inRace ? 0.86f : 1f);
         float ent = UiKit.Enter("settings", 0, 0.04f, 0.4f);
         UiKit.PushAlpha(ent);
         panel = UiKit.Rise(panel, ent, 14f);
         UiKit.Shadow(panel, 18f, 14f, 0.45f, 4f);
         UiKit.Gradient(panel, panelTop, panelBottom, 18f);
         UiKit.Outline(panel, new Color(1, 1, 1, 0.08f), 18f, 0.7f);
-        UiKit.Bar(new Rect(panel.x + pad, panel.y + S(17), S(4), S(22)), UiKit.Accent);
-        UiKit.Text(new Rect(panel.x + pad + S(12), panel.y + S(8), S(200), S(40)), "Settings", UiKit.Black, 24f, UiKit.TextCol);
+        UiKit.Text(new Rect(panel.x + pad + S(2), panel.y + S(8), S(200), S(40)), "Settings", UiKit.Bold, 22f, UiKit.TextCol);
         if (inRace)
         {
             string tag = UiKit.Upper(subtitle); float tw = UiKit.TagWidth(tag, 9f);
-            float tx = panel.x + pad + S(12) + UiKit.Width("Settings", UiKit.Black, 24f) + S(12);
-            UiKit.Tag(new Rect(tx, panel.y + S(19), tw, S(18)), tag, new Color(UiKit.Warn.r, UiKit.Warn.g, UiKit.Warn.b, 0.16f), UiKit.Warn, 9f);
+            float tx = panel.x + pad + S(2) + UiKit.Width("Settings", UiKit.Bold, 22f) + S(12);
+            UiKit.Tag(new Rect(tx, panel.y + S(19), tw, S(18)), tag, new Color(1f, 1f, 1f, 0.12f), UiKit.Sub, 9f); // (paused is a state, not a warning)
         }
         var closeR = new Rect(panel.xMax - pad - S(44), panel.y + S(6), S(44), S(44));
         if (Btn(closeR, IdClose, null, LookGlass, true, SegSize, 999f)) close = true;
@@ -320,11 +320,10 @@ public sealed class SettingsUI
         bool active = live && mode == SliderDrag && pressId == id;
         float th = S(4);
         UiKit.Rect(new Rect(x0, cy - th / 2, w, th), new Color(1, 1, 1, 0.12f), 99f);
-        if (t > 0.001f) UiKit.Gradient(new Rect(x0, cy - th / 2, Mathf.Max(th, w * t), th), accBottom, accTop, 99f, true);
+        if (t > 0.001f) UiKit.Rect(new Rect(x0, cy - th / 2, Mathf.Max(th, w * t), th), sliderFill, 99f); // neutral: red is for selection
         if (it.resettable) UiKit.Rect(new Rect(x0 + w * Mathf.InverseLerp(it.min, it.max, it.def) - S(0.75f), cy - S(8), Mathf.Max(1f, S(1.5f)), S(16)), new Color(1, 1, 1, 0.30f), 1f); // the default
         float a = UiKit.Smooth(id ^ 0x2B000000, active ? 1f : 0f, 20f);
         var kc = new Vector2(x0 + w * t, cy);
-        if (a > 0.01f) UiKit.Glow(new Rect(kc.x - S(22), kc.y - S(22), S(44), S(44)), UiKit.A(UiKit.Accent, 0.55f * a));
         UiKit.Dot(kc + new Vector2(0, S(1.2f)), 11.5f + 2f * a, new Color(0, 0, 0, 0.35f));
         UiKit.Dot(kc, 10.5f + 2f * a, Color.white);
         UiKit.Dot(kc, 4f, Color.Lerp(new Color(0.75f, 0.77f, 0.8f), UiKit.Accent, a));

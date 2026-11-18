@@ -5,8 +5,9 @@
 //    rendered at all behind the menu). Every light that exists is told to skip the layer, so the track's sun does not
 //    reach the stage.
 //  * Driver: one of the rigged CC0 people (People.cs: Quaternius, crew helmet with a dark visor) in a race suit in the
-//    livery colours. Idle clip + procedural breathing, weight shift and head movement, and on Home every 6-12 s a short
-//    gesture (adjust the gloves, touch the helmet, glance at the car, roll the shoulders, fold the arms, nod).
+//    livery colours, standing relaxed: idle clip with the arms hanging naturally (IK), chest and shoulders relaxed,
+//    a normal stance; small breathing, weight shift and head movement, and on Home every 6-12 s a calm gesture
+//    (adjust the gloves, a hand to the visor, glance at the car, fold the arms, nod).
 //  * Car: a copy of the player's own car model (Instantiate under an inactive parent, every script stripped before it
 //    wakes, the seated driver hidden): it shares the race car's meshes and materials, so it costs no new mesh memory.
 //  * Light: a key light (real directional light, studio layer only); fill, rim and floor bounce baked into custom
@@ -27,7 +28,7 @@ public sealed class MenuStudio
 {
     public const int Layer = 30;
     public const int MenuFps = 30;
-    public const int ShotHome = 0, ShotDriver = 1, ShotGarage = 2, ShotHidden = 3;
+    public const int ShotHome = 0, ShotDriver = 1, ShotHidden = 3;
     static readonly Vector3 Origin = new Vector3(0f, -1500f, 0f);
     // stage positions (studio frame, metres): the driver at the centre facing the camera (-z), the car behind on his left
     static readonly Vector3 DriverAt = Vector3.zero, CarAt = new Vector3(1.6f, 0f, 3.6f), PoolAt = new Vector3(0.8f, 0f, 1.8f);
@@ -45,6 +46,7 @@ public sealed class MenuStudio
     Vector3 camPos, camLook; float camFov; bool camSet;
     float driverYaw, carYaw, spinVel, dragLastX, dragLastT; bool dragging, spinCar;
     int gKind = -1, gLast = -1; float gT, gLen, nextG;          // the current gesture (-1 none), its time and length
+    int calfR = -1;                                            // the right calf bone (People has no constant for it)
 
     public bool Alive => root != null;
 
@@ -90,7 +92,7 @@ public sealed class MenuStudio
         savedFps = -1; dragging = false;
     }
 
-    // the livery changed (Garage): suit colours, and a fresh copy of the car (the race car may have swapped its model)
+    // the livery changed (Setup): suit colours, and a fresh copy of the car (the race car may have swapped its model)
     public void Restyle(CarModel playerCar, Livery liv)
     {
         if (root == null) return;
@@ -256,6 +258,8 @@ public sealed class MenuStudio
         rig.tr.localPosition = Vector3.zero; rig.tr.localRotation = Quaternion.Euler(0f, 180f, 0f); rig.tr.localScale = Vector3.one;
         rigSmr = rig.go.GetComponent<SkinnedMeshRenderer>();
         if (rigSmr != null) rigSmr.lightProbeUsage = LightProbeUsage.CustomProvided;
+        calfR = -1;
+        for (int j = 0; j < People.NJ; j++) if (People.Parent[j] == People.JThighR) { calfR = j; break; }
         rigBlock = new MaterialPropertyBlock();
         Dress(liv);
         People.Sample(People.Idle, 0f, buf); rig.Apply(buf);
@@ -379,13 +383,17 @@ public sealed class MenuStudio
     static float Env(float t, float len) => Mathf.SmoothStep(0f, 1f, t / 0.5f) * (1f - Mathf.SmoothStep(0f, 1f, (t - (len - 0.6f)) / 0.6f));
     static void Turn(Transform b, float deg, Vector3 axis) { b.rotation = Quaternion.AngleAxis(deg, axis) * b.rotation; }
 
+    // calm gestures only (no shoulder rolls or anything that reads as squaring up): adjust the gloves, a hand to the
+    // visor, a glance at the car, arms folded, a nod
+    const int GGloves = 0, GVisor = 1, GGlance = 2, GFold = 3, GNod = 4, GCount = 5;
+
     void Animate(float t, float dt, bool gestures)
     {
         // a new gesture every 6-12 s (Home only); one that has started always plays to its end
         if (gKind < 0 && gestures && t >= nextG)
         {
-            int k = Random.Range(0, 6); if (k == gLast) k = (k + 1) % 6;
-            gKind = gLast = k; gT = 0f; gLen = k == 3 ? 2.4f : k == 2 ? 2.6f : 3.2f;
+            int k = Random.Range(0, GCount); if (k == gLast) k = (k + 1) % GCount;
+            gKind = gLast = k; gT = 0f; gLen = k == GGlance ? 2.6f : k == GFold ? 4f : 3.2f;
         }
         float gw = 0f;
         if (gKind >= 0)
@@ -396,45 +404,47 @@ public sealed class MenuStudio
         if (!gestures && gKind < 0) nextG = Mathf.Max(nextG, t + 3f);
 
         People.Sample(People.Idle, t, buf);
-        if (gKind == 4) { People.Sample(People.FoldArms, gT + 0.4f, buf2); People.Blend(buf, buf2, gw, buf); }
-        else if (gKind == 5) { People.Sample(People.Yes, gT, buf2); People.Blend(buf, buf2, gw * 0.8f, buf); }
+        if (gKind == GFold) { People.Sample(People.FoldArms, gT + 0.4f, buf2); People.Blend(buf, buf2, gw, buf); }
+        else if (gKind == GNod) { People.Sample(People.Yes, gT, buf2); People.Blend(buf, buf2, gw * 0.7f, buf); }
         rig.Apply(buf);
 
         var tr = rig.tr; Vector3 right = tr.right, fwd = tr.forward, up = tr.up;
         var b = rig.b;
-        // breathing (~4.2 s): the chest lifts, the shoulders rise a little
+        // relaxed posture over the clip: chest a touch forward (no puffed chest), shoulders dropped, feet a little
+        // closer together (a normal stance, not a wide one)
+        Turn(b[People.JSpine3], 2.5f, right);
+        Turn(b[People.JClavL], 3f, fwd); Turn(b[People.JClavR], -3f, fwd);
+        Turn(b[People.JThighL], 3.5f, fwd); Turn(b[People.JCalfL], -3.5f, fwd);
+        Turn(b[People.JThighR], -3.5f, fwd); if (calfR >= 0) Turn(b[calfR], 3.5f, fwd);
+        // breathing (~4.2 s): small
         float br = Mathf.Sin(t * 1.5f);
-        Turn(b[People.JSpine3], -0.9f * br, right);
-        Turn(b[People.JClavL], 0.8f * br, fwd); Turn(b[People.JClavR], -0.8f * br, fwd);
+        Turn(b[People.JSpine3], -0.5f * br, right);
+        Turn(b[People.JClavL], -0.5f * br, fwd); Turn(b[People.JClavR], 0.5f * br, fwd);
         // weight from one foot to the other (slow, uneven)
         float ws = (Mathf.Sin(t * 0.7f) + 0.35f * Mathf.Sin(t * 1.9f + 1.3f)) * 0.75f;
-        b[People.JPelvis].position += right * (0.012f * ws);
-        Turn(b[People.JPelvis], 1.6f * ws, fwd); Turn(b[People.JSpine1], -1.3f * ws, fwd);
-        // roll the shoulders (two slow circles)
-        if (gKind == 3)
+        b[People.JPelvis].position += right * (0.010f * ws);
+        Turn(b[People.JPelvis], 1.3f * ws, fwd); Turn(b[People.JSpine1], -1.1f * ws, fwd);
+        // arms hang naturally at his sides (two-bone IK; the clip's arms are held wide), except while folded
+        float hang = gKind == GFold ? 1f - gw : 1f;
+        Hang(true, hang, t, right, fwd, up);
+        Hang(false, hang, t, right, fwd, up);
+        if (gKind == GGloves && gw > 0.001f)
         {
-            float ph = gT / gLen * Mathf.PI * 4f, a = 7f * gw;
-            Turn(b[People.JClavL], a * Mathf.Sin(ph), fwd); Turn(b[People.JClavL], a * Mathf.Cos(ph), right);
-            Turn(b[People.JClavR], -a * Mathf.Sin(ph), fwd); Turn(b[People.JClavR], a * Mathf.Cos(ph), right);
+            var lt = rig.Pelvis + fwd * 0.28f + up * 0.12f - right * 0.04f;
+            rig.Arm(true, lt, gw, -fwd - right * 0.3f);
+            var rt = rig.Palm(true) + right * 0.05f + up * 0.02f + fwd * (0.015f * Mathf.Sin(gT * 8f));
+            rig.Arm(false, rt, gw, -fwd + right * 0.3f);
         }
-        // arms: adjust the gloves / touch the helmet (two-bone IK on top of the clip)
-        if (gKind == 0 && gw > 0.001f)
-        {
-            var lt = rig.Pelvis + fwd * 0.30f + up * 0.14f - right * 0.04f;
-            rig.Arm(true, lt, gw);
-            var rt = rig.Palm(true) + right * 0.05f + up * 0.02f + fwd * (0.02f * Mathf.Sin(gT * 9f));
-            rig.Arm(false, rt, gw);
-        }
-        else if (gKind == 1 && gw > 0.001f)
+        else if (gKind == GVisor && gw > 0.001f)
         {
             var hp = b[People.JHead].position;
-            rig.Arm(false, hp + right * 0.14f + up * 0.06f + fwd * 0.02f, gw, right - up * 0.5f);
+            rig.Arm(false, hp + fwd * 0.17f + right * 0.05f - up * 0.02f, gw, right - up * 0.6f);
         }
         // the head: a slow wander ahead, or a glance at the car
         var head = b[People.JHead].position;
-        var look = head + fwd * 3f + right * (Mathf.Sin(t * 0.23f) * 0.8f + Mathf.Sin(t * 0.61f) * 0.3f) + up * (Mathf.Sin(t * 0.17f) * 0.25f - 0.1f);
-        rig.LookAt(look, 0.55f);
-        if (gKind == 2 && carPivot != null) rig.LookAt(carPivot.position + Vector3.up * 0.5f, gw);
+        var look = head + fwd * 3f + right * (Mathf.Sin(t * 0.23f) * 0.6f + Mathf.Sin(t * 0.61f) * 0.2f) + up * (Mathf.Sin(t * 0.17f) * 0.18f - 0.08f);
+        rig.LookAt(look, 0.5f);
+        if (gKind == GGlance && carPivot != null) rig.LookAt(carPivot.position + Vector3.up * 0.5f, gw);
         // soft contact shadow under him (local to the studio root)
         if (blob != null)
         {
@@ -443,20 +453,23 @@ public sealed class MenuStudio
         }
     }
 
-    // the camera for the page: Home = the driver in the middle, Driver = the driver on the left, Garage = the car on the right
+    // one arm hanging relaxed: the palm a little below the hip, just outside the thigh, elbow slightly bent and back
+    void Hang(bool left, float w, float t, Vector3 right, Vector3 fwd, Vector3 up)
+    {
+        if (w <= 0.001f) return;
+        var b = rig.b;
+        Transform ua = b[left ? People.JUpL : People.JUpR], la = b[left ? People.JLoL : People.JLoR], hd = b[left ? People.JHandL : People.JHandR];
+        float l1 = (la.position - ua.position).magnitude, l2 = (hd.position - la.position).magnitude;
+        float side = left ? -1f : 1f, sway = Mathf.Sin(t * 0.9f + (left ? 0f : 1.7f)) * 0.01f;
+        var palm = ua.position - up * ((l1 + l2) * 0.92f + 0.06f) + right * (side * 0.05f) + fwd * (0.04f + sway);
+        rig.Arm(left, palm, w, -fwd + right * (side * 0.35f));
+    }
+
+    // the camera for the page: Home = the driver in the middle, Driver = the driver on the left
     void Frame(int shot, float dt)
     {
         Vector3 subject, pos; float fov, fx;
-        if (shot == ShotGarage)
-        {
-            float a = CarYaw * Mathf.Deg2Rad; // the camera stays put; the turntable turns the car under it
-            // front three-quarter from the car's right: the driver (in front of its left side) stays out of the view
-            var f = new Vector3(Mathf.Sin(a), 0f, Mathf.Cos(a)); var right = new Vector3(Mathf.Cos(a), 0f, -Mathf.Sin(a));
-            subject = CarAt + new Vector3(0f, 0.45f, 0f);
-            pos = CarAt + f * 5.2f + right * 4.8f + new Vector3(0f, 1.6f, 0f);
-            fov = 32f; fx = 0.62f;
-        }
-        else if (shot == ShotDriver) { subject = new Vector3(0f, 0.9f, 0f); pos = new Vector3(0.35f, 1.05f, -5.0f); fov = 30f; fx = 0.25f; }
+        if (shot == ShotDriver) { subject = new Vector3(0f, 0.9f, 0f); pos = new Vector3(0.35f, 1.05f, -5.0f); fov = 30f; fx = 0.25f; }
         else { subject = new Vector3(0f, 0.86f, 0f); pos = new Vector3(0f, 1.08f, -5.5f); fov = 30f; fx = 0.5f; }
         subject += Origin; pos += Origin;
         float aspect = Screen.height > 0 ? Screen.width / (float)Screen.height : 1.78f;
