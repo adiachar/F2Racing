@@ -1,11 +1,15 @@
-// MenuUI.cs — the front end, drawn with IMGUI (UiKit.cs design system) from GameManager.OnGUI:
-//  * Start menu: a hero layout. Left: the circuit (type, big name, country), data chips (length, turns, real pole)
-//    and a large anti-aliased track map (start/finish, direction, sector splits); below it a swipeable carousel of
-//    circuit cards. Right: the game mode (segmented), the session options as compact pills (car, rivals, level,
-//    grid, laps, qualifying, weather, time of day) and the big red primary action. Settings = round icon, top right.
-//  * Loading: centred circuit name, a thin red shimmer and a tip; drawn for one frame before the (slow) build.
+// MenuUI.cs — the front end, drawn with IMGUI (UiKit.cs design system) from GameManager.OnGUI. One job per page:
+//  * Home (Page.Start, MenuHome.cs): the player's driver standing in the 3D studio (MenuStudio.cs), driver card,
+//    Inbox / Settings icons, OFFLINE / ONLINE tiles left, DRIVER / GARAGE tiles right, one big red RACE (the last mode
+//    and circuit, straight to Setup), the daily challenge and the licence credits.
+//  * Play (MenuPlay.cs): 1 Mode · 2 Circuit · 3 Setup, one screen each, Back top-left (and Android back / Escape),
+//    Next bottom-right. Championship skips the circuit (its calendar decides) and opens the season hub (SeasonUI.cs).
+//  * Driver / Garage (MenuDriver.cs): the driver profile (name, number, country, level, safety rating, stats) and the
+//    car (class, livery).
+//  * Loading: centred circuit name, a thin red shimmer and a tip; drawn for one frame before the (slow) build. The
+//    menu's 3D is released before it and the unused assets are purged on it (once).
 //  * Results: your position large, points / championship tags, a podium for the top 3 with team colours, and a
-//    timing table (best lap purple for the fastest). "Replay" (last 60 s, TV cameras) / "Menu" / "Race again".
+//    timing table (best lap purple for the fastest). "Replay" (last 60 s, TV cameras) / "Menu" (Home) / "Race again".
 // A plain C# class: GameManager owns the game settings and hands them in by ref; this class draws, keeps the page
 // that is up and the race-length setting. The game is paused while any page is showing (GameManager checks Showing).
 // Layout units: 390 units = screen height (UiKit.U). Touch targets are 42+ units; layouts keep to Screen.safeArea
@@ -14,10 +18,12 @@ using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
 
-public sealed class MenuUI
+public sealed partial class MenuUI
 {
-    public enum Page { None, Start, Loading, Results, Season, QualiResult }
-    public enum Choice { None, RaceAgain, Replay, Settings, StartRace }
+    // Start = the Home page. Play = the Mode / Circuit / Setup flow (step).
+    public enum Page { None, Start, Loading, Results, Season, QualiResult, Play, Driver, Garage }
+    // Livery: the Garage changed Livery.PlayerIndex (GameManager puts it on the car)
+    public enum Choice { None, RaceAgain, Replay, Settings, StartRace, Livery }
 
     // game mode (saved as "gameMode"): a quick race, a race weekend (qualifying + race), or the championship (SeasonUI.cs)
     public const int ModeQuick = 0, ModeWeekend = 1, ModeChampionship = 2;
@@ -139,7 +145,12 @@ public sealed class MenuUI
     {
         practice = practiceSession; quali = qualifying; loadShownFrame = -1; page = Page.Loading;
         tipIdx = (tipIdx + 1 + (int)(Time.realtimeSinceStartup * 7f)) % Tips.Length;
+        GUIUtility.keyboardControl = 0;
+        ReleaseStudio(); purged = false; // the menu's 3D goes before the circuit is built; the loading page purges once
     }
+
+    // the menu's 3D (MenuStudio.cs) destroyed now; also called by GameManager.StartSession
+    public void ReleaseStudio() { if (studio.Alive) { studio.Release(); releaseFrame = Time.frameCount; } }
 
     public void ShowResults(Row[] rows, string circuit, int laps, double raceTime, double refLap, int pitStops = 0, double penalty = 0)
     {
@@ -163,6 +174,7 @@ public sealed class MenuUI
         resStopsStr = resStops > 0 ? resStops.ToString() : null;
         resPenStr = resPenalty > 0 ? $"+{resPenalty:0} s" : null;
         noteParsed = null; noteLine = notePts = noteChamp = null;
+        MenuProfile.RecordRace(resPos, results.Length); // career stats (Driver page)
         page = Page.Results;
     }
 
@@ -171,171 +183,112 @@ public sealed class MenuUI
     static float U(float v) => UiKit.U(v);
     internal static void Fill(Rect r, Color c) => UiKit.Rect(r, c);
 
+    // ---- the menu's 3D studio, navigation, Android back
+    public CarModel playerCar;                             // GameManager: the player's car (copied into the studio)
+    readonly MenuStudio studio = new MenuStudio();
+    int releaseFrame = -1, drawFrame = -10; bool purged = true, escDue, restyleDue;
+    int navDir = 1; const int KeyNav = 0x5A20;
+    string toast; float toastT = -10f;
+
+    static bool StudioPage(Page p) => p == Page.Start || p == Page.Play || p == Page.Driver || p == Page.Garage || p == Page.Season;
+    // the livery the driver's suit shows: the team's in a championship, else the player's own
+    Livery PlayerLivery()
+    {
+        if (mode == ModeChampionship && Season.Active && !Season.Over) return Livery.ForTeam(Season.Data.team, Season.TeamColour(Season.Data.team));
+        return Livery.Player[Livery.PlayerIndex];
+    }
+
+    public void GoHome() { page = Page.Start; navDir = -1; GUIUtility.keyboardControl = 0; UiKit.Mark(KeyNav); }
+    public void GoPlay(int toStep, int dir)
+    {
+        if (toStep == StepMode && (page != Page.Play || step != StepMode)) ModeStatus();
+        page = Page.Play; step = toStep; navDir = dir; UiKit.Mark(KeyNav);
+    }
+    void GoPage(Page p) { page = p; navDir = 1; GUIUtility.keyboardControl = 0; UiKit.Mark(KeyNav); }
+
+    // Android back / Escape: one page or step back
+    void Back()
+    {
+        switch (page)
+        {
+            case Page.Play:
+                if (step == StepSetup) GoPlay(mode == ModeChampionship ? StepMode : StepCircuit, -1);
+                else if (step == StepCircuit) GoPlay(StepMode, -1);
+                else GoHome();
+                break;
+            case Page.Driver: case Page.Garage: case Page.Results: GoHome(); break;
+            case Page.Season: GoPlay(StepSetup, -1); break;
+        }
+    }
+
+    void Toast(string s) { toast = s; toastT = Time.unscaledTime; }
+    void DrawToast()
+    {
+        float a = Time.unscaledTime - toastT;
+        if (toast == null || a > 2f) return;
+        float k = Mathf.Clamp01(a / 0.15f) * Mathf.Clamp01((2f - a) / 0.3f);
+        float w = UiKit.Width(toast, UiKit.Semi, 11.5f) + U(36), h = U(34);
+        var r = new Rect(Screen.width * 0.5f - w * 0.5f, UiKit.Safe.y + U(64) - U(6) * (1f - k), w, h);
+        UiKit.PushAlpha(k);
+        UiKit.Shadow(r, 999f, 8f, 0.4f, 2f);
+        UiKit.Rect(r, new Color(0.13f, 0.14f, 0.18f, 0.96f), 999f);
+        UiKit.Outline(r, new Color(1, 1, 1, 0.14f), 999f, 0.7f);
+        UiKit.Text(r, toast, UiKit.Semi, 11.5f, UiKit.TextCol, TextAnchor.MiddleCenter);
+        UiKit.PopAlpha();
+    }
+
+    // content of a page or step slides in from the side it was entered from (header and backdrop stay)
+    Matrix4x4 navMatrix;
+    void BeginNav()
+    {
+        float t = UiKit.EaseOut(UiKit.Since(KeyNav) / 0.3f);
+        navMatrix = GUI.matrix;
+        GUI.matrix = Matrix4x4.Translate(new Vector3(U(36) * navDir * (1f - t), 0f, 0f)) * navMatrix;
+        UiKit.PushAlpha(0.15f + 0.85f * t);
+    }
+    void EndNav() { UiKit.PopAlpha(); GUI.matrix = navMatrix; }
+
     // Draws the page that is up. loaded / loadedFor: the circuit GameManager has built now (its preview needs no rebuild).
     public Choice Draw(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
     {
-        if (page == Page.Start) { if (DrawStart(ref map, ref cls, ref riv, ref diff, loaded, loadedFor)) return Choice.Settings; }
-        else if (page == Page.Loading) DrawLoading(map);
-        else if (page == Page.Results) return DrawResults();
-        else if (page == Page.Season) return season.DrawHub(ref map);
-        else if (page == Page.QualiResult) return season.DrawQuali();
-        return Choice.None;
+        var ev = Event.current;
+        int f = Time.frameCount;
+        if (f != drawFrame)
+        {
+            // the back key, once a frame; not on the frame the settings screen (drawn instead of this) closed with it
+            escDue = Input.GetKeyDown(KeyCode.Escape) && f - drawFrame <= 1;
+            drawFrame = f;
+        }
+        // the studio lives while a menu page that can show it is up
+        if (StudioPage(page)) { if (!studio.Alive) studio.Create(playerCar, PlayerLivery()); }
+        else ReleaseStudio();
+        if (ev.type == EventType.Repaint && studio.Alive)
+        {
+            if (restyleDue) { restyleDue = false; studio.Restyle(playerCar, PlayerLivery()); }
+            int shot = page == Page.Start ? MenuStudio.ShotHome : page == Page.Driver ? MenuStudio.ShotDriver : page == Page.Garage ? MenuStudio.ShotGarage : MenuStudio.ShotHidden;
+            studio.Tick(shot, page == Page.Start);
+        }
+        if (escDue) { escDue = false; Back(); }
+
+        var ch = Choice.None;
+        switch (page)
+        {
+            case Page.Start: ch = DrawHome(ref map); break;
+            case Page.Play: ch = DrawPlay(ref map, ref cls, ref riv, ref diff, loaded, loadedFor); break;
+            case Page.Driver: DrawDriverPage(); break;
+            case Page.Garage: ch = DrawGarage(ref cls); break;
+            case Page.Loading: DrawLoading(map); break;
+            case Page.Results: ch = DrawResults(); break;
+            case Page.Season: ch = season.DrawHub(ref map); break;
+            case Page.QualiResult: ch = season.DrawQuali(); break;
+        }
+        DrawToast();
+        return ch;
     }
 
-    // ================================================================== start menu
+    // ================================================================== circuit carousel, track map (the Circuit step)
     int lastMap = -1, mapDir = 1; const int KeyMap = 0x5A17;
-    int ctaKey = -1; string ctaSub, ctaQualiSub;
 
-    // returns true when the settings icon is tapped (GameManager then shows the settings screen over the menu)
-    bool DrawStart(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
-    {
-        UiKit.Backdrop(1f);
-        var safe = UiKit.Safe;
-        float M = U(22), x0 = safe.x + M, x1 = safe.xMax - M, W = x1 - x0;
-        float top = safe.y + U(14), bottom = safe.yMax - U(26);
-        float R = Mathf.Clamp(W * 0.42f, U(300), U(380)), gap = U(18), L = Mathf.Max(U(200), W - R - gap), px = x1 - R;
-        float bodyY = top + U(52);
-        bool champ = mode == ModeChampionship;
-
-        // ---- top bar: brand, mode, settings
-        float e = UiKit.Enter("start", 0);
-        UiKit.PushAlpha(e);
-        UiKit.Bar(new Rect(x0, top + U(10), U(4), U(22)), UiKit.Accent);
-        UiKit.Text(new Rect(x0 + U(12), top + U(4), L, U(34)), Brand, UiKit.Black, 17f, UiKit.TextCol);
-        int nm = UiKit.Segmented(new Rect(px, top + U(2), R - U(54), U(40)), ModeNames, mode, false, true, 11.5f);
-        if (nm != mode) { mode = nm; PlayerPrefs.SetInt("gameMode", mode); champ = mode == ModeChampionship; }
-        bool openSettings = UiKit.IconButton(new Rect(x1 - U(44), top, U(44), U(44)), UiKit.IconSettings);
-        UiKit.PopAlpha();
-
-        // ---- circuit carousel (handled before the hero so a tap there changes the hero this frame)
-        var car = new Rect(x0, bottom - U(58), L, U(58));
-        map = Carousel(car, map);
-        bool pg = map == playgroundIdx;
-        if (map != lastMap) { UiKit.Mark(KeyMap); mapDir = lastMap < 0 || map > lastMap ? 1 : -1; lastMap = map; carCentre = true; }
-        float mt = UiKit.EaseOut(UiKit.Since(KeyMap) / 0.4f);
-        var info = cards[map];
-
-        // ---- hero: eyebrow, name, country
-        float e1 = UiKit.Enter("start", 1), e2 = UiKit.Enter("start", 2), e3 = UiKit.Enter("start", 3);
-        UiKit.PushAlpha(e1 * mt);
-        UiKit.Eyebrow(UiKit.Slide(new Rect(x0, bodyY, L, U(14)), mt, 10f * mapDir), info.eyebrow, UiKit.AccentHi, 9.5f);
-        UiKit.PopAlpha();
-        float ns = UiKit.Fit(info.upper, UiKit.Black, 46f, L, 24f);
-        UiKit.PushAlpha(e2 * mt);
-        UiKit.Text(UiKit.Slide(UiKit.Rise(new Rect(x0, bodyY + U(12), L, U(52)), e2, 12f), mt, 18f * mapDir), info.upper, UiKit.Black, ns, UiKit.TextCol);
-        UiKit.PopAlpha();
-        UiKit.PushAlpha(e3 * mt);
-        UiKit.Text(UiKit.Slide(new Rect(x0, bodyY + U(62), L, U(18)), mt, 12f * mapDir), info.country, UiKit.Semi, 13.5f, UiKit.Sub);
-        UiKit.PopAlpha();
-
-        // ---- map (built first: it measures the length for the chips)
-        var mapR = new Rect(x0 + U(126), bodyY + U(88), L - U(126), car.y - U(12) - (bodyY + U(88)));
-        var pv = pg ? null : Preview(map, loaded, loadedFor);
-        float e5 = UiKit.Enter("start", 5, 0.04f, 0.6f);
-        UiKit.PushAlpha(e5 * (0.35f + 0.65f * mt));
-        if (pv != null) DrawMap(UiKit.Scale(mapR, 0.96f + 0.04f * mt), pv, true);
-        else if (pg) DrawTestArea(mapR);
-        UiKit.PopAlpha();
-
-        // ---- data chips (a column left of the map)
-        float cy = bodyY + U(92), chW = U(114), chH = U(40);
-        for (int i = 0; i < 3; i++)
-        {
-            float ec = UiKit.Enter("start", 4 + i);
-            UiKit.PushAlpha(ec);
-            var r = UiKit.Rise(new Rect(x0, cy + i * (chH + U(7)), chW, chH), ec, 8f);
-            if (pg)
-            {
-                if (i == 0) UiKit.Chip(r, "Timing", "Off", UiKit.TextCol);
-                else if (i == 1) UiKit.Chip(r, "Drive", "Free", UiKit.TextCol);
-                else UiKit.Chip(r, "Tests", "0-100 · Vmax", UiKit.TextCol, 11.5f);
-            }
-            else if (i == 0) UiKit.Chip(r, "Length", info.length, UiKit.TextCol);
-            else if (i == 1) UiKit.Chip(r, "Turns", info.corners, UiKit.TextCol);
-            else UiKit.Chip(r, "Target pole", info.pole, UiKit.TextCol);
-            UiKit.PopAlpha();
-        }
-
-        // ---- session panel
-        var panel = new Rect(px, bodyY, R, bottom - bodyY);
-        float ep = UiKit.Enter("start", 2, 0.04f, 0.45f);
-        UiKit.PushAlpha(ep);
-        panel = UiKit.Slide(panel, ep, 26f);
-        UiKit.Panel(panel, 16f);
-        float pad = U(14), ix = panel.x + pad, iw = panel.width - 2 * pad;
-        UiKit.Eyebrow(new Rect(ix, panel.y + U(9), iw, U(16)), "Session", UiKit.Sub);
-        UiKit.Text(new Rect(ix, panel.y + U(9), iw, U(16)), ModeHint[mode], UiKit.Regular, 9.5f, UiKit.Faint, TextAnchor.MiddleRight);
-
-        float pillH = U(42), pg2 = U(6), colW = (iw - U(8)) / 2, gy = panel.y + U(32);
-        for (int i = 0; i < 8; i++)
-        {
-            int col = i / 4, row = i % 4;
-            var r = new Rect(ix + col * (colW + U(8)), gy + row * (pillH + pg2), colW, pillH);
-            float ei = UiKit.Enter("start", 4 + row + col);
-            UiKit.PushAlpha(ei);
-            r = UiKit.Rise(r, ei, 8f);
-            switch (i)
-            {
-                case 0: cls = UiKit.Pill(r, "Car", CarConfig.ClassNames[cls], cls, CarConfig.ClassNames.Length); break;
-                case 1: { int n = UiKit.Pill(r, "Rivals", champ ? "Full grid" : rivText[riv], riv, rivalCounts.Length, !pg && !champ); riv = n; break; }
-                case 2: diff = UiKit.Pill(r, "Rival level", diffNames[diff], diff, diffNames.Length, !pg); break;
-                case 3: { int n = UiKit.Pill(r, "Grid", GridNames[gridIdx], gridIdx, GridNames.Length, !pg); if (n != gridIdx) SetGrid(n); break; }
-                case 4: { int n = UiKit.Pill(r, "Race length", lapsText[lapsIdx], lapsIdx, LapCounts.Length, !pg); if (n != lapsIdx) { lapsIdx = n; PlayerPrefs.SetInt("laps", lapsIdx); } break; }
-                case 5: { int n = UiKit.Pill(r, "Qualifying", qualiText[qualiIdx], qualiIdx, QualiMinutes.Length, !pg && mode != ModeQuick); if (n != qualiIdx) { qualiIdx = n; PlayerPrefs.SetInt("qualiLen", qualiIdx); } break; }
-                case 6: Weather.Index = UiKit.Pill(r, "Weather", Weather.Names[Weather.Index], Weather.Index, Weather.Names.Length); break; // applied and saved at the start of the session
-                case 7:
-                {
-                    // Night on street circuits only (elsewhere it shows and uses Evening); saved at once, used by the next build
-                    bool street = !pg && map < Circuits.All.Length && Circuits.All[map].style == CircuitStyle.Street;
-                    int cur = (int)TimeOfDay.For(street), n = UiKit.Pill(r, "Time of day", TimeOfDay.Names[cur], cur, TimeOfDay.Count(street));
-                    if (n != cur) TimeOfDay.Set(n, false);
-                    break;
-                }
-            }
-            UiKit.PopAlpha();
-        }
-
-        // ---- actions
-        int key = lapsIdx * 1000 + riv * 10 + qualiIdx * 100000 + (champ ? 7 : 0);
-        if (key != ctaKey)
-        {
-            ctaKey = key;
-            ctaSub = champ ? "Standings  ·  next round" : lapsText[lapsIdx] + "  ·  " + (rivalCounts[riv] == 0 ? "solo" : rivalCounts[riv] + " rivals");
-            ctaQualiSub = qualiText[qualiIdx] + " session, then race";
-        }
-        float bh = U(52), by = panel.yMax - pad - bh;
-        float eb = UiKit.Enter("start", 9);
-        UiKit.PushAlpha(eb);
-        by += U(10) * (1f - eb);
-        if (mode == ModeWeekend && !pg)
-        {
-            // race weekend: practice, or qualifying -> race, or straight to the race from the chosen grid position
-            float w1 = iw * 0.27f, w2 = iw * 0.27f, w3 = iw - w1 - w2 - U(12);
-            if (UiKit.Button(new Rect(ix, by, w1, bh), "Practice", UiKit.Look.Ghost, true, 11.5f)) BeginLoading(true);
-            if (UiKit.Button(new Rect(ix + w1 + U(6), by, w2, bh), "Skip quali", UiKit.Look.Secondary, true, 11.5f)) BeginLoading(false);
-            if (UiKit.Button(new Rect(ix + w1 + w2 + U(12), by, w3, bh), "Qualifying", UiKit.Look.Primary, true, 16f, ctaQualiSub)) BeginLoading(false, true);
-        }
-        else
-        {
-            float w1 = iw * 0.34f, w2 = iw - w1 - U(8);
-            if (UiKit.Button(new Rect(ix, by, w1, bh), pg ? "Drive" : "Practice", UiKit.Look.Secondary, true, 12.5f)) BeginLoading(true);
-            bool can = !pg || champ;
-            if (UiKit.Button(new Rect(ix + w1 + U(8), by, w2, bh), champ ? "Championship" : "Race", UiKit.Look.Primary, can, champ ? 15f : 18f, pg && !champ ? "Not on the test area" : ctaSub))
-            { if (champ) season.Open(); else BeginLoading(false); }
-        }
-        UiKit.PopAlpha();
-        UiKit.PopAlpha(); // panel
-
-        // licence credits for the car and steering-wheel models (CC BY): always on the start menu
-        UiKit.Text(new Rect(x0, safe.yMax - U(29), W, U(12)), CarModel.CarCredit, UiKit.Regular, 7.5f, UiKit.A(UiKit.Faint, 0.85f * e));
-        UiKit.Text(new Rect(x0, safe.yMax - U(18), W, U(12)), CarModel.WheelCredit + "  \u00b7  " + RealWorld.Attribution, UiKit.Regular, 7.5f, UiKit.A(UiKit.Faint, 0.85f * e));
-
-        BuildThumbnails(loaded, loadedFor);
-        return openSettings;
-    }
-
-    static string brand;
-    static string Brand => brand ??= Application.productName.ToUpperInvariant();
 
     // ---- circuit carousel: swipe sideways (with a fling), tap a card to pick it; never fires on a swipe
     float carScroll, carTarget, carVel, carPressX, carPressScroll, carLastX, carLastT; bool carDrag, carCentre = true, carInit;
@@ -404,7 +357,7 @@ public sealed class MenuUI
             float x = k * step - carScroll;
             if (x > g.width || x + cw < 0) continue;
             float vis = Mathf.Clamp01(Mathf.Min(x + cw * 0.5f, g.width - x - cw * 0.5f) / (cw * 0.5f));
-            float ent = UiKit.Enter("start", 6 + Mathf.Max(0, k - Mathf.FloorToInt(carScroll / step)));
+            float ent = UiKit.Enter(KeyCircuit, 6 + Mathf.Max(0, k - Mathf.FloorToInt(carScroll / step)));
             DrawCard(new Rect(x, U(8) + U(10) * (1f - ent), cw, ch), k, k == map, vis * ent);
         }
         GUI.EndGroup();
@@ -443,7 +396,7 @@ public sealed class MenuUI
     int thumbFrame;
     void BuildThumbnails(Track loaded, int loadedFor)
     {
-        if (Event.current.type != EventType.Repaint || GUIUtility.hotControl != 0 || UiKit.Opened("start") < 1.2f || Time.frameCount - thumbFrame < 15) return;
+        if (Event.current.type != EventType.Repaint || GUIUtility.hotControl != 0 || UiKit.Opened(KeyCircuit) < 1.2f || Time.frameCount - thumbFrame < 15) return;
         for (int k = 0; k < previews.Length && k < Circuits.All.Length; k++)
             if (previews[k] == null && k != playgroundIdx) { Preview(k, loaded, loadedFor); thumbFrame = Time.frameCount; return; }
     }
@@ -599,6 +552,13 @@ public sealed class MenuUI
         UiKit.Text(new Rect(tx + tagW + U(10), ty, tw + U(4), U(22)), tip, UiKit.Semi, 11f, UiKit.Sub);
         // the frame has really been drawn: from the next-but-one frame on, the heavy build may start
         if (Event.current.type == EventType.Repaint && loadShownFrame < 0) loadShownFrame = Time.frameCount;
+        // once per loading page, after the studio's objects are really gone (Destroy runs at the end of a frame):
+        // free what the menu used before the circuit is built
+        if (!purged && Event.current.type == EventType.Repaint && Time.frameCount > releaseFrame)
+        {
+            purged = true;
+            Resources.UnloadUnusedAssets(); System.GC.Collect();
+        }
     }
 
     // ================================================================== results
@@ -717,7 +677,7 @@ public sealed class MenuUI
         Choice ch = Choice.None;
         if (seasonNext) { if (UiKit.Button(new Rect(bxr - bw, by, bw, bh), Season.Over ? "Standings" : "Next round", UiKit.Look.Primary, true, 15f)) season.Open(); }
         else if (UiKit.Button(new Rect(bxr - bw, by, bw, bh), "Race again", UiKit.Look.Primary, true, 15f)) ch = Choice.RaceAgain;
-        if (UiKit.Button(new Rect(bxr - 2 * bw - U(10), by, bw, bh), "Menu", UiKit.Look.Secondary, true, 12.5f)) page = Page.Start;
+        if (UiKit.Button(new Rect(bxr - 2 * bw - U(10), by, bw, bh), "Menu", UiKit.Look.Secondary, true, 12.5f)) GoHome();
         if (canReplay && UiKit.Button(new Rect(bxr - 3 * bw - 2 * U(10), by, bw, bh), "Replay", UiKit.Look.Ghost, true, 12.5f)) ch = Choice.Replay;
         UiKit.PopAlpha();
         return ch;

@@ -1,7 +1,8 @@
 // SeasonUI.cs — the championship pages and the qualifying results, drawn with IMGUI through MenuUI (UiKit look):
-//  * Season hub: the next Grand Prix as the page title, your standing in a card (team colour, position, points,
-//    teammate), driver / team standings and the calendar (segmented tabs), "Qualifying", "Skip qualifying" (start
-//    from the menu's grid position), "New season" (asks once more before it wipes the save), "Back".
+//  * Season hub (opened from the Play flow's Setup step): the next Grand Prix as the page title, your standing in a
+//    card (team colour, position, points, teammate), driver / team standings and the calendar (segmented tabs),
+//    "Qualifying", "Skip qualifying" (start from the menu's grid position), "New season" (asks once more before it
+//    wipes the save), "Back" (to Setup).
 //  * Team pick: a new season starts with the player choosing one of the invented teams from a grid of team cards;
 //    shows the teammate and who moves to the free seat.
 //  * Qualifying results: your position large, pole time, the classification with gaps, "Start race" (grid = this
@@ -20,7 +21,12 @@ public sealed class SeasonUI
 
     public SeasonUI(MenuUI menu) { m = menu; }
 
-    public void ShowQuali(Qualifying q) { lastQuali = q; }
+    public void ShowQuali(Qualifying q)
+    {
+        lastQuali = q;
+        var l = q.Classified(); // once per session: a pole counts in the driver's career stats (MenuDriver.cs)
+        if (l.Count > 1 && l[0].Player && !double.IsNaN(l[0].best)) MenuProfile.RecordPole();
+    }
 
     public void Open()
     {
@@ -177,7 +183,7 @@ public sealed class SeasonUI
             if (Btn(f, 3, 4, "Back", UiKit.Look.Ghost)) hit = 0;
         }
         UiKit.PopAlpha();
-        if (hit == 0) { confirmNew = false; m.page = MenuUI.Page.Start; }
+        if (hit == 0) { confirmNew = false; m.GoPlay(MenuUI.StepSetup, -1); }
         else if (hit == 1) { if (confirmNew) { picking = true; confirmNew = false; } else confirmNew = true; }
         else if (hit == 2 || hit == 3)
         {
@@ -324,13 +330,13 @@ public sealed class SeasonUI
         if (Btn(f, 0, 2, "Start season", UiKit.Look.Primary)) hit = 1;
         if (Btn(f, 1, 2, "Back", UiKit.Look.Ghost)) hit = 0;
         UiKit.PopAlpha();
-        if (hit == 0) { picking = false; if (!Season.Active) m.page = MenuUI.Page.Start; }
+        if (hit == 0) { picking = false; if (!Season.Active) m.GoPlay(MenuUI.StepSetup, -1); }
         else if (hit == 1) { Season.New(pickTeam); picking = false; tab = 0; cacheKey = int.MinValue; }
     }
 
     // ---------------------------------------------------------------- qualifying results
     Qualifying qFor; System.Collections.Generic.List<Qualifying.Entry> qList;
-    string[] qTime, qGap; string qHead, qPos, qOf, qBest, qPole, qPoleName; int qMe;
+    string[] qTime, qGap; string qHead, qPos, qOf, qBest, qPole, qPoleName, qPoleCap; int qMe;
 
     void CacheQuali(Qualifying q)
     {
@@ -347,12 +353,13 @@ public sealed class SeasonUI
         qPos = "P" + (qMe + 1); qOf = "of " + n + "  ·  the race grid is set from this order";
         qBest = Qualifying.Fmt(qMe >= 0 ? qList[qMe].best : double.NaN);
         qPole = n > 0 && !double.IsNaN(pole) ? Qualifying.Fmt(pole) : "—"; qPoleName = n > 0 ? qList[0].name : "";
+        qPoleCap = "Pole  ·  " + qPoleName;
     }
 
     public MenuUI.Choice DrawQuali()
     {
         var q = lastQuali;
-        if (q == null) { m.page = MenuUI.Page.Start; return MenuUI.Choice.None; }
+        if (q == null) { m.GoHome(); return MenuUI.Choice.None; }
         if (!ReferenceEquals(q, qFor) || qList == null) CacheQuali(q);
         const string scr = "quali";
         var f = Page();
@@ -368,7 +375,7 @@ public sealed class SeasonUI
         UiKit.PushAlpha(e2);
         float cx = f.x0, cy = f.top + U(82), chH = U(36);
         float w1 = UiKit.ChipWidth("Your best", qBest); UiKit.Chip(new Rect(cx, cy, w1, chH), "Your best", qBest, qMe == 0 ? UiKit.Purple : UiKit.TextCol); cx += w1 + U(8);
-        string poleCap = "Pole  ·  " + qPoleName;
+        string poleCap = qPoleCap; // (built once in CacheQuali)
         float w2 = UiKit.ChipWidth(poleCap, qPole); UiKit.Chip(new Rect(cx, cy, w2, chH), poleCap, qPole, UiKit.Purple);
         UiKit.PopAlpha();
 
@@ -412,7 +419,7 @@ public sealed class SeasonUI
         if (Btn(f, 0, 2, "Start race", UiKit.Look.Primary)) hit = 1;
         if (Btn(f, 1, 2, "Menu", UiKit.Look.Secondary)) hit = 0;
         UiKit.PopAlpha();
-        if (hit == 0) { if (m.mode == MenuUI.ModeChampionship) Open(); else m.page = MenuUI.Page.Start; }
+        if (hit == 0) { if (m.mode == MenuUI.ModeChampionship) Open(); else m.GoHome(); }
         else if (hit == 1) return MenuUI.Choice.StartRace;
         return MenuUI.Choice.None;
     }

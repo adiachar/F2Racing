@@ -1406,6 +1406,7 @@ public partial class GameManager : MonoBehaviour
     // called once the menu's "Loading…" frame is on screen: build the chosen circuit and start the session
     void StartSession()
     {
+        ui.ReleaseStudio(); ApplyFrameRate(); // the menu's 3D gone, the race frame rate back (MenuStudio.cs caps the menu)
         raceLaps = ui.practice ? 0 : MenuUI.LapCounts[ui.lapsIdx];
         PrepareSession(); // weekend / championship: qualifying, circuit of the round, grid (Qualifying.cs)
         if (lineFor != classIdx && world != null) { Destroy(world); world = null; } // new class: rebuild with its racing line
@@ -1442,11 +1443,12 @@ public partial class GameManager : MonoBehaviour
         if (menuOpen && !replaying) { DrawSettings(); return; } // the settings screen covers everything (race paused, or over the start menu)
         if (ui.Showing)
         {
-            ui.canReplay = CanReplay;
+            ui.canReplay = CanReplay; ui.playerCar = model; // (the menu's studio shows a copy of the car)
             var choice = ui.Draw(ref mapIdx, ref classIdx, ref rivalIdx, ref diffIdx, track, builtFor);
             if (choice == MenuUI.Choice.RaceAgain) { ResetCar(); ui.page = MenuUI.Page.None; }
             else if (choice == MenuUI.Choice.Replay) StartReplay();
             else if (choice == MenuUI.Choice.Settings) menuOpen = true;
+            else if (choice == MenuUI.Choice.Livery) { liveryIdx = Livery.PlayerIndex; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); } // Garage
             else if (choice != MenuUI.Choice.None) SessionChoice(choice); // weekend flow (Qualifying.cs)
             return;
         }
