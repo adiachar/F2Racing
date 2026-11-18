@@ -667,15 +667,24 @@ public partial class GameManager : MonoBehaviour
         float pc1 = Mathf.Pow(p, c - 1f), A = 1f / (pc1 * (p + c * (1f - p)));
         return v < p ? A * Mathf.Pow(v, c) : A * pc1 * p + c * A * pc1 * (v - p);
     }
-    // while tilt steering is on the screen must not auto-rotate; with drag steering it may
+    // the screen always auto-rotates between the two landscape sides, with tilt too: locking it read the side wrong on
+    // some phones and flipped the picture. Tilt reads the angle about the screen's own axis, so it works either way up;
+    // when the side changes the tilt axis is picked again (TiltOrientation, from Update)
     void ApplyScreenLock()
     {
         TiltSensors(tilt);
-        if (!tilt) { Screen.orientation = ScreenOrientation.AutoRotation; return; }
-        // freeze the screen the way it is right now (never force a side: that could turn the picture upside down)
-        var cur = Screen.orientation;
-        if (cur == ScreenOrientation.LandscapeLeft || cur == ScreenOrientation.LandscapeRight) Screen.orientation = cur;
+        Screen.autorotateToPortrait = Screen.autorotateToPortraitUpsideDown = false;
+        Screen.autorotateToLandscapeLeft = Screen.autorotateToLandscapeRight = true;
+        if (Screen.orientation != ScreenOrientation.AutoRotation) Screen.orientation = ScreenOrientation.AutoRotation;
         tiltAxis = float.NaN; tiltInit = false;
+    }
+    DeviceOrientation lastSide = DeviceOrientation.Unknown;
+    void TiltOrientation()
+    {
+        var d = Input.deviceOrientation;
+        if (d != DeviceOrientation.LandscapeLeft && d != DeviceOrientation.LandscapeRight) return;
+        if (lastSide != DeviceOrientation.Unknown && d != lastSide) { tiltAxis = float.NaN; tiltInit = false; }
+        lastSide = d;
     }
     int classIdx; // car class: 0 F1 2026, 1 Formula 2, 2 Formula 3
     CarConfig PlayerConfig()
@@ -693,6 +702,7 @@ public partial class GameManager : MonoBehaviour
     {
         if (ui.LoadDue) StartSession();
         PickPlayerModel(); // full car in the cockpit and on High, the lighter one otherwise (GameManagerPerf.cs)
+        if (tilt) TiltOrientation(); // the screen turned to the other landscape side: pick the tilt axis again
         if (menuOpen && Input.GetKeyDown(KeyCode.Escape)) CloseSettings(); // Android "back"
         float dt = Mathf.Min(Time.deltaTime, 0.1f);
         if (replaying) { ReplayStep(dt); if (flashT > 0) flashT -= dt; return; } // the race is over: only the recording moves
