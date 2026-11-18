@@ -767,6 +767,215 @@ if (args.Length > 1 && args[0] == "race" && args[1] == "strat")
     return;
 }
 
+// ---- racecraft (traffic) test: dotnet run -c Release -- traffic [scen | race] ----
+// The "player" is an AiDriver that drives the racing line BLIND (it never looks at another car, as a careless
+// player would): it never yields, brakes for nobody and turns in on whoever is there. The rivals see it as the game
+// passes the player's car (Think's player / playerIdx / playerLateral).
+//  scen: one rival against the player: (a) slower on the line ahead, (b) brakes early (same speed elsewhere),
+//        (c) side by side, rival on either side; Monza, Spa, Monaco with three drivers (aggression 0.95 / 0.60 / 0.45).
+//  race: 21 rivals + the player on the grid in P5 (slower than the top rivals), 5 laps, with the game's tow and Overtake
+//        Mode rule (armed from lap 2).
+// Contacts are counted as events (a pair starts touching) and blamed on the car that caused them: nose to tail, the car
+// behind; side by side, the car moving across into the other one (track-frame lateral speed). Overtakes: a pair swaps
+// order by more than 4 m along the race (a reset or a pit stop re-seeds the pair without counting).
+// DAMAGE=full: damage on, as in the race test; RACEONLY=monza,spa: race on just these circuits.
+if (args.Length > 0 && args[0] == "traffic")
+{
+    string what = args.Length > 1 ? args[1] : "all";
+    bool dmgFull = (Environment.GetEnvironmentVariable("DAMAGE") ?? "").ToLowerInvariant() == "full";
+    var only = Environment.GetEnvironmentVariable("RACEONLY")?.Split(',');
+    var defs = FormulaSim.Circuits.All;
+    double LatV(Track t, FormulaCar c, int i)
+    {
+        var p = t.pts[i]; double ch = Math.Cos(c.heading), sh = Math.Sin(c.heading);
+        double wx = c.vx * ch - c.vy * sh, wy = c.vx * sh + c.vy * ch; return wx * p.nx + wy * p.ny;
+    }
+    // the race craft's state (by reflection, so this test also builds against the old AiDriver for the before / after)
+    string Dbg(AiDriver d) => d.GetType().GetProperty("CraftDebug")?.GetValue(d) as string ?? "";
+    int Cnt(AiDriver d, string f) => d.GetType().GetField(f)?.GetValue(d) is int i ? i : 0;
+    TrafficTally Run(Track t, RacingLine line, List<AiDriver> ais, AiDriver pl, double tMax, int laps)
+    {
+        var tl = new TrafficTally(); var hf = t.h != null ? new HeightField(t) : null;
+        int n = ais.Count, m = n + (pl != null ? 1 : 0), N = t.N;
+        AiDriver C(int k) => k < n ? ais[k] : pl;
+        var touching = new bool[m, m]; var order = new int[m, m]; var lastReset = new double[m]; var pitL = new double[m];
+        for (int k = 0; k < m; k++) lastReset[k] = -99;
+        var otr = new OvertakeRule(t, line); double wall = Traffic.WallOffset(t);
+        var tows = new double[m]; var offNow = new bool[m];
+        double time = 0; int steps = 0;
+        while (time < tMax)
+        {
+            if (laps > 0) { int mx = 0; for (int k = 0; k < m; k++) mx = Math.Max(mx, C(k).lap); if (mx > laps) break; }
+            if (steps++ % 4 == 0)
+            {
+                // the game's tow (GameManager.UpdateTow) and Overtake Mode detection (RaceHud.OvertakeTick, from lap 2)
+                for (int k = 0; k < m; k++)
+                {
+                    var me = C(k); double best = 0; if (me.idx < 0) { tows[k] = 0; continue; }
+                    for (int j = 0; j < m; j++)
+                    {
+                        if (j == k || C(j).idx < 0) continue;
+                        int d = C(j).idx - me.idx; if (d > N / 2) d -= N; else if (d < -N / 2) d += N;
+                        double gap = d * t.ds; if (gap < 2 || gap > 60) continue;
+                        double side = Math.Abs(C(j).lateral - me.lateral); if (side > 2.5) continue;
+                        best = Math.Max(best, (1 - gap / 60) * (1 - side / 2.5));
+                    }
+                    tows[k] = best;
+                }
+                for (int k = 0; k < m; k++) { C(k).car.tow = tows[k]; otr.Update(C(k).car, C(k).idx, time, C(k).lap >= 2); }
+                if (pl != null) pl.Think(4 * H, time, null, null, -1, 0);
+                for (int k = 0; k < n; k++) ais[k].Think(4 * H, time, ais, pl?.car, pl != null ? pl.idx : -1, pl != null ? pl.lateral : 0);
+                if (Environment.GetEnvironmentVariable("TRACEDRV") != null && time > double.Parse(Environment.GetEnvironmentVariable("TFROM")) && time < double.Parse(Environment.GetEnvironmentVariable("TFROM")) + 3)
+                    foreach (var q in ais) if (q.who.name == Environment.GetEnvironmentVariable("TRACEDRV"))
+                        Console.WriteLine($"   t {time:F2} s {t.pts[q.idx].s:F0} lat {q.lateral:F2} hw {t.HalfWidth(q.idx):F1} lineoff {line.off[q.idx]:F2} curv {line.curv[q.idx]:F4} v {Math.Sqrt(q.car.vx * q.car.vx + q.car.vy * q.car.vy) * 3.6:F0} tgt {q.target * 3.6:F0} line {line.speed[q.idx] * 3.6:F0} thr {q.LastInput.throttle:F2} brk {q.LastInput.brake:F2} st {q.LastInput.steer:F2} tow {q.car.tow:F2} slip {Math.Atan2(q.car.vy, Math.Max(1, q.car.vx)) * 57.3:F1} {Dbg(q)}");
+                if (Environment.GetEnvironmentVariable("RDEBUG") == "1" && pl != null && steps % 120 == 1)
+                {
+                    AiDriver bk = null; double bg = 1e9;
+                    foreach (var q in ais) { int dg = pl.idx - q.idx; if (dg > N / 2) dg -= N; else if (dg < -N / 2) dg += N; if (dg > 0 && dg * t.ds < bg) { bg = dg * t.ds; bk = q; } }
+                    if (bk != null) Console.WriteLine($"   t {time:F1} s {t.pts[pl.idx].s:F0} behind {bk.who.name} gap {bg:F0} lat {bk.lateral:F1}/{pl.lateral:F1} v {Math.Sqrt(bk.car.vx * bk.car.vx + bk.car.vy * bk.car.vy) * 3.6:F0}/{Math.Sqrt(pl.car.vx * pl.car.vx + pl.car.vy * pl.car.vy) * 3.6:F0} tow {bk.car.tow:F2} ot {bk.car.otArmed}/{bk.car.otOn} {Dbg(bk)} lap {bk.lap}");
+                }
+                if (Environment.GetEnvironmentVariable("TDEBUG") == "1" && pl != null && (steps % 60 == 1 || (time > double.Parse(Environment.GetEnvironmentVariable("TFROM") ?? "1e9") && time < double.Parse(Environment.GetEnvironmentVariable("TFROM") ?? "1e9") + 2.5))) { var a0 = ais[0]; int dg = pl.idx - a0.idx; if (dg > N / 2) dg -= N; else if (dg < -N / 2) dg += N; Console.WriteLine($"   t {time:F1} s {t.pts[a0.idx].s:F0} gap {dg * t.ds:F1} lat {a0.lateral:F1}/{pl.lateral:F1} v {Math.Sqrt(a0.car.vx * a0.car.vx + a0.car.vy * a0.car.vy) * 3.6:F0}/{Math.Sqrt(pl.car.vx * pl.car.vx + pl.car.vy * pl.car.vy) * 3.6:F0} tgt {a0.target * 3.6:F0} {Dbg(a0)} lap {a0.lap}/{pl.lap}"); }
+                for (int k = 0; k < m; k++)
+                {
+                    var d = C(k);
+                    if (d.recovered) { tl.resets++; lastReset[k] = time; if (k == n) tl.plResets++; }
+                    if (d.idx >= 0) Traffic.Wall(d.car, t.pts[d.idx], d.lateral, wall);
+                    if (k < n && d.idx >= 0 && Math.Abs(d.lateral) > t.HalfWidth(d.idx) + 0.95)
+                    {
+                        tl.aiOffT += 4 * H; // all four wheels past the edge
+                        if (!offNow[k]) { tl.offEvents++; if (Environment.GetEnvironmentVariable("OFFLOG") == "1") Console.WriteLine($"      OFF {d.who.name} t {time:F1} s {t.pts[d.idx].s:F0} lat {d.lateral:F1} v {Math.Sqrt(d.car.vx * d.car.vx + d.car.vy * d.car.vy) * 3.6:F0} tgt {d.target * 3.6:F0} tow {d.car.tow:F2} {Dbg(d)}"); }
+                        offNow[k] = true;
+                    }
+                    else if (k < n) offNow[k] = false;
+                }
+                for (int i = 0; i < m; i++)
+                    for (int j = i + 1; j < m; j++)
+                    {
+                        var a = C(i); var b = C(j);
+                        double dx = a.car.x - b.car.x, dy = a.car.y - b.car.y;
+                        if (dx * dx + dy * dy > 49) { touching[i, j] = false; continue; }
+                        // blame from the state before the contact response
+                        int dI = b.idx - a.idx; if (dI > N / 2) dI -= N; else if (dI < -N / 2) dI += N;
+                        double g = dI * t.ds, side = b.lateral - a.lateral;
+                        double va = a.idx >= 0 ? LatV(t, a.car, a.idx) * Math.Sign(side) : 0, vb = b.idx >= 0 ? -LatV(t, b.car, b.idx) * Math.Sign(side) : 0;
+                        double closeV = Math.Sqrt((a.car.vx - b.car.vx) * (a.car.vx - b.car.vx) + (a.car.vy - b.car.vy) * (a.car.vy - b.car.vy));
+                        bool hit = Traffic.Collide(a.car, b.car);
+                        if (hit && !touching[i, j])
+                        {
+                            int fault; bool rear = false;
+                            if ((Math.Abs(side) < 1.3 && Math.Abs(va - vb) < 1.5) || (Math.Max(va, vb) < 0.5 && Math.Abs(g) > 2.5)) { fault = g > 0 ? i : j; rear = Math.Abs(side) < 1.3; }
+                            else fault = va >= vb ? i : j;
+                            tl.events++;
+                            bool withPl = j == n || i == n;
+                            if (fault == n) tl.plFault++; else { tl.aiFault++; if (rear) tl.aiRear++; if (withPl) tl.aiOnPlFault++; }
+                            if (withPl) tl.plEvents++;
+                            if (fault != n && tl.log.Count < 12) tl.log.Add($"{time:F0}s {(rear ? "rear" : "side")} {C(fault).who.name}->{C(fault == i ? j : i).who.name} at {(a.idx >= 0 ? t.pts[a.idx].s : 0):F0} m g {g:F1} side {side:F1} latv {va:F1}/{vb:F1} | {Dbg(C(fault))}");
+                        }
+                        touching[i, j] = hit;
+                    }
+                // overtakes
+                for (int k = 0; k < m; k++) if (C(k).pitLoss != pitL[k] || C(k).InPit) { pitL[k] = C(k).pitLoss; for (int j = 0; j < m; j++) order[k, j] = order[j, k] = 0; }
+                for (int i = 0; i < m; i++)
+                    for (int j = i + 1; j < m; j++)
+                    {
+                        if (time - lastReset[i] < 3 || time - lastReset[j] < 3) { order[i, j] = 0; continue; }
+                        double dd = (C(i).progress - C(j).progress) * t.length;
+                        int s = dd > 4 ? 1 : dd < -4 ? -1 : 0; if (s == 0) continue;
+                        if (order[i, j] != 0 && s != order[i, j])
+                        {
+                            tl.overtakes++;
+                            if (j == n) { if (s > 0) tl.aiOnPl++; else tl.plOnAi++; }
+                        }
+                        order[i, j] = s;
+                    }
+            }
+            for (int k = 0; k < m; k++)
+            {
+                var d = C(k);
+                if (d.InPit) { d.PitStep(H, time); continue; }
+                if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1);
+                if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
+                d.car.Step(d.LastInput, H);
+            }
+            time += H;
+        }
+        for (int k = 0; k < m; k++) tl.impacts += C(k).car.damage.hits;
+        for (int k = 0; k < n; k++) tl.defMoves += Cnt(ais[k], "defMoves");
+        tl.time = time;
+        return tl;
+    }
+    if (what == "all" || what == "scen")
+    {
+        var drivers = new[] { 1, 3, 11 };   // M. Voss (aggression 0.95), N. Lindqvist (0.60), N. Holz (0.45)
+        var total = new TrafficTally[3]; for (int q = 0; q < 3; q++) total[q] = new TrafficTally();
+        string[] scName = { "(a) slower player on the line ahead", "(b) player brakes early", "(c) player alongside" };
+        foreach (var id in (Environment.GetEnvironmentVariable("SCENONLY") ?? "monza,spa,monaco").Split(','))
+        {
+            int ti = Array.FindIndex(defs, d => d.id == id); var t = defs[ti].Build(); var line = RacingLine.Compute(t, new CarConfig());
+            int N = t.N, p0 = t.GridIndex(0);
+            for (int scn = 0; scn < 3; scn++)
+            {
+                if (Environment.GetEnvironmentVariable("SCENNO") != null && Environment.GetEnvironmentVariable("SCENNO") != scn.ToString()) continue;
+                var tally = new TrafficTally();
+                foreach (int dv in Environment.GetEnvironmentVariable("SCENDRV") != null ? new[] { int.Parse(Environment.GetEnvironmentVariable("SCENDRV")) } : drivers)
+                    foreach (int sideSel in scn == 2 ? new[] { 1, -1 } : new[] { 0 })
+                    {
+                        var plWho = new DriverProfile { name = "PLAYER", pace = 0.85, consistency = 1, aggression = 0.5 };
+                        var tuP = AiTuning.For(ti); double diff = 0.97;
+                        if (scn == 0) diff = 0.95;                    // slower everywhere (and paceScale below)
+                        if (scn == 1) { tuP.brakeUse *= 0.72; diff = 1.0; plWho.pace = 1; }   // brakes early and soft, as fast elsewhere
+                        var pl = new AiDriver(t, line, new CarConfig { damage = dmgFull }, plWho, tuP, diff, 99);
+                        if (scn == 0) pl.paceScale = 0.97;            // 3 % slower on the straights too
+                        var ai = new AiDriver(t, line, new CarConfig { damage = dmgFull }, DriverProfile.Grid[dv], AiTuning.For(ti), 1, dv + 1);
+                        int pIdx = p0, aIdx = scn == 2 ? p0 : (p0 - (int)Math.Round((scn == 0 ? 60 : 20) / t.ds) + N) % N;
+                        double v0 = Math.Min(line.speed[pIdx], line.speed[aIdx]) * 0.9;
+                        pl.Place(pIdx, line.off[pIdx], v0);
+                        double aLat = line.off[aIdx];
+                        if (scn == 2) { double room = t.HalfWidth(aIdx) - 1.0; aLat = Math.Max(-room, Math.Min(room, line.off[aIdx] + sideSel * 2.6)); if (Math.Abs(aLat - line.off[aIdx]) < 2.3) aLat = line.off[aIdx] - sideSel * 2.6; }
+                        ai.Place(aIdx, aLat, v0); ai.lap += 2; pl.lap += 2;   // past lap 1: Overtake Mode can arm
+                        var r = Run(t, line, new List<AiDriver> { ai }, pl, scn == 2 ? 40 : 150, 0);
+                        tally.Add(r);
+                    }
+                total[scn].Add(tally);
+                Console.WriteLine($"  {id,-7} {scName[scn],-36} contacts {tally.events,2} (AI-caused {tally.aiFault}, rear-end by AI {tally.aiRear}, player-caused {tally.plFault}); AI passes on the player {tally.aiOnPl}, re-passed by him {tally.plOnAi}; resets {tally.resets}");
+                foreach (var s in tally.log) Console.WriteLine("        " + s);
+            }
+        }
+        for (int scn = 0; scn < 3; scn++) Console.WriteLine($"SCENARIO {scName[scn]}: contacts {total[scn].events}, AI-caused {total[scn].aiFault}, player-caused {total[scn].plFault}, AI passes {total[scn].aiOnPl}, resets {total[scn].resets}");
+    }
+    if (what == "all" || what == "race")
+    {
+        var sum = new TrafficTally(); int races = 0;
+        double plDiff = double.Parse(Environment.GetEnvironmentVariable("PLDIFF") ?? "0.97", CultureInfo.InvariantCulture);   // the player's pace (AiDriver difficulty)
+        Console.WriteLine($"traffic race: 21 rivals + blind scripted player (P5, difficulty {plDiff:F2}: slower than the top rivals), 5 laps, tow + Overtake Mode, damage {(dmgFull ? "FULL" : "off")}");
+        for (int ti = 0; ti < defs.Length; ti++)
+        {
+            if (only != null && !only.Contains(defs[ti].id)) continue;
+            var t = defs[ti].Build(); var line = RacingLine.Compute(t, new CarConfig());
+            var ais = new List<AiDriver>(); int slot = 0, plSlot = 4; AiDriver pl = null;
+            for (int g = 0; g < 22; g++)
+            {
+                int gi = t.GridIndex(g); double lat = (g % 2 == 0 ? 1 : -1) * 1.8;
+                if (g == plSlot)
+                {
+                    pl = new AiDriver(t, line, new CarConfig { damage = dmgFull }, new DriverProfile { name = "PLAYER", pace = 0.85, consistency = 1, aggression = 0.5 }, AiTuning.For(ti), plDiff, 99);
+                    pl.Place(gi, lat); continue;
+                }
+                var d = new AiDriver(t, line, new CarConfig { damage = dmgFull }, DriverProfile.Grid[slot], AiTuning.For(ti), 1, slot + 1); d.Place(gi, lat); ais.Add(d); slot++;
+            }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var r = Run(t, line, ais, pl, 6 * 130, 5); races++;
+            int plPos = 1 + ais.Count(d => d.progress > pl.progress);
+            Console.WriteLine($"  {defs[ti].name,-28} {r.time,4:F0} s ({sw.Elapsed.TotalSeconds,4:F1} s): contacts {r.events,3} (AI-caused {r.aiFault,3}, of them rear-ends {r.aiRear,2}; with the player {r.plEvents,2}: AI-caused {r.aiOnPlFault}, player-caused {r.plFault}); overtakes {r.overtakes,3}, on the player {r.aiOnPl,2} (he re-passed {r.plOnAi}); player P{plPos}; defensive moves {r.defMoves}; resets {r.resets} (player {r.plResets}); impacts {r.impacts}; AI 4-wheels-off {r.aiOffT:F1} s ({r.offEvents} times)");
+            if (Environment.GetEnvironmentVariable("LAPS") == "1") Console.WriteLine($"      best laps: player {pl.bestLap:F2}; " + string.Join(" ", ais.OrderByDescending(d => d.progress).Select(d => $"{d.who.name.Split(' ')[1]} {d.bestLap:F2}")));
+            foreach (var s in r.log.Take(4)) Console.WriteLine("        " + s);
+            sum.Add(r);
+        }
+        Console.WriteLine($"TRAFFIC RACE TOTAL ({races} races): contacts {sum.events}, AI-caused {sum.aiFault} (rear-ends {sum.aiRear}), with the player {sum.plEvents} (AI-caused {sum.aiOnPlFault}, player-caused {sum.plFault}); overtakes {sum.overtakes}, on the player {sum.aiOnPl} ({(double)sum.aiOnPl / Math.Max(1, races):F1} per race), player re-passes {sum.plOnAi}; defensive moves {sum.defMoves}; resets {sum.resets}; impacts {sum.impacts}; AI 4-wheels-off {sum.aiOffT:F1} s ({sum.offEvents} times)");
+    }
+    return;
+}
+
 // ---- race test: dotnet run -- race [fuel | sc] ("fuel": start on a 70 kg race fuel load instead of qualifying trim;
 // "sc": force a safety car on lap 2 and check the queue, no overtaking and the restart). RC=on: race control and
 // tyre strategy on in the plain race test too (default off: the legacy race test).
@@ -883,7 +1092,7 @@ if (args.Length > 0 && args[0] == "race")
         {
             if (steps++ % 4 == 0)
             {
-                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; var dm = ds[k].car.damage; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap <= 1 ? "*" : "")}{(dm.Any ? $"[d fw {dm.wingFL:F1}/{dm.wingFR:F1} rw {dm.wingRear:F1} su {dm.suspFL:F1}/{dm.suspFR:F1}/{dm.suspRL:F1}/{dm.suspRR:F1} fl {dm.floor:F1}{(dm.Punctured ? " flat" : "")}]" : "")}"); } }
+                for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].recovered) { recov++; rec[k]++; var dm = ds[k].car.damage; where.Add($"{(ds[k].idx >= 0 ? t.pts[ds[k].idx].s : -1):F0}{(ds[k].lap <= 1 ? "*" : "")}{(Environment.GetEnvironmentVariable("RESETT") == "1" ? $"@{time:F0}s{(rcx != null ? "/" + rcx.flag : "")}" : "")}{(dm.Any ? $"[d fw {dm.wingFL:F1}/{dm.wingFR:F1} rw {dm.wingRear:F1} su {dm.suspFL:F1}/{dm.suspFR:F1}/{dm.suspRL:F1}/{dm.suspRR:F1} fl {dm.floor:F1}{(dm.Punctured ? " flat" : "")}]" : "")}"); } }
                 if (rcx != null)
                 {
                     var before = rcx.flag;
@@ -1170,5 +1379,19 @@ foreach (var (nm, data, w) in new[] { ("Monaco", TrackData.Monaco, TrackData.Mon
         var lt = TimeSpan.FromSeconds(r.lapTime);
         Console.WriteLine($"{nm,-10} line: lap {(int)lt.TotalMinutes}:{lt.Seconds:00}.{lt.Milliseconds:000}, speed {vmin:F0}-{vmax:F0} km/h, max offset {offMax:F2} m (limit {t.width / 2 - 1.3:F2}), " +
                           $"brake/coast/throttle {100.0 * nb / r.N:F0}/{100.0 * nc / r.N:F0}/{100.0 * na / r.N:F0}%, {ms:F0} ms");
+    }
+}
+
+// tallies of the racecraft test (traffic)
+sealed class TrafficTally
+{
+    public int defMoves, offEvents, events, aiFault, aiRear, plFault, aiOnPlFault, plEvents, aiOnPl, plOnAi, overtakes, resets, plResets, impacts;
+    public double aiOffT, time;
+    public List<string> log = new List<string>();
+    public void Add(TrafficTally o)
+    {
+        defMoves += o.defMoves; offEvents += o.offEvents; events += o.events; aiFault += o.aiFault; aiRear += o.aiRear; plFault += o.plFault; aiOnPlFault += o.aiOnPlFault; plEvents += o.plEvents;
+        aiOnPl += o.aiOnPl; plOnAi += o.plOnAi; overtakes += o.overtakes; resets += o.resets; plResets += o.plResets; impacts += o.impacts; aiOffT += o.aiOffT; time += o.time;
+        foreach (var s in o.log) if (log.Count < 12) log.Add(s);
     }
 }
