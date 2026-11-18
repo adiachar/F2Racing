@@ -167,7 +167,7 @@ public partial class GameManager : MonoBehaviour
     {
         if (playground || track == null || car == null) return;
         if (mmFor != track || mmX == null) BuildMiniMap();
-        var m = mapRect; Glass(m, 12f);                      // under the race card, top right (RaceHud.cs: HudLayout)
+        var m = mapRect;                                     // no backdrop (Adi): just the track, under the race card, top right (RaceHud.cs: HudLayout)
         if (Event.current.type != EventType.Repaint) return;
         if (mmLane != Trackside.Lane) BuildMmPit();
         if (mmSolidsSeen != Trackside.Solids.Count) BuildMmBlocks();
@@ -1541,7 +1541,7 @@ public partial class GameManager : MonoBehaviour
             GUI.color = old;
             UiKit.Rect(new Rect(r.x + S(8), f.y + S(1), r.width - S(16), S(2)), new Color(1f, 1f, 1f, 0.75f * v), 1f); // level line
         }
-        UiKit.Outline(r, new Color(c.r, c.g, c.b, 0.30f + 0.5f * v), rad, 0.8f + 0.6f * v);
+        // no border (Adi): the fill, ribs and label show where the pedal is
         // grip ribs and the label
         float gx = r.x + r.width * 0.3f, gw = r.width * 0.4f;
         for (int i = 0; i < 3; i++) UiKit.Rect(new Rect(gx, r.y + S(14) + i * S(6), gw, S(1.6f)), new Color(1f, 1f, 1f, 0.16f), 1f);
