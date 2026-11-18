@@ -67,5 +67,7 @@ jobs:
         run: |
           cd build/${{ matrix.targetPlatform }}
           if [ "${{ matrix.targetPlatform }}" = "Android" ]; then f=F2Racing.apk; else zip -qr "$RUNNER_TEMP/F2Racing-WebGL.zip" . && f="$RUNNER_TEMP/F2Racing-WebGL.zip"; fi
-          gh release view latest -R ${{ github.repository }} >/dev/null 2>&1 || gh release create latest -R ${{ github.repository }} --title "Latest build" --notes "Newest successful build (updated automatically)." --prerelease
-          gh release upload latest "$f" -R ${{ github.repository }} --clobber
+          # main -> "latest"; any other branch (manual run) -> a release named after the branch, so tests never replace "latest"
+          tag=latest; [ "${{ github.ref_name }}" != "main" ] && tag="${{ github.ref_name }}"
+          gh release view "$tag" -R ${{ github.repository }} >/dev/null 2>&1 || gh release create "$tag" -R ${{ github.repository }} --target "${{ github.sha }}" --title "Build: $tag" --notes "Newest successful build of $tag (updated automatically)." --prerelease
+          gh release upload "$tag" "$f" -R ${{ github.repository }} --clobber
