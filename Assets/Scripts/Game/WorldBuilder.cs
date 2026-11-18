@@ -23,6 +23,15 @@ public static class WorldBuilder
     // Height of the ground at a point (0 everywhere on a flat circuit). The road, scenery and cars all use it.
     public static HeightField Height;
     public static float H(double x, double y) => Height == null ? 0f : (float)Height.Sample(x, y);
+    // Bridges (HeightField: one leg over another, Suzuka). H is the top surface; where the two legs overlap, things
+    // that belong to one of them take its own level: HOn for something built at track point i, HAlong for something
+    // facing along (dx, dy) (a car). Without bridges both are H.
+    public static float HOn(int i, double x, double y) => Height == null ? 0f : (float)Height.SampleOn(x, y, i);
+    public static float HAlong(double x, double y, double dx, double dy) => Height == null ? 0f : (float)Height.SampleAlong(x, y, dx, dy);
+    // under (or on) a bridge deck: trackside dressing keeps out (the bridge has its own parapets)
+    public static bool UnderBridge(float x, float z) => Height != null && Height.HasBridges && Height.Sample(x, z) - Height.Ground(x, z) > 1.0;
+    // what Drape's H misses for a vertex of a track-following mesh built at track point i (0 away from bridges)
+    static float Dk(int i, double x, double y) => Height == null || !Height.HasBridges ? 0f : (float)(Height.SampleOn(x, y, i) - Height.Sample(x, y));
 
     // Lay everything under "root" onto the hills: meshes built in world coordinates get every vertex lifted,
     // placed objects (trees, cones) are lifted as a whole.
@@ -45,6 +54,7 @@ public static class WorldBuilder
     }
 
     static Material diffuseMat; static bool diffuseTried;
+
     public static Material Mat(Color c, Texture2D tex = null, float smooth = 0.1f, float metal = 0f)
     {
         if (baseMat == null) baseMat = Resources.Load<Material>("Base");
@@ -172,6 +182,8 @@ public static class WorldBuilder
 
     // ---------------------------------------------------------------- meshes
     static Vector3 W(double x, double y, float h = 0) => new Vector3((float)x, h, (float)y);
+    // the same for a vertex of the mesh along track point i (on its own leg's level where two legs cross: Dk)
+    static Vector3 WT(int i, double x, double y, float h) => new Vector3((float)x, h + Dk(i, x, y), (float)y);
 
     // strip along the track between lateral offsets a and b (+ = left), i0..i1 inclusive
     static void Strip(Track t, int i0, int i1, float a, float b, float h, float vScale, List<Vector3> v, List<Vector2> uv, List<int> tri, float hOuter = float.NaN)
@@ -182,8 +194,8 @@ public static class WorldBuilder
         for (int i = i0; i <= i1; i++)
         {
             var p = t.pts[i % t.N];
-            v.Add(W(p.x + p.nx * left, p.y + p.ny * left, hl));
-            v.Add(W(p.x + p.nx * right, p.y + p.ny * right, hr));
+            v.Add(WT(i, p.x + p.nx * left, p.y + p.ny * left, hl));
+            v.Add(WT(i, p.x + p.nx * right, p.y + p.ny * right, hr));
             float vv = (float)(i * t.ds) / vScale; uv.Add(new Vector2(0, vv)); uv.Add(new Vector2(1, vv));
             if (i < i1)
             {
@@ -290,11 +302,13 @@ public static class WorldBuilder
                 outer = Mathf.Max(outer, inner + 0.3f);
                 lat[0] = inner; lat[1] = (inner + wallLat - 1.2f) * 0.5f; lat[2] = wallLat - 1.2f; lat[3] = wallLat + 0.9f; lat[4] = outer;
                 for (int c = 1; c < K; c++) lat[c] = Mathf.Clamp(lat[c], lat[c - 1] + 0.02f, Mathf.Max(outer, lat[c - 1] + 0.02f));
+                // on a bridge deck the verge ends at the parapet
+                if (Height != null && Height.OnDeck(ii)) { float dw = (float)Height.DeckHalf - 0.3f; for (int c = 0; c < K; c++) lat[c] = Mathf.Min(lat[c], dw - (K - 1 - c) * 0.02f); }
                 float along = (float)(i * t.ds);
                 for (int c = 0; c < K; c++)
                 {
                     float x = (float)(p.x + p.nx * lat[c] * side), z = (float)(p.y + p.ny * lat[c] * side);
-                    v.Add(new Vector3(x, 0.012f, z)); uv.Add(new Vector2(x, z)); uv2.Add(new Vector2(lat[c], along));
+                    v.Add(new Vector3(x, 0.012f + Dk(ii, x, z), z)); uv.Add(new Vector2(x, z)); uv2.Add(new Vector2(lat[c], along));
                     tint.Add(Environment.GroundTint(x, z, Environment.Lift(x, z)));
                 }
                 if (r < rows)
@@ -311,6 +325,49 @@ public static class WorldBuilder
         BakeTint.Add(go.GetComponent<MeshFilter>().sharedMesh, tint.ToArray());
     }
     static bool Street(Track t) => t.def != null ? t.def.style == CircuitStyle.Street : t.width < 10.0;
+
+    // Bridges (HeightField.OnDeck: Suzuka's upper leg over the lower one): a concrete slab under the deck, as wide as
+    // the barriers, with a parapet along each edge at the barrier line, and its ends buried in the embankments.
+    // Built at its final height (the vertices hold that minus H, which Drape adds back).
+    static void BuildBridges(Track t, Transform root)
+    {
+        if (Height == null || !Height.HasBridges) return;
+        var v = new List<Vector3>(); var uv = new List<Vector2>(); var tri = new List<int>();
+        float wl = (float)Traffic.WallOffset(t), wo = wl + 0.45f, top = 1.05f, under = -1.5f;
+        // the cross-section, left (+) to right: parapet inner face, its top, the slab's side, its underside, and back up
+        var sec = new[] { new Vector2(wl, -0.05f), new Vector2(wl, top), new Vector2(wo, top), new Vector2(wo, under),
+                          new Vector2(-wo, under), new Vector2(-wo, top), new Vector2(-wl, top), new Vector2(-wl, -0.05f) };
+        int N = t.N, ext = Mathf.Max(1, Mathf.RoundToInt(6f / (float)t.ds));
+        for (int a = 0; a < N; a++)
+        {
+            if (!Height.OnDeck(a) || Height.OnDeck(a - 1)) continue;
+            int b = a; while (b - a < N && Height.OnDeck(b + 1)) b++;
+            int i0 = a - ext, i1 = b + ext; // (a little into the embankments)
+            Vector3 Pt(int i, Vector2 q)
+            {
+                var p = t.pts[((i % N) + N) % N]; double x = p.x + p.nx * q.x, y = p.y + p.ny * q.x;
+                int on = Mathf.Clamp(i, a, b); // (beyond the deck's ends: its end plane)
+                return new Vector3((float)x, (float)Height.SampleOn(x, y, on) + q.y - H(x, y), (float)y);
+            }
+            for (int c = 0; c + 1 < sec.Length; c++)
+                for (int i = i0; i < i1; i++)
+                {
+                    Vector3 p00 = Pt(i, sec[c]), p01 = Pt(i, sec[c + 1]), p10 = Pt(i + 1, sec[c]), p11 = Pt(i + 1, sec[c + 1]);
+                    float u0 = (float)(i * t.ds) / 4f, u1 = (float)((i + 1) * t.ds) / 4f, w0 = (sec[c].x + sec[c].y) / 4f, w1 = (sec[c + 1].x + sec[c + 1].y) / 4f;
+                    // both faces (a few hundred triangles): seen from the road above and from the road below
+                    for (int f = 0; f < 2; f++)
+                    {
+                        int k = v.Count;
+                        v.Add(p00); v.Add(p01); v.Add(p10); v.Add(p11);
+                        uv.Add(new Vector2(u0, w0)); uv.Add(new Vector2(u0, w1)); uv.Add(new Vector2(u1, w0)); uv.Add(new Vector2(u1, w1));
+                        if (f == 0) { tri.Add(k); tri.Add(k + 1); tri.Add(k + 2); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k + 3); }
+                        else { tri.Add(k); tri.Add(k + 2); tri.Add(k + 1); tri.Add(k + 2); tri.Add(k + 3); tri.Add(k + 1); }
+                    }
+                }
+            a = b;
+        }
+        if (v.Count > 0) MeshObj("Bridge", v, uv, tri, Mat(new Color(0.80f, 0.79f, 0.76f), EnvTex.Stone(), 0.1f)).transform.SetParent(root);
+    }
 
     public static GameObject Build(Track t)
     {
@@ -473,7 +530,7 @@ public static class WorldBuilder
                 for (int c = 0; c <= K; c++)
                 {
                     float lat = Wd / 2 - Wd * c / K;
-                    v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2(lat, d)); uv2.Add(line); uv3.Add(edgeDirt[i % t.N]);
+                    v.Add(WT(i, p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2(lat, d)); uv2.Add(line); uv3.Add(edgeDirt[i % t.N]);
                     if (i < t.N && c < K) { int k = i * (K + 1) + c; tri.Add(k); tri.Add(k + K + 1); tri.Add(k + 1); tri.Add(k + K + 1); tri.Add(k + K + 2); tri.Add(k + 1); }
                 }
             }
@@ -496,7 +553,7 @@ public static class WorldBuilder
                     {
                         int pc = side > 0 ? KP - 1 - c : c; float across = kf[pc], g = side > 0 ? 1f - across : across;
                         float lat = left + (right - left) * g;
-                        v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(new Vector2(across, -1)); uv3.Add(edgeDirt[i % t.N]);
+                        v.Add(WT(i, p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(new Vector2(across, -1)); uv3.Add(edgeDirt[i % t.N]);
                     }
                     if (i < i1)
                         for (int c = 0; c + 1 < KP; c++)
@@ -539,7 +596,7 @@ public static class WorldBuilder
                 for (int c = 0; c <= K; c++)
                 {
                     float lat = Wd / 2 - Wd * c / K;
-                    v.Add(W(p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2((float)c / K * Wd / 4, (float)(i * t.ds) / 8));
+                    v.Add(WT(i, p.x + p.nx * lat, p.y + p.ny * lat, 0.03f)); uv.Add(new Vector2((float)c / K * Wd / 4, (float)(i * t.ds) / 8));
                     if (i < t.N && c < K) { int k = i * (K + 1) + c; tri.Add(k); tri.Add(k + K + 1); tri.Add(k + 1); tri.Add(k + K + 1); tri.Add(k + K + 2); tri.Add(k + 1); }
                 }
             }
@@ -658,6 +715,7 @@ public static class WorldBuilder
             }
         }
         Waterfront.BuildTunnel(t, root);
+        BuildBridges(t, root);
         Trackside.Build(t, root, Street(t));
         BuildTerrain();
         if (GroundShaded && !Street(t)) BuildVerge(t, grass, wallLat, root);

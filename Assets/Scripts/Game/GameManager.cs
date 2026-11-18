@@ -471,7 +471,7 @@ public partial class GameManager : MonoBehaviour
             {
                 rivals[i].Think(4 * H, simTime, rivals, car, idx, playerLat);
                 if (rivals[i].InPit) continue; // driven along the pit lane (PitStep below)
-                var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.Grade(rc.x, rc.y, rc.heading) : 0;
+                var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(rc.x, rc.y, rc.heading) : 0;
                 if (rivals[i].idx >= 0) Traffic.Wall(rivals[i].car, track.pts[rivals[i].idx], rivals[i].lateral, wallAt);
             }
             RcStep(); // race control sees every car (GameManagerRaceControl.cs)
@@ -842,7 +842,7 @@ public partial class GameManager : MonoBehaviour
             {
                 SetSurface();
                 LineCheck(simTime); // the timing line, every step (idx is before the step here)
-                if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.Grade(car.x, car.y, car.heading);
+                if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.GradeAlong(car.x, car.y, car.heading);
                 car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
                 car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
                 StartAfterStep();
@@ -934,6 +934,7 @@ public partial class GameManager : MonoBehaviour
         DriverFeel.FeedAudio(audioEngine, car, audioEngine.speed); // slip angles against the limit, front lock-up, plank scrape, slipstream
         audioEngine.Feed(car, cam.transform, camMode == TvMode ? 2 : camMode == 2 || camMode == 3 ? 1 : 0, rivals, Paused); // tyre loads, shifts, boost, surfaces, view, rival cars (EngineAudio.cs)
         if (Paused) { audioEngine.throttle = 0; audioEngine.speed = 0; audioEngine.slide = 0; }
+        audioEngine.muted = !sound || ui.Showing; // no engine on the menu pages (home, play, loading, results)
         if (flashT > 0) flashT -= dt;
     }
 

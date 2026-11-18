@@ -213,6 +213,7 @@ public static class Trackside
         // distance (Unity x/z plane) to the nearest centreline sample; the cell size if none is that close
         public float MinDist(Vector3 p)
         {
+            if (WorldBuilder.UnderBridge(p.x, p.z)) return 0f; // under or on a bridge deck: on the track (the bridge has parapets)
             int cx = Mathf.FloorToInt(p.x / cell), cy = Mathf.FloorToInt(p.z / cell);
             float best = cell * cell;
             for (int dx = -1; dx <= 1; dx++)

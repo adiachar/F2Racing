@@ -1503,9 +1503,10 @@ public class CarModel : MonoBehaviour
         {
             // on hills: sit on the ground and lean with it
             float ch = (float)System.Math.Cos(heading), sh = (float)System.Math.Sin(heading);
-            float h0 = WorldBuilder.H(x, y);
-            float sf = (WorldBuilder.H(x + ch * 1.7, y + sh * 1.7) - WorldBuilder.H(x - ch * 1.7, y - sh * 1.7)) / 3.4f;   // slope ahead
-            float ss = (WorldBuilder.H(x + sh * 0.8, y - ch * 0.8) - WorldBuilder.H(x - sh * 0.8, y + ch * 0.8)) / 1.6f;   // slope to the right
+            // (HAlong: on a bridge or under it, the level of the leg the car drives along)
+            float h0 = WorldBuilder.HAlong(x, y, ch, sh);
+            float sf = (WorldBuilder.HAlong(x + ch * 1.7, y + sh * 1.7, ch, sh) - WorldBuilder.HAlong(x - ch * 1.7, y - sh * 1.7, ch, sh)) / 3.4f;   // slope ahead
+            float ss = (WorldBuilder.HAlong(x + sh * 0.8, y - ch * 0.8, ch, sh) - WorldBuilder.HAlong(x - sh * 0.8, y + ch * 0.8, ch, sh)) / 1.6f;   // slope to the right
             var fwd = new Vector3(ch, sf, sh); var right = new Vector3(sh, ss, -ch);
             transform.position = new Vector3((float)x, h0, (float)y);
             transform.rotation = Quaternion.LookRotation(fwd, Vector3.Cross(fwd, right));

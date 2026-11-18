@@ -47,8 +47,8 @@ public sealed class RacingLineView
             double tx = l.x[q] - l.x[o], ty = l.y[q] - l.y[o], len = System.Math.Sqrt(tx * tx + ty * ty);
             if (len < 1e-9) { tx = t.pts[i].tx; ty = t.pts[i].ty; } else { tx /= len; ty /= len; }
             double ax = l.x[i] - ty * HalfWidth, ay = l.y[i] + tx * HalfWidth, bx = l.x[i] + ty * HalfWidth, by = l.y[i] - tx * HalfWidth;
-            lp[i] = new Vector3((float)ax, WorldBuilder.H(ax, ay) + Lift, (float)ay);
-            rp[i] = new Vector3((float)bx, WorldBuilder.H(bx, by) + Lift, (float)by);
+            lp[i] = new Vector3((float)ax, WorldBuilder.HOn(i, ax, ay) + Lift, (float)ay); // (HOn: its own leg's level at a bridge)
+            rp[i] = new Vector3((float)bx, WorldBuilder.HOn(i, bx, by) + Lift, (float)by);
             sAt[i] = s; s += l.ds[i];
         }
         lapLen = s;
