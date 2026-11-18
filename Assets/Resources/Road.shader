@@ -5,21 +5,23 @@
 //   uv0 = (lateral offset from the centreline in metres, + = left; distance along the track in metres)
 //   uv2 = road:  (racing-line offset at this row in metres, rubber amount 0..1)
 //         kerb:  (0 at the track edge .. 1 at the outer lip, -1)   <- y < -0.5 marks a kerb vertex
-//   uv3 = edge dirt (left, right) 0..1: dust film, gravel stones (WorldBuilder.EdgeDirt)
+//   uv3 = edge dirt (left, right) 0..1: dust film, gravel (WorldBuilder.EdgeDirt)
 // Paint edges are drawn with box-filtered maths in metres (fwidth), so they stay crisp near and do not
 // shimmer far away, whatever the screen resolution.
 //
-// Two levels: LOD 300 (Medium/High) = 3 texture reads (5 m detail, 43 m macro, 1.4 m fine aggregate from the global
-//                                     _F2RoadFine) + the shadow mask, sun sheen with glinting stones, tar seams, rubber streaks, Fresnel,
-//                                     stone-by-stone sun relief, tyre marks, sealed cracks and paver joints, kerb paint wear;
-//             LOD 150 (Low)         = 1 texture read + the shadow mask, no sheen; section shades, patches and kerb relief are maths only.
+// Real Racing 3 look: calm, clean asphalt that stays still at 300 km/h (see Road.cginc for why and how).
+// Two levels: LOD 300 (Medium/High) = 2 texture reads (_F2RoadMacro long tonal drifts, _F2RoadDetail fine grain that
+//                                     fades with mip, distance and camera speed) + the shadow mask, soft rubber streaks
+//                                     and tyre marks along the line, a broad smooth sun sheen, Fresnel sky;
+//             LOD 150 (Low)         = 1 texture read (_F2RoadMacro) + the shadow mask, no grain, no sheen.
 // Both levels also read the sharp sun-shadow mask (_F2RoadShadow, RoadShadow.cs): trees, stands, bridges, fences.
-// RoadSurface.cs picks one from the graphics level and sets _F2RoadFine.
+// RoadSurface.cs picks one from the graphics level and sets the globals _F2RoadMacro, _F2RoadDetail, _F2RoadMotion.
+// (_MainTex is no longer read: WorldBuilder still assigns one, which is harmless; the Fallback uses it.)
 Shader "F2/Road"
 {
     Properties
     {
-        _MainTex ("Asphalt (R grain, G blotches, B patches, A stones)", 2D) = "gray" {}
+        _MainTex ("Unused (Fallback only)", 2D) = "gray" {}
         _Asphalt ("Asphalt colour", Color) = (0.34, 0.34, 0.35, 1)
         _Dust ("Dusty edge colour", Color) = (0.50, 0.48, 0.45, 1)
         _Paint ("Paint", Color) = (0.93, 0.93, 0.90, 1)
@@ -29,7 +31,6 @@ Shader "F2/Road"
         _Loops ("Timing loops: pitch (m), sector 1 end (m), sector 2 end (m)", Vector) = (100000, -1000, -1000, 0)
         _SunDir ("Towards the sun", Vector) = (0, 1, 0, 0)
         _SunCol ("Sun sheen colour", Color) = (1, 0.95, 0.86, 1)
-        _MipBias ("Detail mip bias", Float) = 0.3
     }
 
     // Medium / High
@@ -49,7 +50,7 @@ Shader "F2/Road"
             ENDCG
         }
     }
-    // Low: one texture read, no sheen
+    // Low: one texture read, no grain, no sheen
     SubShader
     {
         Tags { "RenderType"="Opaque" }

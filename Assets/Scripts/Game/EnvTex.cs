@@ -11,7 +11,8 @@
 //   Turf          128  astroturf: fibre grain, two-tone painted bands, thin white edge lines.
 //   Paving        256  light concrete slabs with joints and stains (street-circuit pavements).
 //   Stone         256  coursed stone / concrete blocks (retaining walls).
-//   RoadFine      256  linear data for Road.shader HQ (1.4 m per tile): aggregate albedo, stone polish, stone slopes.
+//   RoadDetail    512  R8 linear, Road.shader HQ fine grain (1.6 m per tile), hand-made mips that fade it to neutral.
+//   RoadMacro     256  linear data for Road.shader (48 m across x 192 m along): tone drift, mottle, resurfaced patches.
 //   Facade        128  one window bay of a plastered town house: frame, sky-lit glass, sill, lintel shadow.
 //   Foliage  1024x512  alpha-tested tree cards, a 4 x 2 atlas: spruce, round park tree, umbrella pine, palm, spreading
 //                      oak, poplar and two forest-edge groves. Crowns are hundreds of small leaf clusters shaded as
@@ -279,73 +280,117 @@ public static class EnvTex
         }));
     }
 
-    // ---------------------------------------------------------------- road: fine aggregate (Road.shader HQ, 1.4 m per tile)
-    // Linear data, every channel 0.5 = neutral (so a missing texture changes nothing and the mips fade it out evenly):
-    //   R albedo around the mean (pale and dark stones, black binder and pores between them)
-    //   G polish of the stone tops (tyres wear them smooth: these glint), BA slope of the surface (x, z), 0.5 = flat
-    // Stones are jittered ellipses, ~3 cm cells (48 per tile, ~5 texels each): flat worn tops with a little tilt of
-    // their own, rounded rims that slope away.
-    static Texture2D cRoadFine;
-    public static Texture2D RoadFine() => cRoadFine != null ? cRoadFine : (cRoadFine = MakeRoadFine());
-    static Texture2D MakeRoadFine()
+    // ---------------------------------------------------------------- road (Road.shader, both set as globals by RoadSurface.cs)
+    // The road reads as RR3-style clean asphalt: a calm mid grey with long, soft tonal drifts and a fine grain that only
+    // shows near the car. Nothing in either texture has metre-scale contrast: at 300 km/h and ~35 fps the road moves
+    // ~2.5 m per frame, so anything between ~5 cm and ~5 m wide strobes ("the road crawls"). Fine grain is either far
+    // below that (and faded with distance, speed and mip) or the variation is tens of metres long.
+
+    // RoadDetail: fine aggregate grain, 512 x 512 R8 (linear), 1.6 m per tile (3 mm texels), HQ only. 0.5 = neutral.
+    // Mean exactly 0.5 on every mip, and the mip chain is made by hand: each level is the box-filtered (energy-preserving)
+    // average of the one above, then its contrast is scaled down (RoadDetailMipFade), so the grain melts to flat grey by
+    // the time a pixel covers ~5 cm, whatever the distance or the viewing angle. The shader never has to guess when to
+    // fade it out, and nothing is left to sparkle or crawl.
+    public static readonly float[] RoadDetailMipFade = { 1f, 1f, 0.9f, 0.6f, 0.3f, 0.1f, 0f };
+    public const float RoadDetailStd = 0.15f; // standard deviation of mip 0 around 0.5 (the shader scales it)
+    static Texture2D cRoadDetail;
+    public static Texture2D RoadDetail() => cRoadDetail != null ? cRoadDetail : (cRoadDetail = MakeRoadDetail());
+    static Texture2D MakeRoadDetail()
     {
-        const int N = 256, C = 48;
-        var alb = new float[N * N]; var px = new Color32[N * N]; double sum = 0;
-        var gl = new float[N * N]; var sx = new float[N * N]; var sz = new float[N * N];
-        var ap = LoadPhoto("asphalt"); // real racing asphalt: albedo, polish and slopes come from the photo's luminance
-        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
+        const int N = 512;
+        var l0 = new float[N * N];
+        var ap = LoadPhoto("asphalt"); // CC0 racing asphalt (Poly Haven asphalt_track): real stone and binder structure
+        FormulaSim.Par.For(0, N, y =>
         {
-            if (ap != null)
+            for (int x = 0; x < N; x++)
             {
-                int k0 = y * N + x; float u0 = (x + 0.5f) / N, v0 = (y + 0.5f) / N, e = 1f / N;
-                float l = ap.L(u0, v0);
-                alb[k0] = 0.4f * Mathf.Clamp(1f + 1.3f * (l - 1f), 0.15f, 2.2f);
-                gl[k0] = Mathf.Clamp01(0.3f + 1.0f * (l - 1f));
-                sx[k0] = Mathf.Clamp((ap.L(u0 + e, v0) - ap.L(u0 - e, v0)) * 0.9f, -1f, 1f);
-                sz[k0] = Mathf.Clamp((ap.L(u0, v0 + e) - ap.L(u0, v0 - e)) * 0.9f, -1f, 1f);
-                sum += alb[k0]; continue;
+                float u = (x + 0.5f) / N, v = (y + 0.5f) / N, l;
+                if (ap != null) l = ap.L(u, v); // one photo tile per texture tile
+                else
+                {
+                    // procedural fallback: soft, band-limited stones (value noise, 2.5 cm and finer), a little sand
+                    float s = Fbm(u, v, 64, 3, 401), p = Fbm(u, v, 160, 2, 409);
+                    l = 1f + 0.9f * (s - 0.5f) + 0.5f * (p - 0.5f) + 0.12f * (Hash(x, y, 417) - 0.5f);
+                }
+                // log response: the photo's few very bright stone tops would otherwise dominate (and sparkle)
+                l0[y * N + x] = Mathf.Log(Mathf.Clamp(l, 0.25f, 3f));
             }
-            float fx = (x + 0.5f) / N * C, fy = (y + 0.5f) / N * C; int ci = Mathf.FloorToInt(fx), cj = Mathf.FloorToInt(fy);
-            float best = 9f, bdx = 0, bdy = 0; int bi = 0, bj = 0;
-            for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++)
+        });
+        // normalise mip 0 to mean 0, standard deviation RoadDetailStd, soft-clipped so no texel is an outlier
+        double s1 = 0, s2 = 0;
+        for (int k = 0; k < l0.Length; k++) { s1 += l0[k]; s2 += l0[k] * l0[k]; }
+        float mean = (float)(s1 / l0.Length), sd = Mathf.Sqrt(Mathf.Max(1e-8f, (float)(s2 / l0.Length) - mean * mean));
+        for (int k = 0; k < l0.Length; k++)
+        {
+            float z = (l0[k] - mean) / sd;                    // in standard deviations
+            l0[k] = z / Mathf.Sqrt(1f + z * z * 0.2f);        // soft clip beyond ~2 sd
+        }
+        s1 = 0; s2 = 0;
+        for (int k = 0; k < l0.Length; k++) { s1 += l0[k]; s2 += l0[k] * l0[k]; }
+        mean = (float)(s1 / l0.Length); sd = Mathf.Sqrt(Mathf.Max(1e-8f, (float)(s2 / l0.Length) - mean * mean));
+        for (int k = 0; k < l0.Length; k++) l0[k] = (l0[k] - mean) / sd * RoadDetailStd; // zero mean, exact std
+
+        bool r8 = SystemInfo.SupportsTextureFormat(TextureFormat.R8);
+        var t = new Texture2D(N, N, r8 ? TextureFormat.R8 : TextureFormat.RGBA32, true, true)
+        { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 8, name = "RoadDetail" };
+        int mips = t.mipmapCount, w = N; var cur = l0;
+        for (int m = 0; m < mips; m++)
+        {
+            float f = m < RoadDetailMipFade.Length ? RoadDetailMipFade[m] : 0f;
+            if (r8)
             {
-                int gi = ((ci + i) % C + C) % C, gj = ((cj + j) % C + C) % C;
-                if (Hash(gi, gj, 201) < 0.1f) continue;                  // a cell of plain binder
-                float cx = ci + i + 0.25f + 0.5f * Hash(gi, gj, 203), cy = cj + j + 0.25f + 0.5f * Hash(gi, gj, 205);
-                float rad = 0.30f + 0.24f * Hash(gi, gj, 207), ang = Hash(gi, gj, 209) * Mathf.PI, e = 0.65f + 0.35f * Hash(gi, gj, 211);
-                float dx = fx - cx, dy = fy - cy, ca = Mathf.Cos(ang), sa = Mathf.Sin(ang);
-                float u = dx * ca + dy * sa, w = (-dx * sa + dy * ca) / e, d = Mathf.Sqrt(u * u + w * w) / rad;
-                if (d < best) { best = d; bdx = dx; bdy = dy; bi = gi; bj = gj; }
-            }
-            int k = y * N + x; float a, g, slx = 0, slz = 0;
-            if (best < 1f)
-            {
-                // a stone: tone of its own (mostly mid grey, some pale, a few near black), darker at the rim
-                float tone = Hash(bi, bj, 213), rim = Mathf.Clamp01((best - 0.7f) / 0.3f);
-                a = tone > 0.85f ? 0.85f : tone < 0.15f ? 0.30f : 0.48f + 0.25f * tone;
-                a *= 1f - 0.3f * rim * rim;
-                // worn flat top with its own tilt; the rim slopes away from the centre
-                float tx = (Hash(bi, bj, 215) - 0.5f) * 0.5f, tz = (Hash(bi, bj, 217) - 0.5f) * 0.5f;
-                float l = Mathf.Max(1e-4f, Mathf.Sqrt(bdx * bdx + bdy * bdy)), out1 = 1.2f * rim;
-                slx = tx * (1f - rim) + bdx / l * out1; slz = tz * (1f - rim) + bdy / l * out1;
-                g = (1f - rim) * (0.35f + 0.65f * Hash(bi, bj, 219));
+                var b = new byte[w * w];
+                for (int k = 0; k < b.Length; k++) b[k] = B(0.5f + cur[k] * f);
+                t.SetPixelData(b, m);
             }
             else
             {
-                // binder (bitumen mastic) with fine sand and the odd pore
-                float n = Hash(x, y, 221);
-                a = 0.20f + 0.08f * n; g = 0.12f;
-                if (Hash(x >> 1, y >> 1, 223) > 0.9f) { a = 0.08f; g = 0f; }
-                slx = (Hash(x, y, 225) - 0.5f) * 0.4f; slz = (Hash(x, y, 227) - 0.5f) * 0.4f;
+                var c = new Color32[w * w];
+                for (int k = 0; k < c.Length; k++) { byte g = B(0.5f + cur[k] * f); c[k] = new Color32(g, g, g, 255); }
+                t.SetPixels32(c, m);
             }
-            alb[k] = a; gl[k] = g; sx[k] = slx; sz[k] = slz; sum += a;
+            if (w == 1) break;
+            // next level: 2 x 2 box average of the unfaded data (the fade is applied per level, never compounded)
+            int nw = w / 2; var nx = new float[nw * nw];
+            for (int y = 0; y < nw; y++)
+                for (int x = 0; x < nw; x++)
+                {
+                    int i0 = 2 * y * w + 2 * x;
+                    nx[y * nw + x] = 0.25f * (cur[i0] + cur[i0 + 1] + cur[i0 + w] + cur[i0 + w + 1]);
+                }
+            cur = nx; w = nw;
         }
-        float mean = (float)(sum / (N * N)), gmean = 0;
-        for (int k = 0; k < gl.Length; k++) gmean += gl[k];
-        gmean /= gl.Length;
-        for (int k = 0; k < px.Length; k++)
-            px[k] = new Color32(B(0.5f + (alb[k] - mean) * 0.9f), B(0.5f + (gl[k] - gmean)), B(0.5f + 0.5f * Mathf.Clamp(sx[k], -1f, 1f)), B(0.5f + 0.5f * Mathf.Clamp(sz[k], -1f, 1f)));
-        return Count(Make(N, N, px, true, 4));
+        t.Apply(false, true);
+        Bytes += N * N * (r8 ? 1 : 4) * 4 / 3;
+        return t;
+    }
+
+    // RoadMacro: 256 x 256 RGBA32 (linear data), read stretched: 48 m across x 192 m along the track, so every variation
+    // is a long, soft drift in the direction of travel (resurfaced lanes, rubbered / sun-bleached bands), never a blotch
+    // that flicks past. Both levels read it (Low: its only texture besides the shadow mask).
+    //   R tone drift (lane-wide, tens of metres long), G slow mottle (rubber density, wet pools, kerb grime),
+    //   B darker resurfaced patches (soft edges, ~20-80 m long). 0.5 = neutral in R and G, B 0 = none.
+    static Texture2D cRoadMacro;
+    public static Texture2D RoadMacro() => cRoadMacro != null ? cRoadMacro : (cRoadMacro = MakeRoadMacro());
+    static Texture2D MakeRoadMacro()
+    {
+        const int N = 256;
+        var px = new Color32[N * N];
+        FormulaSim.Par.For(0, N, y =>
+        {
+            for (int x = 0; x < N; x++)
+            {
+                float u = (float)x / N, v = (float)y / N;
+                // low-passed: 3 octaves from 4 cells (12 m x 48 m down to 3 m x 12 m), the finest one weak
+                float r = 0.5f + (Fbm(u, v, 4, 3, 431) - 0.5f) * 2.0f;
+                float g = 0.5f + (Fbm(u, v, 6, 3, 437) - 0.5f) * 2.2f;
+                float pf = Fbm(u, v, 3, 3, 443);
+                float b = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.54f, 0.66f, pf));
+                px[y * N + x] = new Color32(B(r), B(g), B(b), 255);
+            }
+        });
+        // smooth data (0.2 m x 0.75 m texels, no edges): 2x anisotropy is plenty, the fine grain gets the 8x
+        return Count(Make(N, N, px, true, 2));
     }
 
     // one bay of a town house: plaster, a window with a white frame, glass reflecting the sky (lighter at the top),
