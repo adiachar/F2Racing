@@ -66,7 +66,15 @@ public partial class GameManager : MonoBehaviour
         car = new FormulaCar(PlayerConfig());
         model = MakePlayerCar(WantFullCar(gfxIdx == 0 ? 2 : gfxIdx)) ?? CarModel.CreateFromAsset() ?? CarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
         model.SetLivery(Livery.Player[liveryIdx]);
-        var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera"; cam.allowDynamicResolution = true;
+        var camGo = new GameObject("Camera"); cam = camGo.AddComponent<Camera>(); camGo.tag = "MainCamera";
+        // dynamic resolution only while the picture is actually scaled (SetRenderScale): at 100% the camera draws straight
+        // into the screen buffer, with no scaled intermediate target and upscale pass
+        cam.allowDynamicResolution = false;
+        // no HDR buffer: every world, car and sky shader applies the colour grade and tone curve itself (Grade.cginc) and
+        // writes the final 0..1 colour, and there is no post-processing. With HDR on, the built-in pipeline drew the whole
+        // frame into an off-screen FP16 4x MSAA target (twice the tile memory per pixel on Mali: smaller tiles), resolved it
+        // and copied it to the screen every frame. The picture is the same; additive glare and flares clamp at 1 either way.
+        cam.allowHDR = false;
         cam.allowMSAA = true; // the built-in pipeline takes its MSAA from QualitySettings.antiAliasing (ApplyGraphics)
         cam.nearClipPlane = ChaseNear; cam.farClipPlane = 2500; cam.fieldOfView = 62;
         cam.clearFlags = RenderSettings.skybox != null ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor; cam.backgroundColor = RenderSettings.fogColor;
@@ -269,7 +277,7 @@ public partial class GameManager : MonoBehaviour
 
     // Graphics level (a setting). Auto starts at Medium and steps down if the phone cannot hold about 50 fps.
     static readonly string[] GfxNames = { "Auto", "Low", "Medium", "High" }; int gfxIdx; int gfxLevel = 2;
-    float fpsAvg = 60, slowT;
+    float fpsAvg = 60;
     bool autoNoShadows; // Auto switched the live shadows off (a step before Low; any graphics setting change clears it)
     void ApplyGraphics(int level) { autoNoShadows = false; SetGraphics(level); }
     void SetGraphics(int level)
@@ -293,38 +301,9 @@ public partial class GameManager : MonoBehaviour
         if (cam != null) cam.farClipPlane = level <= 1 ? 1500 : 2500;
         ApplyPerfLevel(level); // per-level cuts: car shader detail, wheel faces, car effects, glare, grade (GameManagerPerf.cs)
     }
-    // Dynamic resolution: when the phone can't hold ~50 fps the 3D picture is drawn at a lower resolution
-    // (never below 75%, see DynResMin) and scaled up (bilinear); the HUD is drawn afterwards at full resolution.
-    // It starts at the full "Resolution scale" setting (ResMax, 100% = the panel's own resolution).
-    // Works where the graphics API supports it (Vulkan, Metal); elsewhere it does nothing.
-    // "About 50 fps" is 83% of the frame-rate target.
-    float renderScale = 1f, scaleT;
-    void DynamicResolution(float floor)
-    {
-        if (Paused || Time.realtimeSinceStartup < 6f || !DynResWorks) return; // GLES: no dynamic resolution (GameManagerPerf.cs)
-        if (fpsAvg < FpsTarget * 0.83f) scaleT -= Time.unscaledDeltaTime; else if (fpsAvg > FpsTarget * 0.96f) scaleT += Time.unscaledDeltaTime; else scaleT = 0;
-        float ns = renderScale;
-        if (scaleT < -1.5f) { ns = Mathf.Min(renderScale, Mathf.Max(floor, renderScale - 0.1f)); scaleT = 0; } // a step down never goes up
-        else if (scaleT > 6f) { ns = Mathf.Min(ResMax, renderScale + 0.05f); scaleT = 0; }
-        if (!Mathf.Approximately(ns, renderScale)) { renderScale = ns; ScalableBufferManager.ResizeBuffers(ns, ns); }
-    }
-    // Auto steps, cheapest-looking loss first; anti-aliasing is never what goes (Low keeps 2x MSAA):
-    //   resolution down to 85% -> live shadows off -> resolution down to 75% -> Low level.
-    // A graphics level chosen by hand only gets the resolution steps.
-    void AutoQuality()
-    {
-        float fps = 1f / Mathf.Max(Time.unscaledDeltaTime, 0.001f);
-        fpsAvg += (fps - fpsAvg) * 0.05f;
-        float floor = AutoResFloor;
-        DynamicResolution(floor);
-        if (DynResWorks && renderScale > floor + 0.01f) { slowT = 0; return; } // first lower the resolution, then the effects
-        if (gfxIdx != 0 || Paused || Time.realtimeSinceStartup < 6f || gfxLevel <= 1) return;
-        slowT = fpsAvg < FpsTarget * 0.83f ? slowT + Time.unscaledDeltaTime : 0;
-        if (slowT < 4f) return;
-        slowT = 0;
-        if (ShadowsLive) { autoNoShadows = true; SetGraphics(gfxLevel); Flash("Shadows off to keep it smooth"); return; }
-        SetGraphics(gfxLevel - 1); Flash("Graphics lowered to keep it smooth");
-    }
+    // Frame rate, then the graphics level, then (last) the resolution: FramePacing in GameManagerPerf.cs. The frame rate is
+    // always a steady rate the screen divides evenly (60 / 40 / 30 on 120 Hz); every step is one-way within a session.
+    void AutoQuality() => FramePacing();
 
     SkidMarks skids;
     void UpdateSkids()

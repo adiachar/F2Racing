@@ -6,8 +6,12 @@
 //    COARSE=1 dotnet run -c Release -- race checks this: same resets, lap times within a few hundredths)
 //  * per-level cuts that the other files read: CarModel.LowDetail, the car paint's cheap SubShader, the sun glare,
 //    the cheap colour grade (F2_GRADE_LOW)
-//  * dynamic resolution only where the graphics API supports it (Vulkan, Metal); on OpenGL ES the resolution
-//    setting changes the screen buffer size instead. Floor 75%; MSAA per level (4x Medium/High, 2x Low)
+//  * steady frame pacing (FramePacing): the frame rate is always one the screen divides evenly (120 Hz: 60 / 40 / 30,
+//    90 Hz: 45 / 30, 60 Hz: 60 / 30). Auto starts at 60 and, when a 3 s window can't hold it, drops to the next rate and
+//    stays there for the session (one-way: no bouncing). Only then the graphics level (Auto), and last one resolution step
+//  * the resolution is never hunted mid-race: at most one step down per session, never back up until the next setting
+//    change. Dynamic resolution only where the API supports it (Vulkan, Metal); on OpenGL ES the screen buffer is
+//    resized instead. Floor 75%; MSAA per level (4x Medium/High, 2x Low)
 using FormulaSim;
 using UnityEngine;
 
@@ -125,16 +129,24 @@ public partial class GameManager
             return dynRes == 1;
         }
     }
-    // Below about 75% the picture goes visibly blocky and every edge and thin pole swims, so dynamic resolution stops
-    // there (or at the "Resolution scale" setting, if the player chose less). The old floor was 60%.
+    // Below about 75% the picture goes visibly blocky and every edge and thin pole swims, so the resolution never goes
+    // below that (or below the "Resolution scale" setting, if the player chose less).
     float DynResMin => Mathf.Min(0.75f, ResMax);
-    // Auto's first resolution steps stop at 85%; the shadows go next, then the rest of the way to DynResMin.
     bool ShadowsLive => gfxLevel >= 2 && shadowsOn && !autoNoShadows && !LightBake.Active;
-    float AutoResFloor => gfxIdx == 0 && ShadowsLive ? Mathf.Max(DynResMin, Mathf.Min(0.85f, ResMax)) : DynResMin;
 
     // MSAA samples per graphics level (QualitySettings clamps to what the GPU supports). Tile GPUs resolve MSAA on
     // the chip, so 4x costs roughly 5-15% of the GPU frame and 2x less; a lower resolution looks far worse.
     static int MsaaFor(int level) => level <= 1 ? 2 : 4;
+
+    // the 3D picture's share of the screen resolution. Dynamic resolution is switched on only while it is under 100%
+    // (at 100% the camera draws straight into the screen buffer, no scaled target and no upscale pass).
+    float renderScale = 1f;
+    void SetRenderScale(float s)
+    {
+        renderScale = s;
+        if (DynResWorks) { if (cam != null) cam.allowDynamicResolution = s < 0.999f; ScalableBufferManager.ResizeBuffers(s, s); }
+        else FixedResolution(s);
+    }
 
     int nativeW, nativeH; float fixedScale = 1f;
     void FixedResolution(float k)
@@ -144,6 +156,107 @@ public partial class GameManager
         fixedScale = k;
         Screen.SetResolution(Mathf.RoundToInt(nativeW * k), Mathf.RoundToInt(nativeH * k), true);
     }
+
+    // ---------------------------------------------------------------- steady frame pacing
+    // An uneven rate judders: 33 fps on a 60 / 120 Hz panel is a mix of 16.7, 25 and 33 ms frames, so the car and the
+    // world move in uneven steps. A rate the panel divides evenly shows every frame for the same number of refreshes.
+    // Unity on Android rounds Application.targetFrameRate DOWN to a divisor of the panel's current rate, and with
+    // Optimized Frame Pacing (BuildScript) the display is asked for a mode the target divides (40 -> 120 Hz).
+    static int[] fpsRungs;                           // the steady rates this screen can show, highest first
+    static int[] FpsRungs => fpsRungs ??= MakeFpsRungs();
+    static int[] MakeFpsRungs()
+    {
+        bool hz120 = false, hz90 = false, hz60 = false;
+        try
+        {
+            AddHz(Screen.currentResolution.refreshRateRatio.value, ref hz120, ref hz90, ref hz60);
+            var modes = Screen.resolutions; // on Android: the display's modes, with every refresh rate it offers
+            for (int i = 0; i < modes.Length; i++) AddHz(modes[i].refreshRateRatio.value, ref hz120, ref hz90, ref hz60);
+        }
+        catch (System.Exception) { }
+        bool r60 = hz60 || hz120 || !hz90, r40 = hz120, r45 = hz90 && !hz120;
+        int n = 1 + (r60 ? 1 : 0) + (r40 ? 1 : 0) + (r45 ? 1 : 0), k = 0;
+        var r = new int[n];
+        if (r60) r[k++] = 60;
+        if (r45) r[k++] = 45;
+        if (r40) r[k++] = 40;
+        r[k] = 30;
+        return r;
+    }
+    static void AddHz(double hz, ref bool h120, ref bool h90, ref bool h60)
+    {
+        if (hz > 117.5 && hz < 122.5) h120 = true; else if (hz > 87.5 && hz < 92.5) h90 = true; else if (hz > 57.5 && hz < 62.5) h60 = true;
+    }
+
+    int fpsLock = 60, fpsRung;                       // the rate asked for (Application.targetFrameRate) and its place in FpsRungs
+    static int[] fpsMem;                             // Auto: the rung each circuit settled on in this run (0 = none yet)
+    float fpsWinT, fpsSettle; int fpsWinN, fpsWinLate; // the 3 s measuring window; seconds to wait before measuring
+    bool fpsHolding = true;                          // the last full window held the lock
+    bool resStepped;                                 // this session's one resolution step is used
+
+    // a session starts or the setting changed: Auto starts at 60 (or where this circuit settled before in this run)
+    void FpsStart()
+    {
+        var r = FpsRungs;
+        if (fpsIdx == 0)
+        {
+            int m = fpsMem != null && mapIdx >= 0 && mapIdx < fpsMem.Length ? fpsMem[mapIdx] : 0;
+            fpsRung = Mathf.Clamp(m, 0, r.Length - 1);
+        }
+        else
+        {
+            int want = fpsIdx == 1 ? 60 : fpsIdx == 2 ? 40 : 30;
+            fpsRung = r.Length - 1;
+            for (int i = 0; i < r.Length; i++) if (r[i] <= want) { fpsRung = i; break; } // what Unity would round it to anyway
+        }
+        fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
+        fpsAvg = fpsLock; fpsHolding = true; resStepped = false;
+        FpsWindowReset(3f);
+    }
+    // a graphics setting changed: every circuit may hold a higher rate now
+    void FpsForget() { fpsMem = null; }
+    void FpsWindowReset(float settle) { fpsWinT = 0; fpsWinN = 0; fpsWinLate = 0; fpsSettle = Mathf.Max(fpsSettle, settle); }
+
+    // once a frame (GameManager.Update, AutoQuality)
+    void FramePacing()
+    {
+        float dt = Time.unscaledDeltaTime;
+        fpsAvg += (1f / Mathf.Max(dt, 0.001f) - fpsAvg) * 0.05f; // the number shown (RaceHud.DrawFps)
+        if (Paused || replaying) { FpsWindowReset(2f); return; } // (menus: capped at 30 by MenuStudio.cs)
+        if (fpsSettle > 0) { fpsSettle -= Mathf.Min(dt, 0.1f); return; }       // (the loading frame's long dt does not count)
+        fpsWinT += dt; fpsWinN++;
+        if (dt > 1.25f / fpsLock) fpsWinLate++; // shown for one refresh too many (60 on 120 Hz: 25 ms instead of 16.7)
+        if (fpsWinT < 3f) return;
+        float avg = fpsWinN / fpsWinT, late = fpsWinLate / (float)fpsWinN;
+        // one hitch (a GC, a sound load) is ~1 late frame in 180 and barely moves the average: it never counts
+        fpsHolding = avg >= fpsLock * 0.92f && late <= 0.1f;
+        FpsWindowReset(0f);
+        if (fpsHolding) return;
+        // 1. Auto frame rate: the next steady rate, for the rest of the session
+        var r = FpsRungs;
+        if (fpsIdx == 0 && fpsRung < r.Length - 1)
+        {
+            fpsRung++; fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
+            if (mapIdx >= 0 && mapIdx < MapNames.Length) { if (fpsMem == null) fpsMem = new int[MapNames.Length]; fpsMem[mapIdx] = Mathf.Max(fpsMem[mapIdx], fpsRung); }
+            fpsAvg = fpsLock; fpsHolding = true; FpsWindowReset(1.5f);
+            Flash(FpsFlash(fpsLock));
+            return;
+        }
+        // 2. Auto graphics: the live shadows, then a level (each one-way)
+        if (gfxIdx == 0 && gfxLevel > 1)
+        {
+            if (ShadowsLive) { autoNoShadows = true; SetGraphics(gfxLevel); Flash("Shadows off to keep it smooth"); }
+            else { SetGraphics(gfxLevel - 1); Flash("Graphics lowered to keep it smooth"); }
+            FpsWindowReset(1.5f);
+            return;
+        }
+        // 3. last: one resolution step per session (never back up mid-race, so the picture never shimmers between sizes)
+        if (DynResWorks && !resStepped && renderScale > DynResMin + 0.01f)
+        {
+            resStepped = true; SetRenderScale(Mathf.Max(DynResMin, renderScale - 0.15f)); FpsWindowReset(1.5f);
+        }
+    }
+    static string FpsFlash(int f) => f == 45 ? "Steady 45 fps for smoother play" : f == 40 ? "Steady 40 fps for smoother play" : "Steady 30 fps for smoother play";
 
     // ---------------------------------------------------------------- small no-garbage strings
     readonly string[] replayCaps = new string[121];

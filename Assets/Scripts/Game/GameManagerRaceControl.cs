@@ -13,8 +13,9 @@ public partial class GameManager
 {
     RaceControl raceCtl; SafetyCarModel scModel;
     int rcPlayerSlot = -1, rcSeenSerial, rcSeenPen, rcWeather; bool rcCutSeen; double rcPlayerProg; bool rcWasNeutral;
-    float rcBlink; int[] rcSetSeen = new int[0];
+    float rcBlink; int[] rcSetSeen = new int[0]; int rcDeltaKey = -1; string rcDeltaText;
     double rcPlayerPrevX = double.NaN, rcPlayerPrevY;
+    double rcStepAt; RacingLine rcLine; // simTime of the last race-control update (60 Hz) and the line it drives
 
     // Settings > Race distance: a share of a Grand Prix (305 km, as real F1)
     static readonly string[] RaceDistNames = { "Menu laps", "10 %", "25 %", "50 %", "100 %" };
@@ -41,7 +42,7 @@ public partial class GameManager
         for (int i = 0; i < rivals.Count; i++) { rcSetSeen[i] = -1; rivals[i].rc = null; rivals[i].slot = -1; }
         if (flagsMode == 1 && raceLaps > 0 && !playground && track != null && line != null && rivals.Count > 0)
         {
-            raceCtl = new RaceControl(track, line, mapIdx * 101 + rivals.Count) { totalLaps = raceLaps };
+            raceCtl = new RaceControl(track, line, mapIdx * 101 + rivals.Count) { totalLaps = raceLaps }; rcLine = line;
             raceCtl.Init(rivals.Count + 1);
             for (int i = 0; i < rivals.Count; i++) { rivals[i].rc = raceCtl; rivals[i].slot = i; }
             rcPlayerSlot = rivals.Count; raceCtl.playerSlot = rcPlayerSlot;
@@ -69,6 +70,7 @@ public partial class GameManager
         };
         PitRcMask(); // cars in the pit lane are not on the track for race control (PitCrew.cs)
         raceCtl.Update(4 * H, raceTime, raceTime > Countdown + 2);
+        rcStepAt = simTime;
     }
 
     double RcPitLoss(double normal) => raceCtl != null ? raceCtl.PitLoss(normal) : normal;
@@ -106,12 +108,40 @@ public partial class GameManager
             Banner("PENALTY", "+5 s  ·  " + raceCtl.penaltyWhy, HudAccent);
         }
         // the safety car itself
-        if (raceCtl.ScPose(out double sx, out double sy, out double sh))
+        if (ScRenderPose(out double sx, out double sy, out double sh))
         {
             if (scModel == null && car != null) scModel = SafetyCarModel.Create(car.cfg.wheelbase, car.cfg.frontWeight, car.cfg.wheelRadius);
             if (scModel != null) { scModel.Show(true); scModel.Place(sx, sy, sh, raceCtl.scV, dt, raceCtl.flag == Flag.Sc); }
         }
         else if (scModel != null) scModel.Show(false);
+    }
+
+    // The safety car is moved by race control at 60 Hz (4 physics steps at once), so drawing its latest place made it
+    // jump in 4-step leaps that fall unevenly on frames (1 or 2 leaps a frame at 40 fps): a visible judder. It is drawn
+    // instead at the same in-between moment as every other car (GameManager.Update: simTime - H + acc). Race control's
+    // place is the one at rcStepAt + 4 H (it moves scV x 4 H per update), so it is drawn that far back along the line.
+    // Drawing only: race control itself is not touched.
+    bool ScRenderPose(out double x, out double y, out double h)
+    {
+        if (!raceCtl.ScPose(out x, out y, out h)) return false;
+        if (rcLine == null || rcLine.off == null || track == null || rcLine.N != track.N || track.ds <= 0) return true;
+        int N = track.N;
+        double back = System.Math.Max(0, System.Math.Min(8 * H, rcStepAt + 4 * H - (simTime - H + acc)));
+        double s = raceCtl.scPos - raceCtl.scV * back / track.ds;
+        s %= N; if (s < 0) s += N;
+        int i = (int)s % N, j = (i + 1) % N; double f = s - System.Math.Floor(s);
+        ScLinePt(i, out double xa, out double ya); ScLinePt(j, out double xb, out double yb);
+        x = xa + (xb - xa) * f; y = ya + (yb - ya) * f;
+        // heading: the line's direction at both points (centred), blended, so it turns smoothly between points
+        double hi = ScLineDir(i, N), hj = ScLineDir(j, N);
+        h = hi + System.Math.Atan2(System.Math.Sin(hj - hi), System.Math.Cos(hj - hi)) * f;
+        return true;
+    }
+    void ScLinePt(int k, out double x, out double y) { var p = track.pts[k]; x = p.x + p.nx * rcLine.off[k]; y = p.y + p.ny * rcLine.off[k]; }
+    double ScLineDir(int k, int N)
+    {
+        ScLinePt((k + N - 1) % N, out double x0, out double y0); ScLinePt((k + 1) % N, out double x1, out double y1);
+        return System.Math.Atan2(y1 - y0, x1 - x0);
     }
 
     // banners on a change of flag (from HudTick)
@@ -149,7 +179,9 @@ public partial class GameManager
             {
                 double dl = raceCtl.vscDelta; bool bad = dl < 0;
                 bool on = !bad || Mathf.Repeat(rcBlink * 4, 1) > 0.4f;
-                string s = (dl >= 0 ? "DELTA +" : "DELTA -") + System.Math.Abs(dl).ToString("0.0") + (bad ? "  SLOW DOWN" : "");
+                int dk = (int)System.Math.Min(99999, System.Math.Round(System.Math.Abs(dl) * 10)) * 2 + (bad ? 1 : 0);
+                if (dk != rcDeltaKey || rcDeltaText == null) { rcDeltaKey = dk; rcDeltaText = (bad ? "DELTA -" : "DELTA +") + (dk / 20) + "." + (dk / 2 % 10) + (bad ? "  SLOW DOWN" : ""); } // once per value, not per frame
+                string s = rcDeltaText;
                 if (on) T(new Rect(x + S(92), y, w - S(96), h), s, 11, TextAnchor.MiddleLeft, bad ? HudAccent : HudGreen);
             }
             else T(new Rect(x + S(92), y, w - S(96), h), f == Flag.Restart ? "NO OVERTAKING TO THE LINE" : "NO OVERTAKING", 10, TextAnchor.MiddleLeft, Color.white);

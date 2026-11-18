@@ -75,6 +75,17 @@ public static class BuildScript
         // asked for a rate the 30/60 fps target divides into. Without it a 60 fps target on a 90 Hz panel alternates
         // 11 ms and 22 ms frames, which reads as a judder of everything on screen.
         PlayerSettings.Android.optimizedFramePacing = true;
+        // Graphics APIs, explicitly (the same order Unity 6 picks by default, so a changed default can't move it): Vulkan
+        // first, OpenGL ES 3 as the fallback for phones whose Vulkan driver Unity blocks. On Mali-G68 / G57 class GPUs
+        // Vulkan has the lower CPU cost per draw call and is where dynamic resolution works (GameManagerPerf.DynResWorks).
+        PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
+        PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.Vulkan, UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 });
+        // a separate render thread (the main thread runs the 240 Hz physics); graphics jobs are left at Unity's default
+        PlayerSettings.SetMobileMTRendering(NamedBuildTarget.Android, true);
+        // incremental GC: a collection is spread over several frames instead of one long pause (a hitch mid-corner)
+        PlayerSettings.gcIncremental = true;
+        // ASTC for any imported texture (the game makes its textures at runtime; Texture2D.Compress picks its own format)
+        EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC;
 
         QualityLevels();
 

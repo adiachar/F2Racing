@@ -28,7 +28,10 @@ public partial class GameManager
     bool haloInCockpit = true;                           // cockpit view draws the halo (hoop + pillar); false hides all of it
     int horizonMode = 1;                                 // 0 off, 1 cockpit only, 2 all views
     // graphics
-    int fpsIdx = 1; float resPct = 100; bool shadowsOn = true, showFps = true;
+    // frame rate: 0 Auto (60, or a steady 40 / 30 if the phone can't hold it: GameManagerPerf.cs), 1 60, 2 40, 3 30 fps.
+    // Saved as "fpsMode"; the old "fps" key (0 = 30, 1 = 60) is still written and read once when "fpsMode" is missing.
+    int fpsIdx; float resPct = 100; bool shadowsOn = true, showFps = true;
+    static readonly string[] FpsNames = { "Auto", "60 fps", "40 fps", "30 fps" };
     // audio (percent)
     float volMaster = 100, volEngine = 100, volFx = 100, volTyres = 100;
     // team radio (the radio itself is TeamRadio.cs): 0 Full, 1 Key info, 2 Off; PlayerPrefs "teamRadio"
@@ -38,7 +41,7 @@ public partial class GameManager
     int unitsIdx; bool hudInfo = true, hudMap = true, hudTower = true, hudSectors = true, hudDelta = true;
 
     float steerGain => steerGainPct * 0.01f;
-    float FpsTarget => fpsIdx == 0 ? 30f : 60f;
+    float FpsTarget => fpsLock;                           // the steady rate asked for now (GameManagerPerf.cs)
     float ResMax => resPct * 0.01f;                      // most of the screen resolution the 3D picture may use
     float ResMin => Mathf.Min(0.6f, ResMax);             // dynamic resolution never goes below this
     string SpeedUnit => unitsIdx == 1 ? "mph" : "km/h";
@@ -89,7 +92,7 @@ public partial class GameManager
         haloInCockpit = PlayerPrefs.GetInt("haloCockpit", 1) == 1;
         damageMode = LoadI("damage", 1, 2);
         flagsMode = LoadI("flags", 1, 1); raceDistIdx = LoadI("raceDist", 0, RaceDistNames.Length - 1);
-        fpsIdx = LoadI("fps", 1, 1); resPct = LoadF("resScale", 100, 50, 100); shadowsOn = PlayerPrefs.GetInt("shadows", 1) == 1; showFps = PlayerPrefs.GetInt("showFps", 1) == 1;
+        fpsIdx = PlayerPrefs.HasKey("fpsMode") ? LoadI("fpsMode", 0, 3) : PlayerPrefs.GetInt("fps", 1) == 0 ? 3 : 0; resPct = LoadF("resScale", 100, 50, 100); shadowsOn = PlayerPrefs.GetInt("shadows", 1) == 1; showFps = PlayerPrefs.GetInt("showFps", 1) == 1;
         teamRadioMode = LoadI("teamRadio", 0, 2);
         volMaster = LoadF("volMaster", 100, 0, 100); volEngine = LoadF("volEngine", 100, 0, 100); volFx = LoadF("volFx", 100, 0, 100); volTyres = LoadF("volTyres", 100, 0, 100);
         unitsIdx = LoadI("units", 0, 1); hudInfo = PlayerPrefs.GetInt("hudInfo", 1) == 1; hudMap = PlayerPrefs.GetInt("hudMap", 1) == 1;
@@ -117,7 +120,7 @@ public partial class GameManager
         PlayerPrefs.SetInt("haloCockpit", haloInCockpit ? 1 : 0);
         PlayerPrefs.SetInt("damage", damageMode);
         PlayerPrefs.SetInt("flags", flagsMode); PlayerPrefs.SetInt("raceDist", raceDistIdx);
-        PlayerPrefs.SetInt("fps", fpsIdx); PlayerPrefs.SetFloat("resScale", resPct); PlayerPrefs.SetInt("shadows", shadowsOn ? 1 : 0); PlayerPrefs.SetInt("showFps", showFps ? 1 : 0);
+        PlayerPrefs.SetInt("fpsMode", fpsIdx); PlayerPrefs.SetInt("fps", fpsIdx == 3 ? 0 : 1); PlayerPrefs.SetFloat("resScale", resPct); PlayerPrefs.SetInt("shadows", shadowsOn ? 1 : 0); PlayerPrefs.SetInt("showFps", showFps ? 1 : 0);
         PlayerPrefs.SetInt("teamRadio", teamRadioMode);
         PlayerPrefs.SetFloat("volMaster", volMaster); PlayerPrefs.SetFloat("volEngine", volEngine); PlayerPrefs.SetFloat("volFx", volFx); PlayerPrefs.SetFloat("volTyres", volTyres);
         PlayerPrefs.SetInt("units", unitsIdx); PlayerPrefs.SetInt("hudInfo", hudInfo ? 1 : 0); PlayerPrefs.SetInt("hudMap", hudMap ? 1 : 0);
@@ -143,11 +146,11 @@ public partial class GameManager
         if (audioEngine == null) return;
         audioEngine.masterVol = volMaster * 0.01f; audioEngine.engineVol = volEngine * 0.01f; audioEngine.fxVol = volFx * 0.01f; audioEngine.tyreVol = volTyres * 0.01f;
     }
-    void ApplyFrameRate() { Application.targetFrameRate = (int)FpsTarget; fpsAvg = FpsTarget; scaleT = 0; slowT = 0; }
+    void ApplyFrameRate() => FpsStart(); // a steady rate the screen divides evenly (GameManagerPerf.cs)
     void ApplyResolution()
     {
-        float ns = ResMax; scaleT = 0;
-        if (!Mathf.Approximately(ns, renderScale)) { renderScale = ns; if (DynResWorks) ScalableBufferManager.ResizeBuffers(ns, ns); else FixedResolution(ns); } // GLES: GameManagerPerf.cs
+        float ns = ResMax; resStepped = false;
+        if (!Mathf.Approximately(ns, renderScale)) SetRenderScale(ns); // GLES: a smaller screen buffer (GameManagerPerf.cs)
     }
     void ApplyDisplay() { ApplyFrameRate(); ApplyResolution(); }
 
@@ -277,12 +280,13 @@ public partial class GameManager
 
         // ---- GRAPHICS
         var gfx = new SettingsUI.Tab("GRAPHICS");
-        gfx.Choice("Graphics level", "Auto starts at Medium and steps down if the phone cannot keep up.", GfxNames, 0, () => gfxIdx, v => { gfxIdx = v; ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); });
-        gfx.Choice("Frame rate", "30 fps saves battery and heat; 60 fps is smoother.", new[] { "30 fps", "60 fps" }, 1, () => fpsIdx, v => { fpsIdx = v; ApplyFrameRate(); });
-        gfx.Slider("Resolution scale", "Sharpness of the 3D picture (the HUD stays sharp). Lower = faster.", 50, 100, 5, 100, () => resPct, v => { resPct = v; ApplyResolution(); }, Pct);
-        gfx.Toggle("Shadows", "Live shadows from cars and scenery. Off = faster.", true, () => shadowsOn, v => { shadowsOn = v; ApplyGraphics(gfxLevel); })
+        gfx.Choice("Graphics level", "Auto starts at Medium and steps down if the phone cannot keep up.", GfxNames, 0, () => gfxIdx, v => { gfxIdx = v; FpsForget(); ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); });
+        gfx.Choice("Frame rate", "Always a steady rate the screen divides evenly. Auto: 60 fps, or a steady 40 (120 Hz screens) or 30 if the phone can't hold 60. 30 saves battery and heat.",
+            FpsNames, 0, () => fpsIdx, v => { fpsIdx = v; FpsForget(); ApplyFrameRate(); });
+        gfx.Slider("Resolution scale", "Sharpness of the 3D picture (the HUD stays sharp). Lower = faster.", 50, 100, 5, 100, () => resPct, v => { resPct = v; FpsForget(); ApplyResolution(); }, Pct);
+        gfx.Toggle("Shadows", "Live shadows from cars and scenery. Off = faster.", true, () => shadowsOn, v => { shadowsOn = v; FpsForget(); ApplyGraphics(gfxLevel); })
             .LockedWhen(() => LightBake.Active ? "This circuit has its shadows baked in: nothing to switch." : gfxLevel <= 1 ? "Shadows are off at the Low graphics level." : null);
-        gfx.Toggle("Show FPS", "Frames per second (and the resolution share when it is lowered), top right under the buttons.", true, () => showFps, v => showFps = v);
+        gfx.Toggle("Show FPS", "The frame-rate lock (\"40 FPS LOCK\"; the measured rate beside it while it doesn't hold) and the resolution share when it is lowered, top right under the buttons.", true, () => showFps, v => showFps = v);
         gfx.Toggle("Render stats (debug)", "Draw calls, triangles, culling sectors, card overdraw and memory, top left. For testing only.", false, () => PerfStats.Show, v => PerfStats.Show = v);
 
         // ---- AUDIO

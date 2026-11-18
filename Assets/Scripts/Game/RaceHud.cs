@@ -1084,11 +1084,18 @@ public partial class GameManager
         s.StartsWith("Best lap", System.StringComparison.Ordinal) || s.StartsWith("Lap ", System.StringComparison.Ordinal) ||
         s.StartsWith("Pit stop", System.StringComparison.Ordinal) || s.StartsWith("JUMP START", System.StringComparison.Ordinal);
 
-    readonly HudSlot fpsSlot = new HudSlot();
+    // "40 FPS LOCK" while the steady rate holds; "33 FPS  ·  60 LOCK" while it doesn't (Auto then steps down: GameManagerPerf.cs);
+    // "  ·  85% RES" when the 3D picture is scaled. The strings are made once per value (no garbage per frame).
+    readonly string[] fpsTexts = new string[242]; int fpsTextsKey = -1;
     void DrawFps()
     {
         if (!showFps) return;
-        TF(new Rect(btnRight - S(150), hudT + S(35), S(150), S(10)), fpsSlot.Fps(Mathf.RoundToInt(fpsAvg), renderScale < 0.99f ? Mathf.RoundToInt(renderScale * 100) : 0), UiKit.Semi, 6.2f, HudFaint, TextAnchor.MiddleRight);
+        int res = renderScale < 0.99f ? Mathf.RoundToInt(renderScale * 100) : 0, key = fpsLock * 1000 + res;
+        if (key != fpsTextsKey) { fpsTextsKey = key; System.Array.Clear(fpsTexts, 0, fpsTexts.Length); }
+        bool hold = fpsHolding && fpsAvg >= fpsLock * 0.9f;
+        int shown = hold ? 241 : Mathf.Clamp(Mathf.RoundToInt(fpsAvg), 0, 240);
+        string s = fpsTexts[shown] ??= (hold ? fpsLock + " FPS LOCK" : shown + " FPS  ·  " + fpsLock + " LOCK") + (res > 0 ? "  ·  " + res + "% RES" : "");
+        TF(new Rect(btnRight - S(150), hudT + S(35), S(150), S(10)), s, UiKit.Semi, 6.2f, HudFaint, TextAnchor.MiddleRight);
     }
 }
 
@@ -1147,12 +1154,6 @@ class HudSlot
     {
         long k = a * 10000L + b + (1L << 40);
         if (k != key) { key = k; s = b > 0 ? a + "/" + b : a.ToString(); }
-        return s;
-    }
-    public string Fps(int fps, int res)
-    {
-        long k = fps * 1000L + res;
-        if (k != key) { key = k; s = fps + " FPS" + (res > 0 ? "  ·  " + res + "% RES" : ""); }
         return s;
     }
     public string Test(double? t100, double top, string unit)

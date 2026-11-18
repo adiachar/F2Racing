@@ -2,6 +2,35 @@
 
 This is a static audit. It was done without an editor or a phone, so every number below is an estimate from the code, the asset sizes and the `Tools/PhysicsCheck` timings. Check the numbers on a device with the checklist at the end.
 
+## Steady frame pacing (Nov 2026)
+
+Report from a Redmi Note 12 Pro 5G (Dimensity 1080, Mali-G68 MC4, 2400x1080, 120 Hz): "33 FPS · 75% RES", feels laggy.
+33 fps against a 60 target is a mix of 16.7 / 25 / 33 ms frames (judder), and the resolution was being hunted up and down.
+
+- **Frame rate = a steady divisor of the panel** (`GameManagerPerf.FramePacing`, setting "Frame rate: Auto / 60 / 40 / 30",
+  PlayerPrefs `fpsMode`; the old `fps` key is migrated: 30 stays 30, 60 becomes Auto). Rates come from the panel's modes
+  (`Screen.resolutions`): 120 Hz -> 60 / 40 / 30, 90 Hz -> 45 / 30, 60 Hz -> 60 / 30 (Unity rounds `targetFrameRate` down to
+  a divisor; Optimized Frame Pacing asks the display for a mode the target divides). Auto starts at 60; a 3 s window that
+  averages under 92% of the lock or has over 10% late frames (> 1.25 frame intervals) drops one rate for the rest of the
+  session (remembered per circuit for the app run; any graphics setting change forgets it). One-way: no bouncing. A single
+  hitch never counts. Measuring pauses in menus/replays and waits 3 s after a session start, 2 s after a pause, 1.5 s after a step.
+- **Then** (lock at its lowest, or a fixed rate chosen) Auto graphics steps (shadows, level), **last** one resolution
+  step of 15% per session (floor 75%), never back up mid-race: no resolution shimmer. The manual Resolution setting is kept.
+- HUD: "40 FPS LOCK" while it holds, "33 FPS · 60 LOCK" while it doesn't, "· 85% RES" when scaled (strings cached per value).
+- **No HDR buffer** (`cam.allowHDR = false`): every shader grades and tone-maps itself (Grade.cginc) and there is no
+  post-processing, so the FP16 4x MSAA off-screen target (256 bits/pixel of tile memory on Mali: half-size tiles), its
+  resolve and the full-screen copy to the screen were pure cost. Expected 2-4 ms GPU and ~1.5-2 GB/s of bandwidth at
+  2400x1080, 60 fps. **Dynamic resolution only while scaled** (`allowDynamicResolution` false at 100%): no scaled
+  intermediate target and upscale pass at full resolution.
+- **Safety car drawn between steps** (`ScRenderPose`): race control moves it at 60 Hz (4 steps at once); it is now drawn at
+  the same in-between moment as the cars (player: lerp of the last two 240 Hz states; rivals: back-extrapolated by
+  `(1 - acc/H) H - RivalBehind`), heading blended between line points. Drawing only.
+- VSC delta text cached per value (was a string per frame under VSC/SC). BuildScript: incremental GC, Vulkan + GLES3
+  fallback explicit, multithreaded rendering, ASTC subtarget.
+- Checked, unchanged: shadow maps are off on every baked circuit (all of them on a phone), no depth prepass / depth
+  texture, no extra pixel lights, no full-screen effects; clouds/glare draw after the opaques on sky pixels only; MSAA kept.
+- On the phone: Auto should settle on "40 FPS LOCK" (or 60) within ~5 s of the green light and stay there.
+
 ## Rendering architecture audit (Nov 2026): track-sector visibility
 
 The sections further down are older (Sept-Oct); the quality tiers and Auto now live in `GameManager.cs`
