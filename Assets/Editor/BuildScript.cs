@@ -50,8 +50,8 @@ public static class BuildScript
         // GPU instancing variants: with the default "Strip Unused" instancing setting Unity keeps a shader's
         // INSTANCING_ON variants only if a material in the build has GPU instancing on. The game makes its materials at
         // runtime, so these two assets keep them: the instanced model trees (FoliageInst, ModelInstancing.cs) and the
-        // rivals' shared car material (CarPaint, CarModel.CreateMergedRival)
-        foreach (var nm in new[] { "FoliageInst", "CarPaint" })
+        // rivals' shared car material (CarPaint, CarModel.CreateMergedRival) and the shared pit garages (PitGarage.cs)
+        foreach (var nm in new[] { "FoliageInst", "CarPaint", "PitGarage" })
         {
             string mp = "Assets/Resources/" + nm + "Instanced.mat";
             if (File.Exists(mp)) continue;

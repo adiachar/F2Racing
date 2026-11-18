@@ -204,7 +204,7 @@ public class PitCrew : MonoBehaviour
     public bool Waiting(int who) => st == St.Wait && owner == who;
     public bool Owns(int who) => st != St.Off && owner == who;
     public int PlayerBay => order[0];
-    public int TeamBay(int team) { int n = order.Length; return n > 1 ? order[1 + ((team % (n - 1)) + (n - 1)) % (n - 1)] : order[0]; }
+    public int TeamBay(int team) => PitGarage.TeamBay(order, team);
     public Vector3 BayPos(int b) => Trackside.Bays[b].centre;
     // the bay where a crew stands or works now (-1: none); PeoplePits' walkers keep clear of it
     public static int ActiveBay => live != null && live.st != St.Off ? live.bay : -1;
@@ -247,7 +247,7 @@ public class PitCrew : MonoBehaviour
         // the garages: the player's box and the rival teams' boxes in their colours and (invented) names
         var gl = new Livery[n]; var gn = new string[n];
         gl[PlayerBay] = player; gn[PlayerBay] = PitGarage.PlayerBrand(player);
-        if (teams != null) foreach (var kv in teams) { int b = TeamBay(kv.Key); if (gn[b] == null) { gl[b] = kv.Value; gn[b] = PitGarage.Brand(kv.Key); } }
+        if (teams != null) foreach (var kv in teams) { int b = TeamBay(kv.Key); if (gn[b] == null) { gl[b] = kv.Value; gn[b] = PitGarage.TeamName(kv.Value); } }
         PitGarage.SetTeams(gl, gn);
         rigged = People.Ready;
         pplRoot = new GameObject("PitPeople"); pplRoot.transform.SetParent(transform, false);

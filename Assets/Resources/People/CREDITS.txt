@@ -9,5 +9,6 @@ Obtained from the GitHub mirrors Dallolz/moorfall-assets (characters/, animation
 and tomoponz/novel-game-prototype (the kit's original License_Standard.txt), November 2026.
 
 Converted by Tools/People/convert.py (fetch.sh downloads the sources): decimated to ~1.2k / ~0.3k triangles,
-reduced to 22 joints, overalls / helmet / headset / cap regions and head gear added, clips baked at 24 fps.
+reduced to 22 joints, slimmed to realistic proportions (vertices pulled towards the bones; skeleton unchanged),
+overalls / helmet / headset / cap regions, reflective cuffs and head gear added, clips baked at 24 fps.
 No attribution is required by CC0; credited with thanks.

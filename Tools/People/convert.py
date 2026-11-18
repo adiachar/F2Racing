@@ -2,7 +2,7 @@
 #   python3 -I convert.py <src dir (fetch.sh output)> <out .bytes> [preview.png]
 # * bodies: Universal Base Characters "Superhero" male / female (12.5k tris each), decimated to ~1.2k (LOD0) and ~0.3k
 #   (LOD1) triangles, skin weights reduced to a 22-joint skeleton (fingers -> hand, curled into a relaxed grip first),
-#   inflated a little into loose overalls. Every face gets a REGION (overall body, flank panels, yoke, sleeves, gloves,
+#   slimmed (SLIM: the Superhero build's chest, lats and arms pulled towards the bones), inflated a little into loose overalls. Every face gets a REGION (overall body, flank panels, yoke, sleeves, gloves,
 #   boots, face, hair, helmet, visor, headset...) - the game colours the regions per team / person (People.cs).
 # * head gear built here and fitted to each head: full-face crew helmet with visor and top stripe, engineer headset with
 #   boom mic, team cap; head faces hidden inside the helmet are dropped. 4 variants x 2 bodies x 2 LODs.
@@ -66,6 +66,44 @@ def load_body(path, U):
     return dict(P=Pw, N=Nw, KW=KW, I=I, t=t, q=q, W=Wr)
 
 
+# slimmer, more realistic proportions than the source's "Superhero" build (huge chest, lats, deltoids and arms): every
+# vertex moves towards the axis of the bones it is skinned to (weighted by its skin weights), so the skeleton, the bind
+# poses and the animation clips stay exactly as they were (no joint moves; the IK bone lengths are unchanged).
+# Torso: towards the spine's vertical axis, more across (x) than front-back (z), most at the chest; limbs: towards the
+# bone segment (joint -> child joint). Head, hands and feet keep their shape.
+SLIM = {  # joint: (factor across, factor front-back) for the torso, (factor, factor) towards the segment for limbs
+    'male':   {'pelvis': (0.97, 0.98), 'spine_01': (0.91, 0.95), 'spine_02': (0.82, 0.92), 'spine_03': (0.78, 0.90), 'clavicle': (0.80, 0.84),
+               'upperarm': (0.77, 0.77), 'lowerarm': (0.86, 0.86), 'thigh': (0.91, 0.91), 'calf': (0.93, 0.93), 'neck_01': (0.9, 0.9)},
+    'female': {'pelvis': (0.98, 0.99), 'spine_01': (0.95, 0.97), 'spine_02': (0.91, 0.95), 'spine_03': (0.89, 0.95), 'clavicle': (0.9, 0.9),
+               'upperarm': (0.86, 0.86), 'lowerarm': (0.9, 0.9), 'thigh': (0.95, 0.95), 'calf': (0.96, 0.96), 'neck_01': (0.94, 0.94)},
+}
+SEG_CHILD = {'clavicle_l': 'upperarm_l', 'clavicle_r': 'upperarm_r', 'upperarm_l': 'lowerarm_l', 'upperarm_r': 'lowerarm_r',
+             'lowerarm_l': 'hand_l', 'lowerarm_r': 'hand_r', 'thigh_l': 'calf_l', 'thigh_r': 'calf_r', 'calf_l': 'foot_l', 'calf_r': 'foot_r',
+             'neck_01': 'Head'}
+
+
+def slim(b, kind):
+    P, KW, W = b['P'], b['KW'], b['W']; pos = {nm: W[j][:3, 3] for j, nm in enumerate(KEEP)}
+    f = SLIM[kind]; D = np.zeros_like(P)
+    spine = np.array([pos['pelvis'], pos['spine_01'], pos['spine_02'], pos['spine_03'], pos['neck_01']])
+    for j, nm in enumerate(KEEP):
+        key = nm if nm in f else nm[:-2] if nm[:-2] in f else None
+        if key is None: continue
+        w = KW[:, j]; sel = w > 1e-4
+        if not sel.any(): continue
+        fx, fz = f[key]; Q = P[sel]
+        if nm in SEG_CHILD:  # towards the bone segment
+            a = pos[nm]; c = pos[SEG_CHILD[nm]]; d = c - a; L2 = d @ d
+            t = np.clip(((Q - a) @ d) / L2, 0.0, 1.0); proj = a + t[:, None] * d
+            off = Q - proj; D[sel] += w[sel, None] * off * (fx - 1.0)
+        else:  # torso: towards the spine's axis at that height (interpolated between the spine joints)
+            ys = spine[:, 1]; order = np.argsort(ys)
+            ax_x = np.interp(Q[:, 1], ys[order], spine[order, 0]); ax_z = np.interp(Q[:, 1], ys[order], spine[order, 2])
+            off = np.c_[(Q[:, 0] - ax_x) * (fx - 1.0), np.zeros(len(Q)), (Q[:, 2] - ax_z) * (fz - 1.0)]
+            D[sel] += w[sel, None] * off
+    b['P'] = P + D
+
+
 def weld(P, I, *attrs):
     key = np.round(P / 1e-5).astype(np.int64)
     _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
@@ -99,10 +137,12 @@ def classify(c, n, w, B):
         return RNeck
     if nm.startswith('hand'): return RGlove
     if nm.startswith('lowerarm'):
-        return RGlove if abs(c[0]) > B['wrist'] - 0.035 else RForearm
+        if abs(c[0]) > B['wrist'] - 0.035: return RGlove
+        if abs(c[0]) > B['wrist'] - 0.10: return RStripe  # reflective band round the cuff
+        return RForearm
     if nm.startswith('upperarm'): return RSleeve
     if nm.startswith('foot') or nm.startswith('ball'): return RBoot
-    side = np.sign(c[0]) * n[0] > 0.75
+    side = np.sign(c[0]) * n[0] > 0.86   # flank panel: a narrow vertical panel down the side (was a wide diamond)
     leg = np.sign(c[0]) * n[0] > 0.9
     if nm.startswith('calf'):
         if c[1] < B['ankle'] + 0.11: return RBoot
@@ -337,6 +377,7 @@ def main():
     bodies = []
     for nm in ['Superhero_Male', 'Superhero_Female']:
         b = load_body(f'{src}/moorfall/characters/{nm}.glb', U1)
+        slim(b, 'male' if nm.endswith('_Male') else 'female')
         b['lods'] = build_body(b); b['pscale'] = b['t'][0][1] / ual_t[0][1]
         bodies.append(b)
         for lod in range(2):

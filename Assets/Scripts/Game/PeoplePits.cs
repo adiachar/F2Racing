@@ -1,7 +1,8 @@
 // PeoplePits.cs — the people around the pit boxes that are not the stop crew (PitCrew.cs): engineers on stools at the
 // garage desks and on the pit-wall stands (headsets, seated, now and then talking), a mechanic in each detailed garage
 // (arms folded / working at the trolley), and a few team members walking along the garage fronts (they turn back
-// before a box where a stop is on). Placed by PitGarage (Spot) in the detailed bays; rigs from People.cs.
+// before a box where a stop is on). Placed by PitGarage (Spot) at the player's box and two either side; the other teams'
+// boxes have the same engineers baked into a static mesh (PitGarage.BakeCrews). Rigs from People.cs.
 // Cost: animated only within ~120 m of the camera (People.AnimDue: every frame within 30 m, every 2nd to 60 m, every 4th beyond; LOD1 mesh beyond 40 m), frozen beyond,
 // hidden beyond ~230 m; one contact-shadow mesh for all of them.
 using System.Collections.Generic;
@@ -44,8 +45,9 @@ public sealed class PeoplePits : MonoBehaviour
             int b0 = order[Mathf.Min(order.Length - 1, i % Mathf.Min(order.Length, 6))];
             int b1 = Mathf.Clamp(b0 + ((i & 1) == 0 ? 3 : -3), 0, n - 1); if (b1 == b0) b1 = Mathf.Clamp(b0 + ((i & 1) == 0 ? -3 : 3), 0, n - 1);
             var A = bays[b0]; var B = bays[b1];
-            float off = A.garageDist - 0.55f - 0.35f * (i % 2);
-            Vector3 pa = A.centre + A.side.normalized * off - A.fwd.normalized * (1.5f * (i % 3)), pb = B.centre + B.side.normalized * (B.garageDist - 0.55f - 0.35f * (i % 2));
+            // (in front of the idle crews and the tyre sets lined up at the garage fronts, PitGarage.Lane)
+            float off = A.garageDist - 2.05f - 0.3f * (i % 2);
+            Vector3 pa = A.centre + A.side.normalized * off - A.fwd.normalized * (1.5f * (i % 3)), pb = B.centre + B.side.normalized * (B.garageDist - 2.05f - 0.3f * (i % 2));
             int seed = 900 + i * 31, body = People.BodyOf(seed, 0.3f);
             int outfit = i == 3 ? People.OMarshal : (i & 1) == 0 ? People.OMechanic : People.OEngineer;
             int gear = outfit == People.OEngineer ? People.GHeadset : Hash(seed, 4) < 0.5f ? People.GCap : People.GBare;
