@@ -12,6 +12,10 @@
 //  * the resolution is never hunted mid-race: at most one step down per session, never back up until the next setting
 //    change. Dynamic resolution only where the API supports it (Vulkan, Metal); on OpenGL ES the screen buffer is
 //    resized instead. Floor 75%; MSAA per level (4x Medium/High, 2x Low)
+//  * frame-time investigation (Docs/PERF-INVESTIGATION.md): Auto steps the rate down early when the phone reports
+//    heat (Thermal.cs), starts at 40 on mid-range Mali GPUs with a 120 Hz panel, and its graphics-level step is held
+//    to the next session start (a level change mid-race switched keywords, shader LODs and MSAA: a lap of first-use
+//    hitches); the physics spiral guard's limits; the overlay's per-frame inputs (FrameLog.cs)
 using FormulaSim;
 using UnityEngine;
 
@@ -194,7 +198,10 @@ public partial class GameManager
     bool fpsHolding = true;                          // the last full window held the lock
     bool resStepped;                                 // this session's one resolution step is used
 
-    // a session starts or the setting changed: Auto starts at 60 (or where this circuit settled before in this run)
+    // a session starts or the setting changed: Auto starts at 60 (or where this circuit settled before in this run).
+    // Mid-range Mali GPUs (G5x / G6x: the Redmi Note 12 Pro's G68 MC4) on a 120 Hz panel start at the steady 40: their
+    // GPU needs ~20-28 ms a frame, so a 60 attempt runs the GPU flat out, heats the phone and throttles it, after which
+    // even 30 is lost (Docs/PERF-ARCHITECTURE.md, gfx request #8). "60 fps" in Settings still forces 60.
     void FpsStart()
     {
         var r = FpsRungs;
@@ -202,6 +209,7 @@ public partial class GameManager
         {
             int m = fpsMem != null && mapIdx >= 0 && mapIdx < fpsMem.Length ? fpsMem[mapIdx] : 0;
             fpsRung = Mathf.Clamp(m, 0, r.Length - 1);
+            if (m == 0 && MaliMidRange) for (int i = 0; i < r.Length; i++) if (r[i] == 40) { fpsRung = i; break; }
         }
         else
         {
@@ -213,6 +221,15 @@ public partial class GameManager
         fpsAvg = fpsLock; fpsHolding = true; resStepped = false;
         FpsWindowReset(3f);
     }
+    static int maliMid = -1;
+    static bool MaliMidRange
+    {
+        get
+        {
+            if (maliMid < 0) { string g = SystemInfo.graphicsDeviceName ?? ""; maliMid = g.Contains("Mali-G5") || g.Contains("Mali-G6") ? 1 : 0; }
+            return maliMid == 1;
+        }
+    }
     // a graphics setting changed: every circuit may hold a higher rate now
     void FpsForget() { fpsMem = null; }
     void FpsWindowReset(float settle) { fpsWinT = 0; fpsWinN = 0; fpsWinLate = 0; fpsSettle = Mathf.Max(fpsSettle, settle); }
@@ -223,6 +240,14 @@ public partial class GameManager
         float dt = Time.unscaledDeltaTime;
         fpsAvg += (1f / Mathf.Max(dt, 0.001f) - fpsAvg) * 0.05f; // the number shown (RaceHud.DrawFps)
         if (Paused || replaying) { FpsWindowReset(2f); return; } // (menus: capped at 30 by MenuStudio.cs)
+        // 0. the phone reports heat (Thermal.cs: Android thermal status MODERATE or more, or headroom near the SEVERE
+        //    level): take the next steady rate now, before the clocks drop and the rate collapses (a 60 that throttles
+        //    ends at 20-30 with judder; a steady 40 heats the phone far less). At most once every 30 s.
+        if (fpsIdx == 0 && Thermal.Hot && fpsRung < FpsRungs.Length - 1 && Time.unscaledTime >= fpsHeatT)
+        {
+            fpsHeatT = Time.unscaledTime + 30f; FpsStepDown(true);
+            return;
+        }
         if (fpsSettle > 0) { fpsSettle -= Mathf.Min(dt, 0.1f); return; }       // (the loading frame's long dt does not count)
         fpsWinT += dt; fpsWinN++;
         if (dt > 1.25f / fpsLock) fpsWinLate++; // shown for one refresh too many (60 on 120 Hz: 25 ms instead of 16.7)
@@ -234,19 +259,14 @@ public partial class GameManager
         if (fpsHolding) return;
         // 1. Auto frame rate: the next steady rate, for the rest of the session
         var r = FpsRungs;
-        if (fpsIdx == 0 && fpsRung < r.Length - 1)
+        if (fpsIdx == 0 && fpsRung < r.Length - 1) { FpsStepDown(false); return; }
+        // 2. Auto graphics: the live shadows, then a level (each one-way), from the NEXT session start
+        //    (AutoGfxAtSessionStart). Changing it mid-race switched the F2_GRADE_LOW keyword, the Road / CarPaint shader
+        //    LODs, anisotropic filtering and MSAA 4x -> 2x at once: every new shader variant and pipeline state is
+        //    created the first time it is drawn, so the next lap hitched at new places (Docs/PERF-INVESTIGATION.md).
+        if (gfxIdx == 0 && gfxLevel > 1 && !autoGfxPending)
         {
-            fpsRung++; fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
-            if (mapIdx >= 0 && mapIdx < MapNames.Length) { if (fpsMem == null) fpsMem = new int[MapNames.Length]; fpsMem[mapIdx] = Mathf.Max(fpsMem[mapIdx], fpsRung); }
-            fpsAvg = fpsLock; fpsHolding = true; FpsWindowReset(1.5f);
-            Flash(FpsFlash(fpsLock));
-            return;
-        }
-        // 2. Auto graphics: the live shadows, then a level (each one-way)
-        if (gfxIdx == 0 && gfxLevel > 1)
-        {
-            if (ShadowsLive) { autoNoShadows = true; SetGraphics(gfxLevel); Flash("Shadows off to keep it smooth"); }
-            else { SetGraphics(gfxLevel - 1); Flash("Graphics lowered to keep it smooth"); }
+            autoGfxPending = true; Flash("Lower graphics from the next session");
             FpsWindowReset(1.5f);
             return;
         }
@@ -256,7 +276,42 @@ public partial class GameManager
             resStepped = true; SetRenderScale(Mathf.Max(DynResMin, renderScale - 0.15f)); FpsWindowReset(1.5f);
         }
     }
+    float fpsHeatT;                                  // Auto's next allowed step for heat (Time.unscaledTime)
+    void FpsStepDown(bool hot)
+    {
+        var r = FpsRungs;
+        fpsRung++; fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
+        if (mapIdx >= 0 && mapIdx < MapNames.Length) { if (fpsMem == null) fpsMem = new int[MapNames.Length]; fpsMem[mapIdx] = Mathf.Max(fpsMem[mapIdx], fpsRung); }
+        fpsAvg = fpsLock; fpsHolding = true; FpsWindowReset(1.5f);
+        Flash(hot ? FpsFlashHot(fpsLock) : FpsFlash(fpsLock));
+    }
     static string FpsFlash(int f) => f == 45 ? "Steady 45 fps for smoother play" : f == 40 ? "Steady 40 fps for smoother play" : "Steady 30 fps for smoother play";
+    static string FpsFlashHot(int f) => f == 45 ? "Phone is warm: steady 45 fps" : f == 40 ? "Phone is warm: steady 40 fps" : "Phone is warm: steady 30 fps";
+
+    // Auto's graphics step (FramePacing 2.), applied when the next session starts, before its world is built
+    bool autoGfxPending;
+    void AutoGfxAtSessionStart()
+    {
+        if (!autoGfxPending) return;
+        autoGfxPending = false;
+        if (gfxIdx != 0 || gfxLevel <= 1) return; // the player chose a level meanwhile
+        if (ShadowsLive) { autoNoShadows = true; SetGraphics(gfxLevel); } else SetGraphics(gfxLevel - 1);
+        FpsForget(); // the lower level may hold a higher rate: every circuit is measured again
+    }
+
+    // ---------------------------------------------------------------- physics spiral guard (GameManager.Update)
+    // the step loop stops early only after SpiralMinSteps steps AND more than SpiralMs of wall time in one frame
+    const int SpiralMinSteps = 8; const double SpiralMs = 20;
+    static readonly long SpiralTicks = (long)(System.Diagnostics.Stopwatch.Frequency * SpiralMs / 1000.0);
+
+    // ---------------------------------------------------------------- the frame-time overlay's inputs (FrameLog.cs)
+    void FrameLogFeed()
+    {
+        FrameLog.Physics(0, 0); // (set again after the step loop when it runs this frame)
+        FrameLog.Racing = !Paused && !replaying && intro == null;
+        FrameLog.ResultsUp = ui != null && ui.page == MenuUI.Page.Results && !replaying && !menuOpen;
+        FrameLog.Lock = fpsLock; FrameLog.Res = renderScale; FrameLog.Gfx = gfxLevel;
+    }
 
     // ---------------------------------------------------------------- small no-garbage strings
     readonly string[] replayCaps = new string[121];

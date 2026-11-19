@@ -283,7 +283,7 @@ public partial class GameManager
         // ---- GRAPHICS
         var gfx = new SettingsUI.Tab("GRAPHICS");
         gfx.Choice("Graphics level", "Auto starts at Medium and steps down if the phone cannot keep up.", GfxNames, 0, () => gfxIdx, v => { gfxIdx = v; FpsForget(); ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); });
-        gfx.Choice("Frame rate", "Always a steady rate the screen divides evenly. Auto: 60 fps, or a steady 40 (120 Hz screens) or 30 if the phone can't hold 60. 30 saves battery and heat.",
+        gfx.Choice("Frame rate", "Always a steady rate the screen divides evenly. Auto: 60 fps (a steady 40 on mid-range Mali phones with 120 Hz screens), lower if the phone can't hold it or gets hot. 30 saves battery and heat.",
             FpsNames, 0, () => fpsIdx, v => { fpsIdx = v; FpsForget(); ApplyFrameRate(); });
         // the base 3D render size (RenderScale.cs): Auto picks ~1.3 Mpx on Android; the Resolution scale below is on top of it
         int[] rsVals = { 0, 100, 85, 70 };
@@ -295,6 +295,7 @@ public partial class GameManager
             .LockedWhen(() => LightBake.Active ? "This circuit has its shadows baked in: nothing to switch." : gfxLevel <= 1 ? "Shadows are off at the Low graphics level." : null);
         gfx.Toggle("Show FPS", "The frame-rate lock (\"40 FPS LOCK\"; the measured rate beside it while it doesn't hold) and the resolution share when it is lowered, top right under the buttons.", true, () => showFps, v => showFps = v);
         gfx.Toggle("Render stats (debug)", "Draw calls, triangles, culling sectors, card overdraw and memory, top left. For testing only.", false, () => PerfStats.Show, v => PerfStats.Show = v);
+        gfx.Toggle("Performance graph (debug)", "Frame times of the last 5 s, CPU / GPU ms, garbage collections, physics, phone heat and clocks, top left; a 2-minute table on the race results. For testing only.", false, () => FrameLog.Show, v => FrameLog.Show = v);
 
         // ---- AUDIO
         var aud = new SettingsUI.Tab("AUDIO");
