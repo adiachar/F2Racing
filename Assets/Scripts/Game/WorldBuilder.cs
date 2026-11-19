@@ -581,7 +581,7 @@ public static class WorldBuilder
             roadMat.SetVector("_SunDir", -sunGo.transform.forward);
             roadMat.SetColor("_SunCol", sun.color * sun.intensity);
             // sunlit asphalt is a clean mid grey, not black (sRGB 0.38 -> about 0.5 on screen in the sun after the bake)
-            roadMat.SetColor("_Asphalt", Street(t) ? new Color(0.44f, 0.44f, 0.45f) : new Color(0.43f, 0.43f, 0.44f)); // (base a touch lighter now that the dry sheen and the edge dust no longer bleach it: ~150 sRGB in the sun)
+            roadMat.SetColor("_Asphalt", Street(t) ? new Color(0.38f, 0.38f, 0.39f) : new Color(0.365f, 0.365f, 0.375f)); // (base a touch lighter now that the dry sheen and the edge dust no longer bleach it: ~150 sRGB in the sun)
             roadMat.SetColor("_Dust", new Color(0.52f, 0.50f, 0.47f));
             RoadSurface.Attach(root.gameObject, roadSh);
         }

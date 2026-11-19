@@ -9,15 +9,16 @@ using UnityEngine;
 public class LensFlare : MonoBehaviour
 {
     public const string PrefKey = "LensFlare";
-    const int Quads = 8;
-    static readonly float[] GhostAt = { -0.32f, 0.42f, -0.70f, 1.35f, -1.15f };      // along sun -> centre -> opposite side
-    static readonly float[] GhostH  = { 0.060f, 0.040f, 0.110f, 0.050f, 0.075f };    // half height, NDC
-    static readonly float[] GhostK  = { 0.30f, 0.38f, 0.16f, 0.30f, 0.14f };         // strength
-    static readonly float[] GhostShape = { 2f, 1f, 2f, 1f, 1f };
+    const int Quads = 12;
+    static readonly float[] GhostAt = { -0.32f, 0.42f, -0.70f, 1.35f, -1.15f, -0.48f, 0.78f, -1.55f };      // along sun -> centre -> opposite side
+    static readonly float[] GhostH  = { 0.060f, 0.040f, 0.110f, 0.050f, 0.075f, 0.022f, 0.030f, 0.160f };    // half height, NDC
+    static readonly float[] GhostK  = { 0.30f, 0.38f, 0.16f, 0.30f, 0.14f, 0.45f, 0.40f, 0.08f };         // strength
+    static readonly float[] GhostShape = { 2f, 1f, 2f, 1f, 1f, 0f, 2f, 2f };
     static readonly Color[] GhostCol =
     {
         new Color(1.0f, 0.85f, 0.55f), new Color(0.45f, 0.90f, 0.75f), new Color(0.60f, 0.55f, 1.0f),
         new Color(1.0f, 0.60f, 0.40f), new Color(0.50f, 0.75f, 1.0f),
+        new Color(0.70f, 1.0f, 0.60f), new Color(1.0f, 0.75f, 0.90f), new Color(0.55f, 0.70f, 1.0f),
     };
 
     static Material mat;
@@ -45,7 +46,7 @@ public class LensFlare : MonoBehaviour
         mesh = new Mesh { name = "LensFlare" }; mesh.MarkDynamic();
         var uv = new Vector4[Quads * 4]; var tri = new int[Quads * 6];
         // quad shapes: 0 bloom, 1 dirt, 2 streak, 3..7 ghosts
-        float[] shape = { 0f, 4f, 3f, GhostShape[0], GhostShape[1], GhostShape[2], GhostShape[3], GhostShape[4] };
+        float[] shape = { 0f, 4f, 3f, GhostShape[0], GhostShape[1], GhostShape[2], GhostShape[3], GhostShape[4], GhostShape[5], GhostShape[6], GhostShape[7], 5f };
         for (int q = 0; q < Quads; q++)
         {
             for (int c = 0; c < 4; c++) uv[q * 4 + c] = new Vector4((c == 0 || c == 3) ? -1 : 1, (c < 2) ? -1 : 1, shape[q], 0);
@@ -94,13 +95,15 @@ public class LensFlare : MonoBehaviour
         Quad(1, s, 0.55f / asp, 0.55f, new Color(1f, 0.95f, 0.85f), 0.11f * vis * (1f - 0.5f * sl));
         // 2 anamorphic streak: thin, wide, blue-ish, through the sun (stronger when the sun is clear of everything)
         Quad(2, s, 0.95f, 0.014f, new Color(0.42f, 0.60f, 1f), 0.50f * vis * vis);
-        // 3..7 ghosts along the line sun -> centre
-        for (int g = 0; g < 5; g++)
+        // 3..10 ghosts along the line sun -> centre (hexagons from the 6-blade iris, rings, small hot dots)
+        for (int g = 0; g < 8; g++)
         {
             float h = GhostH[g];
             var c = Color.Lerp(GhostCol[g], sun, 0.25f);
             Quad(3 + g, s * GhostAt[g], h / asp, h, c, GhostK[g] * vis * (0.35f + 0.65f * sl));
         }
+        // 11 rainbow halo: a thin chromatic ring round the sun (dispersion in the front element), when the sun is in view
+        Quad(11, s, 0.42f / asp, 0.42f, new Color(1f, 1f, 1f), 0.10f * vis * (1f - 0.6f * sl));
         if (!mr.enabled) mr.enabled = true;
         mesh.vertices = pos; mesh.colors32 = col;
     }

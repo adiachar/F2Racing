@@ -165,12 +165,12 @@ public class Sky : MonoBehaviour
         switch (t)
         {
             case TimeOfDay.Kind.Morning: // low, cool-gold sun
-                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.85f; carSun = 1.50f;
+                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.76f; carSun = 1.50f;
                 sky = new Color(0.36f, 0.44f, 0.60f);
                 RenderSettings.ambientSkyColor = new Color(0.60f, 0.68f, 0.80f); RenderSettings.ambientEquatorColor = new Color(0.54f, 0.55f, 0.56f);
                 break;
             case TimeOfDay.Kind.Afternoon:
-                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.78f; ambGain = 0.80f; carSun = 1.55f;
+                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.78f; ambGain = 0.70f; carSun = 1.55f; // ambGain 0.80 put shade at 59 % of sun; RR3 sits at 45-55 %
                 RenderSettings.ambientSkyColor = new Color(0.62f, 0.69f, 0.81f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.56f, 0.57f);
                 break;
             case TimeOfDay.Kind.Evening: // golden hour: a strong, low, warm sun lights every wall that faces it

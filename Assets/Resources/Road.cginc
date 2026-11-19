@@ -79,7 +79,7 @@ v2f vert (appdata v)
     float dist = length(toCam);
     // fine grain: full up to 8 m, gone by 40 m (the texture's mips have flattened it by then anyway); at speed it is
     // held down to a quarter, as the eye (or motion blur) would smear it
-    o.misc.z = saturate((40.0 - dist) / 32.0) * (1.0 - 0.75 * saturate(_F2RoadMotion));
+    o.misc.z = saturate((70.0 - dist) / 55.0) * (1.0 - 0.45 * saturate(_F2RoadMotion));
     o.color = v.color.rgb * 2.0;               // stored light 0.5 = full brightness (LightBake)
     half3 nw = UnityObjectToWorldNormal(v.normal);
     o.sunc = _F2SunLin.rgb * saturate(dot(nw, _SunDir.xyz));
@@ -142,8 +142,13 @@ fixed4 frag (v2f i) : SV_Target
     // mean 0, std ~0.15 at mip 0 and flat beyond ~5 cm per pixel (EnvTex.RoadDetail)
     float2 fu = i.uv.xy * (1.0 / 1.6);
     half grain = (tex2D(_F2RoadDetail, float2(fu.x * 0.92 - fu.y * 0.39, fu.x * 0.39 + fu.y * 0.92)).r - 0.502) * (half)i.misc.z;
+    // coarse clusters (same texture, 7 m per tile, other angle): metre-wide lighter/darker aggregate and binder
+    // areas that keep the surface reading as asphalt out to ~150 m; its mips flatten it smoothly, nothing strobes
+    float2 fc = i.uv.xy * (1.0 / 7.0);
+    half clus = (tex2D(_F2RoadDetail, float2(fc.x * 0.77 + fc.y * 0.64, -fc.x * 0.64 + fc.y * 0.77)).r - 0.502);
 #else
     half grain = 0.0;
+    half clus = 0.0;
 #endif
 
     // ---- light: ambient + sun x the sharp shadow mask (tree dapples, stands, bridges, fences)
@@ -182,7 +187,8 @@ fixed4 frag (v2f i) : SV_Target
     half tone = (0.93 + 0.14 * drift) * (0.97 + 0.06 * blotch) * (1.0 - 0.08 * patch);
     tone *= 1.0 + 0.06 * (half)(secShade - 0.5);
     tone *= 1.0 - 0.05 * inPatch;
-    tone *= 1.0 + 0.3 * grain;                                   // stones and binder, +-4.5 % close up, nothing far
+    tone *= 1.0 + 0.6 * grain;                                   // stones and binder, +-9 % close up, fading by 70 m
+    tone *= 1.0 + 0.45 * clus;                                   // metre-scale clusters, +-6 %, to ~150 m
     half3 col = _Asphalt.rgb * tone;
 
     // ---- rubber laid along the racing line: a broad soft band plus the two tyre tracks; darker the more rubber the
@@ -196,14 +202,18 @@ fixed4 frag (v2f i) : SV_Target
     // soft streaks along the direction of travel (each tyre lays its own); faded once a pixel spans ~17 cm across
     float xs = i.misc.x;
     half streak = (half)(0.5 + 0.5 * sin(xs * 21.0 + sin(xs * 6.3 + along * 0.013) * 1.7));
-    rub *= lerp(1.0, 0.78 + 0.44 * streak, (half)saturate(1.0 - wl * 6.0));
+    rub *= lerp(1.0, 0.7 + 0.6 * streak, (half)saturate(1.0 - wl * 5.0));
 #endif
-    col *= 1.0 - 0.45 * rub; // rubbered, not black: in the sun the line reads as a darker grey
+    col *= 1.0 - 0.58 * rub; // rubbered, not black: in the sun the line reads as a clearly darker grey
 #ifdef ROAD_HQ
     // ---- tyre marks: single cars' pairs of soft dark lines along and around the racing line, more where the line
     // carries more rubber
     half marks = TyrePair(xs, along, 53.0, 1.0, 1.3, wl) + TyrePair(xs, along, 79.0, 2.0, 2.6, wl);
-    col *= 1.0 - (half)saturate(marks) * (0.06 + 0.14 * rubAmt) * (0.7 + 0.6 * blotch) * (1.0 - kerbF);
+    col *= 1.0 - (half)saturate(marks) * (0.08 + 0.2 * rubAmt) * (0.7 + 0.6 * blotch) * (1.0 - kerbF);
+    // braking zones (heavy rubber): short, dark lock-up streak pairs from flat-spotting fronts, along the line
+    float bz = saturate(((float)rubAmt - 0.7) * 4.0);
+    half lock = TyrePair(xs, along, 23.0, 3.0, 0.9, wl) * (half)bz;
+    col *= 1.0 - (half)saturate(lock) * 0.3 * (1.0 - kerbF);
 #endif
 
     // ---- dust off-line: lighter towards the edges where nobody drives (less on fresh patches)

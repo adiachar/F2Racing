@@ -65,14 +65,14 @@ Shader "F2/CarPaint"
     float2 Weave(float3 op, float3 on, float fade)
     {
         float3 an = abs(on);
-        float2 w = (an.x > max(an.y, an.z) ? op.zy : (an.y > an.z ? op.xz : op.xy)) * 100.0;
+        float2 w = (an.x > max(an.y, an.z) ? op.zy : (an.y > an.z ? op.xz : op.xy)) * 160.0; // ~6 mm tows
         float2 cell = floor(w), fr = frac(w);
         float sel = step(0.5, frac((cell.x + cell.y) * 0.25));
         float across = lerp(fr.y, fr.x, sel), prof = 4.0 * across * (1.0 - across);
-        return float2(lerp(1.0, lerp(0.6, 1.3, prof) * lerp(0.88, 1.12, sel), fade), lerp(1.0, lerp(0.55, 1.45, sel) * prof + 0.3, fade));
+        return float2(lerp(1.0, lerp(0.86, 1.08, prof) * lerp(0.95, 1.05, sel), fade), lerp(1.0, lerp(0.7, 1.3, sel) * prof + 0.45, fade)); // subtle: real twill reads as a shimmer in the clear coat, not as bricks
     }
     // how much weave to show: full while a tow covers 3+ pixels, gone below ~1.4 (derivatives: call outside branches)
-    float WeaveFade(float3 op) { float3 d = fwidth(op) * 100.0; return saturate(1.75 - 2.5 * max(d.x, max(d.y, d.z))); }
+    float WeaveFade(float3 op) { float3 d = fwidth(op) * 160.0; return saturate(1.75 - 2.5 * max(d.x, max(d.y, d.z))); }
     // Livery areas from the car's own shape (object space: +z forward, nose tip at z 2.8, x across, ny = how much the
     // surface faces up). style 0: engine cover + sidepod tops + nose tip; 1: engine cover + the whole nose cone, sidepods
     // in the primary; 2: the whole sidepods + nose tip, engine cover in the primary; 3: a centre stripe down nose and
