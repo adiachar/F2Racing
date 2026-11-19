@@ -1,5 +1,5 @@
 // MenuUI.cs — the front end, drawn with IMGUI (UiKit.cs design system) from GameManager.OnGUI. One job per page:
-//  * Home (Page.Start, MenuHome.cs): the player's driver standing in the 3D studio (MenuStudio.cs) with the car,
+//  * Home (Page.Start, MenuHome.cs): the player's driver standing alone in the 3D studio (MenuStudio.cs),
 //    driver card, Settings, OFFLINE and DRIVER tiles, one big red RACE (the last mode and circuit, straight to
 //    Setup) and the licence credits.
 //  * Play (MenuPlay.cs): 1 Mode · 2 Circuit · 3 Setup, one screen each, Back top-left (and Android back / Escape),
@@ -184,7 +184,7 @@ public sealed partial class MenuUI
     internal static void Fill(Rect r, Color c) => UiKit.Rect(r, c);
 
     // ---- the menu's 3D studio, navigation, Android back
-    public CarModel playerCar;                             // GameManager: the player's car (copied into the studio)
+    public CarModel playerCar;                             // GameManager sets it (kept for its hook; the studio shows no car)
     readonly MenuStudio studio = new MenuStudio();
     int releaseFrame = -1, drawFrame = -10; bool purged = true, escDue, restyleDue;
     int navDir = 1; const int KeyNav = 0x5A20;
@@ -243,11 +243,11 @@ public sealed partial class MenuUI
             drawFrame = f;
         }
         // the studio lives while a menu page that can show it is up
-        if (StudioPage(page)) { if (!studio.Alive) studio.Create(playerCar, PlayerLivery()); }
+        if (StudioPage(page)) { if (!studio.Alive) studio.Create(PlayerLivery()); }
         else ReleaseStudio();
         if (ev.type == EventType.Repaint && studio.Alive)
         {
-            if (restyleDue) { restyleDue = false; studio.Restyle(playerCar, PlayerLivery()); }
+            if (restyleDue) { restyleDue = false; studio.Restyle(PlayerLivery()); }
             int shot = page == Page.Start ? MenuStudio.ShotHome : page == Page.Driver ? MenuStudio.ShotDriver : MenuStudio.ShotHidden;
             studio.Tick(shot, page == Page.Start);
         }
@@ -267,119 +267,21 @@ public sealed partial class MenuUI
         return ch;
     }
 
-    // ================================================================== circuit carousel, track map (the Circuit step)
-    int lastMap = -1, mapDir = 1; const int KeyMap = 0x5A17;
+    // ================================================================== track map (the Circuit step)
+    int lastMap = -1, mapDir = 1, mapStepDir; const int KeyMap = 0x5A17;
 
-
-    // ---- circuit carousel: swipe sideways (with a fling), tap a card to pick it; never fires on a swipe
-    float carScroll, carTarget, carVel, carPressX, carPressScroll, carLastX, carLastT; bool carDrag, carCentre = true, carInit;
-    int Carousel(Rect a, int map)
+    // the neighbours of the circuit on screen (map - 1, map + 1) built ahead, one every few frames when the page is idle
+    // (each is a circuit build, ~10-50 ms), so pressing < or > shows its map at once
+    int prefetchFrame;
+    void PrefetchNeighbours(int map, Track loaded, int loadedFor)
     {
+        if (Event.current.type != EventType.Repaint || GUIUtility.hotControl != 0 || UiKit.Opened(KeyCircuit) < 0.8f || Time.frameCount - prefetchFrame < 15) return;
         int n = mapNames.Length;
-        float cw = U(146), cg = U(8), step = cw + cg, content = n * step - cg, maxS = Mathf.Max(0, content - a.width);
-        int id = GUIUtility.GetControlID(FocusType.Passive);
-        var e = Event.current;
-        switch (e.GetTypeForControl(id))
+        for (int d = -1; d <= 1; d += 2)
         {
-            case EventType.MouseDown:
-                if (e.button == 0 && a.Contains(e.mousePosition))
-                {
-                    GUIUtility.hotControl = id; carDrag = false; carPressX = carLastX = e.mousePosition.x; carPressScroll = carScroll;
-                    carVel = 0; carLastT = Time.realtimeSinceStartup; e.Use();
-                }
-                break;
-            case EventType.MouseDrag:
-                if (GUIUtility.hotControl == id)
-                {
-                    float dx = e.mousePosition.x - carPressX;
-                    if (!carDrag && Mathf.Abs(dx) > U(8)) carDrag = true;
-                    if (carDrag)
-                    {
-                        float s = carPressScroll - dx;
-                        if (s < 0) s *= 0.35f; else if (s > maxS) s = maxS + (s - maxS) * 0.35f; // rubber band at the ends
-                        carScroll = carTarget = s;
-                        float now = Time.realtimeSinceStartup, dt = Mathf.Max(1f / 120f, now - carLastT);
-                        carVel = Mathf.Lerp(carVel, -(e.mousePosition.x - carLastX) / dt, 0.6f);
-                        carLastX = e.mousePosition.x; carLastT = now;
-                    }
-                    e.Use();
-                }
-                break;
-            case EventType.MouseUp:
-                if (GUIUtility.hotControl == id)
-                {
-                    GUIUtility.hotControl = 0;
-                    if (!carDrag)
-                    {
-                        float lx = e.mousePosition.x - a.x + carScroll; int k = Mathf.FloorToInt(lx / step);
-                        if (a.Contains(e.mousePosition) && k >= 0 && k < n && lx - k * step <= cw) map = k;
-                    }
-                    else carTarget = carScroll + Mathf.Clamp(carVel, -U(3000), U(3000)) * 0.25f;
-                    carDrag = false; e.Use();
-                }
-                break;
-            case EventType.ScrollWheel:
-                if (a.Contains(e.mousePosition)) { carTarget += (Mathf.Abs(e.delta.x) > Mathf.Abs(e.delta.y) ? e.delta.x : e.delta.y) * U(26); e.Use(); }
-                break;
+            int k = ((map + d) % n + n) % n;
+            if (k < previews.Length && k < Circuits.All.Length && k != playgroundIdx && previews[k] == null) { Preview(k, loaded, loadedFor); prefetchFrame = Time.frameCount; return; }
         }
-        if (carCentre) { carTarget = Mathf.Clamp(map * step - (a.width - cw) * 0.5f, 0, maxS); carCentre = false; if (!carInit) { carScroll = carTarget; carInit = true; } }
-        if (e.type == EventType.Repaint && GUIUtility.hotControl != id)
-        {
-            carTarget = Mathf.Clamp(carTarget, 0, maxS);
-            carScroll = Mathf.Lerp(carScroll, carTarget, 1f - Mathf.Exp(-11f * Time.unscaledDeltaTime));
-        }
-
-        // cards (clipped to the column; they fade as they leave it)
-        var g = new Rect(a.x, a.y - U(8), a.width, a.height + U(16));
-        GUI.BeginGroup(g);
-        float ch = a.height;
-        for (int k = 0; k < n; k++)
-        {
-            float x = k * step - carScroll;
-            if (x > g.width || x + cw < 0) continue;
-            float vis = Mathf.Clamp01(Mathf.Min(x + cw * 0.5f, g.width - x - cw * 0.5f) / (cw * 0.5f));
-            float ent = UiKit.Enter(KeyCircuit, 6 + Mathf.Max(0, k - Mathf.FloorToInt(carScroll / step)));
-            DrawCard(new Rect(x, U(8) + U(10) * (1f - ent), cw, ch), k, k == map, vis * ent);
-        }
-        GUI.EndGroup();
-        // a hint of more to the sides
-        if (carScroll > 1f) UiKit.Icon(new Rect(a.x - U(17), a.center.y - U(6), U(12), U(12)), UiKit.IconBack, UiKit.Faint);
-        if (carScroll < maxS - 1f) UiKit.Icon(new Rect(a.xMax + U(4), a.center.y - U(6), U(12), U(12)), UiKit.IconNext, UiKit.Faint);
-        return map;
-    }
-
-    static readonly Color cardCol = new Color(0.09f, 0.10f, 0.13f, 0.82f), cardSel = new Color(0.15f, 0.16f, 0.20f, 0.95f);
-    void DrawCard(Rect r, int k, bool sel, float alpha)
-    {
-        if (alpha <= 0.01f) return;
-        float s = UiKit.Smooth(0x6C00 + k, sel ? 1f : 0f, 12f);
-        UiKit.PushAlpha(alpha);
-        if (s > 0.02f) UiKit.Shadow(r, 14f, 6f, 0.3f * s, 2f);
-        UiKit.Rect(r, Color.Lerp(cardCol, cardSel, s), 14f);
-        UiKit.Outline(r, Color.Lerp(new Color(1, 1, 1, 0.07f), UiKit.Accent, s), 14f, 0.7f + 0.5f * s);
-        var c = cards[k];
-        var pv = k < previews.Length ? previews[k] : null;
-        float thumb = pv != null ? U(44) : 0f, tx = r.x + U(12), tw = r.width - U(22) - thumb;
-        UiKit.Text(new Rect(tx, r.y + U(6), tw, U(14)), c.number, UiKit.Bold, 10f, Color.Lerp(UiKit.Faint, UiKit.TextCol, s));
-        UiKit.Text(new Rect(tx, r.y + U(19), tw, U(18)), c.name, UiKit.Bold, UiKit.Fit(c.name, UiKit.Bold, 12.5f, tw, 9.5f), Color.Lerp(UiKit.Sub, UiKit.TextCol, s));
-        UiKit.Text(new Rect(tx, r.y + U(36), tw, U(14)), c.country, UiKit.Regular, 9f, UiKit.Faint);
-        if (pv != null)
-        {
-            UiKit.PushAlpha(0.45f + 0.55f * s);
-            DrawMap(new Rect(r.xMax - thumb - U(6), r.y + U(6), thumb, r.height - U(12)), pv, false);
-            UiKit.PopAlpha();
-        }
-        UiKit.PopAlpha();
-    }
-
-    // previews of the other circuits for the cards: one every few frames once the menu is idle (each is a circuit
-    // build, ~10-50 ms), so the entry animation stays smooth
-    int thumbFrame;
-    void BuildThumbnails(Track loaded, int loadedFor)
-    {
-        if (Event.current.type != EventType.Repaint || GUIUtility.hotControl != 0 || UiKit.Opened(KeyCircuit) < 1.2f || Time.frameCount - thumbFrame < 15) return;
-        for (int k = 0; k < previews.Length && k < Circuits.All.Length; k++)
-            if (previews[k] == null && k != playgroundIdx) { Preview(k, loaded, loadedFor); thumbFrame = Time.frameCount; return; }
     }
 
     void DrawTestArea(Rect r)
@@ -388,8 +290,7 @@ public sealed partial class MenuUI
         UiKit.Outline(r, new Color(1, 1, 1, 0.08f), 16f, 0.7f);
         for (int i = 1; i < 6; i++) UiKit.Rect(new Rect(r.x + r.width * i / 6f, r.y + U(10), Mathf.Max(1f, U(0.5f)), r.height - U(20)), new Color(1, 1, 1, 0.04f));
         for (int i = 1; i < 4; i++) UiKit.Rect(new Rect(r.x + U(10), r.y + r.height * i / 4f, r.width - U(20), Mathf.Max(1f, U(0.5f))), new Color(1, 1, 1, 0.04f));
-        UiKit.Eyebrow(new Rect(r.x, r.center.y - U(16), r.width, U(16)), "Open test area", UiKit.Sub, 10f, TextAnchor.MiddleCenter);
-        UiKit.Text(new Rect(r.x, r.center.y + U(2), r.width, U(16)), "Free driving, 0-100 and top speed", UiKit.Regular, 10.5f, UiKit.Faint, TextAnchor.MiddleCenter);
+        UiKit.Text(new Rect(r.x, r.center.y - U(8), r.width, U(16)), "Free driving, 0-100 and top speed", UiKit.Regular, 10.5f, UiKit.Faint, TextAnchor.MiddleCenter);
     }
 
     // ------------------------------------------------------------------ track map

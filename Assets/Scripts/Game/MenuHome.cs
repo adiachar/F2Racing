@@ -1,5 +1,5 @@
 // MenuHome.cs — the Home page of the front end (MenuUI, Page.Start), over the 3D studio (MenuStudio.cs: the driver
-// standing in the middle, the car behind him; drag across the middle to turn him). Minimal on purpose:
+// standing alone in the middle; drag across the middle to turn him). Minimal on purpose:
 //  * top left: the driver card (number, name, level with its XP line) -> Driver page; top right: Settings
 //  * left: OFFLINE (-> Play: mode, circuit, setup); right: DRIVER
 //  * bottom centre: one big red RACE = the last mode and circuit, straight to the Setup step; licence credits under it
@@ -40,7 +40,7 @@ public sealed partial class MenuUI
         var right = new Rect(x1 - tileW, left.y, tileW, tileH);
 
         // drag across the middle: turn the driver
-        studio.Spin(new Rect(left.xMax + U(8), top + U(62), right.x - left.xMax - U(16), race.y - U(8) - (top + U(62))), false);
+        studio.Spin(new Rect(left.xMax + U(8), top + U(62), right.x - left.xMax - U(16), race.y - U(8) - (top + U(62))));
 
         var ch = Choice.None;
         float e0 = UiKit.Enter(KeyHome, 0);
