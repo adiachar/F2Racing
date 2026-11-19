@@ -12,6 +12,9 @@
 // Run-off strip (_Turf = 1, the 2 m strip behind the kerbs; uv3 = (strip inner edge m, paint 0/1 + 0.45 x exit marks)):
 // astroturf (the fibre texture, worn soil at its outer edge) or green / blue painted asphalt run-off (coarse paint over
 // the aggregate in the detail alpha); HQ: tyre marks of cars running wide crossing it at a shallow angle.
+// Forest floor (verge only; uv3.y = 0..1 mask from RealWorld.VergeFloor: the mapped woods and the trees' crowns, ramping
+// in behind the barrier): dark brown-green leaf litter with mossy patches (the detail's clumps / the macro), no
+// mowing stripes or barrier wear under it, so the verge meets the woods' floor on the land without a hard line.
 // No extra reads: everything here is maths on the reads above. (float-only rule for masks and compares.)
 #ifndef F2_GROUND_INCLUDED
 #define F2_GROUND_INCLUDED
@@ -23,7 +26,7 @@ struct appdata
     float4 vertex : POSITION;
     float2 uv : TEXCOORD0;
     float2 uv2 : TEXCOORD2;
-    float2 uv3 : TEXCOORD3;  // run-off strip only (_Turf): inner edge m, paint + 0.45 x marks; (0, 0) elsewhere
+    float2 uv3 : TEXCOORD3;  // run-off strip (_Turf): inner edge m, paint + 0.45 x marks; verge: (0, forest floor 0..1); (0, 0) elsewhere
     float4 color : COLOR;
 };
 struct v2f
@@ -106,6 +109,19 @@ fixed4 frag (v2f i) : SV_Target
     col *= lerp(half3(1.0, 1.0, 1.0), half3(1.10, 1.06, 0.88), saturate((0.40 - lush) * 3.5));
 #endif
 
+    // ---- forest floor under the trees behind the barrier (verge: uv3.y; the run-off strip's uv3 is its own data)
+    float forest = saturate(i.run.y) * saturate(1.0 - _Turf);
+    {
+        half lumD = dot(d.rgb, half3(0.3, 0.59, 0.11));
+#ifdef GROUND_HQ
+        float lit = saturate((0.55 - (float)tuft) * 3.0) * 0.6 + saturate(((float)mac.b - 0.4) * 2.5) * 0.4; // litter / moss patches
+#else
+        float lit = saturate(((float)mac.b - 0.35) * 2.5);
+#endif
+        half3 fl = lerp(half3(0.15, 0.19, 0.075), half3(0.29, 0.215, 0.13), (half)lit) * (0.55 + 1.3 * lumD) * (0.85 + 0.3 * mac.r);
+        col = lerp(col, fl, (half)forest);
+    }
+
     // ---- the 2 m run-off strip behind the kerbs: astroturf or painted asphalt (uniform branch)
     UNITY_BRANCH
     if (_Turf > 0.5)
@@ -159,7 +175,7 @@ fixed4 frag (v2f i) : SV_Target
 #endif
     half sq = (half)saturate((abs(frac(ph) - 0.5) * 2.0 - 0.5) / max(2.0 * wp, 1e-3) + 0.5);
     half fadeFar = (half)saturate(1.5 - wp * 3.0);
-    col *= 1.0 + _Stripe.w * band * fadeFar * vary * (sq * 2.0 - 1.0) * (0.75 + 0.5 * mac.b);
+    col *= 1.0 + _Stripe.w * band * fadeFar * vary * (sq * 2.0 - 1.0) * (0.75 + 0.5 * mac.b) * (half)(1.0 - forest);
 
     // worn, darker strip along the barrier (mowers and marshals cannot reach under it)
     half nb = (half)saturate(1.0 - abs(lat - _Wall.x) * 0.6);
@@ -167,7 +183,7 @@ fixed4 frag (v2f i) : SV_Target
 #ifdef GROUND_HQ
     // grass only: long, clumpy grass with dry tips at the barrier foot, and bare dusty soil between the tufts along
     // the verge's inner edge (wheels cut it, marshals walk it)
-    half longG = (half)saturate(1.2 - abs(lat - _Wall.x) * 0.8) * (half)_Clumps;
+    half longG = (half)saturate(1.2 - abs(lat - _Wall.x) * 0.8) * (half)_Clumps * (half)(1.0 - forest);
     col *= lerp(half3(1.0, 1.0, 1.0), (0.62 + 0.75 * tuft) * half3(1.08, 1.0, 0.78), longG * 0.85);
     // where the run-off meets the grass: worn, patchy (wider in places along the lap), soil between the tufts
     half wpatch = (half)saturate(0.55 + 0.6 * sin(along * 0.043 + mac.b * 6.0) + 0.3 * sin(along * 0.17));

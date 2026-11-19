@@ -273,3 +273,22 @@ APK: models.bytes +310 KB, atlas.bytes +470 KB (raw).
 
 Not done: the old banking over the Serraglio and the Parabolica tower: the oval is not in the map data
 (Overture has no raceways; OSM is not reachable here), so there is nothing accurate to build it from.
+
+## Round 8: forest edge, undergrowth and the forest floor
+
+Shots showed tall trees on bare, mown lawn with a hard line at the trunks, and uniform grass up to the fence foot.
+
+Done (not yet seen in a build):
+
+- **Forest floor** (`RealWorld.FloorMask`): a 0..1 mask on the terrain grid from the mapped woods (depth into them, the
+  circuit's own ground included, ramping in over ~12 m) and the crowns of the trees planted near the track. The land
+  texture blends to dark brown-green leaf litter with mossy patches (no hard switch); the verge gets the mask in uv3.y
+  (`VergeFloor`) and Ground.cginc draws the same floor there, without stripes or barrier wear (no extra texture read).
+- **Undergrowth** (`RealWorld.Undergrowth`, Medium / High, within 150 m of the track): hazel / elder bushes 1.5-4 m and
+  bramble patches 0.5-1 m (the two shrub models resized, instanced), young replanted trees 3-6 m in ~55 m patches
+  (robinia / small tree, slender, LOD 1 at most), ferns in the shade, grass tufts at the tree feet, bushes along the
+  service roads. High 150 / 130 / 64 / 520 ferns, Medium 70 / 60 / 28 / 220. Low: none.
+- **Tall-grass band** (`RealWorld.FenceBand`): pale, uneven grass cards at the barrier feet, park side every ~1.5 m
+  (Medium 2 m) with gaps, plus short tufts on the track side where the verge is grass. Low: none.
+- Card tiles (tall grass, fern) are painted at load (`EnvTex.PaintUnder`) into a free corner of the model atlas, so
+  the cards share the model trees' material and their merged 400 m chunks; LightBake keeps them out of the roof map.

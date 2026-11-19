@@ -104,6 +104,14 @@ public static class LightBake
             }
             if (mf.name == "Trees") { TreeCards(mesh.vertices); continue; }
             var v = mesh.vertices; var t = mesh.triangles;
+            if (mf.name == "EnvModelTrees")
+            {
+                // (the knee-high undergrowth cards in the model trees' chunks are no roofs: left out of the map)
+                var uv = mesh.uv;
+                for (int k = 0; k + 2 < t.Length; k += 3)
+                    if (uv.Length != v.Length || !ModelLib.IsUnderUv(uv[t[k]])) Occluder(v[t[k]], v[t[k + 1]], v[t[k + 2]]);
+                continue;
+            }
             for (int k = 0; k + 2 < t.Length; k += 3) Occluder(v[t[k]], v[t[k + 1]], v[t[k + 2]]);
         }
         // GPU-instanced model trees and shrubs (ModelInstancing.cs): the same triangles the merged meshes had, world space

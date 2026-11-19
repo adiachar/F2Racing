@@ -1281,4 +1281,114 @@ public static class EnvTex
         cr = cg = cb = ca = null;
         return foliage = Count(tex);
     }
+
+    // ---------------------------------------------------------------- undergrowth tiles (ModelLib's model atlas)
+    // Two 256 x 256 cut-out tiles painted into a free corner of the model atlas (Resources/Models/atlas.bytes, 2048 x
+    // 2048; texture rows 0..255 = v 0..0.125, x 1536..2047: alpha 0 there in the shipped atlas, checked before painting),
+    // so the undergrowth cards (RealWorld.Undergrowth: the tall-grass band at the fence feet, grass clumps and ferns in
+    // the woods) share the model trees' material and draws:
+    //   tile 0 (x 1536)  tall uncut grass: ~200 blades from the foot, dark green at the base to pale straw tips, some
+    //                    leaning, some dry, a few seed heads; ragged top
+    //   tile 1 (x 1792)  a fern (bracken / male fern): fronds arching out of one crown, pinnae shrinking to the tips
+    // The colour is the final look (cards tint near 1). Cut-out texels carry the tile's mean colour (no dark mip fringe).
+    public const int UnderX = 1536, UnderTile = 256;
+    static float[] ur, ug, ub, ua;
+    // false: the corner is not free in this atlas (nothing painted; no undergrowth cards)
+    public static bool PaintUnder(Color32[] px, int w, int h)
+    {
+        if (px == null || w != 2048 || h < UnderTile) return false;
+        for (int y = 0; y < UnderTile; y++)
+            for (int x = UnderX; x < UnderX + 2 * UnderTile; x++) if (px[y * w + x].a > 8) return false;
+        int n = UnderTile * UnderTile;
+        ur = new float[n]; ug = new float[n]; ub = new float[n]; ua = new float[n];
+        var r = new System.Random(41);
+        // ---- tile 0: tall grass
+        for (int b = 0; b < 210; b++)
+        {
+            float x0 = 6f + (float)r.NextDouble() * 244f, hh = (0.32f + 0.66f * Mathf.Pow((float)r.NextDouble(), 0.6f)) * 250f;
+            float lean = ((float)r.NextDouble() - 0.5f) * 0.7f, bend = ((float)r.NextDouble() - 0.5f) * 0.9f, w0 = 1.3f + 1.7f * (float)r.NextDouble();
+            bool dry = r.NextDouble() < 0.22;
+            float sh = 0.8f + 0.4f * (float)r.NextDouble();
+            Color c0 = new Color(0.10f, 0.16f, 0.05f) * sh, c1 = dry ? new Color(0.60f, 0.53f, 0.33f) * sh : new Color(0.38f, 0.44f, 0.17f) * sh;
+            int steps = Mathf.CeilToInt(hh / 0.6f); float px0 = 0, py0 = 0;
+            for (int s = 0; s <= steps; s++)
+            {
+                float t = (float)s / steps, x = x0 + (lean * t + bend * t * t) * hh, y = t * hh;
+                float wd = w0 * (1f - 0.85f * t);
+                UDisc(x, y, wd * 0.5f, Color.Lerp(c0, c1, Mathf.Pow(t, 0.8f)), 1f);
+                px0 = x; py0 = y;
+            }
+            // seed heads on some of the tall ones: a loose pale spike
+            if (hh > 170f && r.NextDouble() < 0.3)
+                for (int k = 0; k < 14; k++)
+                    UDisc(px0 + ((float)r.NextDouble() - 0.5f) * 5f, py0 - k * 2.2f, 1.4f, new Color(0.62f, 0.56f, 0.38f) * sh, 1f);
+        }
+        UFlush(px, w, UnderX);
+        // ---- tile 1: a fern
+        System.Array.Clear(ur, 0, n); System.Array.Clear(ug, 0, n); System.Array.Clear(ub, 0, n); System.Array.Clear(ua, 0, n);
+        int fronds = 11;
+        for (int f = 0; f < fronds; f++)
+        {
+            float a0 = -1.2f + 2.4f * (f + 0.5f) / fronds + ((float)r.NextDouble() - 0.5f) * 0.25f; // from the vertical
+            float len = 150f + 95f * (float)r.NextDouble() * (1f - 0.5f * Mathf.Abs(a0)), sh = 0.8f + 0.35f * (float)r.NextDouble();
+            Color stem = new Color(0.14f, 0.20f, 0.06f) * sh, leaf = new Color(0.16f, 0.29f, 0.07f) * sh, tip = new Color(0.27f, 0.39f, 0.10f) * sh;
+            float x = 128f + a0 * 10f, y = 2f, ang = a0 * 0.75f; int steps = Mathf.CeilToInt(len / 1.2f);
+            for (int s = 0; s <= steps; s++)
+            {
+                float t = (float)s / steps;
+                ang = a0 * (0.75f + 0.9f * t); // the frond arches out and droops towards its tip
+                x += Mathf.Sin(ang) * 1.2f; y += Mathf.Cos(ang) * 1.2f;
+                UDisc(x, y, 1.1f * (1f - 0.6f * t), stem, 1f);
+                // pinnae: pairs every ~5 px, longest at mid-frond, slanting forwards
+                if (s % 4 == 0 && t > 0.1f)
+                {
+                    float pl = 34f * Mathf.Pow(Mathf.Sin(Mathf.PI * Mathf.Min(1f, (t - 0.1f) / 0.92f)), 0.7f) * (1f - 0.25f * t);
+                    for (int sd = -1; sd <= 1; sd += 2)
+                    {
+                        float pa = ang + sd * 1.15f, ex = x, ey = y; int ps = Mathf.CeilToInt(pl / 1.1f);
+                        for (int q = 0; q <= ps; q++)
+                        {
+                            float u = (float)q / Mathf.Max(1, ps);
+                            ex += Mathf.Sin(pa - sd * 0.35f * u) * 1.1f; ey += Mathf.Cos(pa - sd * 0.35f * u) * 1.1f;
+                            UDisc(ex, ey, 2.3f * (1f - 0.75f * u) * (1f - 0.4f * t) + 0.4f, Color.Lerp(leaf, tip, u * 0.6f + t * 0.4f), 1f);
+                        }
+                    }
+                }
+            }
+        }
+        UFlush(px, w, UnderX + UnderTile);
+        ur = ug = ub = ua = null;
+        return true;
+    }
+    // an anti-aliased disc, painted "over" (the colour of soft edges is the disc's own)
+    static void UDisc(float cx, float cy, float rad, Color c, float a)
+    {
+        rad = Mathf.Max(rad, 0.45f);
+        int x0 = Mathf.Max(0, Mathf.FloorToInt(cx - rad - 1)), x1 = Mathf.Min(UnderTile - 1, Mathf.CeilToInt(cx + rad + 1));
+        int y0 = Mathf.Max(0, Mathf.FloorToInt(cy - rad - 1)), y1 = Mathf.Min(UnderTile - 1, Mathf.CeilToInt(cy + rad + 1));
+        for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+            {
+                float dx = x + 0.5f - cx, dy = y + 0.5f - cy, cov = Mathf.Clamp01(rad + 0.5f - Mathf.Sqrt(dx * dx + dy * dy)) * a;
+                if (cov <= 0.002f) continue;
+                int i = y * UnderTile + x; float na = cov + ua[i] * (1f - cov), k = cov / na;
+                ur[i] += (c.r - ur[i]) * k; ug[i] += (c.g - ug[i]) * k; ub[i] += (c.b - ub[i]) * k; ua[i] = na;
+            }
+    }
+    // the painted tile into the atlas at (ox, 0); cut-out texels take the tile's mean colour
+    static void UFlush(Color32[] px, int w, int ox)
+    {
+        double sr = 0, sg = 0, sb = 0, sa = 0;
+        for (int i = 0; i < ua.Length; i++) { sr += ur[i] * ua[i]; sg += ug[i] * ua[i]; sb += ub[i] * ua[i]; sa += ua[i]; }
+        float mr = (float)(sr / System.Math.Max(sa, 1e-3)), mg = (float)(sg / System.Math.Max(sa, 1e-3)), mb = (float)(sb / System.Math.Max(sa, 1e-3));
+        for (int y = 0; y < UnderTile; y++)
+            for (int x = 0; x < UnderTile; x++)
+            {
+                int i = y * UnderTile + x; float a = ua[i];
+                float rr = Mathf.Lerp(mr, ur[i], a), gg = Mathf.Lerp(mg, ug[i], a), bb = Mathf.Lerp(mb, ub[i], a);
+                // edge texels fully transparent (the card's rim never shows a sliver of the neighbour tile)
+                if (x == 0 || x == UnderTile - 1 || y == UnderTile - 1) a = 0f;
+                px[y * w + ox + x] = new Color32((byte)(Mathf.Clamp01(rr) * 255f + 0.5f), (byte)(Mathf.Clamp01(gg) * 255f + 0.5f), (byte)(Mathf.Clamp01(bb) * 255f + 0.5f), (byte)(Mathf.Clamp01(a) * 255f + 0.5f));
+            }
+    }
 }
