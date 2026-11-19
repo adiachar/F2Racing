@@ -462,8 +462,8 @@ public static class EnvTex
             if (inF) c = new Color(0.93f, 0.93f, 0.91f);
             if (inG)
             {
-                float t = (v - 0.28f) / 0.52f;
-                c = Color.Lerp(new Color(0.20f, 0.27f, 0.34f), new Color(0.55f, 0.66f, 0.76f), t * t);  // sky in the glass
+                float tg = (v - 0.28f) / 0.52f;
+                c = Color.Lerp(new Color(0.20f, 0.27f, 0.34f), new Color(0.55f, 0.66f, 0.76f), tg * tg);  // sky in the glass
                 ga = 0; // alpha 0 = window glass: Baked.shader (_WinGlow) lights a share of the windows at dusk / night
                 if (Mathf.Abs(u - 0.5f) < 0.012f || Mathf.Abs(v - 0.60f) < 0.012f) { c = new Color(0.9f, 0.9f, 0.88f); ga = 255; } // glazing bars
                 if (u + v * 0.6f > 0.85f && u + v * 0.6f < 0.9f) c += new Color(0.12f, 0.12f, 0.12f);  // a streak of reflection

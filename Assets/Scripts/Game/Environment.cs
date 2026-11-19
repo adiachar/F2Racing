@@ -463,7 +463,7 @@ public static class Environment
     // ================================================================ backdrop: rings of distant land, and the sea
     public static void Backdrop(Transform parent, float cx, float cy, float ext)
     {
-        var e = Cur; var bPlain = new Buf(), bWood = new Buf();
+        var e = Cur; Buf bPlain = new Buf(), bWood = new Buf();
         var haze = RenderSettings.fogColor;
         bool sea = !float.IsNaN(e.seaDir) && !RealWorld.HasWaterAreas;
         bool real = RealWorld.Active && RealWorld.HasTerrain;
