@@ -243,3 +243,33 @@ Still open (by impact per cost):
 5. Landmarks: old Lesmo/Ascari bridges, the old banking, the Parabolica tower.
 6. Crowd variety (colour blocking, flags); marshals at the posts (People*, other engineer).
 7. Post numbers on the marshal posts, painted sector lines on the kerbs.
+
+## Round 7: the park's real trees and furniture
+
+Research (what is trackside): the woods round the circuit are the Parco di Monza's old oak-hornbeam forest (Quercus
+robur / farnia dominant, hornbeam, elm, beech, red oak, plenty of Robinia and ash at the edges), big London planes
+on the avenues and round the villa, a few Scots pines; the July 2023 storms felled ~10,000 trees inside the
+circuit's grounds and ~8,000 have been replanted (young trees). Ranked by share of the driver's view: woods
+(~60 % of everything beyond the barriers), stands / pit building, fences / barriers, service roads and huts, the
+landmarks (old banking over the Serraglio, Parabolica), park furniture.
+
+Done (not yet seen in a build):
+
+- **Park species** (`Tools/Models/build_park.py`, appended to models.bytes / atlas.bytes): park_oak (wide crooked
+  crown), park_plane (tall straight trunk, mottled bark, high dome), park_robinia (slender, pinnate leaves),
+  park_pine (Scots pine: long bare orange trunk, flat tufted crown). Same clump / LOD / impostor pipeline.
+- **Monza mix** (`ModelLib.PickPark`, only with a World file): oak 36 %, robinia 24 %, plane 16 %, tree_small_02
+  (hornbeam / elm stand-in) 16 %, pine 8 %, in ~70 m stands (each patch has a dominant species for half of its
+  trees). The tropical jacaranda / island trees are no longer used at Monza. Planes are always 18-28 m, pines never
+  understorey, pine needles darker and bluer.
+- **Park furniture** along the service roads (`RealWorld.ParkFurniture`): the cast-iron park lamp every ~55 m
+  (max 24 High / 14 Medium) and a bench facing the road with a green bin every ~115-155 m (max 14 / 8), on the far
+  side of the road, never at a hut.
+
+Cost: tree instancing buckets unchanged (5 species at Monza, as before). Park trees are lighter (LOD0 1.5-2.2k tris
+vs 2.3k; LOD1 450-550 vs 570), the vertex budgets are unchanged, so a few more trees become models instead of cards
+at the same cost. Props now go in 1.2 km chunks (was 400 m): about +1 draw call where a chunk is in view.
+APK: models.bytes +310 KB, atlas.bytes +470 KB (raw).
+
+Not done: the old banking over the Serraglio and the Parabolica tower: the oval is not in the map data
+(Overture has no raceways; OSM is not reachable here), so there is nothing accurate to build it from.

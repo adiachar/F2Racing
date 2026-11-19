@@ -241,7 +241,7 @@ public class ModelInstancing : MonoBehaviour
                 for (int k = 0; k < l.v.Length; k++)
                 {
                     // the tint ModelLib.Put stored and BakeTint.Apply multiplied into the baked light
-                    float ao = l.ao[k] / 255f; bool wood = l.uv[k].y < 0.5f;
+                    float ao = l.ao[k] / 255f; bool wood = ModelLib.IsWood(l.uv[k]);
                     Color t = wood ? new Color(ao * p.shade, ao * p.shade, ao * p.shade, 1f) : new Color(ao * p.tint.r, ao * p.tint.g, ao * p.tint.b, 1f);
                     var c = C[o + k]; int d = (o + k) * 4;
                     data[d] = Mathf.FloatToHalf(c.r * t.r); data[d + 1] = Mathf.FloatToHalf(c.g * t.g); data[d + 2] = Mathf.FloatToHalf(c.b * t.b); data[d + 3] = Mathf.FloatToHalf(1f);

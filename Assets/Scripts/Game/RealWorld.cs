@@ -659,7 +659,7 @@ public static class RealWorld
         FreeGrids(); D = null; // (the flags HasBuildings ... stay for the rest of this load)
         LoadMs += (float)sw.Elapsed.TotalMilliseconds;
         Debug.Log("RealWorld " + t.def.id + ": " + BuildingCount + " buildings, " + TreeCount + " trees, " + BandCount + " forest-edge cards, " + OutfieldCount + " hedge/copse plants, "
-                  + FarCount + " far tree-line strips, " + svcRuns.Count + " service roads, " + svcProps.Count + " huts/vehicle groups, " + Vertices + " vertices, " + LoadMs.ToString("F0") + " ms (" + Timing + ")");
+                  + FarCount + " far tree-line strips, " + svcRuns.Count + " service roads, " + svcProps.Count + " huts/vehicle groups, " + LampCount + " park lamps, " + BenchCount + " benches, " + Vertices + " vertices, " + LoadMs.ToString("F0") + " ms (" + Timing + ")");
     }
 
     static void FreeGrids()
@@ -1600,6 +1600,7 @@ public static class RealWorld
                     Environment.EmitTree(mb.v, mb.n, mb.uv, mb.uv2, mb.col, mb.tri, new Vector3(mp.x, mp.y, mp.z), TreeKind.Broadleaf, mp.sz, mp.lc, rnd, mp.nc);
                 }
             ModelLib.PlaceProps(trk);
+            ParkFurniture();
         }
         Bands(rnd);
     }
@@ -1735,6 +1736,57 @@ public static class RealWorld
             svcProps.Add(new SvcProp { x = c.x, z = c.y, ax = ax, az = az, bx = (float)p.nx * side, bz = (float)p.ny * side, reach = reach, kind = kind, seed = i });
             MarkSegment(c.x - ax * reach, c.y - az * reach, c.x + ax * reach, c.y + az * reach, 3.2f, 2);
             acc = 0f; next = 230f + 190f * Hash(i, 33);
+        }
+    }
+
+    // Park furniture along the service roads (ModelLib props, Medium/High): the park's cast-iron lamp every ~55 m and,
+    // every ~130 m, a bench facing the road with a green bin beside it, on the side of the road away from the track
+    // (inside the road's flagged strip, so the trees keep off). Not next to a hut / vehicle group. A few hundred
+    // vertices each, merged into ModelLib's 1.2 km prop chunks.
+    public static int LampCount, BenchCount;
+    static void ParkFurniture()
+    {
+        LampCount = BenchCount = 0;
+        int maxLamps = gfx >= 3 ? 24 : 14, maxBench = gfx >= 3 ? 14 : 8;
+        foreach (var r in svcRuns)
+        {
+            int n = r.Length / 2; if (n < 3) continue;
+            float acc = 0f, nextLamp = 14f + 20f * Hash(n, 71), nextBench = 40f + 60f * Hash(n, 73);
+            for (int k = 1; k < n; k++)
+            {
+                float x0 = r[k * 2 - 2], z0 = r[k * 2 - 1], x1 = r[k * 2], z1 = r[k * 2 + 1];
+                float dx = x1 - x0, dz = z1 - z0, len = Mathf.Sqrt(dx * dx + dz * dz); if (len < 0.01f) continue;
+                dx /= len; dz /= len;
+                float a0 = acc; acc += len;
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    bool lamp = pass == 0; float at = lamp ? nextLamp : nextBench;
+                    while (at <= acc)
+                    {
+                        float t = at - a0, cx = x0 + dx * t, cz = z0 + dz * t;
+                        // the side away from the track
+                        float ox = dz, oz = -dx;
+                        if (TrackDist(cx + ox * 4f, cz + oz * 4f, 80f) < TrackDist(cx - ox * 4f, cz - oz * 4f, 80f)) { ox = -ox; oz = -oz; }
+                        float lat = SvcHalf + (lamp ? 0.7f : 1.3f), x = cx + ox * lat, z = cz + oz * lat;
+                        bool ok = !Trackside.Blocked(x, z, 1.2f) && !(Waterfront.HasWater && Waterfront.InWater(x, z));
+                        foreach (var sp in svcProps) if (ok && (sp.x - x) * (sp.x - x) + (sp.z - z) * (sp.z - z) < (sp.reach + 4f) * (sp.reach + 4f)) ok = false;
+                        if (ok)
+                        {
+                            float y = Mathf.Min(Ground(x, z), MeshY(x, z));
+                            if (lamp && LampCount < maxLamps && ModelLib.AddProp("street_lamp_01", new Vector3(x, y, z), 6.2832f * Hash((int)x, (int)z), 4.6f)) LampCount++;
+                            else if (!lamp && BenchCount < maxBench)
+                            {
+                                // bench front (model -z) towards the road; the bin 1.6 m along, level with the bench's end
+                                if (ModelLib.AddProp("park_bench", new Vector3(x, y, z), Mathf.Atan2(ox, oz), 0.9f)) BenchCount++; // (real size: 1.75 m long, 0.9 m high)
+                                float bx = x + dx * 1.6f, bz = z + dz * 1.6f;
+                                ModelLib.AddProp("park_bin", new Vector3(bx, Mathf.Min(Ground(bx, bz), MeshY(bx, bz)), bz), Mathf.Atan2(ox, oz), 0.95f);
+                            }
+                        }
+                        at += lamp ? 52f + 12f * Hash((int)(x * 3f), 5) : 115f + 40f * Hash((int)(z * 3f), 9);
+                    }
+                    if (lamp) nextLamp = at; else nextBench = at;
+                }
+            }
         }
     }
 

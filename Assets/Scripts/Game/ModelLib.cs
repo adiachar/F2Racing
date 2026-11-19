@@ -4,7 +4,8 @@
 // Files (Resources/Models): models.bytes (meshes, format documented in build_models.py) and atlas.bytes (a JPEG for the
 // colour and a PNG for the alpha, joined here). Trees have three LODs: 0 (<= 2.5k tris: a trimmed trunk and about 850
 // leaf clumps, each a quad painted from the model's own leaves), 1 (<= 600 tris) and 2 (two crossed impostor cards, four
-// triangles). Shrubs have one LOD, props (lamps) one.
+// triangles). Shrubs have one LOD, props (lamps, park benches and bins) one. Monza (RealWorld) plants its own park mix
+// (PickPark: oak, robinia, plane, hornbeam-like, Scots pine; Tools/Models/build_park.py), the parkland circuits the old one.
 //
 // Use: Begin() once per world build (false = models not usable: Low graphics, no bake, files missing: keep the card
 // trees), then TryTree / TryShrub / AddProp for every instance, then Flush(root) once, before the light bake. Instances
@@ -130,7 +131,8 @@ public static class ModelLib
         gfxLevel = gfx; active = true;
         inst = ModelInstancing.Usable(); // decided once per build, before the first instance
         bool hi = gfx >= 3;
-        cap = hi ? new[] { 90000, 100000, 16000, 24000, 8000 } : new[] { 54000, 62000, 10000, 14000, 5000 };
+        cap = hi ? new[] { 90000, 100000, 16000, 24000, 30000 } : new[] { 54000, 62000, 10000, 14000, 16000 };
+        park = RealWorld.Active && models.ContainsKey("park_oak") && models.ContainsKey("park_plane") && models.ContainsKey("park_robinia") && models.ContainsKey("park_pine");
         return true;
     }
     public static bool Active => active;
@@ -142,11 +144,16 @@ public static class ModelLib
 
     static Buf Room(int kind, float x, float z, int need)
     {
-        long key = ((long)kind << 40) ^ ((long)(Mathf.FloorToInt(x / 400f) + 4096) << 20) ^ (long)(Mathf.FloorToInt(z / 400f) + 4096);
+        float cs = kind == 2 ? 1200f : 400f; // props (lamps, benches, bins): a few hundred vertices each, few chunks = few draws
+        long key = ((long)kind << 40) ^ ((long)(Mathf.FloorToInt(x / cs) + 4096) << 20) ^ (long)(Mathf.FloorToInt(z / cs) + 4096);
         if (!bufs.TryGetValue(key, out var l)) bufs[key] = l = new List<Buf>();
         if (l.Count == 0 || l[l.Count - 1].v.Count + need > 60000) l.Add(new Buf());
         return l[l.Count - 1];
     }
+
+    // wood (shade tint) or leaves (leaf tint) by atlas row: the bark strips, lamp tiles and the park props' palette lie
+    // in v 0.25..0.5; leaf clumps and impostor cards above (v >= 0.5) and, for the park species, below (v < 0.25)
+    public static bool IsWood(Vector2 uv) => uv.y < 0.5f && uv.y >= 0.2505f;
 
     static float Hash(uint a) { a ^= a >> 16; a *= 0x7feb352du; a ^= a >> 15; a *= 0x846ca68bu; a ^= a >> 16; return (a & 0xffffff) / 16777216f; }
 
@@ -173,7 +180,7 @@ public static class ModelLib
             float hh = Mathf.Clamp01(q.y * invH);
             b.uv2.Add(new Vector2(sway * hh * hh, phase));
             float ao = l.ao[i] / 255f;
-            bool wood = l.uv[i].y < 0.5f; // the bark strips and lamp tiles are in the lower half of the atlas
+            bool wood = IsWood(l.uv[i]);
             b.col.Add(wood ? new Color(ao * shade, ao * shade, ao * shade, 1f) : new Color(ao * leafTint.r, ao * leafTint.g, ao * leafTint.b, 1f));
         }
         for (int i = 0; i < l.tri.Length; i++) b.tri.Add(o + l.tri[i]);
@@ -188,7 +195,7 @@ public static class ModelLib
         if (!active || trackDist > Reach || treeNames == null || treeNames.Length == 0) return false;
         int lod = trackDist <= Lod0Dist ? 0 : trackDist <= Lod1Dist ? 1 : 2;
         // out of budget: step down a LOD (never up)
-        var m = Pick(rnd);
+        var m = park ? PickPark(foot, rnd) : Pick(rnd);
         for (; lod <= 2; lod++)
         {
             if (lod >= m.lods.Length) return false;
@@ -199,10 +206,13 @@ public static class ModelLib
         // (14-26 m), so the tree line has a ragged top and depth instead of one height
         float hr = (float)rnd.NextDouble();
         float h = hr < 0.32f ? 7f + 5f * (hr / 0.32f) : 14f + 12f * ((hr - 0.32f) / 0.68f);
+        if (park && m.name == "park_plane") h = Mathf.Max(h, 18f + 10f * hr); // the park's planes are the old giants
+        else if (park && m.name == "park_pine") h = Mathf.Max(h, 13f + 8f * hr); // pines: never understorey
         if (trackDist < 22f) h = Mathf.Min(h, 20f); // no giant right at the fence
         float sy = h / m.height, sxz = sy * (0.9f + 0.25f * (float)rnd.NextDouble());
         float yaw = (float)rnd.NextDouble() * 6.2832f, phase = (float)rnd.NextDouble() * 6.2832f;
         var tint = LeafTint(m, leafLin, rnd);
+        if (park && m.name == "park_pine") tint = new Color(tint.r * 0.78f, tint.g * 0.86f, tint.b * 0.98f, 1f); // Scots pine: darker, bluer needles
         float shade = 0.7f + 0.3f * (float)rnd.NextDouble();
         Put(m, lod, lod, foot, yaw, sxz, sy, tint, shade, 1f, phase);
         TreeFeet.Add(new Vector4(foot.x, foot.y, foot.z, h)); TreeWidth.Add(Mathf.Clamp(2.5f * m.radius * sxz, 0.4f * h, 0.9f * h));
@@ -210,13 +220,33 @@ public static class ModelLib
         return true;
     }
 
-    // weights: tree_small_02 35 %, island trees 40 % together, jacaranda 25 %
+    // weights (the parkland circuits): tree_small_02 35 %, island trees 40 % together, jacaranda 25 %
     static Model Pick(System.Random rnd)
     {
         float r = (float)rnd.NextDouble();
         string n = r < 0.35f ? "tree_small_02" : r < 0.50f ? "island_tree_01" : r < 0.65f ? "island_tree_02" : r < 0.75f ? "island_tree_03" : "jacaranda_tree";
         if (models.TryGetValue(n, out var m)) return m;
         return models[treeNames[rnd.Next(treeNames.Length)]];
+    }
+
+    // Monza (the real park, RealWorld): Quercus robur (farnia) dominant, Robinia / ash, London plane, hornbeam-like small
+    // trees (tree_small_02), Scots pine. Woods grow in stands: a ~70 m patch has a dominant species that takes about half
+    // of its trees, the rest by the park's shares. Five species, as before: the instanced draws stay the same.
+    static bool park;
+    static readonly string[] ParkNames = { "park_oak", "park_robinia", "park_plane", "tree_small_02", "park_pine" };
+    static readonly float[] ParkShare = { 0.36f, 0.24f, 0.16f, 0.16f, 0.08f };
+    static int ParkIndex(float r)
+    {
+        for (int i = 0; i < ParkShare.Length; i++) { r -= ParkShare[i]; if (r < 0f) return i; }
+        return 0;
+    }
+    static Model PickPark(Vector3 foot, System.Random rnd)
+    {
+        uint cx = (uint)(Mathf.FloorToInt(foot.x / 70f) + 65536), cz = (uint)(Mathf.FloorToInt(foot.z / 70f) + 65536);
+        int dom = ParkIndex(Hash(cx * 73856093u ^ cz * 19349663u ^ 0x5bd1e995u));
+        float r = (float)rnd.NextDouble();
+        int idx = r < 0.5f ? dom : ParkIndex((r - 0.5f) / 0.5f);
+        return models.TryGetValue(ParkNames[idx], out var m) ? m : Pick(rnd);
     }
 
     // the species' leaf colour relative to the colour painted in its clump tiles, with a shade and the usual hue families
