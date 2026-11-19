@@ -26,7 +26,7 @@ public class CarEnv : MonoBehaviour
     public static int Count, Bytes;
 
     const int Size = 48, MaxCubes = 22, MinCubes = 8;
-    const float Spacing = 280f, EyeUp = 1.1f, Far = 600f, BakeLodBias = 0.5f;
+    const float Spacing = 400f, EyeUp = 1.1f, Far = 450f, BakeLodBias = 0.5f;
     static readonly int idOn = Shader.PropertyToID("_F2EnvOn"), idA = Shader.PropertyToID("_F2EnvCube"),
         idB = Shader.PropertyToID("_F2EnvCube2"), idMix = Shader.PropertyToID("_F2EnvMix");
 
