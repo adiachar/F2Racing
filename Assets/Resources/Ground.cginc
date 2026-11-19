@@ -4,6 +4,7 @@
 //   _MacroTex linear data at ~100 m per tile, turned 37 degrees: R brightness drift, G dry patches, B clumps
 // Mesh data: uv0 = world (x, z) in metres; uv2 = (distance from the track centreline m, distance along the lap m) on
 // verges and gravel traps, (0, 0) on the open land, where the track-relative terms below are all zero.
+// Third read (verges, gravel, run-offs only): the sun-shadow mask _F2RoadShadow (RoadShadow.cs), see the end of frag.
 // Track-relative terms (pure maths, no reads): mowing stripes along the track, worn darker grass at the barrier,
 // tyre ruts in the gravel near its inner edge. Define GROUND_HQ for Medium/High (ruts; Low keeps stripes).
 // Gravel (_Ruts.y > 0): damp darker stones along the inner edge and at the barrier (both levels); HQ: raked ridges along
@@ -60,7 +61,8 @@ float _Clumps;        // grass only (1): the detail's alpha as clumps / tufts an
 float _Turf;          // run-off strip behind the kerbs (1): astroturf / painted run-off, 0 = off
 fixed4 _RunGreen, _RunBlue; // the run-off paints
 sampler2D _F2RoadShadow; // global (RoadShadow.cs): sun shadows in track space, here continued onto verges and run-offs
-float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: 1 / width covered (m), w: half width (m)
+float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: across scale of the fine zone (1/m), w: outer half width (m)
+float4 _F2RoadShadowQ;   // the coarser outer zone: x: where it starts (m), y: its across scale (1/m), z: its first column (0..0.5)
 
 v2f vert (appdata v)
 {
@@ -214,14 +216,16 @@ fixed4 frag (v2f i) : SV_Target
         col *= 1.0 - (half)(inT * saturate(damp) * 0.22);
     }
 
-    // sun shadows beyond the road (verges / run-offs only: uv2 holds the distance from the centreline there): the road's
-    // mask, signed by the side (vertex alpha), takes away the sun's share of the baked light where it says shadow
+    // sun shadows beyond the road (verges, grass, gravel, run-offs: uv2 holds the distance from the centreline there): the
+    // road's mask, out to 40 m past the track edge (fine texels near the track, coarser beyond _F2RoadShadowQ.x), signed by
+    // the side (vertex alpha), takes away the sun's share of the baked light where it says shadow. One read.
     if (lat > 0.5 && _F2RoadShadowP.z > 0.0)
     {
         float ss = i.sideSun; // (compare in float: a half compare breaks the min-precision bytecode)
         bool left = ss > 0.5;
         half sf = (half)saturate(left ? (ss - 0.55) * 2.222 : ss * 2.222);
-        float2 sp = float2((left ? lat : -lat) * _F2RoadShadowP.z + 0.5, i.trk.y * _F2RoadShadowP.x);
+        float gu = (lat < _F2RoadShadowQ.x || _F2RoadShadowQ.y <= 0.0) ? lat * _F2RoadShadowP.z : _F2RoadShadowQ.z + (lat - _F2RoadShadowQ.x) * _F2RoadShadowQ.y;
+        float2 sp = float2((left ? gu : -gu) + 0.5, i.trk.y * _F2RoadShadowP.x);
         float2 sgx = ddx(sp), sgy = ddy(sp);
         float strip = floor(sp.y);
         float2 suv = float2((strip + saturate(sp.x)) * _F2RoadShadowP.y, sp.y - strip);
