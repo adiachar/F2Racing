@@ -20,3 +20,17 @@ belonging to this project, so no attribution is needed and no outside licence ap
 Before you add any downloaded texture: use only CC0 or public-domain sources. Record the URL, author and licence of
 each one in this table, keep it between 256 and 512 px (power of two), and import it with mipmaps and platform
 compression (ASTC/ETC2).
+
+## Downloaded models and textures (Resources/Models: models.bytes + atlas.bytes)
+
+All cut down for phones (leaf clumps, decimated wood, impostor cards, one shared 2048² atlas with mips and GPU
+compression). Built offline: `Tools/Models/build_models.py` (Poly Haven set) and `Tools/Models/build_park.py`
+(Monza park species and furniture, appended to the existing files). Notices also in `Resources/Models/CREDITS.txt`.
+
+| Asset | Source | Licence | Used as |
+|---|---|---|---|
+| tree_small_02, jacaranda_tree, island_tree_01-03, shrub_02/03, street_lamp_01/02 | [Poly Haven](https://polyhaven.com/models) | CC0 | park trees (tree_small_02 stands in for hornbeam / elm at Monza), shrubs, the cast-iron park lamp |
+| Leaf cut-outs oak.png, ash.png, pine.png | [EZ-Tree](https://github.com/dgreenheck/ez-tree) demo textures (Daniel Greenheck) | MIT (keep the notice) | clump tiles of park_oak (Quercus robur), park_robinia (Robinia / ash, pinnate leaves), park_pine (Scots pine) |
+| Bark001, Bark004, Bark006, Bark014 colour maps | [ambientCG](https://ambientcg.com) via the EZ-Tree repo | CC0 | bark strips: oak (deep furrows), robinia, plane (mottled), Scots pine (orange-grey) |
+| Tree skeletons park_oak / park_plane / park_robinia / park_pine | grown by `build_park.py` (our own generator) | ours | wood mesh + leaf clouds; park_plane reuses island_tree_01's broad-leaf clump tiles |
+| banco_praca.glb, lixeira.glb | [kit-cidade-lowpoly](https://github.com/kayquer/kit-cidade-lowpoly) (kayquer) | CC0 | park_bench (recoloured: cast iron, varnished slats), park_bin (recoloured dark green); flat colours in an 8 px palette, no logos |

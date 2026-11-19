@@ -4,7 +4,8 @@
 // Files (Resources/Models): models.bytes (meshes, format documented in build_models.py) and atlas.bytes (a JPEG for the
 // colour and a PNG for the alpha, joined here). Trees have three LODs: 0 (<= 2.5k tris: a trimmed trunk and about 850
 // leaf clumps, each a quad painted from the model's own leaves), 1 (<= 600 tris) and 2 (two crossed impostor cards, four
-// triangles). Shrubs have one LOD, props (lamps) one.
+// triangles). Shrubs have one LOD, props (lamps, park benches and bins) one. Monza (RealWorld) plants its own park mix
+// (PickPark: oak, robinia, plane, hornbeam-like, Scots pine; Tools/Models/build_park.py), the parkland circuits the old one.
 //
 // Use: Begin() once per world build (false = models not usable: Low graphics, no bake, files missing: keep the card
 // trees), then TryTree / TryShrub / AddProp for every instance, then Flush(root) once, before the light bake. Instances
@@ -21,7 +22,7 @@ using FormulaSim;
 
 public static class ModelLib
 {
-    public sealed class Lod { public Vector3[] v, n; public Vector2[] uv; public byte[] ao; public int[] tri; }
+    public sealed class Lod { public Vector3[] v, n; public Vector2[] uv; public byte[] ao; public int[] tri; public float[] wood; }
     public sealed class Model
     {
         public string name; public int kind; // 0 tree, 1 shrub, 2 prop
@@ -79,6 +80,7 @@ public static class ModelLib
                     l.uv[i] = new Vector2(r.ReadUInt16() / 65535f, r.ReadUInt16() / 65535f);
                 }
                 for (int i = 0; i < nt * 3; i++) l.tri[i] = r.ReadUInt16();
+                if (m.kind == 0) l.wood = CrownWood(l, m.height);
                 m.lods[li] = l;
             }
             d[m.name] = m;
@@ -96,6 +98,7 @@ public static class ModelLib
         if (!ImageConversion.LoadImage(tc, jpg, false) || !ImageConversion.LoadImage(ta, png, false)) { Object.Destroy(tc); Object.Destroy(ta); throw new System.Exception("atlas decode"); }
         var pc = tc.GetPixels32(); var pa = ta.GetPixels32(); int w = tc.width, h = tc.height;
         for (int i = 0; i < pc.Length; i++) pc[i].a = pa[i].r;
+        UnderOk = EnvTex.PaintUnder(pc, w, h); // (the undergrowth card tiles, in a free corner)
         Object.Destroy(tc); Object.Destroy(ta);
         var t = new Texture2D(w, h, TextureFormat.RGBA32, true, false) { name = "ModelAtlas", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
         t.SetPixels32(pc); t.Apply(true, false); t.Compress(true); t.Apply(false, true); // GPU-compressed (DXT/ETC2): ~5 MB instead of ~22 MB
@@ -112,15 +115,16 @@ public static class ModelLib
     }
     static readonly Dictionary<long, List<Buf>> bufs = new Dictionary<long, List<Buf>>();
     static bool active, propsDone, inst; static int gfxLevel;
-    // vertex budgets (this build): LOD0 trees, LOD1 trees, impostors, shrubs, props
-    static readonly int[] used = new int[5]; static int[] cap = new int[5];
+    // vertex budgets (this build): LOD0 trees, LOD1 trees, impostors, shrubs, props, undergrowth bushes, undergrowth
+    // cards, young trees
+    static readonly int[] used = new int[8]; static int[] cap = new int[8];
     public static int TreeCount, ShrubCount, PropCount, Vertices, DrawMeshes;
     public static readonly int[] LodCount = new int[3];
 
     // every model tree of this build: foot (x, y, z) and height in w, and its crown width (RoadShadow.cs draws their
     // shadows as dappled crowns; the meshes themselves, leaf quads and impostor cards, are not projected)
     public static readonly List<Vector4> TreeFeet = new List<Vector4>(); public static readonly List<float> TreeWidth = new List<float>();
-    public static void Reset() { ModelInstancing.ResetQueue(); inst = false; TreeFeet.Clear(); TreeWidth.Clear(); bufs.Clear(); active = false; propsDone = false; for (int i = 0; i < used.Length; i++) used[i] = 0; TreeCount = ShrubCount = PropCount = Vertices = DrawMeshes = 0; LodCount[0] = LodCount[1] = LodCount[2] = 0; }
+    public static void Reset() { ModelInstancing.ResetQueue(); inst = false; TreeFeet.Clear(); TreeWidth.Clear(); bufs.Clear(); active = false; propsDone = false; for (int i = 0; i < used.Length; i++) used[i] = 0; TreeCount = ShrubCount = PropCount = Vertices = DrawMeshes = UnderBush = UnderCard = UnderYoung = 0; LodCount[0] = LodCount[1] = LodCount[2] = 0; }
 
     // Medium and High only, with the baked lighting and the foliage shader; false = keep the card trees
     public static bool Begin(int gfx)
@@ -130,7 +134,8 @@ public static class ModelLib
         gfxLevel = gfx; active = true;
         inst = ModelInstancing.Usable(); // decided once per build, before the first instance
         bool hi = gfx >= 3;
-        cap = hi ? new[] { 90000, 100000, 16000, 24000, 8000 } : new[] { 54000, 62000, 10000, 14000, 5000 };
+        cap = hi ? new[] { 90000, 100000, 16000, 24000, 30000, 116000, 64000, 66000 } : new[] { 54000, 62000, 10000, 14000, 16000, 54000, 32000, 30000 };
+        park = RealWorld.Active && models.ContainsKey("park_oak") && models.ContainsKey("park_plane") && models.ContainsKey("park_robinia") && models.ContainsKey("park_pine");
         return true;
     }
     public static bool Active => active;
@@ -142,10 +147,49 @@ public static class ModelLib
 
     static Buf Room(int kind, float x, float z, int need)
     {
-        long key = ((long)kind << 40) ^ ((long)(Mathf.FloorToInt(x / 400f) + 4096) << 20) ^ (long)(Mathf.FloorToInt(z / 400f) + 4096);
+        float cs = kind == 2 ? 1200f : 400f; // (undergrowth cards go in the trees' chunks: kind 0) // props (lamps, benches, bins): a few hundred vertices each, few chunks = few draws
+        long key = ((long)kind << 40) ^ ((long)(Mathf.FloorToInt(x / cs) + 4096) << 20) ^ (long)(Mathf.FloorToInt(z / cs) + 4096);
         if (!bufs.TryGetValue(key, out var l)) bufs[key] = l = new List<Buf>();
         if (l.Count == 0 || l[l.Count - 1].v.Count + need > 60000) l.Add(new Buf());
         return l[l.Count - 1];
+    }
+
+    // wood (shade tint) or leaves (leaf tint) by atlas row: the bark strips, lamp tiles and the park props' palette lie
+    // in v 0.25..0.5; leaf clumps and impostor cards above (v >= 0.5) and, for the park species, below (v < 0.25)
+    public static bool IsWood(Vector2 uv) => uv.y < 0.5f && uv.y >= 0.2505f;
+
+    // Wood inside the crown (the branches): the bake lights each vertex from its own spot, and a branch among the leaf
+    // clumps sees open sky there (the roof map only knows what is above it, not the clumps around it) but no sun: on the
+    // pale park barks (plane, oak) that came out as bright sky-cyan streaks through the crowns (gap list item 9). Load
+    // time, per model LOD: a factor on the wood tint, 1 on the trunk below the crown, ~0.38 and a little warmer (the
+    // green-filtered, bounced light inside a crown, not the blue sky) from the crown's base up. Crown base: the 8th
+    // percentile of the leaf vertices' heights. null = no wood above it (or no leaves: shrubs, props).
+    static float[] CrownWood(Lod l, float height)
+    {
+        int nl = 0; for (int i = 0; i < l.uv.Length; i++) if (!IsWood(l.uv[i])) nl++;
+        if (nl < 8) return null;
+        var hs = new float[nl]; int k = 0;
+        for (int i = 0; i < l.uv.Length; i++) if (!IsWood(l.uv[i])) hs[k++] = l.v[i].y;
+        System.Array.Sort(hs);
+        float b = hs[nl * 8 / 100], w = Mathf.Max(0.3f, 0.08f * height);
+        var f = new float[l.v.Length]; bool any = false;
+        for (int i = 0; i < f.Length; i++)
+        {
+            f[i] = 1f;
+            if (!IsWood(l.uv[i])) continue;
+            float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((l.v[i].y - (b - 0.5f * w)) / w));
+            f[i] = 1f - 0.62f * t; if (t > 0f) any = true;
+        }
+        return any ? f : null;
+    }
+    // the per-vertex tint of a wood vertex (ao x the instance's shade; in the crown darker and warmer), as the merged
+    // path (Put) and the instanced bake (ModelInstancing.Bake) both store it
+    public static Color WoodTint(Lod l, int i, float ao, float shade)
+    {
+        float k = ao * shade; if (l.wood == null) return new Color(k, k, k, 1f);
+        float f = l.wood[i], warm = 1f - f; // 0 on the trunk, up to 0.62 in the crown
+        k *= f;
+        return new Color(k * (1f + 0.10f * warm), k * (1f - 0.02f * warm), k * (1f - 0.22f * warm), 1f);
     }
 
     static float Hash(uint a) { a ^= a >> 16; a *= 0x7feb352du; a ^= a >> 15; a *= 0x846ca68bu; a ^= a >> 16; return (a & 0xffffff) / 16777216f; }
@@ -173,8 +217,8 @@ public static class ModelLib
             float hh = Mathf.Clamp01(q.y * invH);
             b.uv2.Add(new Vector2(sway * hh * hh, phase));
             float ao = l.ao[i] / 255f;
-            bool wood = l.uv[i].y < 0.5f; // the bark strips and lamp tiles are in the lower half of the atlas
-            b.col.Add(wood ? new Color(ao * shade, ao * shade, ao * shade, 1f) : new Color(ao * leafTint.r, ao * leafTint.g, ao * leafTint.b, 1f));
+            bool wood = IsWood(l.uv[i]);
+            b.col.Add(wood ? WoodTint(l, i, ao, shade) : new Color(ao * leafTint.r, ao * leafTint.g, ao * leafTint.b, 1f));
         }
         for (int i = 0; i < l.tri.Length; i++) b.tri.Add(o + l.tri[i]);
         used[budget] += l.v.Length; Vertices += l.v.Length;
@@ -188,7 +232,7 @@ public static class ModelLib
         if (!active || trackDist > Reach || treeNames == null || treeNames.Length == 0) return false;
         int lod = trackDist <= Lod0Dist ? 0 : trackDist <= Lod1Dist ? 1 : 2;
         // out of budget: step down a LOD (never up)
-        var m = Pick(rnd);
+        var m = park ? PickPark(foot, rnd) : Pick(rnd);
         for (; lod <= 2; lod++)
         {
             if (lod >= m.lods.Length) return false;
@@ -199,10 +243,13 @@ public static class ModelLib
         // (14-26 m), so the tree line has a ragged top and depth instead of one height
         float hr = (float)rnd.NextDouble();
         float h = hr < 0.32f ? 7f + 5f * (hr / 0.32f) : 14f + 12f * ((hr - 0.32f) / 0.68f);
+        if (park && m.name == "park_plane") h = Mathf.Max(h, 18f + 10f * hr); // the park's planes are the old giants
+        else if (park && m.name == "park_pine") h = Mathf.Max(h, 13f + 8f * hr); // pines: never understorey
         if (trackDist < 22f) h = Mathf.Min(h, 20f); // no giant right at the fence
         float sy = h / m.height, sxz = sy * (0.9f + 0.25f * (float)rnd.NextDouble());
         float yaw = (float)rnd.NextDouble() * 6.2832f, phase = (float)rnd.NextDouble() * 6.2832f;
         var tint = LeafTint(m, leafLin, rnd);
+        if (park && m.name == "park_pine") tint = new Color(tint.r * 0.78f, tint.g * 0.86f, tint.b * 0.98f, 1f); // Scots pine: darker, bluer needles
         float shade = 0.7f + 0.3f * (float)rnd.NextDouble();
         Put(m, lod, lod, foot, yaw, sxz, sy, tint, shade, 1f, phase);
         TreeFeet.Add(new Vector4(foot.x, foot.y, foot.z, h)); TreeWidth.Add(Mathf.Clamp(2.5f * m.radius * sxz, 0.4f * h, 0.9f * h));
@@ -210,13 +257,33 @@ public static class ModelLib
         return true;
     }
 
-    // weights: tree_small_02 35 %, island trees 40 % together, jacaranda 25 %
+    // weights (the parkland circuits): tree_small_02 35 %, island trees 40 % together, jacaranda 25 %
     static Model Pick(System.Random rnd)
     {
         float r = (float)rnd.NextDouble();
         string n = r < 0.35f ? "tree_small_02" : r < 0.50f ? "island_tree_01" : r < 0.65f ? "island_tree_02" : r < 0.75f ? "island_tree_03" : "jacaranda_tree";
         if (models.TryGetValue(n, out var m)) return m;
         return models[treeNames[rnd.Next(treeNames.Length)]];
+    }
+
+    // Monza (the real park, RealWorld): Quercus robur (farnia) dominant, Robinia / ash, London plane, hornbeam-like small
+    // trees (tree_small_02), Scots pine. Woods grow in stands: a ~70 m patch has a dominant species that takes about half
+    // of its trees, the rest by the park's shares. Five species, as before: the instanced draws stay the same.
+    static bool park;
+    static readonly string[] ParkNames = { "park_oak", "park_robinia", "park_plane", "tree_small_02", "park_pine" };
+    static readonly float[] ParkShare = { 0.36f, 0.24f, 0.16f, 0.16f, 0.08f };
+    static int ParkIndex(float r)
+    {
+        for (int i = 0; i < ParkShare.Length; i++) { r -= ParkShare[i]; if (r < 0f) return i; }
+        return 0;
+    }
+    static Model PickPark(Vector3 foot, System.Random rnd)
+    {
+        uint cx = (uint)(Mathf.FloorToInt(foot.x / 70f) + 65536), cz = (uint)(Mathf.FloorToInt(foot.z / 70f) + 65536);
+        int dom = ParkIndex(Hash(cx * 73856093u ^ cz * 19349663u ^ 0x5bd1e995u));
+        float r = (float)rnd.NextDouble();
+        int idx = r < 0.5f ? dom : ParkIndex((r - 0.5f) / 0.5f);
+        return models.TryGetValue(ParkNames[idx], out var m) ? m : Pick(rnd);
     }
 
     // the species' leaf colour relative to the colour painted in its clump tiles, with a shade and the usual hue families
@@ -255,6 +322,66 @@ public static class ModelLib
         return true;
     }
 
+    // ---------------------------------------------------------------- undergrowth (RealWorld.Undergrowth; Medium / High)
+    // Bushes and brambles are the two shrub models at other sizes (instanced: the shrub buckets, no new draws), young
+    // replanted trees the slender species at LOD 1 at most (the tree buckets), and the low cards (tall grass, ferns)
+    // go into the trees' merged 400 m chunks (the impostors' meshes and material). Own vertex budgets (5, 6, 7).
+    public static bool UnderOk; // the card tiles are in the atlas (EnvTex.PaintUnder)
+    public static int UnderBush, UnderCard, UnderYoung;
+    public static bool UnderReady => active && UnderOk;
+
+    // a bush (hazel / elder: shrub_02) or a bramble patch (shrub_03): height and crown radius (m)
+    public static bool TryBush(Vector3 foot, float height, float radius, float yaw, Color leafLin, bool bramble, System.Random rnd)
+    {
+        if (!active || !models.TryGetValue(bramble ? "shrub_03" : "shrub_02", out var m) || m.kind != 1) return false;
+        if (used[5] + m.lods[0].v.Length > cap[5]) return false;
+        float sy = height / m.height, sxz = radius / Mathf.Max(0.1f, m.radius);
+        var tint = LeafTint(m, leafLin, rnd);
+        if (bramble) tint = new Color(tint.r * 0.78f, tint.g * 0.84f, tint.b * 0.8f, 1f); // brambles: dark, dull leaves
+        Put(m, 0, 5, foot, yaw, sxz, sy, tint, 0.8f, 0.4f, (float)rnd.NextDouble() * 6.2832f);
+        UnderBush++;
+        return true;
+    }
+
+    // a young replanted tree (3-6 m): robinia / ash or the hornbeam-like small tree, slender, never finer than LOD 1
+    public static bool TryYoung(Vector3 foot, float height, Color leafLin, System.Random rnd)
+    {
+        if (!active) return false;
+        bool rob = rnd.NextDouble() < 0.55;
+        if (!models.TryGetValue(rob ? "park_robinia" : "tree_small_02", out var m) || m.kind != 0 || m.lods.Length < 2) return false;
+        if (used[7] + m.lods[1].v.Length > cap[7]) return false;
+        float sy = height / m.height, sxz = sy * (rob ? 0.62f : 0.48f) * (0.85f + 0.3f * (float)rnd.NextDouble());
+        var t = LeafTint(m, leafLin, rnd); t = new Color(t.r * 1.08f, t.g * 1.1f, t.b * 0.92f, 1f); // fresh, lighter leaves
+        Put(m, 1, 7, foot, (float)rnd.NextDouble() * 6.2832f, sxz, sy, t, 0.85f, 0.9f, (float)rnd.NextDouble() * 6.2832f);
+        UnderYoung++;
+        return true;
+    }
+
+    // one upright low card (tile 0 tall grass, 1 fern): foot centre, half its width along the ground, height, the top
+    // pushed by lean (m), foot / top colour (tint on the painted tile), sway at the top. Normals lean up (the bake
+    // lights it like the ground it grows from, a little brighter on its sun side).
+    public static bool AddCard(int tile, Vector3 foot, Vector3 half, float h, Vector3 lean, Color footC, Color topC, float sway, float phase, bool flip)
+    {
+        if (!active || !UnderOk || used[6] + 4 > cap[6]) return false;
+        var b = Room(0, foot.x, foot.z, 4);
+        int o = b.v.Count;
+        float u0 = (EnvTex.UnderX + tile * EnvTex.UnderTile + 1.5f) / 2048f, u1 = (EnvTex.UnderX + (tile + 1) * EnvTex.UnderTile - 1.5f) / 2048f;
+        float v0 = 0.5f / 2048f, v1 = (EnvTex.UnderTile - 1.5f) / 2048f;
+        if (flip) { float tu = u0; u0 = u1; u1 = tu; }
+        Vector3 top = Vector3.up * h + lean;
+        b.v.Add(foot - half); b.v.Add(foot + half); b.v.Add(foot + half + top); b.v.Add(foot - half + top);
+        b.uv.Add(new Vector2(u0, v0)); b.uv.Add(new Vector2(u1, v0)); b.uv.Add(new Vector2(u1, v1)); b.uv.Add(new Vector2(u0, v1));
+        var side = half.normalized * 0.35f;
+        b.n.Add((Vector3.up - side).normalized); b.n.Add((Vector3.up + side).normalized); b.n.Add((Vector3.up + side).normalized); b.n.Add((Vector3.up - side).normalized);
+        b.uv2.Add(new Vector2(0f, phase)); b.uv2.Add(new Vector2(0f, phase)); b.uv2.Add(new Vector2(sway, phase)); b.uv2.Add(new Vector2(sway, phase));
+        b.col.Add(footC); b.col.Add(footC); b.col.Add(topC); b.col.Add(topC);
+        b.tri.Add(o); b.tri.Add(o + 2); b.tri.Add(o + 1); b.tri.Add(o); b.tri.Add(o + 3); b.tri.Add(o + 2);
+        used[6] += 4; Vertices += 4; UnderCard++;
+        return true;
+    }
+    // an undergrowth card's texels (LightBake leaves them out of the roof map: knee-high cards are no roofs)
+    public static bool IsUnderUv(Vector2 uv) => uv.y < 0.1245f && uv.x >= EnvTex.UnderX / 2048f;
+
     // ---------------------------------------------------------------- meshes
     // Once per build, after the last instance and before the light bake. The meshes are named "Env..." (WorldBuilder.Drape
     // leaves them alone: they are at their final height and keep their bent normals).
@@ -285,7 +412,7 @@ public static class ModelLib
             }
         }
         bufs.Clear();
-        Debug.Log("ModelLib: " + (inst ? "instanced " + ModelInstancing.LastCount + " (" + ModelInstancing.LastMeshes + " shared meshes), " : "") + TreeCount + " trees (LOD0 " + LodCount[0] + ", LOD1 " + LodCount[1] + ", impostor " + LodCount[2] + "), " + ShrubCount + " shrubs, " + PropCount + " props, "
+        Debug.Log("ModelLib: " + (inst ? "instanced " + ModelInstancing.LastCount + " (" + ModelInstancing.LastMeshes + " shared meshes), " : "") + TreeCount + " trees (LOD0 " + LodCount[0] + ", LOD1 " + LodCount[1] + ", impostor " + LodCount[2] + "), " + ShrubCount + " shrubs, " + PropCount + " props, undergrowth " + UnderBush + " bushes / " + UnderYoung + " young trees / " + UnderCard + " cards, "
                   + Vertices + " vertices (trees " + (used[0] + used[1] + used[2]) + ", shrubs " + used[3] + ", props " + used[4] + "), " + DrawMeshes + " meshes");
     }
 

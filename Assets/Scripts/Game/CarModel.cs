@@ -5,7 +5,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class CarModel : MonoBehaviour
+public partial class CarModel : MonoBehaviour
 {
     public Transform body;
     public GameObject cockpitFloor;
@@ -465,6 +465,16 @@ public class CarModel : MonoBehaviour
         if (hasCol)
             foreach (var (mm, k) in new[] { (mats[0], 0.6f), (mats[1], 0.55f), (mats[2], 0.75f), (mats[3], 0.7f), (tyreF, 0.45f), (tyreR, 0.45f), (hubF, 0.7f), (hubR, 0.7f), (steerMat, 0.5f) })
                 if (mm.HasProperty("_AO")) mm.SetFloat("_AO", k);
+        // the halo: its own copy of the carbon (it is its own renderer anyway: no extra draw call) with the titanium /
+        // lacquered-carbon look (CarPaint _Rim: dark inside face, sky sheen on the edges). The player's carbon also gets
+        // the cockpit surround (CarPaint _Cockpit: shade inside the tub and under the dashboard, padded headrest).
+        Material haloMat = null;
+        if (mats[2].HasProperty("_Rim"))
+        {
+            haloMat = new Material(mats[2]) { name = "Halo" };
+            haloMat.SetFloat("_Rim", 1f); haloMat.SetFloat("_Cockpit", 0f); haloMat.SetFloat("_Coat", 0.5f); haloMat.SetFloat("_Metal", 0.15f);
+            if (!rival) mats[2].SetFloat("_Cockpit", 1f);
+        }
         meshCache.TryGetValue(cacheKey, out var cached); var made = cached == null ? new Mesh[n] : null;
         var root = new GameObject("Car");
         // the mesh was converted at Formula 2 size (3.135 m wheelbase); a 2026 F1 car is 3.40 m long between the axles and 1.9 m wide
@@ -545,6 +555,7 @@ public class CarModel : MonoBehaviour
             var mat = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
             bool front = name.StartsWith("wheel_F");
             if (name.StartsWith("steer_")) mat = cm.WheelRig != null ? cm.WheelRig.Mat : steerMat;
+            else if (haloMat != null && name.StartsWith("halo_")) mat = haloMat;
             else if (name.StartsWith("wheel_")) mat = name.EndsWith("_tyre") ? (front ? tyreF : tyreR) : (front ? hubF : hubR);
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mat;
             if (cm.WheelRig != null && go.transform == cm.steerWheel) cm.WheelRig.Bind(r);
@@ -595,6 +606,7 @@ public class CarModel : MonoBehaviour
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = ContactShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         AddSunShadow(root, res);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
+        if (!rival) root.AddComponent<CarEnvTarget>(); // the player's car picks the trackside reflection cube (CarEnv.cs)
         return cm;
     }
 
@@ -762,6 +774,7 @@ public class CarModel : MonoBehaviour
                 if (set.steerOnly[w] != null) cm.MergedPart("wheel_" + key + "_hubstatic", pivot, set.steerOnly[w]);
                 if (w < 2) { cm.frontPivots[w] = pivot; cm.frontSpin[w] = spin; } else cm.rearSpin[w - 2] = spin;
             }
+        cm.AddRivalLods(); // far-distance levels of detail of the merged meshes (CarLod.cs): drawing only
         // the helmet is in the body mesh; an empty stand-in keeps CarModel.helmet usable
         var h = new GameObject("Helmet").transform; h.SetParent(cm.body, false); h.localPosition = HelmetPos; cm.helmet = h;
         if (rivalDebris == null) { rivalDebris = Kind(Paint(Lin(0.022f, 0.024f, 0.028f), 0.35f, 0.88f, 0.05f, 0.7f, 0.25f), "_CARBON"); rivalDebris.name = "RivalDebris"; }
@@ -808,6 +821,7 @@ public class CarModel : MonoBehaviour
     {
         if (want == mSplit || bodyGo == null) return;
         mSplit = want;
+        RivalLodsFull(want); // a split car shows its full meshes at every distance (CarLod.cs)
         if (want)
         {
             SplitWings(bodyGo, Res + "|merged", rset.mat, true);
@@ -1093,12 +1107,44 @@ public class CarModel : MonoBehaviour
         var full = buf.Build("CarShadowSrc");
         if (full == null) return null;
         var m = new Mesh { name = "CarShadow", indexFormat = full.indexFormat };
-        m.vertices = full.vertices; m.triangles = full.triangles; // positions only: the shader needs nothing else
+        var sv = full.vertices; var st = full.triangles;
         Destroy(full);
+        ShadowSoften(sv, st, out var sc);
+        m.vertices = sv; m.colors32 = sc; m.triangles = st; // positions + the baked edge softness (alpha)
         // the shadow reaches up to ~6 m past the car (low sun): wider bounds, or it vanishes as soon as the car is off screen
         m.RecalculateBounds(); var bb = m.bounds; bb.Expand(new Vector3(13f, 2f, 13f) / RootScale); m.bounds = bb;
         m.UploadMeshData(true);
         return shadowMesh = m;
+    }
+    // Load time, once: the shadow's soft edge without a second pass (CarShadow.shader reads the vertex alpha).
+    //  * the rear wing and its endplates (behind the rear axle, above the diffuser) are lowered towards the diffuser in
+    //    the shadow copy only, so a low sun no longer throws the wing's shadow as a separate block far behind the car;
+    //  * softness per vertex (alpha, 0 = full shade, 1 = the lightest edge): grows with the height above the floor (high
+    //    parts cast a lighter, fuzzier shade: the wing) and towards the outer tyre walls / wing tips (the side outline);
+    //    a triangle running from a low, inner vertex to a high or outer one draws the gradient = the penumbra;
+    //  * triangles sorted by softness: the shader's stencil keeps the first triangle that lands on a pixel, so every
+    //    pixel inside the low floor's (full shade) shadow stays full and only the overhang outside it shows the gradient.
+    static void ShadowSoften(Vector3[] v, int[] tri, out Color32[] col)
+    {
+        col = new Color32[v.Length];
+        var soft = new float[v.Length];
+        for (int i = 0; i < v.Length; i++)
+        {
+            var p = v[i];
+            if (p.z < -1.5f && Mathf.Abs(p.x) < 0.62f && p.y > 0.5f) { p.y = 0.5f + (p.y - 0.5f) * 0.45f; v[i] = p; }
+            // (the body and tyres are solid: only a mild softening on the airbox / halo top; the thin rear wing more)
+            float hs = Mathf.Max(p.z < -1.55f ? 0.9f * Mathf.Clamp01((p.y - 0.45f) / 0.35f) : 0f, 0.35f * Mathf.Clamp01((p.y - 0.6f) / 0.4f));
+            float xs = Mathf.Clamp01((Mathf.Abs(p.x) - 0.72f) / 0.14f);
+            float zs = Mathf.Max(Mathf.Clamp01((p.z - 2.55f) / 0.3f), Mathf.Clamp01((-1.85f - p.z) / 0.2f));
+            float s = Mathf.Clamp01(Mathf.Max(hs, Mathf.Max(xs, zs)));
+            soft[i] = s; col[i] = new Color32(255, 255, 255, (byte)(s * 255f + 0.5f));
+        }
+        int nt = tri.Length / 3; var key = new float[nt]; var order = new int[nt];
+        for (int t = 0; t < nt; t++) { order[t] = t; key[t] = soft[tri[t * 3]] + soft[tri[t * 3 + 1]] + soft[tri[t * 3 + 2]]; }
+        System.Array.Sort(key, order);
+        var o = new int[tri.Length];
+        for (int t = 0; t < nt; t++) { int s = order[t] * 3; o[t * 3] = tri[s]; o[t * 3 + 1] = tri[s + 1]; o[t * 3 + 2] = tri[s + 2]; }
+        System.Array.Copy(o, tri, tri.Length);
     }
     static Material PlanarMat()
     {

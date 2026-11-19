@@ -63,6 +63,9 @@ public partial class GameManager
         shotIntro = DebugShots.Get(q, "intro", "") != ""; // intro=t1,t2,...: frames of the pre-race intro (PreRace.cs)
         string ql = DebugShots.Get(q, "quality", "High").ToLowerInvariant();
         int g = System.Array.FindIndex(GfxNames, n => n.ToLowerInvariant() == ql); gfxIdx = g >= 0 ? g : 3;
+        // the world is built by Start's LoadMap right after this, before any SetGraphics: WorldBuilder.LiveGfx then reads
+        // the pref, so it must hold the shot level (in memory; StartSession's Save writes the same value anyway)
+        PlayerPrefs.SetInt("gfx", gfxIdx);
         string cl = DebugShots.Get(q, "class", "F1").ToUpperInvariant();
         classIdx = cl == "F3" ? 2 : cl == "F2" ? 1 : 0;
         string tod = DebugShots.Get(q, "tod", "afternoon").ToLowerInvariant();

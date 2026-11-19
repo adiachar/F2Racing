@@ -38,6 +38,10 @@ public static class LightBake
     // (depth pass: sky fill lowered ~40 % and the sun raised ~22 %, so the sunlit total is unchanged but shade is ~0.45-0.5 of sunlit on screen)
     static float AmbGain => night ? 1f : ambGainDay;
     public static Vector3 ToSun => toSun;
+    // day: sunlit faces a touch warmer, the sky fill in the shade a touch cooler and bluer (Real Racing's light), each
+    // close to luma-neutral so the picture keeps its brightness. RoadShadow applies the same sun tint to _F2SunLin.
+    static readonly Color SunWarm = new Color(1.04f, 1f, 0.94f), AmbCool = new Color(0.96f, 0.995f, 1.06f);
+    public static Color SunTint => night ? Color.white : SunWarm;
     public static bool Night => night;
     static Track track;
 
@@ -100,6 +104,14 @@ public static class LightBake
             }
             if (mf.name == "Trees") { TreeCards(mesh.vertices); continue; }
             var v = mesh.vertices; var t = mesh.triangles;
+            if (mf.name == "EnvModelTrees")
+            {
+                // (the knee-high undergrowth cards in the model trees' chunks are no roofs: left out of the map)
+                var uv = mesh.uv;
+                for (int k = 0; k + 2 < t.Length; k += 3)
+                    if (uv.Length != v.Length || !ModelLib.IsUnderUv(uv[t[k]])) Occluder(v[t[k]], v[t[k + 1]], v[t[k + 2]]);
+                continue;
+            }
             for (int k = 0; k + 2 < t.Length; k += 3) Occluder(v[t[k]], v[t[k + 1]], v[t[k + 2]]);
         }
         // GPU-instanced model trees and shrubs (ModelInstancing.cs): the same triangles the merged meshes had, world space
@@ -218,8 +230,13 @@ public static class LightBake
             if (mesh.normals == null || mesh.normals.Length != mesh.vertexCount) mesh.RecalculateNormals(); // never fall back to 'all up': flat
             var v = mesh.vertices; var n = mesh.normals; var col = new Color[v.Length];
             bool hasN = n != null && n.Length == v.Length; int hint = -1, hint2 = -1;
-            bool groundShade = (mf.name == "Verge" || mf.name == "Gravel") && track != null && !night; // alpha: sign + sun share for the shadow mask (Ground.cginc)
+            bool groundShade = (mf.name == "Verge" || mf.name == "Gravel" || mf.name == "Astroturf") && track != null && !night; // alpha: sign + sun share for the shadow mask (Ground.cginc)
             bool foliage = sn == "F2/Foliage"; bool cards = mf.name == "Trees" && v.Length % 4 == 0;
+            // standing things (barriers, walls, boards, posts, tyre walls, stands, buildings), not the ground itself:
+            // their faces get a tight contact shade where they meet the ground (Foot)
+            string mn = mf.name;
+            bool obj = !foliage && !cards && sn != "F2/Ground" && mn != "Terrain" && mn != "Ground" && mn != "EnvGroundFrame" && mn != "Harbour"
+                       && mn != "EnvRealLand" && mn != "EnvRealWater" && mn != "EnvRealRoads" && mn != "Road";
             // load time: the bake of one vertex only reads (the roof map, the height field, the track, the lamps) and
             // writes its own colour, so big meshes are baked in parallel chunks (pure math, no Unity API off the main
             // thread; mesh.colors is set below on the main thread). Each chunk starts its Nearest() search afresh.
@@ -227,10 +244,10 @@ public static class LightBake
                 FormulaSim.Par.For(0, (v.Length + BakeChunk - 1) / BakeChunk, ch =>
                 {
                     int h1 = -1, h2 = -1, e = System.Math.Min(v.Length, (ch + 1) * BakeChunk);
-                    for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref h1, ref h2);
+                    for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref h1, ref h2, obj);
                 });
             else
-                for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref hint, ref hint2);
+                for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref hint, ref hint2, obj);
             mesh.colors = col; verts += v.Length;
             if (!own) r.sharedMaterial.shader = shader;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
@@ -252,13 +269,13 @@ public static class LightBake
             FormulaSim.Par.For(0, (v.Length + BakeChunk - 1) / BakeChunk, ch =>
             {
                 int h1 = -1, h2 = -1, e = System.Math.Min(v.Length, (ch + 1) * BakeChunk);
-                for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, false, true, false, ref h1, ref h2);
+                for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, false, true, false, ref h1, ref h2, false);
             });
         else
             for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, false, true, false, ref hint, ref hint2);
     }
     // the light of vertex i (rgb halved: the shader doubles it; alpha: the ground's shadow-mask data)
-    static Color BakeVertex(int i, Vector3[] v, Vector3[] n, bool hasN, bool groundShade, bool foliage, bool cards, ref int hint, ref int hint2)
+    static Color BakeVertex(int i, Vector3[] v, Vector3[] n, bool hasN, bool groundShade, bool foliage, bool cards, ref int hint, ref int hint2, bool obj = false)
     {
         Vector3 p = v[i], nn = hasN ? n[i] : Vector3.up;
         // merged meshes share vertices between a wall and its top / the ground, so their smooth normals lean
@@ -270,6 +287,7 @@ public static class LightBake
         // hemisphere: sky from above, warm bounce from the ground below, half of each on a wall
         Color amb = Color.Lerp(Bounce, Sky, 0.5f + 0.5f * nn.y) * AmbGain;
         Color sunPart = SunCol * (ndl * sun);
+        if (!night) { amb *= AmbCool; sunPart *= SunWarm; }
         Color c = sunPart + amb * ao;
         // dark where it meets the ground: contact darkening on the sun side as well (fill from a bright sky never reaches a crease)
         c *= 1f - 0.3f * contact;
@@ -278,6 +296,15 @@ public static class LightBake
             // crowns and bushes: the interior and the trunk end are shaded, the top catches the light
             float hAbove = cards ? (i & 3) < 2 ? 0f : 1f : Mathf.Clamp01((p.y - WorldBuilder.H(p.x, p.z)) / 3f);
             c *= 0.5f + 0.5f * Mathf.SmoothStep(0f, 1f, cards ? hAbove * 0.8f + 0.2f * ao : hAbove);
+            // model trees: the trunk's foot darker still over its last ~0.5 m (roots in long grass, no sky light)
+            if (!cards) c *= 0.8f + 0.2f * Mathf.SmoothStep(0f, 1f, hAbove * 6f);
+        }
+        else if (obj && nn.y < 0.75f)
+        {
+            // contact shadow on a standing face where it meets the ground: the last ~0.7 m darkens (sky light and bounce
+            // cannot reach the crease); undersides near the ground (boards, tyre walls, stand bases) as well
+            float hg = p.y - WorldBuilder.H(p.x, p.z);
+            if (hg > -0.6f && hg < 0.7f) c *= 1f - 0.32f * (1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(hg / 0.7f)));
         }
         if (night && lamps != null) c += Flood(p, nn) * (1f - 0.35f * contact);
         // inside a tunnel: no sky, warm lamp light instead (darker into the corners)

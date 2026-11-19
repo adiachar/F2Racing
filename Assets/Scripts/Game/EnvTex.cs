@@ -231,20 +231,33 @@ public static class EnvTex
 
     static Texture2D cTurf;
     public static Texture2D Turf() => cTurf != null ? cTurf : (cTurf = MakeTurf());
+    // Astroturf, one tile = 2 m across (u) x 4 m along the track (v). RGB: the turf: tufted rows of blades along the
+    // track (~1.5 cm gauge), each blade a thin streak a few cm long, lighter tips and darker gaps, the pile laid one way
+    // then the other in 1 m rolls; the mips average it all to a calm green, so the fibres only show near the camera.
+    // A (linear data, 0.5 = mean): coarse asphalt aggregate and paint roughness for the painted run-off (Ground.cginc
+    // _Turf mode draws the paint and reads this alpha; the turf ignores it).
     static Texture2D MakeTurf()
     {
-        var px = new Color32[128 * 128];
-        for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++)
+        const int Sz = 256;
+        var px = new Color32[Sz * Sz];
+        FormulaSim.Par.For(0, Sz, y =>
         {
-            float u = x / 128f, v = y / 128f;
-            bool band = ((int)(v * 4)) % 2 == 0;
-            float fib = 0.86f + 0.2f * VN(u * 0.4f, v, 64, 71) + 0.1f * Hash(x, y, 73);
-            float k = (band ? 0.86f : 1f) * fib * (0.95f + 0.1f * Fbm(u, v, 8, 2, 75));
-            bool line = u < 0.03f || u > 0.97f;     // painted white lines along both edges
-            px[y * 128 + x] = line ? new Color32(S(0.80f * fib), S(0.80f * fib), S(0.78f * fib), 255)
-                                   : new Color32(S(0.035f * k), S(0.17f * k), S(0.05f * k), 255);
-        }
-        return Count(Make(128, 128, px));
+            for (int x = 0; x < Sz; x++)
+            {
+                float u = (float)x / Sz, v = (float)y / Sz;
+                int row = x / 2;                                          // a tufted row every 2 texels (~1.6 cm)
+                float inRow = (x & 1) == 0 ? 1f : 0.78f;                  // the gap between rows is darker
+                int seg = (y + (int)(Hash(row, 0, 91) * 8)) / 3;          // blades ~3 texels (~5 cm) long, staggered
+                float blade = 0.72f + 0.5f * Hash(row, seg, 93);
+                float tip = (y + (int)(Hash(row, 0, 91) * 8)) % 3 == 0 ? 1.12f : 1f; // lighter blade tips
+                bool rollA = ((int)(v * 4)) % 2 == 0;                     // 1 m rolls, pile laid alternately
+                float k = inRow * blade * tip * (rollA ? 0.9f : 1.04f) * (0.9f + 0.2f * Fbm(u, v, 8, 2, 75));
+                // aggregate: stones ~1-3 cm (cells) with binder between, a broad wash of paint thickness
+                float agg = 0.5f + 0.32f * (Hash(x / 2, y / 2, 95) - 0.5f) + 0.22f * (Hash(x, y, 97) - 0.5f) + 0.4f * (Fbm(u, v, 16, 3, 99) - 0.5f);
+                px[y * Sz + x] = new Color32(S(0.030f * k), S(0.105f * k), S(0.042f * k), B(Mathf.Clamp01(agg)));
+            }
+        });
+        return Count(Make(Sz, Sz, px));
     }
 
     static Texture2D cPaving;
@@ -461,9 +474,14 @@ public static class EnvTex
             {
                 // the tile spans pixels 2 .. 126 (the shader's margin); the margin repeats the opposite edge
                 float u = ((x - 2 + 0.5f) / 124f + 1f) % 1f, v = ((y - 2 + 0.5f) / 124f + 1f) % 1f;
-                mk = 1f;
+                mk = 1f; glassPx = false;
                 var c = BCell(cell, u, v, Mathf.Min(127, (int)(u * C)), Mathf.Min(127, (int)(v * C)));
-                px[(oy0 + y) * W + ox0 + x] = new Color32(B(c.r), B(c.g), B(c.b), B(mk));
+                // ground-floor bays: splash grime and shade towards the pavement (darker bases)
+                if (cell >= 8 && cell <= 15) { float g = Mathf.Clamp01(v / 0.3f); c *= 0.7f + 0.3f * g * (2f - g); }
+                // alpha: 0 = window glass (Baked F2_ATLAS mirrors the sky there and lights some windows at night);
+                // else the tint mask, never below 14 (the shader remaps 0.06..1 to 0..1)
+                byte al = glassPx ? (byte)0 : (byte)Mathf.Max(14, (int)B(mk));
+                px[(oy0 + y) * W + ox0 + x] = new Color32(B(c.r), B(c.g), B(c.b), al);
             }
         }
         dPl = dBr = dTi = dPa = dCl = dCo = dSh = dGr = null;
@@ -501,8 +519,10 @@ public static class EnvTex
     static Color Plaster(int x, int y) => Lin(dPl, x, y, PlasterLin);
     static Color Stone(int x, int y) { mk = 0f; return Lin(dPa, x, y, new Color(0.72f, 0.69f, 0.60f)); }
     // glass reflecting the sky: darker low down, lighter at the top, a streak of reflection
+    static bool glassPx; // the pixel being painted is window glass (alpha 0 in the atlas)
     static Color Glass(float t, float u, float v)
     {
+        glassPx = true;
         var c = Color.Lerp(new Color(0.16f, 0.21f, 0.27f), new Color(0.50f, 0.60f, 0.70f), t * t);
         if (u + v * 0.6f > 0.85f && u + v * 0.6f < 0.9f) c += new Color(0.1f, 0.1f, 0.1f);
         return c;
@@ -594,7 +614,9 @@ public static class EnvTex
                 mk = 0f;
                 if (u < 0.02f || u > 0.98f || Mathf.Abs(u - 0.5f) < 0.012f || v < 0.32f || v > 0.925f) return new Color(0.55f, 0.57f, 0.60f);
                 var gl = Glass((v - 0.3f) / 0.64f, u, v) * 0.9f;
-                if (u < 0.5f && v > 0.76f) gl = Slats(new Color(0.78f, 0.78f, 0.76f), y, false); // venetian blind
+                if (u < 0.5f && v > 0.76f) { glassPx = false; gl = Slats(new Color(0.78f, 0.78f, 0.76f), y, false); } // venetian blind
+                // glass balcony balustrade in front of the lower third (hospitality / media floors): a steel top rail
+                if (v < 0.47f) { if (v > 0.445f) { glassPx = false; return new Color(0.70f, 0.72f, 0.74f); } gl *= 0.82f; }
                 return gl;
             }
             case 6: // glass curtain wall
@@ -602,7 +624,11 @@ public static class EnvTex
                 mk = 0f;
                 if (v < 0.1f) return new Color(0.30f, 0.32f, 0.35f) * (v < 0.03f ? 0.8f : 1f);
                 if (x % 32 < 2) return new Color(0.62f, 0.64f, 0.66f);
-                return Glass((v - 0.1f) / 0.9f, u, v) * 0.95f;
+                if (v > 0.9f && v < 0.93f) return new Color(0.55f, 0.57f, 0.60f); // transom
+                // panes differ a little (tint, a blind half down in some)
+                float ph = Hash(x / 32, 0, s);
+                if (ph > 0.7f && v > 0.62f) return Slats(new Color(0.74f, 0.74f, 0.72f), y, false);
+                return Glass((v - 0.1f) / 0.9f, u, v) * (0.88f + 0.14f * ph);
             }
             case 7: // dressed stone, tall window with a round top
             {
@@ -1267,5 +1293,115 @@ public static class EnvTex
         tex.Apply(false, true);
         cr = cg = cb = ca = null;
         return foliage = Count(tex);
+    }
+
+    // ---------------------------------------------------------------- undergrowth tiles (ModelLib's model atlas)
+    // Two 256 x 256 cut-out tiles painted into a free corner of the model atlas (Resources/Models/atlas.bytes, 2048 x
+    // 2048; texture rows 0..255 = v 0..0.125, x 1536..2047: alpha 0 there in the shipped atlas, checked before painting),
+    // so the undergrowth cards (RealWorld.Undergrowth: the tall-grass band at the fence feet, grass clumps and ferns in
+    // the woods) share the model trees' material and draws:
+    //   tile 0 (x 1536)  tall uncut grass: ~200 blades from the foot, dark green at the base to pale straw tips, some
+    //                    leaning, some dry, a few seed heads; ragged top
+    //   tile 1 (x 1792)  a fern (bracken / male fern): fronds arching out of one crown, pinnae shrinking to the tips
+    // The colour is the final look (cards tint near 1). Cut-out texels carry the tile's mean colour (no dark mip fringe).
+    public const int UnderX = 1536, UnderTile = 256;
+    static float[] ur, ug, ub, ua;
+    // false: the corner is not free in this atlas (nothing painted; no undergrowth cards)
+    public static bool PaintUnder(Color32[] px, int w, int h)
+    {
+        if (px == null || w != 2048 || h < UnderTile) return false;
+        for (int y = 0; y < UnderTile; y++)
+            for (int x = UnderX; x < UnderX + 2 * UnderTile; x++) if (px[y * w + x].a > 8) return false;
+        int n = UnderTile * UnderTile;
+        ur = new float[n]; ug = new float[n]; ub = new float[n]; ua = new float[n];
+        var r = new System.Random(41);
+        // ---- tile 0: tall grass
+        for (int b = 0; b < 210; b++)
+        {
+            float x0 = 6f + (float)r.NextDouble() * 244f, hh = (0.32f + 0.66f * Mathf.Pow((float)r.NextDouble(), 0.6f)) * 250f;
+            float lean = ((float)r.NextDouble() - 0.5f) * 0.7f, bend = ((float)r.NextDouble() - 0.5f) * 0.9f, w0 = 1.3f + 1.7f * (float)r.NextDouble();
+            bool dry = r.NextDouble() < 0.22;
+            float sh = 0.8f + 0.4f * (float)r.NextDouble();
+            Color c0 = new Color(0.10f, 0.16f, 0.05f) * sh, c1 = dry ? new Color(0.60f, 0.53f, 0.33f) * sh : new Color(0.38f, 0.44f, 0.17f) * sh;
+            int steps = Mathf.CeilToInt(hh / 0.6f); float px0 = 0, py0 = 0;
+            for (int s = 0; s <= steps; s++)
+            {
+                float t = (float)s / steps, x = x0 + (lean * t + bend * t * t) * hh, y = t * hh;
+                float wd = w0 * (1f - 0.85f * t);
+                UDisc(x, y, wd * 0.5f, Color.Lerp(c0, c1, Mathf.Pow(t, 0.8f)), 1f);
+                px0 = x; py0 = y;
+            }
+            // seed heads on some of the tall ones: a loose pale spike
+            if (hh > 170f && r.NextDouble() < 0.3)
+                for (int k = 0; k < 14; k++)
+                    UDisc(px0 + ((float)r.NextDouble() - 0.5f) * 5f, py0 - k * 2.2f, 1.4f, new Color(0.62f, 0.56f, 0.38f) * sh, 1f);
+        }
+        UFlush(px, w, UnderX);
+        // ---- tile 1: a fern
+        System.Array.Clear(ur, 0, n); System.Array.Clear(ug, 0, n); System.Array.Clear(ub, 0, n); System.Array.Clear(ua, 0, n);
+        int fronds = 11;
+        for (int f = 0; f < fronds; f++)
+        {
+            float a0 = -1.2f + 2.4f * (f + 0.5f) / fronds + ((float)r.NextDouble() - 0.5f) * 0.25f; // from the vertical
+            float len = 150f + 95f * (float)r.NextDouble() * (1f - 0.5f * Mathf.Abs(a0)), sh = 0.8f + 0.35f * (float)r.NextDouble();
+            Color stem = new Color(0.14f, 0.20f, 0.06f) * sh, leaf = new Color(0.16f, 0.29f, 0.07f) * sh, tip = new Color(0.27f, 0.39f, 0.10f) * sh;
+            float x = 128f + a0 * 10f, y = 2f, ang = a0 * 0.75f; int steps = Mathf.CeilToInt(len / 1.2f);
+            for (int s = 0; s <= steps; s++)
+            {
+                float t = (float)s / steps;
+                ang = a0 * (0.75f + 0.9f * t); // the frond arches out and droops towards its tip
+                x += Mathf.Sin(ang) * 1.2f; y += Mathf.Cos(ang) * 1.2f;
+                UDisc(x, y, 1.1f * (1f - 0.6f * t), stem, 1f);
+                // pinnae: pairs every ~5 px, longest at mid-frond, slanting forwards
+                if (s % 4 == 0 && t > 0.1f)
+                {
+                    float pl = 34f * Mathf.Pow(Mathf.Sin(Mathf.PI * Mathf.Min(1f, (t - 0.1f) / 0.92f)), 0.7f) * (1f - 0.25f * t);
+                    for (int sd = -1; sd <= 1; sd += 2)
+                    {
+                        float pa = ang + sd * 1.15f, ex = x, ey = y; int ps = Mathf.CeilToInt(pl / 1.1f);
+                        for (int q = 0; q <= ps; q++)
+                        {
+                            float u = (float)q / Mathf.Max(1, ps);
+                            ex += Mathf.Sin(pa - sd * 0.35f * u) * 1.1f; ey += Mathf.Cos(pa - sd * 0.35f * u) * 1.1f;
+                            UDisc(ex, ey, 2.3f * (1f - 0.75f * u) * (1f - 0.4f * t) + 0.4f, Color.Lerp(leaf, tip, u * 0.6f + t * 0.4f), 1f);
+                        }
+                    }
+                }
+            }
+        }
+        UFlush(px, w, UnderX + UnderTile);
+        ur = ug = ub = ua = null;
+        return true;
+    }
+    // an anti-aliased disc, painted "over" (the colour of soft edges is the disc's own)
+    static void UDisc(float cx, float cy, float rad, Color c, float a)
+    {
+        rad = Mathf.Max(rad, 0.45f);
+        int x0 = Mathf.Max(0, Mathf.FloorToInt(cx - rad - 1)), x1 = Mathf.Min(UnderTile - 1, Mathf.CeilToInt(cx + rad + 1));
+        int y0 = Mathf.Max(0, Mathf.FloorToInt(cy - rad - 1)), y1 = Mathf.Min(UnderTile - 1, Mathf.CeilToInt(cy + rad + 1));
+        for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+            {
+                float dx = x + 0.5f - cx, dy = y + 0.5f - cy, cov = Mathf.Clamp01(rad + 0.5f - Mathf.Sqrt(dx * dx + dy * dy)) * a;
+                if (cov <= 0.002f) continue;
+                int i = y * UnderTile + x; float na = cov + ua[i] * (1f - cov), k = cov / na;
+                ur[i] += (c.r - ur[i]) * k; ug[i] += (c.g - ug[i]) * k; ub[i] += (c.b - ub[i]) * k; ua[i] = na;
+            }
+    }
+    // the painted tile into the atlas at (ox, 0); cut-out texels take the tile's mean colour
+    static void UFlush(Color32[] px, int w, int ox)
+    {
+        double sr = 0, sg = 0, sb = 0, sa = 0;
+        for (int i = 0; i < ua.Length; i++) { sr += ur[i] * ua[i]; sg += ug[i] * ua[i]; sb += ub[i] * ua[i]; sa += ua[i]; }
+        float mr = (float)(sr / System.Math.Max(sa, 1e-3)), mg = (float)(sg / System.Math.Max(sa, 1e-3)), mb = (float)(sb / System.Math.Max(sa, 1e-3));
+        for (int y = 0; y < UnderTile; y++)
+            for (int x = 0; x < UnderTile; x++)
+            {
+                int i = y * UnderTile + x; float a = ua[i];
+                float rr = Mathf.Lerp(mr, ur[i], a), gg = Mathf.Lerp(mg, ug[i], a), bb = Mathf.Lerp(mb, ub[i], a);
+                // edge texels fully transparent (the card's rim never shows a sliver of the neighbour tile)
+                if (x == 0 || x == UnderTile - 1 || y == UnderTile - 1) a = 0f;
+                px[y * w + ox + x] = new Color32((byte)(Mathf.Clamp01(rr) * 255f + 0.5f), (byte)(Mathf.Clamp01(gg) * 255f + 0.5f), (byte)(Mathf.Clamp01(bb) * 255f + 0.5f), (byte)(Mathf.Clamp01(a) * 255f + 0.5f));
+            }
     }
 }

@@ -22,7 +22,7 @@ public static class DriverGeo
 {
     public const float K = 3.40f / 3.135f; // = CarModel.RootScale
     // part IDs (CarPaint _MERGED, after CarModel.Id* 0..11)
-    public const byte IdCarbon = 2, IdSuit = 12, IdTrim = 13, IdHelmA = 14, IdHelmB = 15, IdVisor = 16, IdDark = 17;
+    public const byte IdCarbon = 2, IdSuit = 12, IdTrim = 13, IdHelmA = 14, IdHelmB = 15, IdVisor = 16, IdDark = 17, IdGlove = 18, IdGloveAcc = 19; // gloves: dark grey fabric, team-colour cuff band
     public const int Torso = 0, Head = 1, UpperL = 2, ForeL = 3, HandL = 4, UpperR = 5, ForeR = 6, HandR = 7, Bones = 8;
 
     // ---- the seated driver (driver frame, metres)
@@ -335,7 +335,7 @@ public static class DriverGeo
                 path[i] = new Vector3(0, 0, z[i]); ry[i] = rr[i] * 0.9f; b0[i] = bf;
                 if (wU[i] > 0) { b1[i] = bu; w1[i] = wU[i]; } else if (wH[i] > 0) { b1[i] = bh; w1[i] = wH[i]; } else { b1[i] = bf; w1[i] = 0f; }
             }
-            Tube(d, path, rr, ry, new float[n], Vector3.up, cols, bind.p[bf], bind.r[bf], (r, c) => r >= lip ? IdTrim : sleeve(r, c),
+            Tube(d, path, rr, ry, new float[n], Vector3.up, cols, bind.p[bf], bind.r[bf], (r, c) => r >= lip ? (r <= lip + (hi ? 1 : 0) ? IdGloveAcc : IdGlove) : sleeve(r, c),
                  b0, b1, w1, false, true);
         }
     }
@@ -348,7 +348,7 @@ public static class DriverGeo
         Vector3 hp = bind.p[bh]; Quaternion hr = bind.r[bh];
         float mx = side == 0 ? 1f : -1f;
         Vector3 M(Vector3 v) => new Vector3(v.x * mx, v.y, v.z);
-        System.Func<int, int, byte> glove = (r, c) => IdTrim;
+        System.Func<int, int, byte> glove = (r, c) => IdGlove;
         // back of the hand / palm
         {
             var path = hi ? new[] { new Vector3(0, 0, -0.02f), new Vector3(0.001f, 0, 0.02f), new Vector3(0.003f, 0, 0.055f), new Vector3(0.005f, 0, 0.08f) }
@@ -357,7 +357,15 @@ public static class DriverGeo
             var ry = hi ? new[] { 0.03f, 0.04f, 0.044f, 0.044f } : new[] { 0.03f, 0.044f, 0.044f };
             for (int i = 0; i < path.Length; i++) path[i] = M(path[i]);
             int n = path.Length;
-            Tube(d, path, rx, ry, new float[n], Vector3.up, cols, hp, hr, glove, Fill(n, bh), Fill(n, bh), FillF(n, 0f), false, false);
+            // the back of the hand (away from the palm: -x on the left hand, +x on the mirrored right) carries a
+            // team-colour panel from the wrist to the knuckles, as real race gloves
+            float backA = side == 0 ? 180f : 0f;
+            System.Func<int, int, byte> back = (r, c) =>
+            {
+                float a = (c + 0.5f) * 360f / cols, da = Mathf.Abs(Mathf.DeltaAngle(a, backA));
+                return r >= 1 && r <= n - 2 && da < 50f ? IdGloveAcc : IdGlove;
+            };
+            Tube(d, path, rx, ry, new float[n], Vector3.up, cols, hp, hr, back, Fill(n, bh), Fill(n, bh), FillF(n, 0f), false, false);
         }
         // fingers: an arc round the grip axis, from the knuckles round its front to its inner side
         {

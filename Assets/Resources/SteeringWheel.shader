@@ -2,7 +2,7 @@
 // (sun with a little wrap + sky SH, a clear coat reflecting the sky probe / the road below the horizon, a sun highlight
 // sized by the gloss); the material comes per vertex: colour rgb = base (linear), a = baked occlusion;
 // TEXCOORD1 = (clear coat, gloss, metal, kind). Kinds:
-//   0 plain (buttons, knobs, gloss-black housing, metal hub)   1 carbon: CarPaint's 2x2 twill, finer (4 mm tows)
+//   0 plain (buttons, knobs, gloss-black housing, metal hub)   1 carbon: CarPaint's subtle 2x2 twill (~3 mm tows)
 //   2 rubber / alcantara grips: matte with a soft sheen towards grazing angles (brushed fabric)
 //   3 display: the CPU-drawn _Dash texture, self-lit, behind a glossy glass that still mirrors the sky
 //   4 shift LED: TEXCOORD0.x = its number (0..14); _Led.x = how many are lit, _Led.y = 1 all blue / 2 all dark (flash)
@@ -77,9 +77,9 @@ Shader "F2/SteeringWheel"
                 float2 cell = floor(w), fr = frac(w);
                 float sel = step(0.5, frac((cell.x + cell.y) * 0.25));
                 float across = lerp(fr.y, fr.x, sel), prof = 4.0 * across * (1.0 - across);
-                return float2(lerp(1.0, lerp(0.6, 1.3, prof) * lerp(0.88, 1.12, sel), fade), lerp(1.0, lerp(0.55, 1.45, sel) * prof + 0.3, fade));
+                return float2(lerp(1.0, lerp(0.92, 1.04, prof) * lerp(0.97, 1.03, sel), fade), lerp(1.0, lerp(0.8, 1.2, sel) * prof * 0.8 + 0.6, fade)); // (CarPaint's low contrast: the old 0.6..1.3 read as a brick wall)
             }
-            #define TOWS 270.0
+            #define TOWS 300.0
 
             v2f vert (appdata v)
             {
@@ -114,7 +114,7 @@ Shader "F2/SteeringWheel"
                 float isScreen = step(abs(kind - 3.0), 0.5), isLed = step(abs(kind - 4.0), 0.5);
                 // derivatives outside any branch
                 float3 dop = fwidth(i.op.xyz) * TOWS;
-                float fade = saturate(1.75 - 2.5 * max(dop.x, max(dop.y, dop.z))) * isCarbon;
+                float fade = saturate(2.0 - 4.0 * max(dop.x, max(dop.y, dop.z))) * isCarbon; // full at 4+ px per tow, gone below 2 (as CarPaint)
                 float4 dash = tex2D(_Dash, i.uv.xy);
                 float3 alb = tex2D(_Albedo, i.uv.zw).rgb;
 

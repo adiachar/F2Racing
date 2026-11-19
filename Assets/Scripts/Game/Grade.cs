@@ -52,8 +52,12 @@ public static class Grade
                 return G(1.00f, 1.00f, 1.03f, V(1.02f, 1.00f, 0.97f), V(0.002f, 0.003f, 0.004f), V(0.00f, 0.01f, 0.00f), V(1.00f, 1.00f, 1.00f));
             case "zandvoort":   // North Sea dunes: bright, airy, clean
                 return G(1.04f, 1.04f, 1.03f, V(1.00f, 1.00f, 1.00f), V(0.004f, 0.006f, 0.010f), V(0.02f, 0.02f, 0.02f), V(1.00f, 1.00f, 1.01f));
-            case "monza":       // Po valley summer: warm, sunny
-                return G(1.22f, 0.85f, 1.04f, V(1.08f, 1.00f, 1.05f), V(0.006f, 0.005f, 0.002f), V(0.02f, 0.01f, -0.02f), V(1.00f, 1.01f, 1.01f)); // RR3 reference: light neutral asphalt, olive grass (docs/reference/rr3-colour-targets.md)
+            case "monza":       // Po valley summer: the warmth comes from the sun (Sky.SunAt), the grade only white-balances it.
+                // The bake's sunlit asphalt is warm (linear R/B ~1.17), so the tint leans a little cool (green stays in
+                // the middle: never magenta) and a mid-tone lift (gamma) brightens the road without clipping the white
+                // car: asphalt ~143,140,140 neutral (was 139,129,126), white car ~245,245,248 (was 245,235,239 pink).
+                // RR3 reference: docs/reference/rr3-colour-targets.md
+                return G(1.36f, 0.85f, 1.02f, V(0.97f, 1.00f, 1.07f), V(0.004f, 0.004f, 0.004f), V(0.07f, 0.07f, 0.07f), V(1.00f, 1.00f, 1.00f));
             case "suzuka":      // crisp, vivid greens
                 return G(1.00f, 1.06f, 1.05f, V(1.01f, 1.00f, 0.98f), V(0.002f, 0.004f, 0.008f), V(0.00f, 0.03f, 0.00f), V(1.00f, 1.00f, 1.00f));
             case "budapest":    // summer heat: warm
@@ -77,9 +81,11 @@ public static class Grade
             case TimeOfDay.Kind.Morning: // cool, fresh, a little softer; opened up for the low sun (less of it on the ground)
                 g.tint = Mul(g.tint, V(0.98f, 1.00f, 1.04f)); g.contrast -= 0.02f; g.exposure *= 1.06f; g.lift += V(0.000f, 0.002f, 0.006f);
                 break;
-            case TimeOfDay.Kind.Evening: // golden hour: warm, rich, a touch more contrast, blue-violet shadows
-                g.tint = Mul(g.tint, V(1.10f, 0.98f, 0.84f)); g.sat += 0.05f; g.contrast += 0.04f; g.exposure *= 1.10f;
-                g.lift += V(0.004f, 0.000f, 0.012f); g.gain = Mul(g.gain, V(1.02f, 0.99f, 0.95f));
+            case TimeOfDay.Kind.Evening: // golden hour: warm, a touch more contrast. The orange comes from the low sun; the
+                // tint keeps green in the middle (a red-up / green-down tint turned the blue sky fill in the shade purple and
+                // the tyres rust) and the lift stays near-neutral (a blue lift made the shadows violet)
+                g.tint = Mul(g.tint, V(1.05f, 1.00f, 0.88f)); g.contrast += 0.04f; g.exposure *= 1.10f;
+                g.lift += V(0.002f, 0.002f, 0.003f); g.gain = Mul(g.gain, V(1.01f, 1.00f, 0.98f));
                 break;
             case TimeOfDay.Kind.Night:   // floodlit: neutral-cool white light, deep blacks, punchy
                 g.tint = Mul(g.tint, V(0.97f, 0.99f, 1.04f)); g.sat *= 0.95f; g.contrast += 0.06f; g.exposure *= 1.12f; // = the old 1.06 x 1.25 night exposure

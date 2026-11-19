@@ -4,6 +4,8 @@
 //    wall, steel truss, standing-seam roof, louvres, glass balustrade, vomitory, big screen, poured concrete, scaffold,
 //    hazard stripes. The advertising boards moved to 16 boards of 256 x 64 (x 0..511 y 256..511 and x 512..1023
 //    y 0..255) with smooth slanted lettering instead of 3 px blocks; x 512..1023 y 256..319 is the circuit's name sign.
+//    x 512..1023 y 320..511: four grandstand name banners (512 x 32, invented names), the race-control sign and the
+//    pit-lane floor lettering ("SPEED LIMIT 80", white paint on pit asphalt).
 //    Old layout of the bottom-left block:
 //      left half (x 0..255), as before:
 //        y   0..63   64 flat colour swatches (16 x 4 cells of 16 px); flat-coloured parts point all their UVs at a cell centre
@@ -64,6 +66,53 @@ public static class TracksideArt
     public static readonly Vector4 GlassWall = Reg(0, 128, 128, 128), Truss = Reg(128, 128, 128, 64), RoofSeam = Reg(128, 192, 64, 64),
         Louvre = Reg(192, 192, 64, 64), Balustrade = Reg(256, 128, 64, 64), Vomitory = Reg(320, 128, 64, 64), Screen = Reg(384, 128, 128, 64),
         ConcreteWall = Reg(256, 192, 128, 64), ScaffoldR = Reg(384, 192, 64, 64), Hazard = Reg(448, 192, 64, 64), NameSign = Reg(512, 256, 512, 64);
+    // grandstand name banners (k 0..3), race control, pit-lane floor lettering
+    public static Vector4 StandBanner(int k) { k = ((k % 4) + 4) % 4; return Reg(512, 320 + k * 32, 512, 32); }
+    public static readonly Vector4 RaceControl = Reg(512, 448, 512, 32), PitText = Reg(512, 480, 512, 32);
+    // run-off asphalt (Monza's asphalt run-offs, Trackside): one 32 x 16 tile of aggregate (4 m along x 2 m across, 8 px
+    // per metre) that repeats seamlessly. The whole free swatch block (x 64..255, y 32..63) is filled with the same
+    // periodic pattern, so the tile's edges and its mip levels only ever blend into more of itself: the UVs are exact
+    // (no inset) and the quads join without a seam. Tone: a neutral mid grey like the road's (not the dark, blue-grey
+    // pit swatch).
+    public static readonly Vector4 RunOff = new Vector4(128f / AW, 40f / AH, 160f / AW, 56f / AH);
+    static bool InRunOffBlock(int x, int y) => y >= 32 && y < 64 && x >= 64 && x < AS;
+    static Color32 RunOffPixel(int x, int y)
+    {
+        int px = ((x % 32) + 32) % 32, py = ((y - 40) % 16 + 16) % 16;
+        // coarse binder / aggregate drift: periodic value noise on 8 px cells (4 x 2 cells per tile), smoothly blended
+        float fx = px / 8f, fy = py / 8f; int cx = (int)fx, cy = (int)fy; float tx = fx - cx, ty = fy - cy;
+        tx = tx * tx * (3f - 2f * tx); ty = ty * ty * (3f - 2f * ty);
+        float V(int a, int b) => Hash(((a % 4) + 4) % 4, ((b % 2) + 2) % 2, 71);
+        float coarse = Mathf.Lerp(Mathf.Lerp(V(cx, cy), V(cx + 1, cy), tx), Mathf.Lerp(V(cx, cy + 1), V(cx + 1, cy + 1), tx), ty);
+        float n = Hash(px, py, 72), n2 = Hash(px / 2, py / 2, 73);
+        float k = 0.93f + 0.10f * coarse + 0.07f * (n - 0.5f) + 0.05f * (n2 - 0.5f);
+        if (n > 0.93f) k += 0.16f;      // light stones
+        else if (n < 0.06f) k -= 0.14f; // binder pits
+        return Mul(new Color32(124, 123, 120, 255), k);
+    }
+    static readonly string[] StandNames = { "TRIBUNA AURORA", "TRIBUNA DEL PARCO", "TRIBUNA VELOCE", "TRIBUNA SOLE" };
+    static readonly Color32[] StandBack = { new Color32(150, 22, 30, 255), new Color32(22, 40, 92, 255), new Color32(18, 92, 52, 255), new Color32(26, 26, 30, 255) };
+    // x 512..1023, y 320..511 (lx 0..511, ly 0..191)
+    static Color32 ExtraPixel(int lx, int ly)
+    {
+        int row = ly / 32, y = ly % 32;
+        string txt; Color32 bg, fg;
+        if (row < 4) { txt = StandNames[row]; bg = StandBack[row]; fg = new Color32(246, 244, 236, 255); }
+        else if (row == 4) { txt = "RACE CONTROL"; bg = new Color32(34, 36, 40, 255); fg = new Color32(240, 240, 236, 255); }
+        else { txt = "SPEED LIMIT 80"; bg = Swatch[PitAsphalt]; fg = new Color32(232, 232, 228, 255); }
+        float cw = 3.2f, adv = 6f, x0 = (512f - txt.Length * adv * cw) * 0.5f + cw * 0.5f;
+        float cov = TextCov(txt, lx, y, x0, 28f, cw, 3.4f, adv, 0f);
+        var c = Mix(bg, fg, cov);
+        if (row <= 4)
+        {
+            // banners: a thin white keyline and a darker hem top and bottom (the cloth's tensioned edge)
+            if (y < 2 || y > 29) c = Mul(bg, 0.7f);
+            else if (y < 3 || y > 28) c = Mix(c, fg, 0.6f);
+            if (row < 4 && (lx < 3 || lx > 508)) c = Mul(c, 0.6f); // eyelets / frame
+        }
+        else c = Mul(c, 0.94f + 0.08f * Hash(lx / 2, y / 2, 611)); // painted on asphalt
+        return c;
+    }
     public const int AdCount = 16;
     public static Vector4 Ad(int k)
     {
@@ -117,6 +166,8 @@ public static class TracksideArt
             case 'X': return new[] { "#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #" };
             case 'Y': return new[] { "#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  " };
             case 'Z': return new[] { "#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####" };
+            case '8': return new[] { " ### ", "#   #", "#   #", " ### ", "#   #", "#   #", " ### " };
+            case '0': return new[] { " ### ", "#   #", "#  ##", "# # #", "##  #", "#   #", " ### " };
             default: return null;
         }
     }
@@ -170,11 +221,12 @@ public static class TracksideArt
                 {
                     if (x < 512) c = AdPixel((x / 256) + ((y - 256) / 64) * 2, x % 256, (y - 256) % 64);
                     else if (y < 320) c = SignPixel(x - 512, y - 256);
-                    else c = new Color32(128, 128, 128, 255);
+                    else c = ExtraPixel(x - 512, y - 320);
                 }
                 else if (x >= 512) c = AdPixel(8 + ((x - 512) / 256) + (y / 64) * 2, (x - 512) % 256, y % 64);
                 else if (y >= 128) c = ArchPixel(x, y - 128);
                 else if (x >= AS) c = DetailPixel(x - AS, y);
+                else if (InRunOffBlock(x, y)) c = RunOffPixel(x, y);
                 else if (y < 64)
                 {
                     int s = (y / 16) * 16 + x / 16;
@@ -550,8 +602,10 @@ public static class TracksideArt
             for (int x = 0; x < W; x++)
             {
                 int band = y / CH, ly = y % CH, seat = x / CW, lx = x % CW;
-                Color32 seatCol = (band & 1) == 0 ? new Color32(40, 64, 120, 255) : new Color32(86, 90, 98, 255);
-                Color32 c = ly < 4 ? Mul(seatCol, 0.5f) : Mul(seatCol, 0.8f + 0.25f * (lx > 1 && lx < 14 ? 1f : 0f)); // seat back with a dark gap under it
+                // seats in a neutral light grey: Baked F2_CROWD colours them per seat block (uv1) where alpha is 1
+                Color32 seatCol = new Color32(206, 206, 210, 255);
+                Color32 c = ly < 4 ? Mul(seatCol, 0.45f) : Mul(seatCol, 0.8f + 0.2f * (lx > 1 && lx < 14 ? 1f : 0f)); // seat back with a dark gap under it
+                Color32 seat0 = c;
                 if (Hash(seat, band, 21) < fill[band])
                 {
                     bool redBand = band == 1;
@@ -590,6 +644,7 @@ public static class TracksideArt
                     bool txt = ly >= 10 && ly <= 13 && ((x / 3) % 3 != 2) && Hash(x / 3, run, 52) > 0.3f;
                     c = txt ? b1 : (ly == 8 || ly == 15 ? Mul(b1, 0.9f) : b0);
                 }
+                c.a = c.r == seat0.r && c.g == seat0.g && c.b == seat0.b ? (byte)255 : (byte)0; // seat (tinted) or person
                 px[y * W + x] = c;
             }
         var t = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 4 };

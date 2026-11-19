@@ -1,6 +1,6 @@
 // Lens flare for phones (LensFlare.cs): ONE mesh of screen-space quads (bloom, dirt, anamorphic streak, ghosts), additive,
 // no textures (the shapes are drawn with maths). Vertices are already in clip space (x, y); uv.xy = -1..1 inside the quad,
-// uv.z = shape (0 soft disc, 1 ring-disc, 2 hexagon, 3 anamorphic streak, 4 lens dirt), vertex colour = colour x intensity.
+// uv.z = shape (0 soft disc, 1 ring-disc, 2 hexagon, 3 anamorphic streak, 4 lens dirt, 5 rainbow halo ring), vertex colour = colour x intensity.
 Shader "F2/LensFlare"
 {
     SubShader
@@ -45,7 +45,14 @@ Shader "F2/LensFlare"
                     g = smoothstep(1.0, 0.88, h) * (0.25 + 0.75 * smoothstep(0.55, 0.95, h));
                 }
                 else if (i.uv.z < 3.5)  { float x = 1.0 - abs(p.x), y = 1.0 - abs(p.y); g = x * x * x * y * y * y * y * y * y; } // streak
-                else                    { g = saturate(1.0 - r); g *= g * (0.55 + 0.45 * sin(p.x * 9.0 + p.y * 4.0) * sin(p.y * 7.0 - p.x * 3.0)); } // dirt
+                else if (i.uv.z < 4.5)  { g = saturate(1.0 - r); g *= g * (0.55 + 0.45 * sin(p.x * 9.0 + p.y * 4.0) * sin(p.y * 7.0 - p.x * 3.0)); } // dirt
+                else                                                                                             // rainbow halo ring
+                {
+                    float t = saturate((r - 0.82) / 0.16);                       // 0 inner edge .. 1 outer edge
+                    g = smoothstep(0.0, 0.3, t) * smoothstep(1.0, 0.7, t);
+                    float3 hue = saturate(float3(t * 2.0 - 0.6, 1.0 - abs(t * 2.0 - 1.0) * 1.4, 1.2 - t * 2.0) * 1.3);
+                    return fixed4(F2GradeAdd(i.color.rgb * hue) * g, 0);
+                }
                 return fixed4(F2GradeAdd(i.color.rgb) * g, 0);
             }
             ENDCG

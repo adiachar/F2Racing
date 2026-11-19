@@ -1,8 +1,11 @@
 // Ground for phones: grass, terrain, verges with mowing stripes, gravel traps with tyre ruts (Ground.cginc).
 // Lighting is baked into the vertex colours (LightBake.cs); two texture reads per pixel at most.
-// Two levels: LOD 300 (Medium/High) = detail + macro, wandering stripes, barrier wear, gravel ruts, grass clumps / patches /
-//                                     long grass at the barrier / worn soil at the verge edge (detail alpha);
-//             LOD 150 (Low)         = the same two reads with a positive mip bias, stripes, no ruts.
+// Two levels: LOD 300 (Medium/High) = detail + macro, wandering stripes, barrier wear, gravel ruts / rakes / stones /
+//                                     damp edges, grass clumps / patches / long grass at the barrier / worn soil at the
+//                                     verge edge (detail alpha), run-off strip (_Turf: astroturf fibres or green / blue
+//                                     painted run-off, tyre marks crossing it);
+//             LOD 150 (Low)         = the same reads with a positive mip bias, stripes, damp gravel edges, the run-off
+//                                     strip's paint bands and worn edges (no ruts, rakes, stones or marks).
 // EnvSurface.cs picks one from the graphics level.
 Shader "F2/Ground"
 {
@@ -17,6 +20,10 @@ Shader "F2/Ground"
         _Wall ("Barrier: line m, darkening", Vector) = (-100, 0, 0, 0)
         _Ruts ("Ruts: inner edge m, strength", Vector) = (1000, 0, 0, 0)
         _Clumps ("Grass clumps from the detail alpha (0 off, 1 on)", Float) = 0
+        _Turf ("Run-off strip behind the kerbs: turf / painted run-off (0 off, 1 on)", Float) = 0
+        _Forest ("Forest-floor mask in uv3.y (1 only where the mesh has it: RealWorld.VergeFloor)", Float) = 0
+        _RunGreen ("Run-off paint green", Color) = (0.25, 0.48, 0.29, 1)
+        _RunBlue ("Run-off paint blue", Color) = (0.19, 0.33, 0.58, 1)
     }
     SubShader
     {

@@ -1,8 +1,10 @@
 // RoadShadow.cs — a sharp sun-shadow mask for the road and kerbs, made once when the track loads (no per-frame cost).
 // The baked vertex light (LightBake.cs) has road rows every ~2 m, so the shadows of trees, stands, bridges and
 // fences on the asphalt come out as soft blobs. This draws them properly, in track space:
-//   * texture: U = across the road (road + kerbs + 2 m of verge each side, ~0.25 m per texel), V = along the lap
-//     (~0.3 m per texel). The lap is cut into strips laid side by side (<= 2048 x 2048), R8 with mips (~2-3 MB);
+//   * texture: U = across the track, V = along the lap (~0.3 m per texel). Across: a fine zone (road, kerbs, run-off
+//     strip and 4 m of verge each side, ~0.27 m per texel) and a coarser outer zone out to 40 m beyond the track edge
+//     (~0.55 m per texel: verges, grass, gravel and run-offs; Ground.cginc reads it). The lap is cut into strips laid
+//     side by side (<= 2048 x 2048), R8 with mips (Monza: ~1950 x 2048, 4.0 MB + mips = 5.3 MB);
 //   * occluders, taken from whatever the world holds (so any track works, no lists to keep up to date):
 //       - every opaque mesh more than 0.5 m above the ground (stands, pit building, walls, bridges, gantry, buildings,
 //         boards; terrain only where it rises > 3 m, e.g. raised forest canopy): each triangle is projected along the
@@ -16,7 +18,11 @@
 //     then read into the track-space texture.
 // The road's vertex colours are then split: rgb = sky/ambient light only, a = the bake's own sun visibility with the
 // part the mask already explains lifted (so its blurry blob does not double the sharp shadow). Road.shader adds
-// _F2SunLin x N.L x a x mask back. Night or no sun: nothing is built, the road keeps its plain baked light.
+// _F2SunLin x N.L x a x mask back. The verges, gravel and run-off strips get the same split (SplitGround: their vertex
+// alpha keeps the side and the sun's share, the share now with the coarse bake's blob lifted where the mask explains it).
+// Tree feet also get a small dark disc (contact shade on the sunlit grass round the trunk).
+// _F2RoadAmb (the road's mean ambient, w = N.L) lets CarShadow.shader match the cars' shadows to this shade.
+// Night or no sun: nothing is built, the road keeps its plain baked light.
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
@@ -25,8 +31,17 @@ public static class RoadShadow
 {
     public static Texture2D Mask;
     public static float BuildMs;
-    const float VergeReach = 12f;
-    static readonly int TexId = Shader.PropertyToID("_F2RoadShadow"), ParId = Shader.PropertyToID("_F2RoadShadowP"), SunId = Shader.PropertyToID("_F2SunLin");
+    const float FineReach = 4f, OuterReach = 40f, FineTexel = 0.27f, OuterTexel = 0.55f; // m beyond the run-off strip / the track edge
+    static readonly int TexId = Shader.PropertyToID("_F2RoadShadow"), ParId = Shader.PropertyToID("_F2RoadShadowP"), SunId = Shader.PropertyToID("_F2SunLin"),
+        QId = Shader.PropertyToID("_F2RoadShadowQ"), AmbId = Shader.PropertyToID("_F2RoadAmb");
+    // across layout: nIn texels of dL0 m each side of the centreline out to h0, then nOut of dL1 m out to the edge
+    static int lC, lIn; static float lH0, lD0, lD1;
+    // texel column (float, 0..C) of a signed lateral offset
+    static float ColAt(float lat)
+    {
+        float a = Mathf.Abs(lat), t = a <= lH0 ? a / lD0 : lIn + (a - lH0) / lD1;
+        return lC * 0.5f + (lat < 0f ? -t : t);
+    }
 
     // no mask: white texture, no sun split (Road.shader then uses the baked light as it is)
     public static void Reset()
@@ -34,6 +49,8 @@ public static class RoadShadow
         Shader.SetGlobalTexture(TexId, Texture2D.whiteTexture);
         Shader.SetGlobalVector(ParId, new Vector4(0f, 1f, 0f, 0f));
         Shader.SetGlobalVector(SunId, Vector4.zero);
+        Shader.SetGlobalVector(QId, new Vector4(1e6f, 0f, 0f, 0f));
+        Shader.SetGlobalVector(AmbId, Vector4.zero);
     }
 
     // ---------------------------------------------------------------- world grid of light (255 = sun, 0 = shade)
@@ -102,14 +119,18 @@ public static class RoadShadow
         sH = new Vector2(s.x, s.z);
 
         // layout: C texels across, strips of Hs rows along, S strips side by side
-        // the mask also covers the verges and run-offs (VergeReach m beyond the road) so Ground.cginc can continue the shadows onto the grass
-        float L = (float)(t.N * t.ds), half = (float)t.width * 0.5f + WorldBuilder.Kerb + 2f + VergeReach;
-        int C = Mathf.Clamp(Mathf.CeilToInt(2f * half / 0.27f / 4f) * 4, 32, 192);
+        // the mask also covers the verges, grass and run-offs (40 m beyond the track edge) so Ground.cginc continues the
+        // shadows onto them; fine texels out to h0, coarser ones beyond (ColAt)
+        float L = (float)(t.N * t.ds), h0 = (float)t.width * 0.5f + WorldBuilder.Kerb + 2f + FineReach, half = (float)t.width * 0.5f + OuterReach;
+        int nIn = Mathf.Clamp(Mathf.CeilToInt(h0 / FineTexel), 16, 64), nOut = Mathf.Clamp(Mathf.CeilToInt((half - h0) / OuterTexel), 2, 80);
+        if (((nIn + nOut) & 1) != 0) nOut++; // C a multiple of 4
+        int C = 2 * (nIn + nOut);
+        lC = C; lIn = nIn; lH0 = h0; lD0 = h0 / nIn; lD1 = (half - h0) / nOut;
         int S = Mathf.Max(1, 2048 / C);
         int R = Mathf.CeilToInt(L / 0.3f);
         S = Mathf.Min(S, Mathf.Max(1, Mathf.CeilToInt(R / 256f)));
         int Hs = Mathf.Min(2048, Mathf.CeilToInt((float)R / S));
-        float dA = L / (S * Hs), dL = 2f * half / C;
+        float dA = L / (S * Hs);
         int W = S * C;
 
         // world tile grid over the track (+ margin), tiles marked under every texel
@@ -188,27 +209,38 @@ public static class RoadShadow
             var q = rowP[r]; int st = r / Hs, row = r - st * Hs, o = row * W + st * C;
             for (int j = 0; j < C; j++)
             {
-                float l = -half + (j + 0.5f) * dL;
+                float tj = j + 0.5f - C * 0.5f, ta = Mathf.Abs(tj);
+                float la = ta <= nIn ? ta * lD0 : h0 + (ta - nIn) * lD1, l = tj < 0f ? -la : la;
                 px[o + j] = (byte)Mathf.Clamp(LightAt(q.x + q.z * l, q.y + q.w * l) + 0.5f, 0f, 255f);
             }
         });
 
-        // split the road's baked light into ambient (rgb) and sun visibility (a)
-        Color sunLin = sun.color.linear * sun.intensity;
+        // split the road's baked light into ambient (rgb) and sun visibility (a); the sun as the bake has it (warm tint)
+        Color sunLin = sun.color.linear * sun.intensity * LightBake.SunTint;
         var rmf = road.GetComponent<MeshFilter>();
-        SplitRoad(rmf != null ? rmf.sharedMesh : null, sunLin, px, W, C, Hs, dA, dL, half);
+        Vector4 amb = SplitRoad(rmf != null ? rmf.sharedMesh : null, sunLin, px, W, C, Hs, dA);
+        int gv = 0;
+        foreach (var gmf in root.GetComponentsInChildren<MeshFilter>(true))
+        {
+            string gn = gmf.name; if (gn != "Verge" && gn != "Gravel" && gn != "Astroturf") continue;
+            var gr = gmf.GetComponent<MeshRenderer>(); if (gr == null || gr.sharedMaterial == null || gr.sharedMaterial.shader == null || gr.sharedMaterial.shader.name != "F2/Ground") continue;
+            gv += SplitGround(gmf.sharedMesh, sunLin, px, W, Hs, dA, half);
+        }
 
         if (Mask != null) Object.Destroy(Mask);
         Mask = new Texture2D(W, Hs, TextureFormat.R8, true, true) { name = "RoadShadow", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
         Mask.SetPixelData(px, 0);
         Mask.Apply(true, true);
         Shader.SetGlobalTexture(TexId, Mask);
-        // x: strips per metre along, y: 1 / strips, z: 1 / width covered (m), w: half that width (m)
-        Shader.SetGlobalVector(ParId, new Vector4(1f / (Hs * dA), 1f / S, 1f / (2f * half), half));
+        // x: strips per metre along, y: 1 / strips, z: across scale of the fine zone (1 / (C x dL0)), w: outer half width (m)
+        Shader.SetGlobalVector(ParId, new Vector4(1f / (Hs * dA), 1f / S, 1f / (C * lD0), half));
+        // the coarse outer zone (Ground.cginc): x: h0 (m), y: 1 / (C x dL1), z: nIn / C
+        Shader.SetGlobalVector(QId, new Vector4(h0, 1f / (C * lD1), (float)nIn / C, 0f));
         Shader.SetGlobalVector(SunId, new Vector4(sunLin.r, sunLin.g, sunLin.b, 1f));
+        Shader.SetGlobalVector(AmbId, amb);
         pool = null; tileOf = null;
         BuildMs = (float)sw.Elapsed.TotalMilliseconds;
-        Debug.Log("RoadShadow: " + W + "x" + Hs + " (" + S + " strips), " + trees + " trees, " + tris + " triangles, " + order.Count + " tiles, " + BuildMs.ToString("F0") + " ms");
+        Debug.Log("RoadShadow: " + W + "x" + Hs + " (" + S + " strips), " + trees + " trees, " + tris + " triangles, " + order.Count + " tiles, " + gv + " ground vertices, " + (W * Hs * 4 / 3 / 1024) + " KB, " + BuildMs.ToString("F0") + " ms");
     }
 
     // ---------------------------------------------------------------- solid and see-through meshes
@@ -341,17 +373,17 @@ public static class RoadShadow
         Vector2 td = t1 - t0; float tl2 = Mathf.Max(td.sqrMagnitude, 1e-4f); float tpen = Mathf.Max(0.12f, 0.03f + 0.01f * (tt * h * 0.5f) / sy);
         float frond = Mathf.Repeat(seedX, 6.283f);
         Z = new TreeShape { c = c, g = g, k = k, ss = ss, ir = ir, seedX = seedX, seedY = seedY, kind = kind, ry = ry, thrC = thrC, thrE = thrE,
-                            soft = soft, frond = frond, t0 = t0, td = td, tl2 = tl2, tr = tr, tpen = tpen };
+                            soft = soft, frond = frond, t0 = t0, td = td, tl2 = tl2, tr = tr, tpen = tpen, foot = new Vector2(foot.x, foot.z) };
         ForTiles(minX, minZ, maxX, maxZ, true);
         return true;
     }
-    struct TreeShape { public Vector3 c, ss; public Vector2 t0, td; public float g, k, ir, seedX, seedY, ry, thrC, thrE, soft, frond, tl2, tr, tpen; public int kind; }
+    struct TreeShape { public Vector3 c, ss; public Vector2 t0, td, foot; public float g, k, ir, seedX, seedY, ry, thrC, thrE, soft, frond, tl2, tr, tpen; public int kind; }
     static TreeShape Z;
     static void FillTree(int tb, int i0, int i1, int j0, int j1, float cx0, float cz0)
     {
         Vector3 c = Z.c, ss = Z.ss; Vector2 t0 = Z.t0, td = Z.td; int kind = Z.kind;
         float g = Z.g, k = Z.k, ir = Z.ir, seedX = Z.seedX, seedY = Z.seedY, ry = Z.ry, thrC = Z.thrC, thrE = Z.thrE, soft = Z.soft, frond = Z.frond;
-        float tl2 = Z.tl2, tr = Z.tr, tpen = Z.tpen; const float f1 = 0.85f, f2 = 2.4f;
+        float tl2 = Z.tl2, tr = Z.tr, tpen = Z.tpen; Vector2 ft = Z.foot; const float f1 = 0.85f, f2 = 2.4f;
         for (int j = j0; j <= j1; j++)
         {
             float z = cz0 + j * Cell; int row = tb + (j << 5);
@@ -402,6 +434,9 @@ public static class RoadShadow
                 float px = x - t0.x, pz = z - t0.y; float u = Mathf.Clamp01((px * td.x + pz * td.y) / tl2);
                 float dx = px - td.x * u, dz = pz - td.y * u, d = Mathf.Sqrt(dx * dx + dz * dz);
                 if (d < tr + tpen) { float a = Mathf.Clamp01((d - tr) / tpen + 0.5f); lit = Mathf.Min(lit, 0.06f + 0.94f * a * a * (3f - 2f * a)); }
+                // contact shade at the foot: a dark ring round the trunk on the grass (roots, long grass, no sky light)
+                float fx = x - ft.x, fz = z - ft.y, fd = Mathf.Sqrt(fx * fx + fz * fz) - tr;
+                if (fd < 0.55f) { float a = Mathf.Clamp01(fd / 0.55f); lit = Mathf.Min(lit, 0.45f + 0.55f * a * a * (3f - 2f * a)); }
                 int lv = (int)(255f * lit + 0.5f);
                 if (lv < pool[row + i]) pool[row + i] = (byte)lv;
             }
@@ -409,20 +444,22 @@ public static class RoadShadow
     }
 
     // ---------------------------------------------------------------- the road's vertex colours
-    static void SplitRoad(Mesh m, Color sunLin, byte[] px, int W, int C, int Hs, float dA, float dL, float half)
+    static float MaskAt(byte[] px, int W, int Hs, float dA, float lat, float along)
     {
-        if (m == null) return;
+        int C = lC, rows = px.Length / W * (W / C);
+        int j = Mathf.Clamp((int)ColAt(lat), 0, C - 1);
+        int r = (int)(along / dA); r = ((r % rows) + rows) % rows;
+        int st = r / Hs; return px[(r - st * Hs) * W + st * C + j] * (1f / 255f);
+    }
+    // returns the road's mean ambient light (rgb, linear, as Road.shader adds it) and the mean N.L (w)
+    static Vector4 SplitRoad(Mesh m, Color sunLin, byte[] px, int W, int C, int Hs, float dA)
+    {
+        if (m == null) return Vector4.zero;
         var v = m.vertices; var n = m.normals; var col = m.colors; var uv = m.uv;
-        if (col == null || col.Length != v.Length || uv == null || uv.Length != v.Length) return;
+        if (col == null || col.Length != v.Length || uv == null || uv.Length != v.Length) return Vector4.zero;
         bool hasN = n != null && n.Length == v.Length;
-        int rows = px.Length / W * (W / C);
-        float MaskAt(float lat, float along)
-        {
-            int j = Mathf.Clamp((int)((lat + half) / dL), 0, C - 1);
-            int r = (int)(along / dA); r = ((r % rows) + rows) % rows;
-            int st = r / Hs; return px[(r - st * Hs) * W + st * C + j] * (1f / 255f);
-        }
-        Vector3 toSun = s;
+        float MaskAt(float lat, float along) => RoadShadow.MaskAt(px, W, Hs, dA, lat, along);
+        Vector3 toSun = s; double ar = 0, ag = 0, ab = 0, an = 0; int cnt = 0;
         for (int i = 0; i < v.Length; i++)
         {
             Vector3 p = v[i], nn = hasN ? n[i] : Vector3.up;
@@ -437,7 +474,50 @@ public static class RoadShadow
                 for (float dl = -2.4f; dl <= 2.41f; dl += 1.2f) mn = Mathf.Min(mn, MaskAt(uv[i].x + dl, uv[i].y + da));
             float resid = Mathf.Clamp01(vs + (1f - mn) * 1.1f);
             col[i] = new Color(Mathf.Max(0f, lit.r - sr) * 0.5f, Mathf.Max(0f, lit.g - sg) * 0.5f, Mathf.Max(0f, lit.b - sb) * 0.5f, resid);
+            // the open road (not under a roof or in a tunnel): its ambient, for the cars' shadow shade
+            if (ndl > 0.5f && col[i].g > 0.05f) { ar += col[i].r * 2f; ag += col[i].g * 2f; ab += col[i].b * 2f; an += ndl; cnt++; }
         }
         m.colors = col;
+        return cnt > 0 ? new Vector4((float)(ar / cnt), (float)(ag / cnt), (float)(ab / cnt), (float)(an / cnt)) : Vector4.zero;
+    }
+
+    // ---------------------------------------------------------------- verges, gravel, run-off strips
+    // Their vertex alpha (LightBake) holds the side (>= 0.55 left) and the sun's share of the light; uv2 = (lat m, along m).
+    // As for the road: the coarse bake's soft blob is lifted where the mask has shade near by (the mask draws it sharply),
+    // fading back to the plain bake where Ground.cginc fades the mask out at its outer edge. Load time only.
+    static int SplitGround(Mesh m, Color sunLin, byte[] px, int W, int Hs, float dA, float half)
+    {
+        if (m == null) return 0;
+        var v = m.vertices; var n = m.normals; var col = m.colors;
+        var tu = new List<Vector2>(); m.GetUVs(2, tu);
+        if (col == null || col.Length != v.Length || tu.Count != v.Length) return 0;
+        bool hasN = n != null && n.Length == v.Length;
+        float sunL = sunLin.r * 0.3f + sunLin.g * 0.59f + sunLin.b * 0.11f;
+        for (int i = 0; i < v.Length; i++)
+        {
+            float lat = tu[i].x, along = tu[i].y;
+            float edge = Mathf.Clamp01((half - lat) * 0.5f);
+            if (lat <= 0.5f || edge <= 0f) continue;
+            Color c = col[i] * 2f; float al = col[i].a;
+            bool left = al >= 0.5f; float sf = Mathf.Clamp01(left ? (al - 0.55f) / 0.45f : al / 0.45f);
+            Vector3 p = v[i], nn = hasN ? n[i] : Vector3.up;
+            float ndl = Mathf.Max(0f, Vector3.Dot(nn, s));
+            if (ndl < 0.05f) continue;
+            float vs = LightBake.Sun(p.x + nn.x * 0.2f, p.z + nn.z * 0.2f, p.y + 0.05f);
+            float cL = c.r * 0.3f + c.g * 0.59f + c.b * 0.11f;
+            // the sun part the bake put in (tint and contact included), and its unshadowed size
+            float g = vs > 0.05f ? Mathf.Clamp(sf * cL / Mathf.Max(1e-4f, sunL * ndl * vs), 0.5f, 1.5f) : 1f;
+            Color full = sunLin * (ndl * g), old = full * vs;
+            Color amb = new Color(Mathf.Max(0f, c.r - old.r), Mathf.Max(0f, c.g - old.g), Mathf.Max(0f, c.b - old.b));
+            float sl = left ? lat : -lat, mn = 1f;
+            for (float da = -4f; da <= 4.01f; da += 1f)
+                for (float dl = -2.4f; dl <= 2.41f; dl += 1.2f) mn = Mathf.Min(mn, MaskAt(px, W, Hs, dA, sl + dl, along + da));
+            float resid = Mathf.Clamp01(vs + (1f - mn) * 1.1f * edge);
+            Color sn = full * resid, nc = amb + sn;
+            float nL = nc.r * 0.3f + nc.g * 0.59f + nc.b * 0.11f, sfN = Mathf.Clamp01((sn.r * 0.3f + sn.g * 0.59f + sn.b * 0.11f) / Mathf.Max(1e-3f, nL));
+            col[i] = new Color(nc.r * 0.5f, nc.g * 0.5f, nc.b * 0.5f, left ? 0.55f + 0.45f * sfN : 0.45f * sfN);
+        }
+        m.colors = col;
+        return v.Length;
     }
 }

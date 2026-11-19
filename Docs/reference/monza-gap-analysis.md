@@ -243,3 +243,87 @@ Still open (by impact per cost):
 5. Landmarks: old Lesmo/Ascari bridges, the old banking, the Parabolica tower.
 6. Crowd variety (colour blocking, flags); marshals at the posts (People*, other engineer).
 7. Post numbers on the marshal posts, painted sector lines on the kerbs.
+
+## Round 7: the park's real trees and furniture
+
+Research (what is trackside): the woods round the circuit are the Parco di Monza's old oak-hornbeam forest (Quercus
+robur / farnia dominant, hornbeam, elm, beech, red oak, plenty of Robinia and ash at the edges), big London planes
+on the avenues and round the villa, a few Scots pines; the July 2023 storms felled ~10,000 trees inside the
+circuit's grounds and ~8,000 have been replanted (young trees). Ranked by share of the driver's view: woods
+(~60 % of everything beyond the barriers), stands / pit building, fences / barriers, service roads and huts, the
+landmarks (old banking over the Serraglio, Parabolica), park furniture.
+
+Done (not yet seen in a build):
+
+- **Park species** (`Tools/Models/build_park.py`, appended to models.bytes / atlas.bytes): park_oak (wide crooked
+  crown), park_plane (tall straight trunk, mottled bark, high dome), park_robinia (slender, pinnate leaves),
+  park_pine (Scots pine: long bare orange trunk, flat tufted crown). Same clump / LOD / impostor pipeline.
+- **Monza mix** (`ModelLib.PickPark`, only with a World file): oak 36 %, robinia 24 %, plane 16 %, tree_small_02
+  (hornbeam / elm stand-in) 16 %, pine 8 %, in ~70 m stands (each patch has a dominant species for half of its
+  trees). The tropical jacaranda / island trees are no longer used at Monza. Planes are always 18-28 m, pines never
+  understorey, pine needles darker and bluer.
+- **Park furniture** along the service roads (`RealWorld.ParkFurniture`): the cast-iron park lamp every ~55 m
+  (max 24 High / 14 Medium) and a bench facing the road with a green bin every ~115-155 m (max 14 / 8), on the far
+  side of the road, never at a hut.
+
+Cost: tree instancing buckets unchanged (5 species at Monza, as before). Park trees are lighter (LOD0 1.5-2.2k tris
+vs 2.3k; LOD1 450-550 vs 570), the vertex budgets are unchanged, so a few more trees become models instead of cards
+at the same cost. Props now go in 1.2 km chunks (was 400 m): about +1 draw call where a chunk is in view.
+APK: models.bytes +310 KB, atlas.bytes +470 KB (raw).
+
+Not done: the old banking over the Serraglio and the Parabolica tower: the oval is not in the map data
+(Overture has no raceways; OSM is not reachable here), so there is nothing accurate to build it from.
+
+## Round 8: forest edge, undergrowth and the forest floor
+
+Shots showed tall trees on bare, mown lawn with a hard line at the trunks, and uniform grass up to the fence foot.
+
+Done (not yet seen in a build):
+
+- **Forest floor** (`RealWorld.FloorMask`): a 0..1 mask on the terrain grid from the mapped woods (depth into them, the
+  circuit's own ground included, ramping in over ~12 m) and the crowns of the trees planted near the track. The land
+  texture blends to dark brown-green leaf litter with mossy patches (no hard switch); the verge gets the mask in uv3.y
+  (`VergeFloor`) and Ground.cginc draws the same floor there, without stripes or barrier wear (no extra texture read).
+- **Undergrowth** (`RealWorld.Undergrowth`, Medium / High, within 150 m of the track): hazel / elder bushes 1.5-4 m and
+  bramble patches 0.5-1 m (the two shrub models resized, instanced), young replanted trees 3-6 m in ~55 m patches
+  (robinia / small tree, slender, LOD 1 at most), ferns in the shade, grass tufts at the tree feet, bushes along the
+  service roads. High 150 / 130 / 64 / 520 ferns, Medium 70 / 60 / 28 / 220. Low: none.
+- **Tall-grass band** (`RealWorld.FenceBand`): pale, uneven grass cards at the barrier feet, park side every ~1.5 m
+  (Medium 2 m) with gaps, plus short tufts on the track side where the verge is grass. Low: none.
+- Card tiles (tall grass, fern) are painted at load (`EnvTex.PaintUnder`) into a free corner of the model atlas, so
+  the cards share the model trees' material and their merged 400 m chunks; LightBake keeps them out of the roof map.
+
+## Round 9: grandstands, buildings, pit straight
+
+Done (not yet seen in a build):
+
+- **Procedural stands** (`Trackside.Stand`): grey standing-seam roof (no longer white); the underside is in shade (lighter at
+  the front edge, darker at the back) with four steel purlins; the front girder has real top / bottom chords; every column is
+  a flanged steel column on a base plate, carrying a lattice cantilever truss (chords + webs with thickness; Low keeps the flat
+  beam); an eaves beam along the back. Rows get baked AO under the roof (treads, risers, seats and crowd darker towards the
+  back). Seats in team-coloured blocks (one colour per section, the upper tier another; Monza mostly red). Stair aisles:
+  yellow nosing on every step, a handrail down the middle with posts. A name banner under the roof's front girder
+  (invented names: "TRIBUNA AURORA", "TRIBUNA DEL PARCO", "TRIBUNA VELOCE", "TRIBUNA SOLE").
+- **Crowd** (`Baked.shader F2_CROWD`, trackside crowd material after the bake): the empty seats in the crowd texture are
+  neutral and take the seat block's colour from uv1; each person bobs / sways by a texel (per-person phase, `_Time`),
+  sampled with unshifted gradients (no mip seams). The map stands' crowd cell (building atlas cell 22) gets the same shimmer.
+- **Map buildings** (`EnvTex.BuildingAtlas` + `Baked.shader F2_ATLAS`): window glass is marked (alpha 0; the tint mask now
+  starts at 14/255) and mirrors the sky / ground / sun with Fresnel like the trackside glass (Medium / High); ground-floor
+  bays darker towards the pavement; office ribbon windows get a glass balcony balustrade with a rail; curtain-wall panes
+  vary (tint, blinds, transom). At dusk / night a share of the windows glows warm (`_F2Night`, set in `Trackside.Build`
+  from the time of day; also the trackside glass).
+- **Pit straight**: white line along the wall side of the fast lane, speed-limit lines across the lane at both ends,
+  "SPEED LIMIT 80" painted before the entry line; a pit-wall gantry 40 m before the line (two timing screens, to the lane
+  and to the track, advertisers on the beam); the first bay's penthouse is now a two-storey race-control tower glazed on
+  three sides with a "RACE CONTROL" sign and a mast. (Garage interiors / team boxes / pit-wall stands stay `PitGarage.cs`.)
+- Atlas: the free block x 512..1023 y 320..511 of `TracksideArt.Atlas` holds the banners, the race-control sign and the
+  pit-lane lettering; glyphs '8', '0' added.
+
+Cost: draw calls **+0**. Triangles: ~+0.9k per roofed stand on Medium / High (trusses ~0.6k, aisles ~0.25k), so ~+4.5k
+Medium, ~+7k High over the lap; Low ~+0.2k; pit ~+0.2k. Pixel: F2_ATLAS ~+35 ALU (Low ~+10: no mirror), two more
+interpolators; F2_CROWD ~+15 ALU. Crowd meshes +16 bytes / vertex (uv1).
+
+Shots to verify: s=0 chase + tv (main stand roof, trusses, banner, seat colours, crowd movement; race-control tower;
+pit-wall gantry at s=-40; speed-limit line at the pit entry), any map building with offices (glass reflecting the sky).
+Risks: glass on map buildings too bright at grazing angles; seat tint strength (linear uv1 values); the banner hiding the
+top rows from the chase camera.
