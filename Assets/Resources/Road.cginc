@@ -383,7 +383,7 @@ fixed4 frag (v2f i) : SV_Target
     half s = saturate(dot((half3)V, R));
     half lobe = saturate(s * 1.6 - 0.6); lobe *= lobe;
     half s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s16 = s8 * s8, s32 = s16 * s16;
-    half gloss = 0.35 + 0.55 * rub + 0.4 * paint + 0.5 * kerbF + 0.35 * tar;
+    half gloss = 0.35 + 0.55 * rub + 0.4 * paint + 0.12 * kerbF + 0.35 * tar; // (kerbs 0.5 -> 0.12: the white sheen turned the red blocks pink)
     // (dry sheen held down: RR3's sunlit asphalt is a neutral mid grey, about 150-160 sRGB)
     half3 spec = _SunCol.rgb * ((lobe * 0.24 + s16 * 0.28) * gloss * sunVis);
     half f = 1.0 - saturate(dot((half3)V, N)); half f2 = f * f; half fres = f2 * f2 * f;
