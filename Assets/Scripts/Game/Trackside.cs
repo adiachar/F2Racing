@@ -181,6 +181,16 @@ public static class Trackside
         Quad(m, b - f + s + up * y0, b + f + s + up * y0, b + f + s + up * y1, b - f + s + up * y1, along, r);
         Quad(m, b - f - s + up * y0, b + f - s + up * y0, b + f - s + up * y1, b - f - s + up * y1, -along, r);
     }
+    // a catch-fence post in the fence layer (F): the fence texture's opaque cable rows (v 0..2/64 of each 1 m tile), so it
+    // shares the fence's material, visibility and distance veil
+    static readonly Vector4 FenceSolid = new Vector4(0f, 0.006f, 0.03f, 0.025f);
+    static void FencePost(Vector3 b, Vector3 front, Vector3 along, float half, float y0, float y1)
+    {
+        Vector3 f = front * half, s = along * half, up = Vector3.up; var r = FenceSolid;
+        Quad(F, b + f - s + up * y0, b + f + s + up * y0, b + f + s + up * y1, b + f - s + up * y1, front, r);
+        Quad(F, b - f + s + up * y0, b + f + s + up * y0, b + f + s + up * y1, b - f + s + up * y1, along, r);
+        Quad(F, b - f - s + up * y0, b + f - s + up * y0, b + f - s + up * y1, b - f - s + up * y1, -along, r);
+    }
     // flat ground decal strip piece (y = h) between lateral lines; r = grime column, v along
     // contact shadow on the ground round a box footprint (centre c, half lengths hl along T and hd along D): four strips
     // of the grime layer's shade column, darkest at the wall, gone w metres out. Medium / High (the decal layer is
@@ -1487,11 +1497,14 @@ public static class Trackside
                             }
                         }
                         aoOn = true;
-                        Post(Pm, fa + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
+                        // the fence's posts and its top stay go in the fence layer itself (the solid cable rows of its texture,
+                        // FenceSolid), so whatever hides the fence (Low, also when Auto steps down mid-race; no cutout shader)
+                        // hides them too: no orphan comb of posts along the Armco. Far away they thin to the fence's veil.
+                        FencePost(fa + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1);
                         if (tall && !low)
                             for (float d = 5f; d < len - 2f; d += 5f)
-                                Post(Pm, Vector3.Lerp(fa, fb, d / len) + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
-                        Quad(Pm, fa + da * 0.06f + up * y1, fa + da * 0.06f + up * (y1 + 0.1f), fa + lean + up * (y2 + 0.05f), fa + lean + up * (y2 - 0.05f), Vector3.Cross(mid, up), TracksideArt.Sw(TracksideArt.PostDark));
+                                FencePost(Vector3.Lerp(fa, fb, d / len) + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1);
+                        Quad(F, fa + da * 0.06f + up * y1, fa + da * 0.06f + up * (y1 + 0.1f), fa + lean + up * (y2 + 0.05f), fa + lean + up * (y2 - 0.05f), Vector3.Cross(mid, up), FenceSolid);
                     }
                     fenceU += len;
                     segNo++;

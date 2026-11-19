@@ -209,7 +209,7 @@ public class Sky : MonoBehaviour
     public static Transform CloudDome => Current != null ? Current.dome : null;
     public const float CloudFill = DomeFill;
     // 0..1: how much of the sun reaches the ground through the cloud (the cars' sun light follows this)
-    public static float SunShare => (1f - 0.55f * Weather.Wetness) * todSun;
+    public static float SunShare => (1f - 0.7f * Weather.Wetness) * todSun; // (0.55 left a hard sun under the rain deck)
     // the cars' sun relative to the world's (SunAt: carSun); GameManager drives LightBake.CarSun with CarSunShare
     public static float CarSunK { get; private set; } = 1f;
     public static float CarSunShare => SunShare * CarSunK;
@@ -280,8 +280,8 @@ public class Sky : MonoBehaviour
     {
         if (sunLight == null) return;
         if (sunBase < 0f) { sunBase = sunLight.intensity; shadowBase = sunLight.shadowStrength; }
-        sunLight.intensity = sunBase * (1f - 0.55f * w);
-        sunLight.shadowStrength = shadowBase * (1f - 0.7f * w);        // overcast: soft, faint shadows
+        sunLight.intensity = sunBase * (1f - 0.7f * w);
+        sunLight.shadowStrength = shadowBase * (1f - 0.85f * w);       // overcast: soft, faint shadows (the road's mask: Road.cginc)
     }
 
     static void CloudParams(Look k)
@@ -508,26 +508,31 @@ public class Sky : MonoBehaviour
         return sum / norm;
     }
 
-    // 256x256 cloud density in alpha: domain-warped fbm (organic shapes) plus a little billow (puffy edges),
+    // 256x256 cloud density in alpha: lightly warped fbm puffs; R: a smooth broad field for the rain deck (Clouds.shader);
     // stretched to the full 0..1 range so the shader's cover threshold means the same for every seed
     static Texture2D CloudNoise()
     {
         const int N = 256;
-        var val = new float[N * N]; float lo = 1e9f, hi = -1e9f;
+        var val = new float[N * N]; var deck = new float[N * N]; float lo = 1e9f, hi = -1e9f, dlo = 1e9f, dhi = -1e9f;
         for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
         {
             float u = (float)x / N, v = (float)y / N;
-            float wx = Fbm(u, v, 4, 2, 101) - 0.5f, wy = Fbm(u, v, 4, 2, 203) - 0.5f;
-            float n = Fbm(u + wx * 0.25f, v + wy * 0.25f, 4, 5, 7) * 0.75f + (1f - Mathf.Abs(Fbm(u, v, 8, 3, 55) * 2f - 1f)) * 0.25f;
+            // puffs: a light warp only (0.25 made swirls), smaller cells (6, was 4), a soft lumpy octave on top (the old
+            // ridged 1-|2f-1| term drew streaks)
+            float wx = Fbm(u, v, 3, 2, 101) - 0.5f, wy = Fbm(u, v, 3, 2, 203) - 0.5f;
+            float n = Fbm(u + wx * 0.08f, v + wy * 0.08f, 6, 5, 7) * 0.8f + Fbm(u, v, 12, 2, 55) * 0.2f;
             val[y * N + x] = n; if (n < lo) lo = n; if (n > hi) hi = n;
+            deck[y * N + x] = Fbm(u, v, 2, 3, 301); // the rain deck: broad, smooth, no warp
         }
         // trim the extreme tails a little so the range is well used
         float span = hi - lo; lo += span * 0.04f; hi -= span * 0.04f;
+        for (int i = 0; i < deck.Length; i++) { if (deck[i] < dlo) dlo = deck[i]; if (deck[i] > dhi) dhi = deck[i]; }
         var px = new Color32[N * N];
         for (int i = 0; i < px.Length; i++)
         {
             byte b = (byte)Mathf.Clamp(Mathf.RoundToInt((val[i] - lo) / (hi - lo) * 255f), 0, 255);
-            px[i] = new Color32(255, 255, 255, b);
+            byte r = (byte)Mathf.Clamp(Mathf.RoundToInt((deck[i] - dlo) / Mathf.Max(dhi - dlo, 1e-4f) * 255f), 0, 255);
+            px[i] = new Color32(r, 255, 255, b);
         }
         var t = new Texture2D(N, N, TextureFormat.RGBA32, true) { name = "CloudNoise", wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, anisoLevel = 0 };
         t.SetPixels32(px); t.Apply(true, true);

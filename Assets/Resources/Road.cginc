@@ -64,6 +64,7 @@ float _HalfWidth;
 float4 _Grid, _SunDir;
 float4 _Loops;           // x: timing-loop pitch (m), y / z: the sector ends (m along)
 half _Wet; // global (Weather.cs)
+float _F2EnvOn; UNITY_DECLARE_TEXCUBE(_F2EnvCube); // global (CarEnv.cs): the wet mirror's one read (HQ, wet only)
 
 v2f vert (appdata v)
 {
@@ -187,6 +188,19 @@ fixed4 frag (v2f i) : SV_Target
     half tone = (0.93 + 0.14 * drift) * (0.97 + 0.06 * blotch) * (1.0 - 0.08 * patch);
     tone *= 1.0 + 0.06 * (half)(secShade - 0.5);
     tone *= 1.0 - 0.05 * inPatch;
+#ifdef ROAD_HQ
+    // mid-distance variation (20-200 m out, where the road was one smooth grey): 40-80 m stretches laid in one of two
+    // shades (fresher darker asphalt or older lighter), often a lane wide (left half, right half or the full width),
+    // feathered over ~1.5 m across and blended into the next stretch over its last 8 m. Hashes and smoothsteps only.
+    float pl = along / 59.0, pk = floor(pl), pf = (pl - pk) * 59.0;
+    float q0 = Hash1(pk * 3.17 + 5.1), q1 = Hash1(pk * 3.17 + 8.27);  // this stretch / the next one's shade and lane
+    float r0 = Hash1(pk * 1.93 + 2.7), r1 = Hash1(pk * 1.93 + 4.63);
+    float lsL = smoothstep(-0.75, 0.75, lat), lsR = 1.0 - lsL;        // left (lat > 0) / right half, feathered
+    float m0 = r0 < 0.33 ? lsL : (r0 < 0.66 ? lsR : 1.0);
+    float m1 = r1 < 0.33 ? lsL : (r1 < 0.66 ? lsR : 1.0);
+    float sh0 = (q0 > 0.5 ? -0.065 : 0.035) * m0, sh1 = (q1 > 0.5 ? -0.065 : 0.035) * m1;
+    tone *= 1.0 + (half)lerp(sh0, sh1, smoothstep(51.0, 59.0, pf)) * (half)(1.0 - inPatch);
+#endif
     tone *= 1.0 + 0.6 * grain;                                   // stones and binder, +-9 % close up, fading by 70 m
     tone *= 1.0 + 0.45 * clus;                                   // metre-scale clusters, +-6 %, to ~150 m
     half3 col = _Asphalt.rgb * tone;
@@ -197,7 +211,8 @@ fixed4 frag (v2f i) : SV_Target
     half rubAmt = (half)saturate(i.misc.y);
     half broad = saturate(1.0 - x * x * 0.3);                  // ~1.8 m half width
     half tracks = saturate(1.0 - abs(abs(x) - 0.8) * 2.0);     // wheels ~1.6 m apart
-    half rub = kerb ? 0.0 : rubAmt * rubAmt * broad * (0.6 + 0.4 * tracks) * (0.75 + 0.5 * blotch);
+    // (rubAmt x (0.3 + 0.7 rubAmt), was rubAmt^2: the line now reads on the straights too, a little)
+    half rub = kerb ? 0.0 : rubAmt * (0.3 + 0.7 * rubAmt) * broad * (0.6 + 0.4 * tracks) * (0.75 + 0.5 * blotch);
 #ifdef ROAD_HQ
     // soft streaks along the direction of travel (each tyre lays its own); faded once a pixel spans ~17 cm across
     float xs = i.misc.x;
@@ -286,7 +301,8 @@ fixed4 frag (v2f i) : SV_Target
         float tri = abs(frac(along / per) - 0.5) * 2.0;              // 0..1 triangle wave
         half red = (half)saturate((tri - 0.5) / (wa * (2.0 / per)) + 0.5);
         float jb = abs(tri - 0.5) * per * 0.5;                        // metres to the nearest colour change
-        half3 kc = lerp(_Paint.rgb, _KerbRed.rgb, red);
+        // (kerb white 0.62 x the line paint: in the sun the blocks clipped to 251; the red is held down in _KerbRed)
+        half3 kc = lerp(_Paint.rgb * 0.62, _KerbRed.rgb, red);
         kc = lerp(kc, _KerbYellow.rgb, (half)isSaus);
         kc *= 0.96 + 0.2 * grain;
         // raised look: a shadowed step against the asphalt, a lit rounded nose just above it, a dark joint between the
@@ -318,7 +334,7 @@ fixed4 frag (v2f i) : SV_Target
         half wsk = (half)(0.5 + 0.5 * sin(ac * 17.0 + sin(along * 0.11 + ac * 3.0) * 1.3));
         half innerH = (half)saturate(1.0 - ac * 1.6);
         half smear = (half)kwear * (0.3 + 0.7 * innerH * innerH) * lerp(0.75, 0.45 + 0.8 * wsk, (half)saturate(1.0 - wkm * 6.0)) * (0.6 + 0.8 * blotch);
-        kc *= 1.0 - 0.45 * saturate(smear) * (1.0 - 0.4 * (half)isSaus);
+        kc *= 1.0 - 0.6 * saturate(smear) * (1.0 - 0.4 * (half)isSaus); // (0.45 -> 0.6: the kerbs looked new)
         // paint chipped off at the block edges (grey base showing), a ragged edge in ~6 cm cells across; near only
         float cell = floor(ac * 23.0);
         float blk = floor(along * 2.0 / per);
@@ -369,6 +385,11 @@ fixed4 frag (v2f i) : SV_Target
     // wet asphalt is about half as bright; paint and kerbs (smooth, light) darken less; water darkens more still
     half darken = kerb ? 0.28 : 0.45 - 0.23 * paint;
     col *= (1.0 - wet * darken) * (1.0 - 0.3 * pool);
+    // rain (wet only): the cloud deck takes most of the direct sun and blurs what is left, so the sun share on the
+    // road drops and the sharp mask fades towards a soft mean; a little more sky light (no extra read)
+    half rainK = saturate(_Wet * 2.0 - 1.0);
+    light = i.color * (1.0 + 0.2 * rainK) + i.sunc * (i.misc.w * lerp(shade, 0.75, 0.8 * rainK) * (1.0 - 0.5 * rainK));
+    sunVis *= 1.0 - 0.8 * rainK;
 
     col *= light;
     // the sky over the road is seen in the wet surface: as bright as the open sky, less in tunnels and deep shade
@@ -385,14 +406,27 @@ fixed4 frag (v2f i) : SV_Target
     half s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s16 = s8 * s8, s32 = s16 * s16;
     half gloss = 0.35 + 0.55 * rub + 0.4 * paint + 0.12 * kerbF + 0.35 * tar; // (kerbs 0.5 -> 0.12: the white sheen turned the red blocks pink)
     // (dry sheen held down: RR3's sunlit asphalt is a neutral mid grey, about 150-160 sRGB)
-    half3 spec = _SunCol.rgb * ((lobe * 0.24 + s16 * 0.28) * gloss * sunVis);
     half f = 1.0 - saturate(dot((half3)V, N)); half f2 = f * f; half fres = f2 * f2 * f;
+    // the dry sheen fades at steep views (TV cameras, high replays): it made the road pale and pinkish from above;
+    // full at chase / cockpit angles (N.V < ~0.2)
+    half kv = saturate(f + 0.2); kv *= kv;
+    half3 spec = _SunCol.rgb * ((lobe * 0.24 + s16 * 0.28) * gloss * sunVis * kv);
     // wet: a water film mirrors the sky (Schlick, F0 = 0.02 for water) and the sun in a bright streak (s^128 off the
     // smooth geometric normal), dimmed by the overcast; rubber and puddles are the smoothest, so they shine most
     half wetG = saturate(wet * (0.75 + 0.25 * paint + 0.3 * rub + 0.3 * tar) + pool);
     half s128 = s32 * s32; s128 *= s128;
     spec += _SunCol.rgb * ((s32 * 0.8 + s128 * 3.0) * wetG * (1.0 - 0.7 * _Wet) * (0.3 + 0.7 * sunVis));
-    col = lerp(col, unity_FogColor.rgb * skyVis, saturate((0.02 + 0.98 * fres) * wetG * 0.95));
+    // the mirror: the trackside cube (CarEnv.cs, the one the car paint reads) along the reflected view, so stands,
+    // trees and the cloud deck show in the water; ONE read, wet only, blurred a mip for the rain-rippled film. Skipped
+    // while CarEnv bakes (neutral grade: the cube being drawn may be the bound one) and without a cube: the sky colour
+    half3 mir = unity_FogColor.rgb * skyVis;
+    if (_F2EnvOn > 0.5 && wetG > 0.02 && abs((float)_GradeExposure - 1.0) + abs((float)_GradeContrast - 1.0) > 0.001)
+    {
+        float3 Rv = reflect(-V, (float3)N);
+        Rv.y = abs(Rv.y);
+        mir = UNITY_SAMPLE_TEXCUBE_LOD(_F2EnvCube, Rv, 1.2).rgb * (0.6 + 0.4 * skyVis);
+    }
+    col = lerp(col, mir, saturate((0.02 + 0.98 * fres) * wetG * 0.95));
     col += spec + unity_FogColor.rgb * (fres * 0.13 * (0.6 + 0.4 * gloss) * (1.0 - wetG));
 #else
     // Low: the same sky mirror, with the Fresnel term from the vertex shader; no glint

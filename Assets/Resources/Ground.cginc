@@ -102,7 +102,8 @@ fixed4 frag (v2f i) : SV_Target
 #endif
     half4 mac = tex2D(_MacroTex, i.uv.zw);
     half3 col = d.rgb * (0.80 + 0.40 * mac.r);
-    col = lerp(col, col * _DryTint.rgb, mac.g * _DryTint.a);
+    // dry patches: on mown grass (_Clumps 1) only a third of them (real Monza verges are evenly lush, no brown mange)
+    col = lerp(col, col * _DryTint.rgb, mac.g * _DryTint.a * (1.0 - 0.67 * _Clumps));
 #ifdef GROUND_HQ
     // clumps: the turf is lumpy (darker hollows between tufts), lush darker blue-green patches and thin, paler ones
     col *= 0.9 + 0.2 * tuft;
@@ -147,9 +148,14 @@ fixed4 frag (v2f i) : SV_Target
         half3 pc = lerp(_RunGreen.rgb, _RunBlue.rgb, (half)blueF);
         pc *= (0.9 + 0.2 * mac.r) * (1.0 + 0.55 * agg);
         pc = lerp(pc, half3(0.16, 0.16, 0.15), (half)saturate(agg * 3.0 - 0.6) * 0.35);
-        // turf: the fibre texture (rgb), a drift in tone
+        // turf: the fibre texture (rgb); then turf and paint a quarter less saturated (both read as a uniform teal band),
+        // a slow drift in tone along the lap (~150 m and ~40 m), and a faint grey film of rubber / dust next to the kerb
+        // (the same for the green paint)
         half3 tc = col;
         col = lerp(tc, pc, (half)paintF);
+        half tl = dot(col, half3(0.3, 0.59, 0.11));
+        col = lerp(half3(tl, tl, tl), col, 0.8) * (half)(0.93 + 0.07 * sin(along * 0.042) + 0.04 * sin(along * 0.157 + 1.3));
+        col = lerp(col, half3(0.16, 0.16, 0.15), (half)saturate(1.0 - rel * 1.6) * 0.22);
         // outer edge: soil and worn grass creep onto it in patches (and dust over the paint); inner edge: rubber dust
         float wob = 0.18 * sin(along * 0.31 + mac.b * 5.0) + 0.1 * sin(along * 1.7);
         half soilE = (half)saturate((rel - 1.62 - wob) * 3.0) * (half)saturate(mac.b * 1.6 + 0.1);
@@ -195,7 +201,8 @@ fixed4 frag (v2f i) : SV_Target
     // where the run-off meets the grass: worn, patchy (wider in places along the lap), soil between the tufts
     half wpatch = (half)saturate(0.55 + 0.6 * sin(along * 0.043 + mac.b * 6.0) + 0.3 * sin(along * 0.17));
     half worn = (half)saturate(1.0 - abs(lat - _Stripe.x - 0.2) * (1.6 - 0.7 * wpatch)) * saturate((0.66 - tuft) * 3.0) * (half)saturate(_Stripe.w * 20.0) * (half)_Clumps;
-    col = lerp(col, half3(0.20, 0.17, 0.12) * (0.8 + 0.4 * mac.r), worn * (0.4 + 0.3 * wpatch));
+    // (only where wpatch peaks, and lighter: it put brown soil patches all along the verges)
+    col = lerp(col, half3(0.20, 0.17, 0.12) * (0.8 + 0.4 * mac.r), worn * 0.45 * wpatch * wpatch);
 #else
     // Low: the worn edge as a mean darkening only
     col *= 1.0 - 0.12 * (half)saturate(1.0 - abs(lat - _Stripe.x - 0.2) * 1.3) * (half)saturate(_Stripe.w * 20.0) * (half)_Clumps;

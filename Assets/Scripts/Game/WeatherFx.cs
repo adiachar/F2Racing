@@ -3,9 +3,12 @@
 //    billboards in a box ahead of and above the camera. The drops come at the camera with the car's speed, so at
 //    speed they become long streaks fanning out from the vanishing point, and there are more of them. One draw call.
 //    Wet only (damp = the rain has stopped). Low: fewer drops.
-//  * Spray: one small particle system per car (30 particles at most), soft grey puffs thrown up behind the rear
+//  * Spray: one small particle system per car (18 particles at most), soft grey puffs thrown up behind the rear
 //    wheels, by speed and wetness. Off on Low, and for cars more than SprayRange from the camera.
-//    All spray systems share one material, so Unity can batch them.
+//    All spray systems share one material, so Unity can batch them. The shader fades every puff out near the camera
+//    (gone within 3 m, full from 9 m: the player's own spray no longer covers the chase view) and softly towards the
+//    road (the road height rides in Custom1.x, so no depth texture is needed and no hard line where a puff meets the
+//    asphalt). Rain fades out within 1.5-4 m of the lens (no tall pale columns from the nearest streaks).
 // Both are generated here (textures and all); the shader is Resources/WeatherFx.shader, else the legacy
 // alpha-blended particle shader if the build has it, else no effects at all (the wet road still shows).
 using System.Collections.Generic;
@@ -14,8 +17,11 @@ using UnityEngine;
 public class WeatherFx : MonoBehaviour
 {
     const float SprayRange = 70f;           // m from the camera
-    const int RainMax = 420, RainMaxLow = 160, SprayMax = 30;
+    const int RainMax = 420, RainMaxLow = 160, SprayMax = 18;
 
+    static readonly int FadeId = Shader.PropertyToID("_Fade");
+    static readonly List<ParticleSystemVertexStream> SprayStreams = new List<ParticleSystemVertexStream>
+        { ParticleSystemVertexStream.Position, ParticleSystemVertexStream.Color, ParticleSystemVertexStream.UV, ParticleSystemVertexStream.Custom1X };
     Camera cam; ParticleSystem rain; Material rainMat, sprayMat;
     readonly List<ParticleSystem> sprays = new List<ParticleSystem>();
     readonly List<Transform> sprayT = new List<Transform>();
@@ -36,6 +42,12 @@ public class WeatherFx : MonoBehaviour
         if (sh == null || !sh.isSupported) return; // no effects
         rainMat = new Material(sh) { mainTexture = Soft(16, true), name = "Rain" };
         sprayMat = new Material(sh) { mainTexture = Soft(32, false), name = "Spray" };
+        if (rainMat.HasProperty(FadeId))
+        {
+            // x: camera fade start (m), y: 1 / its length (m), z: 1 / ground fade height (m), 0 = none
+            rainMat.SetVector(FadeId, new Vector4(1.5f, 1f / 2.5f, 0f, 0f));
+            sprayMat.SetVector(FadeId, new Vector4(3f, 1f / 6f, 1f / 0.6f, 0f));
+        }
         if (rainMat.HasProperty("_TintColor")) { rainMat.SetColor("_TintColor", new Color(0.5f, 0.5f, 0.5f, 0.5f)); sprayMat.SetColor("_TintColor", new Color(0.5f, 0.5f, 0.5f, 0.5f)); }
 
         var go = new GameObject("Rain"); go.transform.SetParent(cam.transform, false);
@@ -71,11 +83,13 @@ public class WeatherFx : MonoBehaviour
         var m = ps.main;
         m.loop = true; m.playOnAwake = false; m.simulationSpace = ParticleSystemSimulationSpace.World;
         m.startLifetime = new ParticleSystem.MinMaxCurve(0.5f, 0.8f); m.startSpeed = new ParticleSystem.MinMaxCurve(3f, 7f);
-        m.startSize = new ParticleSystem.MinMaxCurve(0.7f, 1.3f); m.startRotation = new ParticleSystem.MinMaxCurve(0f, 6.28f);
-        m.startColor = new Color(0.80f, 0.82f, 0.86f, 0.22f); m.maxParticles = SprayMax; m.gravityModifier = 0.05f;
+        m.startSize = new ParticleSystem.MinMaxCurve(0.7f, 1.2f); m.startRotation = new ParticleSystem.MinMaxCurve(0f, 6.28f);
+        m.startColor = new Color(0.80f, 0.82f, 0.86f, 0.16f); m.maxParticles = SprayMax; m.gravityModifier = 0.05f;
         var shp = ps.shape; shp.enabled = true; shp.shapeType = ParticleSystemShapeType.Cone; shp.angle = 14f; shp.radius = 0.7f;
         var inh = ps.inheritVelocity; inh.enabled = true; inh.mode = ParticleSystemInheritVelocityMode.Initial; inh.curveMultiplier = 0.75f;
-        var sz = ps.sizeOverLifetime; sz.enabled = true; sz.size = new ParticleSystem.MinMaxCurve(1f, AnimationCurve.Linear(0f, 1f, 1f, 3.2f));
+        var sz = ps.sizeOverLifetime; sz.enabled = true; sz.size = new ParticleSystem.MinMaxCurve(1f, AnimationCurve.Linear(0f, 1f, 1f, 2.8f));
+        var cd = ps.customData; cd.enabled = true; // Custom1.x: the road height under the car (the shader's ground fade)
+        cd.SetMode(ParticleSystemCustomData.Custom1, ParticleSystemCustomDataMode.Vector); cd.SetVectorComponentCount(ParticleSystemCustomData.Custom1, 1);
         var col = ps.colorOverLifetime; col.enabled = true;
         var g = new Gradient();
         g.SetKeys(new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.white, 1f) },
@@ -83,8 +97,9 @@ public class WeatherFx : MonoBehaviour
         col.color = g;
         var em = ps.emission; em.rateOverTime = 0f;
         var r = go.GetComponent<ParticleSystemRenderer>();
-        r.renderMode = ParticleSystemRenderMode.Billboard; r.maxParticleSize = 0.35f; // a puff never fills the screen
+        r.renderMode = ParticleSystemRenderMode.Billboard; r.maxParticleSize = 0.22f; // a puff never fills the screen
         Plain(r, sprayMat);
+        r.SetActiveVertexStreams(SprayStreams);
         return ps;
     }
 
@@ -121,9 +136,10 @@ public class WeatherFx : MonoBehaviour
         if (!ps.gameObject.activeSelf) ps.gameObject.SetActive(true);
         if (!ps.isPlaying) ps.Play();
         var fwd = car.forward;
-        t.SetPositionAndRotation(p - fwd * 2.5f + Vector3.up * 0.3f, Quaternion.LookRotation(-fwd + Vector3.up * 0.25f));
+        t.SetPositionAndRotation(p - fwd * 2.5f + Vector3.up * 0.3f, Quaternion.LookRotation(-fwd + Vector3.up * 0.35f));
+        var cd = ps.customData; cd.SetVector(ParticleSystemCustomData.Custom1, 0, p.y);
         float k = Mathf.Clamp01((speed - 10f) / 50f) * (w > 0.75f ? 1f : 0.35f); // damp: a light mist off the drying track
-        var em = ps.emission; em.rateOverTime = 50f * k;
+        var em = ps.emission; em.rateOverTime = 28f * k;
     }
 
     public void End()
