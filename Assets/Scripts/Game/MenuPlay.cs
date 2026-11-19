@@ -118,47 +118,100 @@ public sealed partial class MenuUI
     }
 
     // ================================================================== 2 circuit
+    // Left: the circuit (type, the name once as the title, country) and its data chips. Right: the big track map with
+    // < and > beside it, a tap on the map = the next circuit, a swipe = next / previous; page dots under it.
+    float mapPressX;
+    int[] mapOrder; int realCount;   // the cycle: the real circuits first (one dot each), then test track(s) and playground
+
+    void BuildOrder()
+    {
+        int n = mapNames.Length;
+        mapOrder = new int[n]; int k = 0;
+        for (int i = 0; i < n; i++) if (i != playgroundIdx && i < Circuits.All.Length && Circuits.All[i].style != CircuitStyle.Test) mapOrder[k++] = i;
+        realCount = k;
+        for (int i = 0; i < n; i++) if (i != playgroundIdx && (i >= Circuits.All.Length || Circuits.All[i].style == CircuitStyle.Test)) mapOrder[k++] = i;
+        if (playgroundIdx >= 0 && playgroundIdx < n) mapOrder[k++] = playgroundIdx;
+    }
+    int MapStep(int map, int d)
+    {
+        int n = mapOrder.Length, pos = System.Array.IndexOf(mapOrder, map);
+        if (pos < 0) pos = 0;
+        return mapOrder[((pos + d) % n + n) % n];
+    }
+
     void DrawCircuitStep(ref int map, Track loaded, int loadedFor, float x0, float x1, float cTop, float bottom)
     {
-        float W = x1 - x0;
+        float W = x1 - x0, L = W * 0.40f, bodyY = cTop;
+        if (mapOrder == null) BuildOrder();
+        int n = mapOrder.Length;
         var next = NextRect(x1, bottom);
-        var car = new Rect(x0 + U(14), bottom - U(58), next.x - U(30) - x0 - U(14), U(58));
-        map = Carousel(car, map);   // before the hero, so a tap there changes the hero this frame
+        float bw = U(44), mapTop = bodyY - U(4), mapBottom = next.y - U(30);
+        var area = new Rect(x0 + L, mapTop, W - L, mapBottom - mapTop);
+        var prevB = new Rect(area.x, area.center.y - bw * 0.5f, bw, bw);
+        var nextB = new Rect(area.xMax - bw, prevB.y, bw, bw);
+        var mapR = new Rect(prevB.xMax + U(8), area.y, nextB.x - U(8) - prevB.xMax - U(8), area.height);
+
+        // ---- input first, so a change shows this frame
+        float ea = UiKit.Enter(KeyCircuit, 5);
+        UiKit.PushAlpha(ea);
+        if (MapArrow(prevB, false)) { map = MapStep(map, -1); mapStepDir = -1; }
+        if (MapArrow(nextB, true)) { map = MapStep(map, 1); mapStepDir = 1; }
+        UiKit.PopAlpha();
+        int sw = MapSwipe(mapR);
+        if (sw != 0) { map = MapStep(map, sw); mapStepDir = sw; }
+
         bool pg = map == playgroundIdx;
-        if (map != lastMap) { UiKit.Mark(KeyMap); mapDir = lastMap < 0 || map > lastMap ? 1 : -1; lastMap = map; carCentre = true; }
+        if (map != lastMap)
+        {
+            UiKit.Mark(KeyMap);
+            mapDir = mapStepDir != 0 ? mapStepDir : lastMap < 0 || map > lastMap ? 1 : -1;
+            mapStepDir = 0; lastMap = map;
+        }
         float mt = UiKit.EaseOut(UiKit.Since(KeyMap) / 0.4f);
         var info = cards[map];
-        float L = W * 0.44f, bodyY = cTop;
 
-        // ---- hero: eyebrow, name, country
+        // ---- the circuit: eyebrow (type, n / total), the name (once), country
         float e1 = UiKit.Enter(KeyCircuit, 1), e2 = UiKit.Enter(KeyCircuit, 2), e3 = UiKit.Enter(KeyCircuit, 3);
         UiKit.PushAlpha(e1 * mt);
         UiKit.Eyebrow(UiKit.Slide(new Rect(x0, bodyY, L, U(14)), mt, 10f * mapDir), info.eyebrow, UiKit.Faint, 9f);
         UiKit.PopAlpha();
-        float ns = UiKit.Fit(info.upper, UiKit.Bold, 40f, L, 20f);
+        float ns = UiKit.Fit(info.upper, UiKit.Bold, 40f, L - U(12), 20f);
         UiKit.PushAlpha(e2 * mt);
-        UiKit.Text(UiKit.Slide(UiKit.Rise(new Rect(x0, bodyY + U(12), L, U(52)), e2, 12f), mt, 18f * mapDir), info.upper, UiKit.Bold, ns, UiKit.TextCol);
+        UiKit.Text(UiKit.Slide(UiKit.Rise(new Rect(x0, bodyY + U(12), L - U(12), U(52)), e2, 12f), mt, 18f * mapDir), info.upper, UiKit.Bold, ns, UiKit.TextCol);
         UiKit.PopAlpha();
         UiKit.PushAlpha(e3 * mt);
         UiKit.Text(UiKit.Slide(new Rect(x0, bodyY + U(62), L, U(18)), mt, 12f * mapDir), info.country, UiKit.Regular, 13f, UiKit.Sub);
         UiKit.PopAlpha();
 
-        // ---- map (built first: it measures the length for the chips)
-        var mapR = new Rect(x0 + L, bodyY - U(4), W - L, car.y - U(14) - (bodyY - U(4)));
+        // ---- the map (built first: it measures the length for the chips)
         var pv = pg ? null : Preview(map, loaded, loadedFor);
-        float e5 = UiKit.Enter(KeyCircuit, 5, 0.04f, 0.6f);
+        float e5 = UiKit.Enter(KeyCircuit, 4, 0.04f, 0.6f);
         UiKit.PushAlpha(e5 * (0.35f + 0.65f * mt));
-        if (pv != null) DrawMap(UiKit.Scale(mapR, 0.96f + 0.04f * mt), pv, true);
-        else if (pg) DrawTestArea(mapR);
+        var mr = UiKit.Slide(UiKit.Scale(mapR, 0.96f + 0.04f * mt), mt, 16f * mapDir);
+        if (pv != null) DrawMap(mr, pv, true);
+        else if (pg) DrawTestArea(mr);
+        UiKit.PopAlpha();
+
+        // ---- page dots: one round dot per real circuit, then a small square for the test track / playground
+        float dg = U(11), extra = n - realCount, dw = (n - 1) * dg + (extra > 0 ? U(8) : 0f), dx = mapR.center.x - dw * 0.5f, dy = mapBottom + U(12);
+        UiKit.PushAlpha(ea);
+        for (int k = 0; k < n; k++)
+        {
+            bool on = mapOrder[k] == map;
+            var col = on ? UiKit.TextCol : new Color(1, 1, 1, 0.22f);
+            float x = dx + k * dg + (k >= realCount ? U(8) : 0f);
+            if (k < realCount) UiKit.Dot(new Vector2(x, dy), on ? 3.2f : 2.4f, col);
+            else { float h = on ? U(2.8f) : U(2.1f); UiKit.Rect(new Rect(x - h, dy - h, 2f * h, 2f * h), col, 1f); }
+        }
         UiKit.PopAlpha();
 
         // ---- data chips (a column under the name)
-        float cy = bodyY + U(90), chW = U(126), chH = U(40);
+        float cy = bodyY + U(92), chW = U(130), chH = U(40);
         for (int i = 0; i < 3; i++)
         {
             float ec = UiKit.Enter(KeyCircuit, 4 + i);
             UiKit.PushAlpha(ec);
-            var r = UiKit.Rise(new Rect(x0, cy + i * (chH + U(7)), chW, chH), ec, 8f);
+            var r = UiKit.Rise(new Rect(x0, cy + i * (chH + U(8)), chW, chH), ec, 8f);
             if (pg)
             {
                 if (i == 0) UiKit.Chip(r, "Timing", "Off", UiKit.TextCol);
@@ -175,7 +228,46 @@ public sealed partial class MenuUI
         UiKit.PushAlpha(en);
         if (UiKit.Button(next, "Next", UiKit.Look.Primary, true, 15f)) GoPlay(StepSetup, 1);
         UiKit.PopAlpha();
-        BuildThumbnails(loaded, loadedFor);
+        PrefetchNeighbours(map, loaded, loadedFor);
+    }
+
+    // < / > beside the map: a round glass button, red only while pressed
+    static bool MapArrow(Rect r, bool next)
+    {
+        bool hit = UiKit.Press(r, true, out float p);
+        var rr = UiKit.Scale(r, 1f - 0.06f * p);
+        UiKit.Rect(rr, Color.Lerp(new Color(1, 1, 1, 0.06f), UiKit.Accent, p), 999f);
+        UiKit.Outline(rr, Color.Lerp(UiKit.Line, UiKit.Accent, p), 999f, 0.7f);
+        UiKit.Icon(UiKit.Scale(rr, 0.42f), next ? UiKit.IconNext : UiKit.IconBack, UiKit.TextCol);
+        return hit;
+    }
+
+    // the map itself: a tap = the next circuit, a sideways swipe = next (to the left) / previous (to the right).
+    // Returns the step (-1, 0, 1) on release.
+    int MapSwipe(Rect r)
+    {
+        int id = GUIUtility.GetControlID(FocusType.Passive);
+        var e = Event.current; int res = 0;
+        switch (e.GetTypeForControl(id))
+        {
+            case EventType.MouseDown:
+                if (e.button == 0 && r.Contains(e.mousePosition)) { GUIUtility.hotControl = id; mapPressX = e.mousePosition.x; e.Use(); }
+                break;
+            case EventType.MouseDrag:
+                if (GUIUtility.hotControl == id) e.Use();
+                break;
+            case EventType.MouseUp:
+                if (GUIUtility.hotControl == id)
+                {
+                    GUIUtility.hotControl = 0;
+                    float dx = e.mousePosition.x - mapPressX;
+                    if (Mathf.Abs(dx) > U(24)) res = dx < 0 ? 1 : -1;
+                    else if (r.Contains(e.mousePosition)) res = 1;
+                    e.Use();
+                }
+                break;
+        }
+        return res;
     }
 
     // ================================================================== 3 setup

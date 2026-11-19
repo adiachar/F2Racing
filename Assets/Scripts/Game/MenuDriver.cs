@@ -104,7 +104,7 @@ public sealed partial class MenuUI
         float PW = Mathf.Clamp(W * 0.54f, U(350), U(460));
         UiKit.Gradient(new Rect(x1 - PW - U(120), 0, sw - (x1 - PW) + U(120), sh), clear0, sideShade, 0f, true);
         UiKit.Gradient(new Rect(0, 0, sw, sh * 0.25f), shadeTop, clear0);
-        studio.Spin(new Rect(x0, top + U(56), x1 - PW - U(12) - x0, bottom - top - U(56)), false);
+        studio.Spin(new Rect(x0, top + U(56), x1 - PW - U(12) - x0, bottom - top - U(56)));
         PageHeader(x0, top, "Profile", "DRIVER", KeyDriver);
 
         var panel = new Rect(x1 - PW, top, PW, bottom - top);

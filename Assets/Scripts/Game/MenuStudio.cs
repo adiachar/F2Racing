@@ -1,5 +1,5 @@
-// MenuStudio.cs — the 3D behind the front end (MenuUI): a dark studio garage with the player's driver standing in the
-// middle and their car parked behind him, lit like a showroom.
+// MenuStudio.cs — the 3D behind the front end (MenuUI): a dark studio garage with the player's driver standing alone
+// in the middle, lit like a showroom. Only the driver: no car (fewer objects, cheaper).
 //  * Where: far below the circuit (Origin), on its own layer (Layer 30, unused by the game). Only the studio camera
 //    draws that layer, and while the studio exists the game's main camera is switched off (the circuit is not
 //    rendered at all behind the menu). Every light that exists is told to skip the layer, so the track's sun does not
@@ -7,17 +7,14 @@
 //  * Driver: one of the rigged CC0 people (People.cs: Quaternius, crew helmet with a dark visor) in a race suit in the
 //    livery colours, standing relaxed: idle clip with the arms hanging naturally (IK), chest and shoulders relaxed,
 //    a normal stance; small breathing, weight shift and head movement, and on Home every 6-12 s a calm gesture
-//    (adjust the gloves, a hand to the visor, glance at the car, fold the arms, nod).
-//  * Car: a copy of the player's own car model (Instantiate under an inactive parent, every script stripped before it
-//    wakes, the seated driver hidden): it shares the race car's meshes and materials, so it costs no new mesh memory.
+//    (adjust the gloves, a hand to the visor, a glance aside, fold the arms, nod).
 //  * Light: a key light (real directional light, studio layer only); fill, rim and floor bounce baked into custom
-//    spherical harmonics given to the driver and car renderers (People.shader and CarPaint.shader read ShadeSH9);
-//    one 64 px reflection probe rendered once at creation (the light strips in the car paint). The set (floor pool,
-//    curved back wall, LED strips, a red line at the wall base, an overhead softbox) is ONE vertex-coloured mesh
-//    (Baked.shader): one draw call. Fog is switched off only while the studio camera renders.
+//    spherical harmonics given to the driver (People.shader reads ShadeSH9). The set (floor pool, curved back wall,
+//    LED strips, a red line at the wall base, an overhead softbox) is ONE vertex-coloured mesh (Baked.shader): one
+//    draw call. No reflection probe, no render textures. Fog is switched off only while the studio camera renders.
 //  * Cost rules: everything is created in Create() when a menu page needs it and destroyed in Release() (MenuUI calls
 //    it in BeginLoading; GameManager.StartSession calls it again to be sure): GameObjects, the set mesh and material,
-//    the probe (its render texture), the camera and light; the main camera is switched back on and the frame rate
+//    the camera and light, the driver rig and its shadow mesh; the main camera is switched back on and the frame rate
 //    the menu capped (MenuFps) is given back. Nothing here has an Update: MenuUI calls Tick() once a frame while a
 //    menu page is up, never in a race.
 using System.Collections.Generic;
@@ -30,12 +27,11 @@ public sealed class MenuStudio
     public const int MenuFps = 30;
     public const int ShotHome = 0, ShotDriver = 1, ShotHidden = 3;
     static readonly Vector3 Origin = new Vector3(0f, -1500f, 0f);
-    // stage positions (studio frame, metres): the driver at the centre facing the camera (-z), the car behind on his left
-    static readonly Vector3 DriverAt = Vector3.zero, CarAt = new Vector3(1.6f, 0f, 3.6f), PoolAt = new Vector3(0.8f, 0f, 1.8f);
-    const float CarYaw = -128f;
+    // stage positions (studio frame, metres): the driver at the centre facing the camera (-z); the set centred behind him
+    static readonly Vector3 DriverAt = Vector3.zero, PoolAt = new Vector3(0f, 0f, 1.2f);
     static readonly Color HelmetCol = new Color(1f, 0.82f, 0.18f); // the player's helmet (as CarModel's driver)
 
-    GameObject root; Camera cam, mainCam; ReflectionProbe probe; Transform driverPivot, carPivot; GameObject carCopy;
+    GameObject root; Camera cam, mainCam; Transform driverPivot;
     People.Rig rig; People.Blobs blob; SkinnedMeshRenderer rigSmr; MaterialPropertyBlock rigBlock;
     readonly Vector4[] pal = new Vector4[People.NReg];
     readonly List<Object> made = new List<Object>();          // meshes / materials made here: destroyed in Release
@@ -44,14 +40,14 @@ public sealed class MenuStudio
     Camera.CameraCallback preCb, postCb;
     int savedFps = -1; bool fogWas, fogOff;
     Vector3 camPos, camLook; float camFov; bool camSet;
-    float driverYaw, carYaw, spinVel, dragLastX, dragLastT; bool dragging, spinCar;
+    float driverYaw, spinVel, dragLastX, dragLastT; bool dragging;
     int gKind = -1, gLast = -1; float gT, gLen, nextG;          // the current gesture (-1 none), its time and length
     int calfR = -1;                                            // the right calf bone (People has no constant for it)
 
     public bool Alive => root != null;
 
     // ------------------------------------------------------------------ create / release
-    public void Create(CarModel playerCar, Livery liv)
+    public void Create(Livery liv)
     {
         if (root != null) return;
         root = new GameObject("MenuStudio");
@@ -62,17 +58,14 @@ public sealed class MenuStudio
         BuildLighting();
         BuildSet();
         driverPivot = Child("DriverPivot", DriverAt, 0f);
-        carPivot = Child("CarPivot", CarAt, CarYaw);
         if (People.Ready) BuildDriver(liv);
-        if (playerCar != null) CloneCar(playerCar);
         BuildCamera();
         SetLayer(root.transform);
-        probe.RenderProbe();
         mainCam = Camera.main;
         if (mainCam != null && mainCam != cam) mainCam.enabled = false; // the circuit is not drawn behind the menu
         if (preCb == null) { preCb = OnPre; postCb = OnPost; }
         Camera.onPreRender += preCb; Camera.onPostRender += postCb;
-        nextG = Time.unscaledTime + 4f; gKind = -1; camSet = false; driverYaw = carYaw = spinVel = 0f; dragging = false;
+        nextG = Time.unscaledTime + 4f; gKind = -1; camSet = false; driverYaw = spinVel = 0f; dragging = false;
     }
 
     public void Release()
@@ -81,9 +74,9 @@ public sealed class MenuStudio
         if (preCb != null) { Camera.onPreRender -= preCb; Camera.onPostRender -= postCb; }
         if (fogOff) { RenderSettings.fog = fogWas; fogOff = false; }
         if (blob != null) blob.Destroy();
-        blob = null; rig = null; rigSmr = null; rigBlock = null; carCopy = null;
-        Object.Destroy(root); // camera, key light, probe (and its render texture), driver rig, car copy, set
-        root = null; cam = null; probe = null; driverPivot = carPivot = null;
+        blob = null; rig = null; rigSmr = null; rigBlock = null;
+        Object.Destroy(root); // camera, key light, driver rig, set
+        root = null; cam = null; driverPivot = null;
         for (int i = 0; i < made.Count; i++) if (made[i] != null) Object.Destroy(made[i]);
         made.Clear();
         if (mainCam != null) mainCam.enabled = true;
@@ -92,14 +85,8 @@ public sealed class MenuStudio
         savedFps = -1; dragging = false;
     }
 
-    // the livery changed (Setup): suit colours, and a fresh copy of the car (the race car may have swapped its model)
-    public void Restyle(CarModel playerCar, Livery liv)
-    {
-        if (root == null) return;
-        if (rig != null) Dress(liv);
-        if (carCopy != null) { Object.Destroy(carCopy); carCopy = null; }
-        if (playerCar != null) { CloneCar(playerCar); SetLayer(carPivot); }
-    }
+    // the livery changed (Setup): the suit colours
+    public void Restyle(Livery liv) { if (root != null && rig != null) Dress(liv); }
 
     void OnPre(Camera c) { if (c != cam || c == null) return; fogWas = RenderSettings.fog; fogOff = true; RenderSettings.fog = false; }
     void OnPost(Camera c) { if (c != cam || c == null || !fogOff) return; RenderSettings.fog = fogWas; fogOff = false; }
@@ -133,15 +120,6 @@ public sealed class MenuStudio
         s.AddDirectionalLight(new Vector3(-0.35f, 0.55f, 0.75f).normalized, new Color(1f, 0.97f, 0.92f), 0.85f);
         s.AddDirectionalLight(Vector3.down, new Color(0.5f, 0.5f, 0.55f), 0.06f);
         sh[0] = s;
-        // reflections of the studio for the car paint: rendered once, small
-        var pg = new GameObject("Reflections"); pg.transform.SetParent(root.transform, false);
-        pg.transform.localPosition = new Vector3(0.6f, 1.6f, -1.2f);
-        probe = pg.AddComponent<ReflectionProbe>();
-        probe.mode = ReflectionProbeMode.Realtime; probe.refreshMode = ReflectionProbeRefreshMode.ViaScripting;
-        probe.timeSlicingMode = ReflectionProbeTimeSlicingMode.NoTimeSlicing;
-        probe.resolution = 64; probe.hdr = false; probe.size = new Vector3(40f, 20f, 40f); probe.center = new Vector3(0.5f, 2f, 2.7f);
-        probe.clearFlags = ReflectionProbeClearFlags.SolidColor; probe.backgroundColor = new Color(0.01f, 0.011f, 0.014f);
-        probe.cullingMask = 1 << Layer; probe.nearClipPlane = 0.1f; probe.farClipPlane = 40f; probe.importance = 10; probe.intensity = 1f;
     }
 
     void BuildCamera()
@@ -158,7 +136,7 @@ public sealed class MenuStudio
     void BuildSet()
     {
         var v = new List<Vector3>(1400); var c = new List<Color>(1400); var t = new List<int>(9000);
-        // floor: a disc round the pool, a soft lit pool under the driver and one under the car
+        // floor: a disc round the pool, a soft lit pool under the driver
         float[] rings = { 0f, 0.7f, 1.4f, 2.1f, 2.8f, 3.6f, 4.5f, 5.6f, 7f, 9f, 12f, 16f };
         const int seg = 56;
         for (int r = 0; r < rings.Length; r++)
@@ -204,7 +182,7 @@ public sealed class MenuStudio
             var p = PoolAt + n * (R - 0.1f);
             AddQuad(v, c, t, p - tg + Vector3.up * 0.45f, p + tg + Vector3.up * 0.45f, p + tg + Vector3.up * 4.0f, p - tg + Vector3.up * 4.0f, new Color(0.46f, 0.48f, 0.52f, 1f));
         }
-        // overhead softbox (mostly seen in the car paint)
+        // overhead softbox
         var sb = PoolAt + Vector3.up * 5f;
         AddQuad(v, c, t, sb + new Vector3(-2.5f, 0, -1.3f), sb + new Vector3(2.5f, 0, -1.3f), sb + new Vector3(2.5f, 0, 1.3f), sb + new Vector3(-2.5f, 0, 1.3f), new Color(0.6f, 0.6f, 0.62f, 1f));
 
@@ -223,8 +201,8 @@ public sealed class MenuStudio
 
     static Color FloorCol(Vector3 p)
     {
-        float d1 = (p - DriverAt).magnitude / 2.0f, d2 = (p - CarAt).magnitude / 3.4f;
-        float b = 0.0035f + 0.020f * Mathf.Exp(-d1 * d1) + 0.014f * Mathf.Exp(-d2 * d2);
+        float d1 = (p - DriverAt).magnitude / 2.2f;
+        float b = 0.0035f + 0.022f * Mathf.Exp(-d1 * d1);
         return new Color(b, b * 1.03f, b * 1.12f, 1f);
     }
     // a quad seen from both sides (the set is looked at from inside and from the probe)
@@ -287,48 +265,9 @@ public sealed class MenuStudio
         rigSmr.SetPropertyBlock(rigBlock);
     }
 
-    // ------------------------------------------------------------------ car (a copy of the race car: shared meshes and materials)
-    void CloneCar(CarModel src)
-    {
-        var hold = new GameObject("Hold"); hold.SetActive(false); hold.transform.SetParent(root.transform, false);
-        var go = Object.Instantiate(src.gameObject, hold.transform); // under an inactive parent: no script wakes up
-        go.name = "MenuCar";
-        var cm = go.GetComponent<CarModel>();
-        if (cm != null)
-        {
-            if (cm.haloPillar != null) cm.haloPillar.SetActive(true);
-            if (cm.haloHoop != null) cm.haloHoop.SetActive(true);
-            if (cm.cockpitFloor != null) cm.cockpitFloor.SetActive(false);
-            if (cm.helmet != null && cm.helmet.GetComponent<Renderer>() != null) cm.helmet.gameObject.SetActive(false); // a code-built car's helmet
-        }
-        var mbs = go.GetComponentsInChildren<MonoBehaviour>(true);
-        for (int i = mbs.Length - 1; i >= 0; i--) if (mbs[i] != null) Object.DestroyImmediate(mbs[i]); // never woken: no OnDestroy runs
-        var pss = go.GetComponentsInChildren<ParticleSystem>(true);
-        for (int i = 0; i < pss.Length; i++) pss[i].gameObject.SetActive(false);
-        var sun = go.transform.Find("SunShadow");
-        if (sun != null) sun.gameObject.SetActive(false);
-        var blk = new MaterialPropertyBlock();
-        var rs = go.GetComponentsInChildren<Renderer>(true);
-        for (int i = 0; i < rs.Length; i++)
-        {
-            var r = rs[i];
-            if (r is SkinnedMeshRenderer) { r.enabled = false; continue; } // the seated driver: he is standing beside the car
-            if (r is ParticleSystemRenderer) continue;
-            r.shadowCastingMode = ShadowCastingMode.Off;
-            r.lightProbeUsage = LightProbeUsage.CustomProvided;
-            r.reflectionProbeUsage = ReflectionProbeUsage.BlendProbes;
-            r.GetPropertyBlock(blk); blk.CopySHCoefficientArraysFrom(sh); r.SetPropertyBlock(blk);
-        }
-        go.transform.SetParent(carPivot, false);
-        go.transform.localPosition = Vector3.zero; go.transform.localRotation = Quaternion.identity;
-        go.SetActive(true);
-        Object.Destroy(hold);
-        carCopy = go;
-    }
-
     // ------------------------------------------------------------------ per frame (menu pages only)
-    // the turntable: drag sideways in area to turn the driver (or the car), with a little fling
-    public void Spin(Rect area, bool car)
+    // the turntable: drag sideways in area to turn the driver, with a little fling
+    public void Spin(Rect area)
     {
         if (root == null) return;
         int id = GUIUtility.GetControlID(FocusType.Passive);
@@ -338,7 +277,7 @@ public sealed class MenuStudio
             case EventType.MouseDown:
                 if (e.button == 0 && area.Contains(e.mousePosition))
                 {
-                    GUIUtility.hotControl = id; dragging = true; spinCar = car; spinVel = 0f;
+                    GUIUtility.hotControl = id; dragging = true; spinVel = 0f;
                     dragLastX = e.mousePosition.x; dragLastT = Time.realtimeSinceStartup; e.Use();
                 }
                 break;
@@ -346,7 +285,7 @@ public sealed class MenuStudio
                 if (GUIUtility.hotControl == id)
                 {
                     float deg = -(e.mousePosition.x - dragLastX) / Mathf.Max(1f, Screen.height) * 220f;
-                    if (spinCar) carYaw += deg; else driverYaw += deg;
+                    driverYaw += deg;
                     float now = Time.realtimeSinceStartup, ddt = Mathf.Max(1f / 120f, now - dragLastT);
                     spinVel = Mathf.Lerp(spinVel, deg / ddt, 0.5f);
                     dragLastX = e.mousePosition.x; dragLastT = now; e.Use();
@@ -370,12 +309,10 @@ public sealed class MenuStudio
         float dt = Mathf.Min(Time.unscaledDeltaTime, 0.1f), t = Time.unscaledTime;
         if (!dragging && Mathf.Abs(spinVel) > 0.05f)
         {
-            float d = spinVel * dt;
-            if (spinCar) carYaw += d; else driverYaw += d;
+            driverYaw += spinVel * dt;
             spinVel *= Mathf.Exp(-2.4f * dt);
         }
         driverPivot.localRotation = Quaternion.Euler(0f, driverYaw, 0f);
-        carPivot.localRotation = Quaternion.Euler(0f, CarYaw + carYaw, 0f);
         if (rig != null) Animate(t, dt, gestures);
         Frame(shot, dt);
     }
@@ -384,7 +321,7 @@ public sealed class MenuStudio
     static void Turn(Transform b, float deg, Vector3 axis) { b.rotation = Quaternion.AngleAxis(deg, axis) * b.rotation; }
 
     // calm gestures only (no shoulder rolls or anything that reads as squaring up): adjust the gloves, a hand to the
-    // visor, a glance at the car, arms folded, a nod
+    // visor, a glance aside, arms folded, a nod
     const int GGloves = 0, GVisor = 1, GGlance = 2, GFold = 3, GNod = 4, GCount = 5;
 
     void Animate(float t, float dt, bool gestures)
@@ -440,11 +377,11 @@ public sealed class MenuStudio
             var hp = b[People.JHead].position;
             rig.Arm(false, hp + fwd * 0.17f + right * 0.05f - up * 0.02f, gw, right - up * 0.6f);
         }
-        // the head: a slow wander ahead, or a glance at the car
+        // the head: a slow wander ahead, or a glance aside (to his left, as if at the pit wall)
         var head = b[People.JHead].position;
         var look = head + fwd * 3f + right * (Mathf.Sin(t * 0.23f) * 0.6f + Mathf.Sin(t * 0.61f) * 0.2f) + up * (Mathf.Sin(t * 0.17f) * 0.18f - 0.08f);
         rig.LookAt(look, 0.5f);
-        if (gKind == GGlance && carPivot != null) rig.LookAt(carPivot.position + Vector3.up * 0.5f, gw);
+        if (gKind == GGlance) rig.LookAt(head - right * 3f + fwd * 1.2f - up * 0.1f, gw);
         // soft contact shadow under him (local to the studio root)
         if (blob != null)
         {
