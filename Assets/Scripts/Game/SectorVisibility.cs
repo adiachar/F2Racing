@@ -60,6 +60,7 @@ public class SectorVisibility : MonoBehaviour
     public int[] CardStart, CardCount; public Vector4[] Cards; // alpha-tested area per 12 m cluster: xyz centre, w area (m^2)
     public int Sectors, Sector = -1, Hidden, SplitFrom, SplitInto, Gfx; public bool Bypass = true, Occlusion; public float BuildMs, ReliefM;
     public long TrisAll; public int AvgSet;
+    public Track TrackRef => t; // (PerfStats: distance of each renderer from the track, the corridor counters)
 
     Track t; float[] trackY; int sectorPts; ulong[] sets; int words; bool[] off; int hint = -1, applied = -2;
     // instanced items (ModelInstancing): world boxes, size reach, per-sector bitsets

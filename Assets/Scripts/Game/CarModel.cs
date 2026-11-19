@@ -5,7 +5,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class CarModel : MonoBehaviour
+public partial class CarModel : MonoBehaviour
 {
     public Transform body;
     public GameObject cockpitFloor;
@@ -773,6 +773,7 @@ public class CarModel : MonoBehaviour
                 if (set.steerOnly[w] != null) cm.MergedPart("wheel_" + key + "_hubstatic", pivot, set.steerOnly[w]);
                 if (w < 2) { cm.frontPivots[w] = pivot; cm.frontSpin[w] = spin; } else cm.rearSpin[w - 2] = spin;
             }
+        cm.AddRivalLods(); // far-distance levels of detail of the merged meshes (CarLod.cs): drawing only
         // the helmet is in the body mesh; an empty stand-in keeps CarModel.helmet usable
         var h = new GameObject("Helmet").transform; h.SetParent(cm.body, false); h.localPosition = HelmetPos; cm.helmet = h;
         if (rivalDebris == null) { rivalDebris = Kind(Paint(Lin(0.022f, 0.024f, 0.028f), 0.35f, 0.88f, 0.05f, 0.7f, 0.25f), "_CARBON"); rivalDebris.name = "RivalDebris"; }
@@ -819,6 +820,7 @@ public class CarModel : MonoBehaviour
     {
         if (want == mSplit || bodyGo == null) return;
         mSplit = want;
+        RivalLodsFull(want); // a split car shows its full meshes at every distance (CarLod.cs)
         if (want)
         {
             SplitWings(bodyGo, Res + "|merged", rset.mat, true);

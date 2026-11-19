@@ -257,10 +257,11 @@ public class ModelInstancing : MonoBehaviour
     }
 
     // ================================================================ per frame
+    public static bool Off; // PerfLab A/B: draw no instanced trees / shrubs
     void LateUpdate()
     {
         Draws = 0; Shown = 0; Tris = 0; Count = n;
-        if (n == 0 || buckets == null) return;
+        if (n == 0 || buckets == null || Off) return; // (Off: PerfLab A/B switch, trees hidden)
         if (!baked) Bake();
         var cam = Camera.main; if (cam == null) return;
         if (!svChecked || sv == null) { sv = SectorVisibility.Cur; svChecked = true; if (sv != null && !transform.IsChildOf(sv.transform)) sv = null; }
