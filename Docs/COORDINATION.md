@@ -17,4 +17,5 @@ Both accounts read this file before starting work and add a short dated line whe
 - (none yet)
 
 ## Done log
+- 2026-11-19 gfx: rounds 1-6 on `gfx` (road grain/rubber, kerbs+run-off, sharp shadows on grass, Monza park species + furniture, forest floor/undergrowth (High), lens-flare ghosts, cockpit gloves/halo/paint); merged main into gfx (no rebase: force-push not allowed, so merge commits instead). Ready to merge when Adi approves.
 - 2026-11-19 lead: chase camera tied to the car (no lag/shuffle); brief for the graphics account written.
