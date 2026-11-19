@@ -284,6 +284,11 @@ public static class Trackside
     // positions and their lines of sight to the road against them (and against the model trees' crowns).
     public struct Solid { public float cx, cz, tx, tz, hl, hd, y0, y1; public bool rel; }
     public static readonly List<Solid> Solids = new List<Solid>();
+    // TV camera platforms on the scaffold towers (outside of the corners): where a real broadcast camera stands. pos is
+    // the lens (y above the local ground, like rel solids), look = the way it faces (back up the road, horizontal);
+    // GameManager.BuildTvCams can put its cameras here (they clear the fences and the tower itself)
+    public struct TvMount { public Vector3 pos, look; public int idx; }
+    public static readonly List<TvMount> TvMounts = new List<TvMount>();
     public static void AddSolid(Vector3 c, Vector3 along, float hl, float hd, float y0, float y1, bool rel)
     {
         var a = new Vector2(along.x, along.z); if (a.sqrMagnitude < 1e-8f) a = Vector2.right; a.Normalize();
@@ -373,7 +378,7 @@ public static class Trackside
     // ================================================================ build
     public static void Build(Track t, Transform root, bool street)
     {
-        Bays.Clear(); Lane = null; feet.Clear(); Tall.Clear(); Solids.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
+        Bays.Clear(); Lane = null; feet.Clear(); Tall.Clear(); Solids.Clear(); TvMounts.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
         if (t == null || t.N < 8 || root == null) return;
         { var tod = TimeOfDay.For(street); Shader.SetGlobalFloat("_F2Night", tod == TimeOfDay.Kind.Night ? 1f : tod == TimeOfDay.Kind.Evening ? 0.45f : 0f); } // lit windows (Baked)
         int N = t.N; float ds = (float)t.ds;
@@ -1285,6 +1290,8 @@ public static class Trackside
                 Box(A, c - D * 0.5f - T * 0.2f + up * (th + 1.55f), T, up, D, 0.5f, 0.17f, 0.15f, TracksideArt.GantryDark, true);
                 Box(A, c - D * 0.5f - T * 0.78f + up * (th + 1.55f), T, up, D, 0.1f, 0.12f, 0.12f, TracksideArt.GlassDark, true);
                 AddFoot(c, T, hf + 1f, hf + 1f, th + 2.2f); Tall.Add(c); AoPad(c, T, D, hf, hf, 1.0f);
+                // the lens: in front of the tower's solid (+1.5 m pad of the TV cameras' inside test), 1 m over the platform rail
+                TvMounts.Add(new TvMount { pos = c - D * (hf + 2.7f) + up * (th + 2.3f), look = -T, idx = i });
                 camNo++;
             }
             // recovery cranes: yellow carrier, cab, outriggers, the boom raised over the barrier
@@ -1497,6 +1504,8 @@ public static class Trackside
                             }
                         }
                         aoOn = true;
+                        // the mesh is a solid for the TV cameras (GameManager.BuildTvCams): a camera must not film through it
+                        AddSolid((fa + fb) * 0.5f + lean * 0.5f, len3, len * 0.5f, 0.4f, y0, y2 + 0.05f, true);
                         // the fence's posts and its top stay go in the fence layer itself (the solid cable rows of its texture,
                         // FenceSolid), so whatever hides the fence (Low, also when Auto steps down mid-race; no cutout shader)
                         // hides them too: no orphan comb of posts along the Armco. Far away they thin to the fence's veil.

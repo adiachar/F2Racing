@@ -3,7 +3,7 @@
 //    old atlas (below) except that its two advertising blocks (y 128..255) now hold architecture detail: glass curtain
 //    wall, steel truss, standing-seam roof, louvres, glass balustrade, vomitory, big screen, poured concrete, scaffold,
 //    hazard stripes. The advertising boards moved to 16 boards of 256 x 64 (x 0..511 y 256..511 and x 512..1023
-//    y 0..255) with smooth slanted lettering instead of 3 px blocks; x 512..1023 y 256..319 is the circuit's name sign.
+//    y 0..255) with smooth slanted lettering (VectorFont's stroke glyphs, antialiased) instead of 3 px blocks; x 512..1023 y 256..319 is the circuit's name sign.
 //    x 512..1023 y 320..511: four grandstand name banners (512 x 32, invented names), the race-control sign and the
 //    pit-lane floor lettering ("SPEED LIMIT 80", white paint on pit asphalt).
 //    Old layout of the bottom-left block:
@@ -136,64 +136,14 @@ public static class TracksideArt
         new Color32(196, 28, 34, 255), new Color32(244, 200, 40, 255), new Color32(250, 250, 250, 255), new Color32(250, 250, 250, 255),
         new Color32(22, 42, 112, 255), new Color32(124, 204, 58, 255), new Color32(250, 250, 250, 255), new Color32(250, 214, 50, 255),
         new Color32(250, 250, 250, 255), new Color32(206, 28, 40, 255), new Color32(240, 200, 60, 255), new Color32(20, 20, 24, 255) };
-    // 5 x 7 pixel letters (top row first)
-    static string[] Glyph(char ch)
-    {
-        switch (ch)
-        {
-            case 'A': return new[] { " ### ", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
-            case 'B': return new[] { "#### ", "#   #", "#   #", "#### ", "#   #", "#   #", "#### " };
-            case 'C': return new[] { " ### ", "#   #", "#    ", "#    ", "#    ", "#   #", " ### " };
-            case 'D': return new[] { "#### ", "#   #", "#   #", "#   #", "#   #", "#   #", "#### " };
-            case 'E': return new[] { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#####" };
-            case 'F': return new[] { "#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#    " };
-            case 'G': return new[] { " ### ", "#   #", "#    ", "# ###", "#   #", "#   #", " ### " };
-            case 'H': return new[] { "#   #", "#   #", "#   #", "#####", "#   #", "#   #", "#   #" };
-            case 'I': return new[] { " ### ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", " ### " };
-            case 'K': return new[] { "#   #", "#  # ", "# #  ", "##   ", "# #  ", "#  # ", "#   #" };
-            case 'L': return new[] { "#    ", "#    ", "#    ", "#    ", "#    ", "#    ", "#####" };
-            case 'M': return new[] { "#   #", "## ##", "# # #", "# # #", "#   #", "#   #", "#   #" };
-            case 'N': return new[] { "#   #", "##  #", "# # #", "#  ##", "#   #", "#   #", "#   #" };
-            case 'O': return new[] { " ### ", "#   #", "#   #", "#   #", "#   #", "#   #", " ### " };
-            case 'P': return new[] { "#### ", "#   #", "#   #", "#### ", "#    ", "#    ", "#    " };
-            case 'Q': return new[] { " ### ", "#   #", "#   #", "#   #", "# # #", "#  # ", " ## #" };
-            case 'R': return new[] { "#### ", "#   #", "#   #", "#### ", "# #  ", "#  # ", "#   #" };
-            case 'S': return new[] { " ####", "#    ", "#    ", " ### ", "    #", "    #", "#### " };
-            case 'T': return new[] { "#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  " };
-            case 'U': return new[] { "#   #", "#   #", "#   #", "#   #", "#   #", "#   #", " ### " };
-            case 'V': return new[] { "#   #", "#   #", "#   #", "#   #", "#   #", " # # ", "  #  " };
-            case 'W': return new[] { "#   #", "#   #", "#   #", "# # #", "# # #", "## ##", "#   #" };
-            case 'X': return new[] { "#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #" };
-            case 'Y': return new[] { "#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  " };
-            case 'Z': return new[] { "#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####" };
-            case '8': return new[] { " ### ", "#   #", "#   #", " ### ", "#   #", "#   #", " ### " };
-            case '0': return new[] { " ### ", "#   #", "#  ##", "# # #", "##  #", "#   #", " ### " };
-            default: return null;
-        }
-    }
-
-    // smooth lettering: the 5 x 7 bitmap read with bilinear filtering and a threshold, so strokes get round corners and
-    // clean diagonals at any size. gx 0..5 across, gy 0..7 from the top; returns 0..1 (0.5 = the outline)
-    static readonly System.Collections.Generic.Dictionary<char, string[]> glyphs = new System.Collections.Generic.Dictionary<char, string[]>();
-    static float Bit(string[] g, int x, int y) => x >= 0 && x < 5 && y >= 0 && y < 7 && g[y][x] == '#' ? 1f : 0f;
-    static float GlyphCov(char ch, float gx, float gy)
-    {
-        string[] g;
-        if (!glyphs.TryGetValue(ch, out g)) { g = Glyph(ch); glyphs[ch] = g; }
-        if (g == null) return 0f;
-        float fx = gx - 0.5f, fy = gy - 0.5f; int ix = Mathf.FloorToInt(fx), iy = Mathf.FloorToInt(fy); float a = fx - ix, b = fy - iy;
-        float v0 = Bit(g, ix, iy) + (Bit(g, ix + 1, iy) - Bit(g, ix, iy)) * a, v1 = Bit(g, ix, iy + 1) + (Bit(g, ix + 1, iy + 1) - Bit(g, ix, iy + 1)) * a;
-        return v0 + (v1 - v0) * b;
-    }
-    // text coverage at pixel (lx, ly): letters cw x ch px per bitmap cell, adv cells per letter, top of the letters at yTop
+    // text coverage at pixel (lx, ly): letters cw x ch px per font cell (VectorFont: a 5 x 7 cell box), adv cells per letter, top of the letters at yTop
     // (v runs up), slant = px of lean per px of height
     static float TextCov(string txt, float lx, float ly, float x0, float yTop, float cw, float ch, float adv, float slant)
     {
         float ty = (yTop - ly) / ch; if (ty < -0.6f || ty > 7.6f) return 0f;
         float u = (lx - x0 - (ly - (yTop - 3.5f * ch)) * slant) / cw; if (u < -0.6f) return 0f;
         int ci = Mathf.FloorToInt((u + 0.5f) / adv); if (ci < 0 || ci >= txt.Length) return 0f;
-        float v = GlyphCov(txt[ci], u - ci * adv, ty);
-        return Mathf.Clamp01((v - 0.45f) * Mathf.Min(cw, ch) + 0.5f);
+        return VectorFont.Cov(txt[ci], u - ci * adv, ty, Mathf.Min(cw, ch)); // smooth stroke font (VectorFont.cs)
     }
     static Color32 Mix(Color32 a, Color32 b, float t) => new Color32(B(a.r + (b.r - a.r) * t), B(a.g + (b.g - a.g) * t), B(a.b + (b.b - a.b) * t), 255);
 

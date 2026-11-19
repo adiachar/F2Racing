@@ -183,23 +183,25 @@ public static class Scenery
     // Braking distance boards (200 / 150 / 100 / 50 m; the 200 only before the long braking zones) before every real
     // braking zone, on the outside of the corner, facing the driver. The distances are measured to the turn-in point
     // of the racing line.
-    static readonly string[] Digit = {
-        "01110100011001110101110011000101110", "00100011000010000100001000010001110", "01110100010000100010001000100011111", "", "",
-        "11111100001111000001000011000101110" };
+    // Texture: four boards of 256 x 128 (one per distance, 200 at the bottom row) with black digits in VectorFont's
+    // smooth stroke glyphs (antialiased, mipmapped; the old 3 px pixel digits read "8-bit"), a dark grey frame; the
+    // boards' backs point at the frame (dark grey, not white: they face the TV cameras).
+    const int BoardW = 256, BoardH = 128;
     public static GameObject Boards(Track t, RacingLine line, Transform parent, float wallAt)
     {
         string[] label = { "200", "150", "100", "50" };
-        var tex = WorldBuilder.Tex(96, 128, (u, v, x, y) =>
+        var frame = new Color32(44, 45, 48, 255); var paper = new Color32(242, 242, 236, 255); var ink = new Color32(16, 16, 19, 255);
+        // a texel is 1.1 m / 256 wide and 0.7 m / 128 tall: wider font cells keep the digits' proportions on the board
+        const float ch = 10f, cw = ch * 1.27f, adv = 6.2f;
+        var tex = WorldBuilder.Tex(BoardW, BoardH * 4, (u, v, x, y) =>
         {
-            int row = Mathf.Min(3, y / 32), yy = y - row * 32 - 5; string txt = label[row];
-            int x0 = (96 - txt.Length * 18) / 2 + 1, xx = x - x0;
-            bool border = x < 3 || x > 92 || y % 32 < 2 || y % 32 > 29;
-            if (!border && xx >= 0 && yy >= 0 && yy < 21 && xx < txt.Length * 18 && xx % 18 < 15)
-            {
-                string bits = Digit[txt[xx / 18] - '0'];
-                if (bits[(6 - yy / 3) * 5 + (xx % 18) / 3] == '1') return new Color32(15, 15, 18, 255);
-            }
-            return border ? new Color32(15, 15, 18, 255) : new Color32(245, 245, 240, 255);
+            int row = Mathf.Min(3, y / BoardH), ly = y - row * BoardH; string txt = label[row];
+            float fx = Mathf.Min(x + 0.5f, BoardW - x - 0.5f), fy = Mathf.Min(ly + 0.5f, BoardH - ly - 0.5f), e = Mathf.Min(fx, fy);
+            if (e < 7f) return e < 5.5f ? frame : Color32.Lerp(frame, paper, (e - 5.5f) / 1.5f);
+            float w = cw * (adv * (txt.Length - 1) + 5f), x0 = (BoardW - w) * 0.5f, gy = (BoardH * 0.5f + 3.5f * ch - (ly + 0.5f)) / ch;
+            float gu = (x + 0.5f - x0) / cw; int ci = Mathf.FloorToInt((gu + 0.5f) / adv);
+            float cov = ci >= 0 && ci < txt.Length ? VectorFont.Cov(txt[ci], gu - ci * adv, gy, ch, 1.3f) : 0f;
+            return Color32.Lerp(paper, ink, cov);
         });
         var face = new Buf(); var post = new Buf();
         int N = line.N; float hw = (float)t.width / 2;
@@ -228,7 +230,7 @@ public static class Scenery
                 float y0 = 0.55f, y1 = 1.25f, v0 = b / 4f, v1 = (b + 1) / 4f;
                 Quad(face, l + Vector3.up * y0, r + Vector3.up * y0, r + Vector3.up * y1, l + Vector3.up * y1, -tan,
                      new Vector2(0, v0), new Vector2(1, v0), new Vector2(1, v1), new Vector2(0, v1));
-                var w = new Vector2(0.5f, 0.02f);
+                var w = new Vector2(0.5f, 2f / (BoardH * 4)); // the back and the post: the dark grey frame
                 Quad(face, l + Vector3.up * y0, r + Vector3.up * y0, r + Vector3.up * y1, l + Vector3.up * y1, tan, w, w, w, w);
                 Vector3 m = (a + d) * 0.5f + tan * 0.02f, hx = nrm * 0.04f;
                 Quad(post, m - hx, m + hx, m + hx + Vector3.up * y0, m - hx + Vector3.up * y0, -tan, w, w, w, w);

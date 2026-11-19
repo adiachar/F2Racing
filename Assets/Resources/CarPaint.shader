@@ -399,8 +399,10 @@ Shader "F2/CarPaint"
                 float coatMin = 0.1 * visorK;
                 if (mir > 0.5)
                 {
-                    base = half3(0.05, 0.052, 0.056); metal = 0.0; coatK = 0.6; gloss0 = 0.92; glossAdd = 0.0; specK = 0.5;
-                    coatMin = 0.22;
+                    // a mirror shows the world behind at a near-constant ~40 % (tinted glass), not a Fresnel rise
+                    // towards white at grazing views (the halo cam saw a flat white panel)
+                    base = half3(0.05, 0.052, 0.056); metal = 0.0; coatK = 0.42; gloss0 = 0.92; glossAdd = 0.0; specK = 0.35;
+                    coatMin = 0.36; envTint = half3(0.8, 0.8, 0.82);
                 }
                 half gloss = saturate(gloss0 + 0.08 * _Wet + glossAdd);
                 // sun with a little wrap (a softer terminator: flanks turned from the sun stay readable) + sky light
@@ -412,6 +414,9 @@ Shader "F2/CarPaint"
                 diff = (half3)PaintRoll((float3)diff, fabric);
                 diff *= inShade;
                 half3 R = reflect(-V, N);
+                // mirror glass (4 cm tall, object y 0.702 .. 0.745): its picture has the horizon across the middle (sky
+                // above, the road behind below), whatever the view; a flat glass would show one flat tone. mir: float mask
+                R = lerp(R, normalize(half3(R.x, (half)((i.op.y - 0.7235) * 5.0) + R.y * 0.2, R.z) + half3(0.0, 0.0, 0.001)), (half)mir);
                 half3 env;
                 float envLod = (1.0 - gloss) * 5.0; // (mip of the 128 px sky probe)
                 if (_F2EnvOn > 0.5)

@@ -1248,7 +1248,7 @@ public static class RealWorld
         Vector3 FL = cen + F * hs - A * hl, FR = cen + F * hs + A * hl, BL = cen - F * hs - A * hl, BR = cen - F * hs + A * hl;
         Trackside.AddSolid(cen, A, hl + 0.8f, hs + 1.2f, gmin - 1f, roofY + 3.5f, false); // (roof flags, floodlights)
         var mb = Buf(SBuild, Block(ocx, ocz), 220 + 28 * (Mathf.RoundToInt(2f * hl / 9f) + 3));
-        Color conc = C(0.80f, 0.80f, 0.78f), dark = C(0.62f, 0.62f, 0.61f), white = Color.white;
+        Color conc = C(0.68f, 0.68f, 0.66f), dark = C(0.53f, 0.53f, 0.52f), white = C(0.75f, 0.75f, 0.74f); // (was 0.80 / 0.62 / 1.0: stands blew out to white in the sun)
         float k = 0.95f + 0.1f * Hash(b, 77); conc *= k; conc.a = 1f; dark.a = 1f;
         var cc = CellUv(CConcrete); var pl = CellUv(CPlaster); float bw = TileW(CConcrete), fh = TileH(CConcrete);
         float bays = Mathf.Max(1f, Mathf.Round(2f * hl / bw));
@@ -1286,7 +1286,7 @@ public static class RealWorld
         // other one, and a white rail along the front: the seating reads as blocks of people, not one noisy slab
         Vector2 flat = new Vector2(0.5f, 0.5f);
         int aisles = Mathf.Max(2, Mathf.RoundToInt(2f * hl / 9f)); float slopeLen = Mathf.Sqrt(depth * depth + rise * rise);
-        Color step = C(0.74f, 0.74f, 0.72f), mouth = C(0.10f, 0.10f, 0.11f), rail = C(0.93f, 0.93f, 0.92f);
+        Color step = C(0.74f, 0.74f, 0.72f), mouth = C(0.10f, 0.10f, 0.11f), rail = C(0.70f, 0.70f, 0.69f);
         Vector3 upRake = (BL - FL + up * (topY - frontY)) / slopeLen; // unit vector up the slope
         for (int q = 0; q <= aisles; q++)
         {
