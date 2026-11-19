@@ -17,5 +17,6 @@ Both accounts read this file before starting work and add a short dated line whe
 - (none yet)
 
 ## Done log
+- 2026-11-19 gfx: round 9 (stands: steel trusses, shaded roof underside, AO rows, team-coloured seat blocks, crowd shimmer, aisles, name banners; map-building glass mirrors the sky + lit windows at dusk; pit-lane markings, pit-wall gantry, race-control tower). Draw calls +0.
 - 2026-11-19 gfx: rounds 1-6 on `gfx` (road grain/rubber, kerbs+run-off, sharp shadows on grass, Monza park species + furniture, forest floor/undergrowth (High), lens-flare ghosts, cockpit gloves/halo/paint); merged main into gfx (no rebase: force-push not allowed, so merge commits instead). Ready to merge when Adi approves.
 - 2026-11-19 lead: chase camera tied to the car (no lag/shuffle); brief for the graphics account written.

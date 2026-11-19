@@ -474,9 +474,14 @@ public static class EnvTex
             {
                 // the tile spans pixels 2 .. 126 (the shader's margin); the margin repeats the opposite edge
                 float u = ((x - 2 + 0.5f) / 124f + 1f) % 1f, v = ((y - 2 + 0.5f) / 124f + 1f) % 1f;
-                mk = 1f;
+                mk = 1f; glassPx = false;
                 var c = BCell(cell, u, v, Mathf.Min(127, (int)(u * C)), Mathf.Min(127, (int)(v * C)));
-                px[(oy0 + y) * W + ox0 + x] = new Color32(B(c.r), B(c.g), B(c.b), B(mk));
+                // ground-floor bays: splash grime and shade towards the pavement (darker bases)
+                if (cell >= 8 && cell <= 15) { float g = Mathf.Clamp01(v / 0.3f); c *= 0.7f + 0.3f * g * (2f - g); }
+                // alpha: 0 = window glass (Baked F2_ATLAS mirrors the sky there and lights some windows at night);
+                // else the tint mask, never below 14 (the shader remaps 0.06..1 to 0..1)
+                byte al = glassPx ? (byte)0 : (byte)Mathf.Max(14, (int)B(mk));
+                px[(oy0 + y) * W + ox0 + x] = new Color32(B(c.r), B(c.g), B(c.b), al);
             }
         }
         dPl = dBr = dTi = dPa = dCl = dCo = dSh = dGr = null;
@@ -514,8 +519,10 @@ public static class EnvTex
     static Color Plaster(int x, int y) => Lin(dPl, x, y, PlasterLin);
     static Color Stone(int x, int y) { mk = 0f; return Lin(dPa, x, y, new Color(0.72f, 0.69f, 0.60f)); }
     // glass reflecting the sky: darker low down, lighter at the top, a streak of reflection
+    static bool glassPx; // the pixel being painted is window glass (alpha 0 in the atlas)
     static Color Glass(float t, float u, float v)
     {
+        glassPx = true;
         var c = Color.Lerp(new Color(0.16f, 0.21f, 0.27f), new Color(0.50f, 0.60f, 0.70f), t * t);
         if (u + v * 0.6f > 0.85f && u + v * 0.6f < 0.9f) c += new Color(0.1f, 0.1f, 0.1f);
         return c;
@@ -607,7 +614,9 @@ public static class EnvTex
                 mk = 0f;
                 if (u < 0.02f || u > 0.98f || Mathf.Abs(u - 0.5f) < 0.012f || v < 0.32f || v > 0.925f) return new Color(0.55f, 0.57f, 0.60f);
                 var gl = Glass((v - 0.3f) / 0.64f, u, v) * 0.9f;
-                if (u < 0.5f && v > 0.76f) gl = Slats(new Color(0.78f, 0.78f, 0.76f), y, false); // venetian blind
+                if (u < 0.5f && v > 0.76f) { glassPx = false; gl = Slats(new Color(0.78f, 0.78f, 0.76f), y, false); } // venetian blind
+                // glass balcony balustrade in front of the lower third (hospitality / media floors): a steel top rail
+                if (v < 0.47f) { if (v > 0.445f) { glassPx = false; return new Color(0.70f, 0.72f, 0.74f); } gl *= 0.82f; }
                 return gl;
             }
             case 6: // glass curtain wall
@@ -615,7 +624,11 @@ public static class EnvTex
                 mk = 0f;
                 if (v < 0.1f) return new Color(0.30f, 0.32f, 0.35f) * (v < 0.03f ? 0.8f : 1f);
                 if (x % 32 < 2) return new Color(0.62f, 0.64f, 0.66f);
-                return Glass((v - 0.1f) / 0.9f, u, v) * 0.95f;
+                if (v > 0.9f && v < 0.93f) return new Color(0.55f, 0.57f, 0.60f); // transom
+                // panes differ a little (tint, a blind half down in some)
+                float ph = Hash(x / 32, 0, s);
+                if (ph > 0.7f && v > 0.62f) return Slats(new Color(0.74f, 0.74f, 0.72f), y, false);
+                return Glass((v - 0.1f) / 0.9f, u, v) * (0.88f + 0.14f * ph);
             }
             case 7: // dressed stone, tall window with a round top
             {

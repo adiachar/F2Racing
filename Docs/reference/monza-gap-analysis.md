@@ -292,3 +292,38 @@ Done (not yet seen in a build):
   (Medium 2 m) with gaps, plus short tufts on the track side where the verge is grass. Low: none.
 - Card tiles (tall grass, fern) are painted at load (`EnvTex.PaintUnder`) into a free corner of the model atlas, so
   the cards share the model trees' material and their merged 400 m chunks; LightBake keeps them out of the roof map.
+
+## Round 9: grandstands, buildings, pit straight
+
+Done (not yet seen in a build):
+
+- **Procedural stands** (`Trackside.Stand`): grey standing-seam roof (no longer white); the underside is in shade (lighter at
+  the front edge, darker at the back) with four steel purlins; the front girder has real top / bottom chords; every column is
+  a flanged steel column on a base plate, carrying a lattice cantilever truss (chords + webs with thickness; Low keeps the flat
+  beam); an eaves beam along the back. Rows get baked AO under the roof (treads, risers, seats and crowd darker towards the
+  back). Seats in team-coloured blocks (one colour per section, the upper tier another; Monza mostly red). Stair aisles:
+  yellow nosing on every step, a handrail down the middle with posts. A name banner under the roof's front girder
+  (invented names: "TRIBUNA AURORA", "TRIBUNA DEL PARCO", "TRIBUNA VELOCE", "TRIBUNA SOLE").
+- **Crowd** (`Baked.shader F2_CROWD`, trackside crowd material after the bake): the empty seats in the crowd texture are
+  neutral and take the seat block's colour from uv1; each person bobs / sways by a texel (per-person phase, `_Time`),
+  sampled with unshifted gradients (no mip seams). The map stands' crowd cell (building atlas cell 22) gets the same shimmer.
+- **Map buildings** (`EnvTex.BuildingAtlas` + `Baked.shader F2_ATLAS`): window glass is marked (alpha 0; the tint mask now
+  starts at 14/255) and mirrors the sky / ground / sun with Fresnel like the trackside glass (Medium / High); ground-floor
+  bays darker towards the pavement; office ribbon windows get a glass balcony balustrade with a rail; curtain-wall panes
+  vary (tint, blinds, transom). At dusk / night a share of the windows glows warm (`_F2Night`, set in `Trackside.Build`
+  from the time of day; also the trackside glass).
+- **Pit straight**: white line along the wall side of the fast lane, speed-limit lines across the lane at both ends,
+  "SPEED LIMIT 80" painted before the entry line; a pit-wall gantry 40 m before the line (two timing screens, to the lane
+  and to the track, advertisers on the beam); the first bay's penthouse is now a two-storey race-control tower glazed on
+  three sides with a "RACE CONTROL" sign and a mast. (Garage interiors / team boxes / pit-wall stands stay `PitGarage.cs`.)
+- Atlas: the free block x 512..1023 y 320..511 of `TracksideArt.Atlas` holds the banners, the race-control sign and the
+  pit-lane lettering; glyphs '8', '0' added.
+
+Cost: draw calls **+0**. Triangles: ~+0.9k per roofed stand on Medium / High (trusses ~0.6k, aisles ~0.25k), so ~+4.5k
+Medium, ~+7k High over the lap; Low ~+0.2k; pit ~+0.2k. Pixel: F2_ATLAS ~+35 ALU (Low ~+10: no mirror), two more
+interpolators; F2_CROWD ~+15 ALU. Crowd meshes +16 bytes / vertex (uv1).
+
+Shots to verify: s=0 chase + tv (main stand roof, trusses, banner, seat colours, crowd movement; race-control tower;
+pit-wall gantry at s=-40; speed-limit line at the pit entry), any map building with offices (glass reflecting the sky).
+Risks: glass on map buildings too bright at grazing angles; seat tint strength (linear uv1 values); the banner hiding the
+top rows from the chase camera.
