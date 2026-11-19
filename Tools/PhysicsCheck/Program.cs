@@ -884,7 +884,7 @@ if (args.Length > 0 && args[0] == "traffic")
                         if (order[i, j] != 0 && s != order[i, j])
                         {
                             tl.overtakes++;
-                            if (j == n) { if (s > 0) tl.aiOnPl++; else tl.plOnAi++; }
+                            if (j == n) { if (s > 0) { tl.aiOnPl++; if (tl.firstPass == 0) tl.firstPass = time; } else tl.plOnAi++; }
                         }
                         order[i, j] = s;
                     }
@@ -942,6 +942,65 @@ if (args.Length > 0 && args[0] == "traffic")
             }
         }
         for (int scn = 0; scn < 3; scn++) Console.WriteLine($"SCENARIO {scName[scn]}: contacts {total[scn].events}, AI-caused {total[scn].aiFault}, player-caused {total[scn].plFault}, AI passes {total[scn].aiOnPl}, resets {total[scn].resets}");
+    }
+    if (what == "all" || what == "duel")
+    {
+        // duel: one rival right behind the blind player (0.6 s back, flying, Overtake Mode armed), the player's pace set
+        // so that the rival is DELTA s a lap faster alone (bisection on the player's difficulty, same profile and tuning);
+        // 5 laps. Does a faster rival get by a player who just holds the racing line, and cleanly?
+        double SoloLap(Track t, RacingLine line, DriverProfile w, int ti, double diff, int seed)
+        {
+            var d = new AiDriver(t, line, new CarConfig(), w, AiTuning.For(ti), diff, seed); var hf = t.h != null ? new HeightField(t) : null;
+            d.Place(t.N - 30, line.off[t.N - 30]); double time = 0; int steps = 0;
+            while (d.lap < 3 && time < 600)
+            {
+                if (steps++ % 4 == 0) { d.Think(4 * H, time, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); }
+                d.car.Step(d.LastInput, H); time += H;
+            }
+            return d.lastLap;
+        }
+        var deltas = (Environment.GetEnvironmentVariable("DELTA") ?? "0.3,0.5").Split(',').Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+        var duelIds = (Environment.GetEnvironmentVariable("DUELONLY") ?? string.Join(",", defs.Select(d => d.id))).Split(',');
+        var drivers = new[] { 1, 3, 11 };   // M. Voss (aggression 0.95), N. Lindqvist (0.60), N. Holz (0.45)
+        Console.WriteLine($"traffic duel: one rival 0.6 s behind the blind player, faster by {string.Join(" / ", deltas)} s a lap alone; 5 laps; damage {(dmgFull ? "FULL" : "off")}");
+        foreach (double delta in deltas)
+        {
+            var sum = new TrafficTally(); int duels = 0, passedOnce = 0; double tFirst = 0; int nFirst = 0;
+            foreach (var id in duelIds)
+            {
+                int ti = Array.FindIndex(defs, d => d.id == id); if (ti < 0) continue;
+                var t = defs[ti].Build(); var line = RacingLine.Compute(t, new CarConfig()); int N = t.N;
+                var row = new List<string>(); var rowT = new TrafficTally();
+                foreach (int dv in drivers)
+                {
+                    var w = DriverProfile.Grid[dv];
+                    var plWho = new DriverProfile { name = "PLAYER", pace = w.pace, consistency = 1, aggression = 0.5 };
+                    double aiLap = SoloLap(t, line, new DriverProfile { name = w.name, pace = w.pace, consistency = 1, aggression = w.aggression }, ti, 1, dv + 1);
+                    // secant on the player's difficulty: his solo lap - the rival's = delta
+                    double d0 = 1.0, f0 = SoloLap(t, line, plWho, ti, d0, 99) - aiLap - delta, d1 = 0.985, f1 = SoloLap(t, line, plWho, ti, d1, 99) - aiLap - delta;
+                    for (int it = 0; it < 3 && Math.Abs(f1) > 0.02 && Math.Abs(f1 - f0) > 1e-6; it++)
+                    {
+                        double d2 = Math.Max(0.9, Math.Min(1.02, d1 - f1 * (d1 - d0) / (f1 - f0)));
+                        d0 = d1; f0 = f1; d1 = d2; f1 = SoloLap(t, line, plWho, ti, d1, 99) - aiLap - delta;
+                    }
+                    double diff = d1; if (Environment.GetEnvironmentVariable("DUELDBG") == "1") Console.WriteLine($"      {w.name} solo {aiLap:F2} player diff {diff:F4} gap {f1 + delta:F2}");
+                    var pl = new AiDriver(t, line, new CarConfig { damage = dmgFull }, plWho, AiTuning.For(ti), diff, 99);
+                    var ai = new AiDriver(t, line, new CarConfig { damage = dmgFull }, w, AiTuning.For(ti), 1, dv + 1);
+                    int pIdx = t.GridIndex(0); double v0 = line.speed[pIdx] * 0.9;
+                    int aIdx = (pIdx - (int)Math.Round(Math.Max(15, 0.6 * v0) / t.ds) + N) % N;
+                    pl.Place(pIdx, line.off[pIdx], v0); ai.Place(aIdx, line.off[aIdx], v0);
+                    ai.lap += 2; pl.lap += 2;   // past lap 1: Overtake Mode can arm
+                    var r = Run(t, line, new List<AiDriver> { ai }, pl, 5 * 200, Math.Max(ai.lap, pl.lap) + 4);
+                    rowT.Add(r); duels++; if (r.aiOnPl > 0) passedOnce++;
+                    if (r.firstPass > 0) { tFirst += r.firstPass; nFirst++; }
+                    row.Add($"{w.name.Split(' ')[1]} {r.aiOnPl}/{r.plOnAi}{(r.aiFault > 0 ? $" c{r.aiFault}" : "")}{(Environment.GetEnvironmentVariable("DUELDBG") == "1" ? $" a{Cnt(ai, "attacksMade")} d{Cnt(ai, "divesMade")} e[{string.Join(",", (int[])ai.GetType().GetField("attackEnds").GetValue(ai))}]" : "")}");
+                }
+                sum.Add(rowT);
+                Console.WriteLine($"  {defs[ti].name,-28} passes on the player / re-passed: {string.Join(", ", row),-40} contacts {rowT.events} (AI-caused {rowT.aiFault}, player-caused {rowT.plFault}); AI 4-wheels-off {rowT.aiOffT:F1} s");
+                foreach (var s in rowT.log.Take(3)) Console.WriteLine("        " + s);
+            }
+            Console.WriteLine($"DUEL TOTAL (rival {delta:F1} s/lap faster, {duels} duels of 5 laps): passes on the player {sum.aiOnPl} ({(double)sum.aiOnPl / Math.Max(1, duels):F2} per duel; at least one in {passedOnce} of {duels}; first after {(nFirst > 0 ? tFirst / nFirst : 0):F0} s on average), re-passed {sum.plOnAi}; contacts {sum.events}, AI-caused {sum.aiFault} (rear-ends {sum.aiRear}), player-caused {sum.plFault}; AI 4-wheels-off {sum.aiOffT:F1} s ({sum.offEvents} times)");
+        }
     }
     if (what == "all" || what == "race")
     {
@@ -1386,7 +1445,7 @@ foreach (var (nm, data, w) in new[] { ("Monaco", TrackData.Monaco, TrackData.Mon
 sealed class TrafficTally
 {
     public int defMoves, offEvents, events, aiFault, aiRear, plFault, aiOnPlFault, plEvents, aiOnPl, plOnAi, overtakes, resets, plResets, impacts;
-    public double aiOffT, time;
+    public double aiOffT, time, firstPass;
     public List<string> log = new List<string>();
     public void Add(TrafficTally o)
     {

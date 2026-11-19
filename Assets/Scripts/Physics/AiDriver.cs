@@ -160,6 +160,9 @@ namespace FormulaSim
             else speed = (double[])line.SpeedProfile(c, grip, brake).Clone();
             deploy = line.deploy != null ? (double[])line.deploy.Clone() : null;
             line.speed = keepS; line.braking = keepB; line.phase = keepP; line.vCorner = keepC; line.lapTime = keepT; line.deploy = keepD; line.soc = keepE;
+            // a late-braking dive (race craft only) brakes nearer the car's real limit instead
+            // of his everyday share (up to 98 %), more of the gap for the bold (never less than his own profile)
+            diveK = Math.Max(1, Math.Min(DiveK0 + DiveKA * who.aggression, 0.98 / Math.Max(0.5, brake)));
             FitGrip();   // race craft: the grip this driver uses (AiRacecraft.cs; changes nothing when he drives alone)
         }
 
@@ -264,13 +267,18 @@ namespace FormulaSim
             wasBraking = brakingZone;
             if (mistakeT > 0) mistakeT -= dt;
             double vt = Math.Min(V(ip), V(idx) + 3) * lapPace * (mistakeT > 0 ? 1.07 : 1);
-            if (Math.Abs(offset) > 0.8) vt *= 0.985;      // off the ideal line: a little slower
+            // a late-braking dive (race craft, AiRacecraft.cs): the braking zone at the car's real limit
+            if (diveOn && brakingZone) vt = Math.Max(vt, Math.Min(DiveSpeed(ip), DiveSpeed(idx) + 3) * lapPace);
+            if (Math.Abs(offset) > 0.8 && !diveOn) vt *= 0.985;   // off the ideal line: a little slower (not in a dive: that is the point of it)
             // off the line in a bend (traffic only: alone the offset is 0): no running ahead of the profile out of the bend,
             // and with the car already sliding, no more speed until it grips (an off-line lane is not what the profile is for)
+            double slideHold = double.MaxValue;
             if (Math.Abs(offset) > 0.3 && Math.Abs(line.curv[idx]) > 0.004)
             {
-                vt = Math.Min(vt, V(idx) * lapPace);
-                if (Math.Abs(Math.Atan2(car.vy, Math.Max(5, car.vx))) > 0.045) vt = Math.Min(vt, v);
+                vt = Math.Min(vt, (diveOn ? DiveSpeed(idx) : V(idx)) * lapPace);
+                // hold the speed it has (applied after the grip factors below: scaling the held speed again every think
+                // braked the car down to a crawl while it slid)
+                if (Math.Abs(Math.Atan2(car.vy, Math.Max(5, car.vx))) > 0.045) slideHold = v;
             }
             // drive to the grip the tyres have now (cold, overheated or worn tyres). Without downforce corner speed goes
             // with grip^(1/2); with it the load itself grows with speed, so corner speed reacts more strongly:
@@ -284,6 +292,7 @@ namespace FormulaSim
                 // damage (lost downforce, bent suspension, a flat tyre): the same rule, from the grip the damage leaves
                 if (car.cfg.damage && car.damage.Any) { dmgScale = Math.Pow(Clamp(car.DamageGrip(vt), 0.3, 1.0), 1 / (2 - 2 * car.cfg.loadExp * share)); vt *= dmgScale; }
             }
+            vt = Math.Min(vt, slideHold);
             double vtFree = vt;
             vt = Math.Min(vt, Math.Min(speedCap, pathCap));   // traffic and the own lane's curvature (both off when alone)
             held = vt < vtFree - 0.3;
@@ -303,19 +312,21 @@ namespace FormulaSim
                 // feed-forward: the pedal the profile's deceleration needs (less drag), corrected by the speed error, so
                 // the car brakes as hard as its profile says (5 g and more at speed) instead of only on an error
                 int iq = (ip + 1) % N; double dsq = Math.Max(0.1, track.ds);
-                double aReq = Math.Max(0, (V(ip) * V(ip) - V(iq) * V(iq)) / (2 * dsq)) * lapPace * lapPace * (mistakeT > 0 ? 0.85 : 1) * dmgScale * dmgScale;
+                double vb0 = diveOn ? DiveSpeed(ip) : V(ip), vb1 = diveOn ? DiveSpeed(iq) : V(iq);   // a dive brakes harder, later
+                double aReq = Math.Max(0, (vb0 * vb0 - vb1 * vb1) / (2 * dsq)) * lapPace * lapPace * (mistakeT > 0 ? 0.85 : 1) * dmgScale * dmgScale;
                 double ff = (car.massNow > 0 ? car.massNow : car.cfg.mass) * aReq - 0.5 * 1.225 * car.cfg.cdA * v * v;
                 brk = Clamp(ff / car.cfg.brakeForce - err * tune.kBrk, 0, 1);
             }
             if (brk > 0.02) thr = 0;
             // held back by a car in the lane (or a tight off-line lane): brake for it, not only on the profile's error
             if (held && v > vt + 0.3) { brk = Math.Max(brk, Clamp((v - vt) * 0.3, 0, 1)); thr = 0; }
-            ErsButtons(v, straight && !noPass && !blueFlag && !capped, brakingZone);
-            if ((car.otOn || car.boostOn || car.tow > 0.15) && !held && !brakingZone && v > 40 && Math.Abs(car.r * v) < 6)
+            ErsButtons(v, (straight || (ersAttack && line.phase[idx] > 0)) && !noPass && !blueFlag && !capped, brakingZone);   // attacking: from the exit
+            if ((car.otOn || car.boostOn || car.tow > 0.15 || (seen > 0 && (mode == 1 || prepPass) && !noPass && !blueFlag)) && !held && !brakingZone && v > 40 && Math.Abs(car.r * v) < 6)
             {
                 // the extra power (or the slipstream's lower drag) takes the car over its own speed profile: stay flat
                 // while the profile does not fall within the next 0.6 s (then the normal control sheds the extra speed
-                // before the brake point)
+                // before the brake point). Pulling out of the tow to pass, the speed it carried is the pass: no lifting
+                // back to the profile when the tow is gone (race craft only)
                 bool clear = true; int nL = (int)Math.Round(v * 0.6 / track.ds); double vIp = V(ip);
                 for (int k = 0; k <= nL && clear; k += 4) clear = V((ip + k) % N) >= vIp - 0.5;
                 if (clear) { thr = 1; brk = 0; }
@@ -384,7 +395,7 @@ namespace FormulaSim
                 }
                 int keepLap = lap; Place(idx, offR, keep); lap = keepLap; progress = lap + (double)idx / N - pitLoss / RefLap; // a reset is not a new grid slot: the lap count stays
                 int g = 1; while (g < car.cfg.gearTopSpeeds.Length && keep * 3.6 > car.cfg.gearTopSpeeds[g - 1] * 0.8) g++;
-                car.gear = g; stuckT = offT = 0; offset = offsetTarget = 0; recovered = true; mode = 0; atkRef = null; heldT = 0;
+                car.gear = g; stuckT = offT = 0; offset = offsetTarget = 0; recovered = true; mode = 0; atkRef = null; heldT = 0; diveOn = false;
             }
             input = new CarInput(steer, thr, brk);
             return input;
@@ -435,15 +446,20 @@ namespace FormulaSim
             bool onStraight = racing && !brakingZone && v > 40 && line.phase != null && line.phase[idx] > 0;
             if (car.otArmed && !otWasArmed) otSave = ersRng.NextDouble() < 0.3 * (1 - who.aggression);
             otWasArmed = car.otArmed;
-            // attack: with the race craft lining up or making a pass (the energy is not spent following 100 m back)
-            bool attack = seen > 0 ? mode == 1 || prepPass || aheadGap < 15 + 0.2 * v : aheadGap < 30 + 0.8 * v, defend = behindGap < 25;
+            // attack: with the race craft lining up or making a pass, or from the exit onto the straight that leads to the
+            // place he will pass, within 1 s (ersAttack, AiRacecraft.cs): the lap's allowance is saved for that straight,
+            // not spent following 100 m back or on a straight that ends in a fast bend. Overtake Mode only spends the
+            // allowance where it gives more than the car's own map, so on from the exit costs nothing until it counts.
+            bool attack = seen > 0 ? mode == 1 || prepPass || ersAttack : aheadGap < 30 + 0.8 * v, defend = behindGap < 25;
             car.otOn = car.otArmed && onStraight && car.OtLeft > 0 && (otSave ? defend : attack || defend);
             double soc = double.IsNaN(car.ersEnergy) ? 1 : car.ersEnergy / c.ersCapacity;
             if (onStraight && !wasStraight)
-                boostWant = (aheadGap < 30 || behindGap < 20) && soc > 0.4 && ersRng.NextDouble() < 0.25 + 0.4 * who.aggression;
+                boostWant = ((aheadGap < 30 && seen == 0) || behindGap < 20) && soc > 0.4 && ersRng.NextDouble() < 0.25 + 0.4 * who.aggression;   // attacking: ersPush
             wasStraight = onStraight;
             if (!onStraight || soc < 0.25 || (aheadGap > 60 && behindGap > 40)) boostWant = false;
-            car.boostOn = boostWant;
+            // the push for the pass: the last seconds of the attack straight, close behind or alongside (where the car
+            // ahead clips or its map ramps down), with charge to spare
+            car.boostOn = boostWant || (ersPush && onStraight && soc > 0.35);
         }
 
         public CarInput LastInput => input;
