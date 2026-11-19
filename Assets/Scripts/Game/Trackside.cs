@@ -1606,7 +1606,7 @@ public static class Trackside
             // braking zones: a pair of black lock-up marks on the asphalt running wide of the line towards the outside of
             // the corner, and dirt thrown over the kerb on the exit; at the slow corners only, a few of them
             {
-                var done = new List<int>(); int maxLk = high ? 8 : 5;
+                var done = new List<int>(); int maxLk = high ? 6 : 4;
                 foreach (int apex in corners)
                 {
                     if (done.Count >= maxLk || curvAbs[apex] < 1f / 130f) break;
@@ -1614,7 +1614,7 @@ public static class Trackside
                     if (near) continue;
                     done.Add(apex);
                     int sg = Outside(apex), st = Mathf.Max(1, Mathf.RoundToInt(3f / ds));
-                    int lenL = Mathf.RoundToInt((30f + 25f * Rand(apex, 81)) / ds), i0 = apex - Mathf.RoundToInt(22f / ds) - lenL;
+                    int lenL = Mathf.RoundToInt((14f + 12f * Rand(apex, 81)) / ds), i0 = apex - Mathf.RoundToInt(26f / ds) - lenL; // short: a real flat-spot mark, not a painted lane line
                     float latA = hw * (0.15f + 0.3f * Rand(apex, 82)), latB = hw - 0.9f;
                     for (int m = 0; m < 2; m++)
                         for (int j = 0; j + st <= lenL; j += st)
@@ -1622,7 +1622,9 @@ public static class Trackside
                             int ia = W(i0 + j), ib = W(i0 + j + st);
                             float fa = (float)j / lenL, fb = (float)(j + st) / lenL;
                             float la = Mathf.Lerp(latA, latB, fa * fa) - m * 1.55f, lb = Mathf.Lerp(latA, latB, fb * fb) - m * 1.55f;
-                            float wa = 0.07f + 0.07f * fa, wb = 0.07f + 0.07f * fb;
+                            // thin at both ends (the wheel locks, then the driver releases): reads as a fading skid
+                            float wa = 0.015f + 0.075f * Mathf.Sin(fa * Mathf.PI), wb = 0.015f + 0.075f * Mathf.Sin(fb * Mathf.PI);
+                            if (Rand(apex * 7 + j + m * 131, 83) < 0.12f) continue; // a few gaps where the tyre unloaded
                             var pa = t.pts[ia]; var pb = t.pts[ib];
                             Vector3 Da = Nrm(pa) * sg, Db = Nrm(pb) * sg, ca = P(pa), cb = P(pb);
                             SetChunk(ia);
