@@ -4,8 +4,10 @@
 // Mesh data (WorldBuilder builds it):
 //   uv0 = (lateral offset from the centreline in metres, + = left; distance along the track in metres)
 //   uv2 = road:  (racing-line offset at this row in metres, rubber amount 0..1)
-//         kerb:  (0 at the track edge .. 1 at the outer lip, -1)   <- y < -0.5 marks a kerb vertex
-//   uv3 = edge dirt (left, right) 0..1: dust film, gravel (WorldBuilder.EdgeDirt)
+//         kerb:  (0 at the track edge .. 1 at the outer lip, -(1 + type + 0.45 x wear))   <- y < -0.5 marks a kerb
+//                vertex; type 0 kerb, 1 stepped kerb, 2 sausage (WorldBuilder.KerbLayout)
+//   uv3 = edge dirt (left, right) 0..1: dust film, gravel (WorldBuilder.EdgeDirt); on a kerb vertex the other side's
+//         component holds the saw-tooth ridge amount
 // Paint edges are drawn with box-filtered maths in metres (fwidth), so they stay crisp near and do not
 // shimmer far away, whatever the screen resolution.
 //
@@ -26,6 +28,7 @@ Shader "F2/Road"
         _Dust ("Dusty edge colour", Color) = (0.50, 0.48, 0.45, 1)
         _Paint ("Paint", Color) = (0.93, 0.93, 0.90, 1)
         _KerbRed ("Kerb red", Color) = (0.70, 0.14, 0.13, 1)
+        _KerbYellow ("Sausage kerb yellow", Color) = (0.93, 0.74, 0.10, 1)
         _HalfWidth ("Half track width (m)", Float) = 6
         _Grid ("Grid: first slot (m), pitch (m), slots, slot offset (m)", Vector) = (0, 8, 0, 1.8)
         _Loops ("Timing loops: pitch (m), sector 1 end (m), sector 2 end (m)", Vector) = (100000, -1000, -1000, 0)

@@ -231,20 +231,33 @@ public static class EnvTex
 
     static Texture2D cTurf;
     public static Texture2D Turf() => cTurf != null ? cTurf : (cTurf = MakeTurf());
+    // Astroturf, one tile = 2 m across (u) x 4 m along the track (v). RGB: the turf: tufted rows of blades along the
+    // track (~1.5 cm gauge), each blade a thin streak a few cm long, lighter tips and darker gaps, the pile laid one way
+    // then the other in 1 m rolls; the mips average it all to a calm green, so the fibres only show near the camera.
+    // A (linear data, 0.5 = mean): coarse asphalt aggregate and paint roughness for the painted run-off (Ground.cginc
+    // _Turf mode draws the paint and reads this alpha; the turf ignores it).
     static Texture2D MakeTurf()
     {
-        var px = new Color32[128 * 128];
-        for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++)
+        const int Sz = 256;
+        var px = new Color32[Sz * Sz];
+        FormulaSim.Par.For(0, Sz, y =>
         {
-            float u = x / 128f, v = y / 128f;
-            bool band = ((int)(v * 4)) % 2 == 0;
-            float fib = 0.86f + 0.2f * VN(u * 0.4f, v, 64, 71) + 0.1f * Hash(x, y, 73);
-            float k = (band ? 0.86f : 1f) * fib * (0.95f + 0.1f * Fbm(u, v, 8, 2, 75));
-            bool line = u < 0.03f || u > 0.97f;     // painted white lines along both edges
-            px[y * 128 + x] = line ? new Color32(S(0.80f * fib), S(0.80f * fib), S(0.78f * fib), 255)
-                                   : new Color32(S(0.035f * k), S(0.17f * k), S(0.05f * k), 255);
-        }
-        return Count(Make(128, 128, px));
+            for (int x = 0; x < Sz; x++)
+            {
+                float u = (float)x / Sz, v = (float)y / Sz;
+                int row = x / 2;                                          // a tufted row every 2 texels (~1.6 cm)
+                float inRow = (x & 1) == 0 ? 1f : 0.78f;                  // the gap between rows is darker
+                int seg = (y + (int)(Hash(row, 0, 91) * 8)) / 3;          // blades ~3 texels (~5 cm) long, staggered
+                float blade = 0.72f + 0.5f * Hash(row, seg, 93);
+                float tip = (y + (int)(Hash(row, 0, 91) * 8)) % 3 == 0 ? 1.12f : 1f; // lighter blade tips
+                bool rollA = ((int)(v * 4)) % 2 == 0;                     // 1 m rolls, pile laid alternately
+                float k = inRow * blade * tip * (rollA ? 0.9f : 1.04f) * (0.9f + 0.2f * Fbm(u, v, 8, 2, 75));
+                // aggregate: stones ~1-3 cm (cells) with binder between, a broad wash of paint thickness
+                float agg = 0.5f + 0.32f * (Hash(x / 2, y / 2, 95) - 0.5f) + 0.22f * (Hash(x, y, 97) - 0.5f) + 0.4f * (Fbm(u, v, 16, 3, 99) - 0.5f);
+                px[y * Sz + x] = new Color32(S(0.030f * k), S(0.105f * k), S(0.042f * k), B(Mathf.Clamp01(agg)));
+            }
+        });
+        return Count(Make(Sz, Sz, px));
     }
 
     static Texture2D cPaving;

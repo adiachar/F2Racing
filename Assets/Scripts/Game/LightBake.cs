@@ -218,7 +218,7 @@ public static class LightBake
             if (mesh.normals == null || mesh.normals.Length != mesh.vertexCount) mesh.RecalculateNormals(); // never fall back to 'all up': flat
             var v = mesh.vertices; var n = mesh.normals; var col = new Color[v.Length];
             bool hasN = n != null && n.Length == v.Length; int hint = -1, hint2 = -1;
-            bool groundShade = (mf.name == "Verge" || mf.name == "Gravel") && track != null && !night; // alpha: sign + sun share for the shadow mask (Ground.cginc)
+            bool groundShade = (mf.name == "Verge" || mf.name == "Gravel" || mf.name == "Astroturf") && track != null && !night; // alpha: sign + sun share for the shadow mask (Ground.cginc)
             bool foliage = sn == "F2/Foliage"; bool cards = mf.name == "Trees" && v.Length % 4 == 0;
             // load time: the bake of one vertex only reads (the roof map, the height field, the track, the lamps) and
             // writes its own colour, so big meshes are baked in parallel chunks (pure math, no Unity API off the main

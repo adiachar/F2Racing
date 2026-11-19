@@ -55,7 +55,7 @@ sampler2D _F2RoadMacro;  // global (RoadSurface.cs): R tone drift, G mottle, B r
 #ifdef ROAD_HQ
 sampler2D _F2RoadDetail; // global (RoadSurface.cs): R fine grain, 0.5 = neutral, fades out down the mips
 #endif
-fixed4 _Asphalt, _Dust, _Paint, _KerbRed, _SunCol;
+fixed4 _Asphalt, _Dust, _Paint, _KerbRed, _KerbYellow, _SunCol;
 sampler2D _F2RoadShadow; // global (RoadShadow.cs)
 float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: 1 / width covered (m), w: half width (m)
 half4 _F2SunLin;         // the sun's linear colour x intensity, as baked (0: no mask, the vertex colour is all the light)
@@ -263,27 +263,84 @@ fixed4 frag (v2f i) : SV_Target
     half3 paintCol = _Paint.rgb * (0.95 + 0.2 * grain) * (1.0 - 0.3 * rub);
     col = lerp(col, paintCol, paint);
 
-    // ---- kerbs: 1.5 m red / white blocks, crisp, with tyre-blackened inner edge and a darker outer lip
-    half across = (half)i.misc.x;
-    float tri = abs(frac(along * (1.0 / 3.0)) - 0.5) * 2.0;          // 0..1 triangle wave, period 3 m
-    half red = (half)saturate((tri - 0.5) / (wa * (2.0 / 3.0)) + 0.5); // d(tri)/d(along) = 2/3
-    half3 kc = lerp(_Paint.rgb, _KerbRed.rgb, red) * (0.96 + 0.2 * grain);
-    kc *= 1.0 - 0.3 * saturate(1.0 - across * 3.0) * blotch;         // rubber where wheels ride the kerb (long, soft)
-    kc *= 1.0 - 0.25 * smoothstep(0.82, 1.0, across);                 // outer lip
-    // raised look: a shadowed step against the asphalt, a lit rounded nose just above it, and a dark joint
-    // between the blocks (all box-filtered, ~2-4 cm wide)
-    kc *= 1.0 - 0.45 * Band(across, -1.0, 0.018, wk);
-    kc *= 1.0 + 0.12 * Band(across, 0.025, 0.09, wk);
-    float jb = abs(tri - 0.5) * 1.5;                                  // metres to the nearest colour change
-    kc *= 1.0 - 0.3 * Band(jb, -1.0, 0.012, wa);
-    // outer lip: the last ~1.5 pixels fade to dark dirt, as the road edge does (softer polygon edge against the verge)
-    half lipW = (half)min(1.5 * wk, 0.5);
-    kc = lerp(kc, _Dust.rgb * 0.4, 0.7 * (half)saturate((across - (1.0 - lipW)) / max(lipW, 1e-4)));
+    // ---- kerbs (uv2.y = -(1 + type + 0.45 x wear): type 0 kerb, 1 stepped kerb, 2 sausage; uv3 = this side's dirt
+    // and, in the other component, the saw-tooth ridge amount). Branched: the asphalt pixels pay nothing for this.
+    UNITY_BRANCH
+    if (i.misc.y < -0.5)
+    {
+        float kcode = -i.misc.y - 1.0;
+        float kt = floor(kcode + 0.02);
+        float kwear = saturate((kcode - kt) * (1.0 / 0.45));
+        float isStep = (kt > 0.5 && kt < 1.5) ? 1.0 : 0.0;
+        float isSaus = kt > 1.5 ? 1.0 : 0.0;
+        float ac = i.misc.x;                                          // 0 at the track side .. 1 at the outer lip
+        float kRidge = lat > 0.0 ? i.dirt.y : i.dirt.x;
+        float kDirt = lat > 0.0 ? i.dirt.x : i.dirt.y;
+        float wkm = wk * lerp(1.4, 0.5, isSaus);                      // pixel across, metres
+        // fine detail (chips, specks, single serrations) only while a pixel is under ~2.5 cm, and near the camera and
+        // slow (the road grain's distance x speed fade): never a single-pixel contrast
+        float fine = saturate(1.6 - max(wa, wkm) * 45.0) * i.misc.z;
+        // blocks: 1.5 m red / white (stepped kerb: 0.75 m on its raised outer tier); a sausage is yellow throughout
+        float tierO = isStep * (ac > 0.445 ? 1.0 : 0.0);
+        float per = lerp(3.0, 1.5, tierO);
+        float tri = abs(frac(along / per) - 0.5) * 2.0;              // 0..1 triangle wave
+        half red = (half)saturate((tri - 0.5) / (wa * (2.0 / per)) + 0.5);
+        float jb = abs(tri - 0.5) * per * 0.5;                        // metres to the nearest colour change
+        half3 kc = lerp(_Paint.rgb, _KerbRed.rgb, red);
+        kc = lerp(kc, _KerbYellow.rgb, (half)isSaus);
+        kc *= 0.96 + 0.2 * grain;
+        // raised look: a shadowed step against the asphalt, a lit rounded nose just above it, a dark joint between the
+        // blocks (all box-filtered, ~2-4 cm wide); stepped: shade at the foot of the step and a lit edge on top of it
+        half notS = (half)(1.0 - isSaus);
+        kc *= 1.0 - 0.45 * Band(ac, -1.0, 0.018, wk) * notS;
+        kc *= 1.0 + 0.12 * Band(ac, 0.025, 0.09, wk) * notS;
+        kc *= 1.0 - 0.3 * Band(jb, -1.0, 0.012, wa) * notS;
+        kc *= 1.0 - 0.32 * Band(ac, 0.40, 0.445, wk) * (half)isStep;
+        kc *= 1.0 + 0.14 * Band(ac, 0.47, 0.53, wk) * (half)isStep;
+        // sausage: a lit crown, dark feet, serrated notches across its top every 0.25 m (box-filtered, fading to their
+        // mean once a pixel spans ~1/4 of a tooth) and a joint between the 2 m pieces
+        float sn = abs(frac(along * 4.0) - 0.5);                      // 0..0.5, a notch at 0.5
+        half notch = Band(sn, 0.36, 1.0, wa * 4.0) * Band(ac, 0.12, 0.88, wk);
+        notch = lerp(0.14 * Band(ac, 0.12, 0.88, wk), notch, (half)saturate(1.5 - wa * 6.0));
+        half sj = Band(abs(frac(along * 0.5) - 0.5), 0.485, 1.0, wa * 0.5);
+        kc *= 1.0 + (half)isSaus * (0.16 * Band(ac, 0.36, 0.64, wk) - 0.4 * (Band(ac, -1.0, 0.07, wk) + Band(ac, 0.93, 2.0, wk)) - 0.5 * notch - 0.5 * sj);
+        // saw-tooth rumble ridges (outside of corner exits), 0.3 m pitch on the outer part: each ridge's long face
+        // brightens towards its crest (it faces the cars coming), then a short dark drop; zero-mean shading, faded to
+        // flat once a pixel spans ~1/5 of a ridge, so far away it is just the kerb's colour
+        float rs = frac(along * (1.0 / 0.3));
+        float rd = abs(rs - 0.5);                                     // the drop at the crest (rs -> 1 / 0)
+        half drop = Band(rd, 0.41, 1.0, wa * (1.0 / 0.3));
+        half ridgeM = (half)(kRidge * saturate((ac - 0.3) * 8.0) * (1.0 - isSaus) * (isStep > 0.5 ? tierO : 1.0) * saturate(1.6 - wa * 16.0));
+        kc *= 1.0 + ridgeM * (0.14 * (half)(rs - 0.5) - 0.38 * (drop - 0.18));
 #ifdef ROAD_HQ
-    // road dirt thrown onto the outer part, in long soft drifts (no scuffed blotches: they strobed past at speed)
-    kc = lerp(kc, _Dust.rgb * 0.75, saturate(across * 1.4 - 0.5) * 0.16 * (0.5 + blotch));
+        // rubber smeared on where tyres ride the kerb: heaviest on the inner half, in soft streaks along the track
+        // (still under the car at speed), more at apexes and exits (wear)
+        half wsk = (half)(0.5 + 0.5 * sin(ac * 17.0 + sin(along * 0.11 + ac * 3.0) * 1.3));
+        half innerH = (half)saturate(1.0 - ac * 1.6);
+        half smear = (half)kwear * (0.3 + 0.7 * innerH * innerH) * lerp(0.75, 0.45 + 0.8 * wsk, (half)saturate(1.0 - wkm * 6.0)) * (0.6 + 0.8 * blotch);
+        kc *= 1.0 - 0.45 * saturate(smear) * (1.0 - 0.4 * (half)isSaus);
+        // paint chipped off at the block edges (grey base showing), a ragged edge in ~6 cm cells across; near only
+        float cell = floor(ac * 23.0);
+        float blk = floor(along * 2.0 / per);
+        float chipW = 0.012 + 0.08 * Hash1(cell * 7.31 + blk * 13.17) * Hash1(cell * 3.1 + blk * 5.7 + 2.0);
+        half chip = Band(jb, -1.0, chipW, wa) * (half)(fine * (0.45 + 0.55 * kwear) * (1.0 - isSaus));
+        kc = lerp(kc, half3(0.40, 0.39, 0.37) * (0.9 + 0.5 * grain), chip * 0.8);
+        // dirt and gravel dust on the outer part: a soft film (more beside the traps and on exits), grit specks near
+        half outerD = (half)saturate(ac * 2.6 - 1.45 + isSaus * 0.5);
+        kc = lerp(kc, _Dust.rgb * (0.72 + 0.5 * grain), saturate(outerD * (0.15 + 0.55 * (half)kDirt) * (0.5 + blotch)) * 0.55);
+        half spk = saturate((grain - 0.1) * 7.0) * (half)fine * outerD * (half)saturate(kDirt * 2.0 - 0.3);
+        kc = lerp(kc, half3(0.60, 0.56, 0.50), spk * 0.55);
+#else
+        kc *= 1.0 - 0.3 * saturate(1.0 - (half)ac * 3.0) * blotch * (half)(0.4 + 0.6 * kwear); // rubber, its mean
+        kc = lerp(kc, _Dust.rgb * 0.75, (half)saturate(ac * 2.6 - 1.45) * 0.2 * (0.5 + (half)kDirt));
 #endif
-    col = kerb ? kc : col;
+        // outer lip (and a sausage's inner foot): the last ~1.5 pixels fade to dark dirt, as the road edge does
+        // (softer polygon edge against the verge)
+        half lipW = (half)min(1.5 * wk, 0.5);
+        kc = lerp(kc, _Dust.rgb * 0.4, 0.7 * (half)saturate((ac - (1.0 - lipW)) / max(lipW, 1e-4)));
+        kc = lerp(kc, _Dust.rgb * 0.4, 0.6 * (half)isSaus * (half)saturate((lipW - ac) / max(lipW, 1e-4)));
+        col = kc;
+    }
 
     // ---- edge dirt (uv3, the side this pixel is on): a dusty film reaching 0.5-1.6 m in from the edge (wandering),
     // over the kerb too, with a fine scatter of gravel thrown onto it next to the traps (its mean tone only)

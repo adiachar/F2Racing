@@ -264,6 +264,52 @@ public static class WorldBuilder
         return outp;
     }
 
+    // Kerb and run-off styles per side (0 = left, 1 = right) and track point, from the corner each point belongs to (the
+    // tightest point within 40 m): style 0 flat (gentle bends: low, slight bevel), 1 rounded corner kerb, 2 stepped
+    // (outside of medium corners, R 45-250 m: Lesmo, Parabolica, Ascari exits); wear 0..1 (how much tyres ride it:
+    // apexes and exits); exit 0..1 (outside of a corner exit: saw-tooth ridges on the kerb, tyre marks over the
+    // run-off); sausage (inside of the chicanes, R < 45 m, near the apex: yellow sausage kerb behind the kerb); paint
+    // (outside of corners: the 2 m strip behind the kerb is green / blue painted asphalt, not astroturf). Visual only:
+    // the physical widths (Track.SurfaceAt) are unchanged.
+    struct KerbInfo { public int style; public float wear, exit; public bool sausage, paint; }
+    static KerbInfo[,] KerbLayout(Track t)
+    {
+        int N = t.N; float ds = (float)t.ds; int W = Mathf.Max(1, Mathf.RoundToInt(40f / ds));
+        var info = new KerbInfo[2, N];
+        bool park = t.def != null && t.def.style == CircuitStyle.Parkland;
+        for (int i = 0; i < N; i++)
+        {
+            int best = 0; double bc = 0;
+            for (int k = -W; k <= W; k++)
+            {
+                double c = System.Math.Abs(t.pts[((i + k) % N + N) % N].curv);
+                if (c > bc + 1e-9 || (c > bc - 1e-9 && System.Math.Abs(k) < System.Math.Abs(best))) { bc = c; best = k; }
+            }
+            int apex = ((i + best) % N + N) % N;
+            float R = bc > 1e-6 ? (float)(1.0 / bc) : 1e6f, after = -best * ds;
+            int insideS = t.pts[apex].curv > 0 ? 0 : 1; // left-hand bend: the inside is on the left
+            for (int s = 0; s < 2; s++)
+            {
+                var ki = new KerbInfo();
+                if (R > 250f) { ki.style = 0; ki.wear = 0.2f; }
+                else if (s == insideS)
+                {
+                    ki.style = 1; ki.wear = Mathf.Lerp(0.95f, 0.45f, Mathf.Clamp01(Mathf.Abs(after) / 40f));
+                    ki.sausage = park && R < 45f && Mathf.Abs(after) < 20f;
+                }
+                else
+                {
+                    ki.exit = after > 0f ? Mathf.Clamp01(after / 8f) * Mathf.Clamp01((40f - after) / 15f) : 0f;
+                    ki.style = R >= 45f && after > -6f ? 2 : 1;
+                    ki.wear = 0.3f + 0.6f * ki.exit;
+                    ki.paint = park && after > -15f;
+                }
+                info[s, i] = ki;
+            }
+        }
+        return info;
+    }
+
     const float SeaBed = -4f;
     // Ground.shader / Foliage.shader draw the land and the trees (need the baked lighting, like Road.shader)
     public static bool GroundShaded; public static Shader FoliageShader;
@@ -534,26 +580,37 @@ public static class WorldBuilder
                     if (i < t.N && c < K) { int k = i * (K + 1) + c; tri.Add(k); tri.Add(k + K + 1); tri.Add(k + 1); tri.Add(k + K + 1); tri.Add(k + K + 2); tri.Add(k + 1); }
                 }
             }
-            // kerbs in the same mesh (uv2.y = -1 marks them; uv2.x = 0 at the track edge .. 1 at the raised outer lip).
-            // A rounded profile across (six columns): a rounded nose at the track edge, a top rising gently to the raised
-            // outer lip and a rounded fall at the back; the baked and the sun light change across it, so it reads as a
-            // raised kerb, not a painted strip
-            float[] kf = { 0f, 0.07f, 0.25f, 0.6f, 0.86f, 1f }, kh = { 0.04f, 0.062f, 0.072f, 0.085f, 0.09f, 0.068f };
-            int KP = kf.Length;
-            void KerbRun(int i0, int i1, float side)
+            // kerbs in the same mesh (uv2.y < -0.5 marks them; uv2.x = 0 at the track edge .. 1 at the outer lip).
+            // uv2.y = -(1 + type + 0.45 x wear): type 0 kerb, 1 stepped kerb, 2 sausage; wear 0..1 (rubber, chips).
+            // uv3 on a kerb vertex: its own side's edge dirt as on the road, the other component = the saw-tooth ridge
+            // amount (outside of corner exits). Profiles across (the baked and the sun light change across them):
+            //   flat (gentle bends): a low slab with a slight bevel at both edges;
+            //   rounded (corners): a rounded nose, a top rising gently to the raised outer lip, a rounded fall;
+            //   stepped (outside of medium corners): a low flat inner tier, a step, a raised outer tier;
+            //   sausage (inside of the chicanes): a tall rounded hump 0.5 m wide just behind the kerb, on the turf.
+            var kl = KerbLayout(t);
+            float[] kfFlat = { 0f, 0.04f, 0.3f, 0.7f, 0.95f, 1f }, khFlat = { 0.037f, 0.05f, 0.052f, 0.054f, 0.052f, 0.04f };
+            float[] kfRound = { 0f, 0.07f, 0.25f, 0.6f, 0.86f, 1f }, khRound = { 0.04f, 0.062f, 0.072f, 0.085f, 0.09f, 0.068f };
+            float[] kfStep = { 0f, 0.04f, 0.42f, 0.47f, 0.9f, 1f }, khStep = { 0.037f, 0.05f, 0.053f, 0.088f, 0.095f, 0.07f };
+            float[] kfSaus = { 0f, 0.15f, 0.5f, 0.85f, 1f }, khSaus = { 0.045f, 0.11f, 0.14f, 0.11f, 0.045f };
+            void KerbRun(int i0, int i1, float side, float latIn, float latOut, float[] kf, float[] kh, int type)
             {
-                float inner = side * Wd / 2, outer = side * (Wd / 2 + Kerb);
+                int KP = kf.Length, s = side > 0 ? 0 : 1;
+                float inner = side * latIn, outer = side * latOut;
                 float left = Mathf.Max(inner, outer), right = Mathf.Min(inner, outer);
                 int start = v.Count;
                 for (int i = i0; i <= i1; i++)
                 {
                     var p = t.pts[i % t.N]; float d = (float)(i * t.ds);
+                    var ki = kl[s, i % t.N]; var ed = edgeDirt[i % t.N];
+                    var kd = s == 0 ? new Vector2(ed.x, type == 2 ? 0f : ki.exit) : new Vector2(type == 2 ? 0f : ki.exit, ed.y);
+                    var code = new Vector2(0, -(1f + type + 0.45f * ki.wear));
                     // columns from left to right: on the left-hand kerb (side > 0) the outer lip is at the left
                     for (int c = 0; c < KP; c++)
                     {
                         int pc = side > 0 ? KP - 1 - c : c; float across = kf[pc], g = side > 0 ? 1f - across : across;
-                        float lat = left + (right - left) * g;
-                        v.Add(WT(i, p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(new Vector2(across, -1)); uv3.Add(edgeDirt[i % t.N]);
+                        float lat = left + (right - left) * g; code.x = across;
+                        v.Add(WT(i, p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(code); uv3.Add(kd);
                     }
                     if (i < i1)
                         for (int c = 0; c + 1 < KP; c++)
@@ -564,8 +621,19 @@ public static class WorldBuilder
                         }
                 }
             }
-            Runs(i => t.kerbL[i] > 0, (k, j) => KerbRun(k, j, 1));
-            Runs(i => t.kerbR[i] > 0, (k, j) => KerbRun(k, j, -1));
+            // one piece per stretch of the same style (pieces meet at a shared track point, as real kerb sections do)
+            for (int ks = 0; ks < 2; ks++)
+            {
+                int ksd = ks; float kside = ks == 0 ? 1f : -1f; var kwArr = ks == 0 ? t.kerbL : t.kerbR;
+                for (int kst = 0; kst < 3; kst++)
+                {
+                    int sty = kst;
+                    Runs(i => kwArr[i] > 0 && kl[ksd, i].style == sty, (k, j) => KerbRun(k, j, kside, Wd / 2, Wd / 2 + Kerb,
+                        sty == 0 ? kfFlat : sty == 1 ? kfRound : kfStep, sty == 0 ? khFlat : sty == 1 ? khRound : khStep, sty == 2 ? 1 : 0));
+                }
+                Runs(i => kwArr[i] > 0 && kl[ksd, i].sausage, (k, j) => KerbRun(k, j, kside, Wd / 2 + Kerb + 0.12f, Wd / 2 + Kerb + 0.62f, kfSaus, khSaus, 2));
+            }
+
             // baked like any other surface first (LightBake only lights the plain materials), Road.shader after
             var roadGo = MeshObj("Road", v, uv, tri, asphalt, true, uv2); roadGo.transform.SetParent(root);
             roadGo.GetComponent<MeshFilter>().sharedMesh.SetUVs(3, uv3);
@@ -639,18 +707,46 @@ public static class WorldBuilder
             }
             if (t.def != null && t.def.style == CircuitStyle.Parkland)
             {
-                // a 2 m astroturf strip behind the kerb (or the track edge) all the way round
+                // a 2 m strip behind the kerb (or the track edge) all the way round (physically astroturf, Track.SurfaceAt):
+                // astroturf, or green / blue painted asphalt run-off on the outside of the corners (Monza). With
+                // Ground.shader (_Turf mode): uv0 = uv2 = (metres from the centreline, metres along), uv3 = (the strip's
+                // inner edge m, paint 0/1 + 0.45 x tyre marks of cars running wide over it); each 1-point segment has
+                // its own vertices, so a turf / paint change is a crisp line across
                 v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>();
+                var uv2t = new List<Vector2>(); var uv3t = new List<Vector2>(); var rk = KerbLayout(t);
                 Runs(i => true, (k, j) =>
                 {
                     for (int i = k; i < j; i++)
                     {
-                        float kl = t.kerbL[i], kr = t.kerbR[i];
-                        Strip(t, i, i + 1, Wd / 2 + kl, Wd / 2 + kl + 2f, 0.035f, 4, v, uv, tri);
-                        Strip(t, i, i + 1, -(Wd / 2 + kr), -(Wd / 2 + kr + 2f), 0.035f, 4, v, uv, tri);
+                        for (int ts = 0; ts < 2; ts++)
+                        {
+                            float sd = ts == 0 ? 1f : -1f, a = Wd / 2 + (ts == 0 ? t.kerbL[i] : t.kerbR[i]), b = a + 2f;
+                            int first = v.Count;
+                            Strip(t, i, i + 1, sd * a, sd * b, 0.035f, 4, v, uv, tri);
+                            if (!GroundShaded) continue;
+                            float paint = rk[ts, i].paint ? 1f : 0f;
+                            for (int q = first; q < v.Count; q++)
+                            {
+                                bool lv = (q - first) % 2 == 0; // Strip: (left, right) per point; left = larger lateral
+                                float lat = sd > 0 ? (lv ? b : a) : (lv ? a : b);
+                                int pi = i + (q - first) / 2; float along = (float)(pi * t.ds);
+                                uv[q] = new Vector2(lat, along); uv2t.Add(new Vector2(lat, along));
+                                uv3t.Add(new Vector2(a, paint + 0.45f * rk[ts, pi % t.N].exit));
+                            }
+                        }
                     }
                 });
-                MeshObj("Astroturf", v, uv, tri, Mat(new Color(0.88f, 0.76f, 0.84f), EnvTex.Turf())).transform.SetParent(root); // tint: darker, less saturated paint green (~sRGB 40,120,70)
+                if (GroundShaded)
+                {
+                    var tm = new Material(groundSh) { mainTexture = EnvTex.Turf() };
+                    tm.SetTexture("_MacroTex", EnvTex.Macro());
+                    tm.SetVector("_DryTint", new Vector4(1, 1, 1, 0));
+                    tm.SetFloat("_Turf", 1f);
+                    tm.mainTextureScale = new Vector2(1f / 2f, 1f / 4f); // one tile = 2 m across x 4 m along (EnvTex.Turf)
+                    var tgo = MeshObj("Astroturf", v, uv, tri, tm, true, uv2t); tgo.transform.SetParent(root);
+                    tgo.GetComponent<MeshFilter>().sharedMesh.SetUVs(3, uv3t);
+                }
+                else MeshObj("Astroturf", v, uv, tri, Mat(Color.white, EnvTex.Turf())).transform.SetParent(root); // (the turf colour is in the texture)
                 // gravel traps out to the barrier: Ground.shader with the stone texture in world space; uv2 = (metres from
                 // the centreline, metres along) for the churned inner edge and the ruts of cars that went off
                 v = new List<Vector3>(); uv = new List<Vector2>(); tri = new List<int>(); var uv2g = new List<Vector2>();
