@@ -151,7 +151,7 @@ public partial class GameManager
     int nativeW, nativeH; float fixedScale = 1f;
     void FixedResolution(float k)
     {
-        if (nativeW == 0) { nativeW = Screen.width; nativeH = Screen.height; } // before any change: the panel's own size
+        if (nativeW == 0) { nativeW = RenderScale.NativeW > 0 ? Mathf.RoundToInt(RenderScale.NativeW * RenderScale.Scale) : Screen.width; nativeH = RenderScale.NativeH > 0 ? Mathf.RoundToInt(RenderScale.NativeH * RenderScale.Scale) : Screen.height; } // the base render scale (RenderScale.cs) is the 100% size // before any change: the panel's own size
         if (Mathf.Approximately(k, fixedScale)) return;
         fixedScale = k;
         Screen.SetResolution(Mathf.RoundToInt(nativeW * k), Mathf.RoundToInt(nativeH * k), true);

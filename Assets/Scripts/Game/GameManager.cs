@@ -46,6 +46,7 @@ public partial class GameManager : MonoBehaviour
         Screen.orientation = ScreenOrientation.AutoRotation;
         Screen.autorotateToPortrait = Screen.autorotateToPortraitUpsideDown = false;
         Screen.autorotateToLandscapeLeft = Screen.autorotateToLandscapeRight = true;
+        UnityEngine.Physics.simulationMode = SimulationMode.Script; // the game has its own physics: no PhysX step per FixedUpdate (no PhysX queries are used)
         QualitySettings.vSyncCount = 0; QualitySettings.shadowProjection = ShadowProjection.StableFit;
 
         tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
@@ -96,7 +97,7 @@ public partial class GameManager : MonoBehaviour
     {
         playground = mapIdx == PlaygroundIdx;
         int circuit = playground ? (builtFor >= 0 ? builtFor : 0) : mapIdx;
-        if (circuit != builtFor || world == null)
+        if (circuit != builtFor || world == null || WorldBuilder.Stale) // Stale: the graphics level changed since the last build
         {
             if (world != null) Destroy(world);
             track = Circuits.All[circuit].Build();
@@ -295,7 +296,7 @@ public partial class GameManager : MonoBehaviour
         QualitySettings.shadowDistance = level >= 3 ? 90 : 55;
         // anisotropic filtering keeps the road and verges sharp at a low angle. Other files read "Disable" as "Low".
         // Medium forces at least 4x, High 8x; a texture that asks for more (its own anisoLevel) gets it, up to 16x.
-        QualitySettings.anisotropicFiltering = level <= 1 ? AnisotropicFiltering.Disable : AnisotropicFiltering.ForceEnable;
+        QualitySettings.anisotropicFiltering = level <= 1 ? AnisotropicFiltering.Disable : AnisotropicFiltering.Enable; // per texture: road/ground/kerbs ask for 4-8x themselves; forcing it on trees and people cost 1-3 ms
         Texture.SetGlobalAnisotropicFilteringLimits(level >= 3 ? 8 : 4, 16);
         QualitySettings.globalTextureMipmapLimit = 0; // full-size textures on every level (some default levels halve them)
         if (cam != null) cam.farClipPlane = level <= 1 ? 1500 : 2500;
@@ -831,6 +832,7 @@ public partial class GameManager : MonoBehaviour
         if (steerReset) { steerF.Reset(input.steer); steerReset = false; }
         steerF.BeginFrame(input.steer, (int)(acc / H), H);
         double wallDv = 0; // biggest speed change from a barrier hit this frame (m/s), for the haptics
+        PerfLab.PhysBegin();
         while (acc >= H)
         {
             px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn;
@@ -859,6 +861,7 @@ public partial class GameManager : MonoBehaviour
             frontSpin += car.vx / car.cfg.wheelRadius * H;
             if (playground) TestBench();
         }
+        PerfLab.PhysEnd(); // timing only
         if (!Paused) Rumble(wallDv);
         if (!playground) LapsAndRecover(dt);
         QualiUpdate(); // qualifying clock and flag (Qualifying.cs)
@@ -1449,6 +1452,13 @@ public partial class GameManager : MonoBehaviour
     // Look: UiKit.cs; layout and the race read-outs: RaceHud.cs.
     Texture2D white;
     void OnGUI()
+    {
+        var et = Event.current.type; bool hud = !menuOpen && !ui.Showing;
+        if (hud && et != EventType.Repaint && et != EventType.MouseDown && et != EventType.MouseUp) return; // the race HUD reacts to nothing else: every steering-thumb move was a full HUD pass
+        if (hud && PerfLab.HudOff) return;
+        PerfLab.GuiBegin(); OnGuiBody(); PerfLab.GuiEnd();
+    }
+    void OnGuiBody()
     {
         if (white == null) white = Texture2D.whiteTexture;
         if (menuOpen && !replaying) { DrawSettings(); return; } // the settings screen covers everything (race paused, or over the start menu)

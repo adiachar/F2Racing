@@ -285,6 +285,11 @@ public partial class GameManager
         gfx.Choice("Graphics level", "Auto starts at Medium and steps down if the phone cannot keep up.", GfxNames, 0, () => gfxIdx, v => { gfxIdx = v; FpsForget(); ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); });
         gfx.Choice("Frame rate", "Always a steady rate the screen divides evenly. Auto: 60 fps, or a steady 40 (120 Hz screens) or 30 if the phone can't hold 60. 30 saves battery and heat.",
             FpsNames, 0, () => fpsIdx, v => { fpsIdx = v; FpsForget(); ApplyFrameRate(); });
+        // the base 3D render size (RenderScale.cs): Auto picks ~1.3 Mpx on Android; the Resolution scale below is on top of it
+        int[] rsVals = { 0, 100, 85, 70 };
+        string[] rsNames = { "Auto (" + Mathf.RoundToInt(RenderScale.AutoScale(RenderScale.NativeW, RenderScale.NativeH) * 100) + "%)", "100%", "85%", "70%" };
+        gfx.Choice("3D resolution", "Base size of the 3D picture against the screen (the HUD stays sharp). Auto suits most phones.", rsNames, 0,
+            () => System.Math.Max(0, System.Array.IndexOf(rsVals, RenderScale.Pct)), v => { RenderScale.Pct = rsVals[v]; FpsForget(); });
         gfx.Slider("Resolution scale", "Sharpness of the 3D picture (the HUD stays sharp). Lower = faster.", 50, 100, 5, 100, () => resPct, v => { resPct = v; FpsForget(); ApplyResolution(); }, Pct);
         gfx.Toggle("Shadows", "Live shadows from cars and scenery. Off = faster.", true, () => shadowsOn, v => { shadowsOn = v; FpsForget(); ApplyGraphics(gfxLevel); })
             .LockedWhen(() => LightBake.Active ? "This circuit has its shadows baked in: nothing to switch." : gfxLevel <= 1 ? "Shadows are off at the Low graphics level." : null);
