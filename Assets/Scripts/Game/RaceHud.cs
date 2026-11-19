@@ -12,7 +12,8 @@
 //  * BOOST and OVERTAKE buttons (left beside the brake with tilt steering; right above the brake with touch): boost = full MGU-K power while held; Overtake Mode
 //    (2026, replaces DRS) lights up when armed at a detection point, a tap uses it, the ring is the energy left
 //  * local mini-map (GameManager.cs: DrawMiniMap) under the race card
-//  * banners (top centre): fastest lap, pit stop, track limits, jump start, flags; they slide in and out
+//  * banners (top centre): fastest lap, pit stop, track limits, jump start, flags, penalties; they slide in and out.
+//    Above them a small toast (GameManagerProgress.cs): safety-rating drops and rivals' time penalties
 // Sector and gap bookkeeping is in Sectors.cs. Number strings come from tables filled once (HudNum) or are rebuilt only
 // when their value changes (HudSlot); text widths are measured once per value, so drawing allocates nothing per frame.
 using System.Collections.Generic;
@@ -72,6 +73,7 @@ public partial class GameManager
         DrawWheel(speed);
         DrawErsButtons();
         DrawBanners();
+        DrawProgressToast(); // "Contact  ·  Safety –4", rival penalties (GameManagerProgress.cs)
         DrawRcHud(); // VSC delta, safety car and blue-flag read-outs (GameManagerRaceControl.cs)
         DrawFps();
     }
@@ -352,7 +354,7 @@ public partial class GameManager
         // running order (the same measure as Position())
         ordN = Mathf.Min(1 + rivals.Count, ord.Length);
         prog[0] = pLap + (double)idx / track.N - pitLoss / RefLap();
-        for (int i = 1; i < ordN; i++) prog[i] = rivals[i - 1].progress;
+        for (int i = 1; i < ordN; i++) prog[i] = rivals[i - 1].progress - RivalPen(i - 1) / RefLap(); // less time penalties
         for (int i = 0; i < ordN; i++) ord[i] = i;
         for (int i = 1; i < ordN; i++) { int e = ord[i], j = i - 1; while (j >= 0 && prog[ord[j]] < prog[e]) { ord[j + 1] = ord[j]; j--; } ord[j + 1] = e; }
 
@@ -395,7 +397,7 @@ public partial class GameManager
     }
 
     CarTiming TimingOf(int e) => e == 0 ? myTime : rivTime[e - 1];
-    double Penalty(int e) => e == 0 ? pitLoss : 0;
+    double Penalty(int e) => e == 0 ? pitLoss : RivalPen(e - 1);
     int SetOf(int e) => e == 0 ? carSet : rivals[e - 1].tyreSet;
     int StopsOf(int e) => e == 0 ? pitStops : rivals[e - 1].pitStops;
 

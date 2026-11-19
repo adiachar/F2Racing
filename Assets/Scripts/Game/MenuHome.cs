@@ -1,6 +1,7 @@
 // MenuHome.cs — the Home page of the front end (MenuUI, Page.Start), over the 3D studio (MenuStudio.cs: the driver
 // standing alone in the middle; drag across the middle to turn him). Minimal on purpose:
-//  * top left: the driver card (number, name, level with its XP line) -> Driver page; top right: Settings
+//  * top left: the driver card (number, name, level with its XP line, safety grade and score) -> Driver page;
+//    top right: Settings
 //  * left: OFFLINE (-> Play: mode, circuit, setup); right: DRIVER
 //  * bottom centre: one big red RACE = the last mode and circuit, straight to the Setup step; licence credits under it
 // Red is only on RACE; the XP line is the one info accent (cyan). Strings are built when what they show changes.
@@ -78,7 +79,7 @@ public sealed partial class MenuUI
         return raceSub;
     }
 
-    // the driver card: number, name, level + XP line (cyan: progress). true = tapped
+    // the driver card: number, name, level + XP line (cyan: progress), safety rating. true = tapped
     bool DriverCard(Rect r)
     {
         MenuProfile.Load();
@@ -91,6 +92,12 @@ public sealed partial class MenuUI
         float tx = badge.xMax + U(12), tw = c.xMax - U(14) - tx;
         UiKit.Text(new Rect(tx, c.y + U(7), tw, U(22)), MenuProfile.Name, UiKit.Bold, UiKit.Fit(MenuProfile.Name, UiKit.Bold, 15f, tw, 10f), UiKit.TextCol);
         UiKit.Text(new Rect(tx, c.y + U(27), tw, U(14)), MenuProfile.LevelStr, UiKit.Regular, 10f, UiKit.Sub);
+        // safety rating: grade and score, right of the level (grade colour: S A B green, C neutral, D E amber)
+        var gr = new Rect(c.xMax - U(14) - U(46), c.y + U(26), U(46), U(16));
+        UiKit.Rect(gr, new Color(1, 1, 1, 0.05f), 6f); UiKit.Outline(gr, UiKit.Line, 6f, 0.7f);
+        Color gc = Progression.GradeColor(MenuProfile.Grade);
+        UiKit.Text(new Rect(gr.x + U(7), gr.y, U(12), gr.height), MenuProfile.Safety, UiKit.Bold, 10f, gc);
+        UiKit.Text(new Rect(gr.x, gr.y, gr.width - U(7), gr.height), MenuProfile.SrStr, UiKit.Semi, 9f, UiKit.Sub, TextAnchor.MiddleRight);
         var bar = new Rect(tx, c.yMax - U(11), tw, Mathf.Max(2f, U(2.5f)));
         UiKit.Rect(bar, new Color(1, 1, 1, 0.08f), 2f);
         if (MenuProfile.XpFrac > 0.001f) UiKit.Rect(new Rect(bar.x, bar.y, Mathf.Max(bar.height, bar.width * MenuProfile.XpFrac), bar.height), UiKit.Info, 2f);

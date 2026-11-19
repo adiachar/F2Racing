@@ -318,13 +318,14 @@ public partial class GameManager
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
         game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => damageMode, v => { damageMode = v; SetupChanged(); });
-        game.Choice("Flags & safety car", "On: yellow flags, Virtual Safety Car and Safety Car after crashes, blue flags, track-limits warnings (3 strikes, then +5 s). Fitted at the next restart.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
+        game.Choice("Flags & safety car", "On: yellow flags, Virtual Safety Car and Safety Car after crashes, blue flags and penalties: track limits (3 warnings, then +5 s), +5 / +10 s for causing a collision, +5 s for a place gained off track and not given back. Fitted at the next restart.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
         game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();
         game.Button("Restart", "Start this session again from the grid.", () => "Restart session", () => { ResetCar(); CloseSettings(); }).HiddenWhen(() => !InRace);
         game.Button("Leave", "End this session and go to the start menu.", () => "Back to menu", () => { CloseSettings(); ui.page = MenuUI.Page.Start; }).HiddenWhen(() => !InRace);
+        game.Button("Reset progress (debug)", "Level, XP, safety rating and career stats back to a new driver. Tap twice. For testing only.", ProgressResetLabel, ProgressResetTap).HiddenWhen(() => InRace);
 
         return new List<SettingsUI.Tab> { con, asst, setup, camTab, gfx, aud, game };
     }

@@ -375,6 +375,7 @@ public partial class GameManager : MonoBehaviour
         idx = prevIdx = -1; lineIdx = -1; lineT = double.NaN; lastValid = true; lapStart = null; cut = false; offTime = wrongTime = 0; t100 = null; launchT = -1; topSpeed = 0;
         Flash(MapNames[mapIdx]);
         StartReset(); // lights, launch, jump-start check (GameManagerStart.cs)
+        ProgressBegin(); // safety rating, XP and race-rule tally of a race (GameManagerProgress.cs)
     }
 
     // ---------------------------------------------------------------- rivals
@@ -458,8 +459,8 @@ public partial class GameManager : MonoBehaviour
             for (int i = 0; i < rivals.Count; i++)
             {
                 if (rivals[i].InPit) continue; // cars in the pit lane touch nobody
-                for (int j = i + 1; j < rivals.Count; j++) if (!rivals[j].InPit) Traffic.Collide(rivals[i].car, rivals[j].car);
-                if (pRun == null) Traffic.Collide(rivals[i].car, car);
+                for (int j = i + 1; j < rivals.Count; j++) if (!rivals[j].InPit) RivalContact(i, j); // = Traffic.Collide(rivals[i].car, rivals[j].car), judged (GameManagerProgress.cs)
+                if (pRun == null) PlayerContact(i);                                                   // = Traffic.Collide(rivals[i].car, car), judged
             }
         }
         double hw = track.width / 2;
@@ -498,7 +499,7 @@ public partial class GameManager : MonoBehaviour
     int Position()
     {
         double mine = pLap + (idx < 0 ? 0 : (double)idx / track.N) - pitLoss / RefLap(); int pos = 1;
-        foreach (var d in rivals) if (d.progress > mine) pos++;
+        for (int k = 0; k < rivals.Count; k++) if (rivals[k].progress - RivalPen(k) / RefLap() > mine) pos++; // less a rival's time penalties
         return pos;
     }
 
@@ -906,6 +907,7 @@ public partial class GameManager : MonoBehaviour
             rm.Feed(c, dt);
         }
         RcFrame(dt); // safety car model, flags, penalties, rival tyre changes (GameManagerRaceControl.cs)
+        ProgressTick(dt); // safety rating events, clean laps, overtakes, race rules (GameManagerProgress.cs)
         if (!Paused && raceLaps > 0 && !playground) Record(dt, rx, ry, rh, rd);
         UpdateSkids();
         LineFrame(); // the racing-line guide (RacingLineView.cs)
@@ -1435,7 +1437,8 @@ public partial class GameManager : MonoBehaviour
             rows[i + 1] = new MenuUI.Row { name = w.name, colour = new Color(w.r, w.g, w.b), progress = rivals[i].progress, best = rivals[i].bestLap };
         }
         double refLap = RefLap(); // turns lap fractions into seconds
-        ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (GridStart ? Countdown : 0) + pitLoss, refLap, pitStops, jumped ? JumpPenalty : 0);
+        ProgressFinish(rows); // rival time penalties into the order; the race's XP and safety tally (GameManagerProgress.cs)
+        ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (GridStart ? Countdown : 0) + pitLoss, refLap, pitStops, PlayerPenaltyTotal());
         RaceFinished(rows); // places gained, fastest lap, championship points (Qualifying.cs)
     }
 

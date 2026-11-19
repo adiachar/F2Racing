@@ -37,6 +37,7 @@ public class TeamRadio : MonoBehaviour
         public Track track; public FormulaCar car; public List<AiDriver> rivals;
         public bool cut, boxArmed, pitLane, jumped, seasonRound;
         public PitRun pitRun; public RaceControl rc;
+        public int penSerial, penSecs;   // the game's own time penalties (GameManagerProgress.cs): count, last one's seconds
     }
 
     // ---------------------------------------------------------------- clips (names as in the pack, Tools/Voice/radio_lines.py)
@@ -313,7 +314,7 @@ public class TeamRadio : MonoBehaviour
     // ---------------------------------------------------------------- race watching
     bool active, finished; double prevRaceTime;
     bool saidCheck, saidLights, saidStart, saidJump, seasonRound;
-    int prevLap, prevPitStops, prevWeather, prevSerial, prevPenSerial, gridPos, posNow, posCand, posSaid, nextGapLap, overtakeLap = -10, defendLap = -10, pbLap = -10, purpleLap = -10, tyreCallLap = -10;
+    int prevLap, prevPitStops, prevWeather, prevSerial, prevPenSerial, prevGamePen, gridPos, posNow, posCand, posSaid, nextGapLap, overtakeLap = -10, defendLap = -10, pbLap = -10, purpleLap = -10, tyreCallLap = -10;
     float posCandT, coldFT, coldRT, hotFT, hotRT, battT, defendT, hotSaidAt = -999f, battSaidAt = -999f, tlAt = -1f, tlSaidAt = -999f, teleportAt = -999f, blueSaidAt = -999f, yellowSaidAt = -999f, damageSaidAt = -999f, okSaidAt = -999f, tyreSuitAt = -999f, pitOutAt = -999f;
     bool coldFSaid, coldRSaid, windowSaid, wearMidSaid, wearHighSaid, boxPrev, inPitPrev, cutPrev, bluePrev, yellowPrev, neutralPrev, gapPending, damageNeedSaid;
     int damageHits; double lastX = double.NaN, lastY, lastGapAhead = double.NaN, lastGapBehind = double.NaN;
@@ -326,7 +327,7 @@ public class TeamRadio : MonoBehaviour
         rng = new System.Random(System.Environment.TickCount);
         finished = saidCheck = saidLights = saidStart = saidJump = false;
         prevLap = view.lap; prevPitStops = view.pitStops; prevWeather = Weather.Index;
-        prevSerial = view.rc != null ? view.rc.serial : 0; prevPenSerial = view.rc != null ? view.rc.penaltySerial : 0;
+        prevSerial = view.rc != null ? view.rc.serial : 0; prevPenSerial = view.rc != null ? view.rc.penaltySerial : 0; prevGamePen = view.penSerial;
         gridPos = posNow = posCand = posSaid = Position(); posCandT = clock;
         nextGapLap = 2 + rng.Next(0, 2); overtakeLap = defendLap = pbLap = purpleLap = tyreCallLap = -10;
         coldFT = coldRT = hotFT = hotRT = battT = defendT = 0f;
@@ -508,6 +509,13 @@ public class TeamRadio : MonoBehaviour
             bool blue = view.rcSlot >= 0 && rc.Blue(view.rcSlot);
             if (blue && !bluePrev && clock - blueSaidAt > 45f) { blueSaidAt = clock; Post(E(PSafety, true, true, "Blue flags. Let him through.", TNone, 6f).A(C.blue)); }
             bluePrev = blue;
+        }
+
+        // the game's own penalties (collision, place not given back): the clip says five seconds, so only those
+        if (view.penSerial != prevGamePen)
+        {
+            prevGamePen = view.penSerial;
+            if (view.penSecs == 5) Post(E(PSafety, true, true, "We have a five second penalty.", TNone, 10f).A(C.penalty));
         }
 
         // ---- track limits (read the strike a moment later: race control counts it in the same frame)
@@ -822,5 +830,6 @@ public partial class GameManager
         v.lapStart = lapStart ?? double.NaN; v.lastLap = lastLap ?? double.NaN;
         v.cut = cut; v.boxArmed = boxArmed; v.pitLane = PitLaneOn; v.pitRun = pRun; v.pitStops = pitStops;
         v.rc = raceCtl; v.rcSlot = rcPlayerSlot; v.jumped = jumped; v.tyreSet = carSet; v.seasonRound = InSeasonRound;
+        v.penSerial = pgPenSerial; v.penSecs = pgPenLast;
     }
 }

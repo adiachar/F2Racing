@@ -1,10 +1,12 @@
 // MenuDriver.cs — the Driver page of the front end (MenuUI), and the player's profile (MenuProfile).
 //  * the 3D driver on the left (MenuStudio.cs; drag to turn him), one panel on the right: name (a text field; the
-//    phone's keyboard opens), number 1-99, country, level with its XP bar (cyan), safety rating S A B C D E (A for
-//    now, green) and career stats (races, wins, podiums, poles).
+//    phone's keyboard opens), number 1-99, country, level with its XP bar (cyan), safety rating S A B C D E with the
+//    score (S A B green, C neutral, D E amber) and career stats (races, wins, podiums, poles).
 // MenuProfile keeps the profile in PlayerPrefs: drvName, drvNum, drvCountry, drvRaces, drvWins, drvPodiums,
-// drvPoles, drvXp. Races are counted when the results page opens (MenuUI.ShowResults), poles when qualifying ends
-// (SeasonUI.ShowQuali). The strings shown are rebuilt when a value changes.
+// drvPoles, drvXp (total), drvSr (safety rating 0-100). Races, XP and the safety rating are recorded when the results
+// page opens (MenuUI.ShowResults, with the race's tally from GameManagerProgress.cs; rules in Progression.cs), poles
+// when qualifying ends (SeasonUI.ShowQuali; their XP comes with the race). The strings shown are rebuilt when a value
+// changes.
 using FormulaSim;
 using UnityEngine;
 
@@ -16,13 +18,15 @@ public static class MenuProfile
         "Germany", "Great Britain", "Ireland", "Italy", "Japan", "Mexico", "Monaco", "Netherlands", "New Zealand", "Norway",
         "Poland", "Portugal", "South Africa", "Spain", "Sweden", "Switzerland", "Thailand", "United States",
     };
-    public const string Safety = "A";               // safety rating: a placeholder until incidents are scored
-    public const int XpPerLevel = 1000;
     static bool loaded;
-    public static string Name = "Driver", NumStr = "1", LevelStr = "LEVEL 1", XpStr = "0 / 1000 XP";
+    public static string Name = "Driver", NumStr = "1", LevelStr = "Level 1", XpStr = "0 / 250 XP", SrStr = "70";
     public static string RacesStr = "0", WinsStr = "0", PodiumsStr = "0", PolesStr = "0";
-    public static int Num = 1, Country, Races, Wins, Podiums, Poles, Xp;
-    public static float XpFrac;
+    public static int Num = 1, Country, Races, Wins, Podiums, Poles, Xp, Level = 1, Grade = 1;
+    public static float XpFrac, Sr = Progression.SrStart;
+    public static string Safety => Progression.Grades[Grade];   // the grade letter
+    public static RaceProgress Pending;  // GameManager (FinishRace): the race just finished, applied by RecordRace
+    public static RaceOutcome Last;      // the last race's XP and safety change (results page)
+    public static bool PolePending;      // pole in the qualifying just run: its XP comes with the race from pole
 
     public static void Load()
     {
@@ -32,14 +36,17 @@ public static class MenuProfile
         Num = Mathf.Clamp(PlayerPrefs.GetInt("drvNum", 1), 1, 99);
         Country = Mathf.Clamp(PlayerPrefs.GetInt("drvCountry", 0), 0, Countries.Length - 1);
         Races = PlayerPrefs.GetInt("drvRaces", 0); Wins = PlayerPrefs.GetInt("drvWins", 0);
-        Podiums = PlayerPrefs.GetInt("drvPodiums", 0); Poles = PlayerPrefs.GetInt("drvPoles", 0); Xp = PlayerPrefs.GetInt("drvXp", 0);
+        Podiums = PlayerPrefs.GetInt("drvPodiums", 0); Poles = PlayerPrefs.GetInt("drvPoles", 0); Xp = Mathf.Max(0, PlayerPrefs.GetInt("drvXp", 0));
+        Sr = Mathf.Clamp(PlayerPrefs.GetFloat("drvSr", Progression.SrStart), 0f, 100f);
         Build();
     }
     static void Build()
     {
         NumStr = Num.ToString();
-        int lvl = 1 + Xp / XpPerLevel, inLvl = Xp % XpPerLevel;
-        LevelStr = "Level " + lvl; XpStr = inLvl + " / " + XpPerLevel + " XP"; XpFrac = inLvl / (float)XpPerLevel;
+        Level = Progression.LevelOf(Xp); XpFrac = Progression.FracOf(Xp);
+        LevelStr = Progression.LevelNames[Level];
+        XpStr = Level >= Progression.MaxLevel ? "Max level" : (Xp - Progression.StartOf(Level)) + " / " + Progression.Need(Level) + " XP";
+        Grade = Progression.GradeOf(Sr); SrStr = Mathf.RoundToInt(Sr).ToString();
         RacesStr = Races.ToString(); WinsStr = Wins.ToString(); PodiumsStr = Podiums.ToString(); PolesStr = Poles.ToString();
     }
 
@@ -55,23 +62,102 @@ public static class MenuProfile
     public static void SetNum(int n) { Load(); Num = Mathf.Clamp(n, 1, 99); PlayerPrefs.SetInt("drvNum", Num); Build(); }
     public static void SetCountry(int c) { Load(); Country = Mathf.Clamp(c, 0, Countries.Length - 1); PlayerPrefs.SetInt("drvCountry", Country); }
 
-    // a race finished (pos 1-based of cars): stats and XP (a finish, places beaten, a win / podium bonus)
-    public static void RecordRace(int pos, int cars)
+    // a race finished (pos 1-based of cars; fastest = the player set the race's fastest lap): career stats, XP from
+    // the race (Pending: laps, overtakes, clean laps; Progression.cs has the numbers) and the safety rating
+    public static void RecordRace(int pos, int cars, bool fastest)
     {
         Load();
+        var rp = Pending; Pending = null;
         Races++;
         bool field = cars > 1;
         if (field && pos == 1) Wins++;
         if (field && pos <= 3) Podiums++;
-        Xp += 100 + (field ? Mathf.Max(0, cars - pos) * 10 : 0) + (field && pos == 1 ? 150 : field && pos <= 3 ? 60 : 0);
-        PlayerPrefs.SetInt("drvRaces", Races); PlayerPrefs.SetInt("drvWins", Wins); PlayerPrefs.SetInt("drvPodiums", Podiums); PlayerPrefs.SetInt("drvXp", Xp);
-        Build();
+        var o = new RaceOutcome { xpBefore = Xp, levelBefore = Level, srBefore = Sr, gradeBefore = Grade };
+
+        // ---- XP: (label, value) sources, the biggest three are listed
+        int laps = rp != null ? rp.laps : 0, ot = rp != null ? Mathf.Min(rp.overtakes, Progression.MaxOvertakes) : 0, cl = rp != null ? rp.cleanLaps : 0;
+        int xPos = field ? Mathf.Max(0, cars - pos) * Progression.XpPerPlace + (pos == 1 ? Progression.XpWin : pos <= 3 ? Progression.XpPodium : 0) : 0;
+        bool pole = PolePending && field && rp != null && rp.fromPole; PolePending = false;
+        var names = new[] { "Finish", "Position", "Laps", "Overtakes", "Clean laps", "Pole", "Fastest lap" };
+        var vals = new[] { Progression.XpFinish, xPos, laps * Progression.XpPerLap, ot * Progression.XpOvertake, cl * Progression.XpCleanLap,
+                           pole ? Progression.XpPole : 0, field && fastest ? Progression.XpFastest : 0 };
+        int gain = 0; foreach (int v in vals) gain += v;
+        Xp += gain;
+        o.xpGain = gain; o.xpAfter = Xp; o.xpGainStr = "+" + gain + " XP";
+        var sb = new System.Text.StringBuilder();
+        var used = new bool[vals.Length];
+        for (int k = 0; k < 3; k++)
+        {
+            int best = -1; for (int i = 0; i < vals.Length; i++) if (!used[i] && vals[i] > 0 && (best < 0 || vals[i] > vals[best])) best = i;
+            if (best < 0) break;
+            used[best] = true;
+            if (sb.Length > 0) sb.Append("  \u00b7  ");
+            sb.Append(names[best]).Append(" +").Append(vals[best]);
+        }
+        o.xpDetail = sb.ToString();
+
+        // ---- safety rating: the race's own tally (a clean-race pull at the flag is in it already)
+        if (rp != null) Sr = Mathf.Clamp(rp.sr, 0f, 100f);
+        o.srAfter = Sr;
+        Save();
+        o.levelAfter = Level; o.gradeAfter = Grade;
+        o.xpAfterStr = XpStr;
+        o.srBeforeStr = Mathf.RoundToInt(o.srBefore).ToString(); o.srAfterStr = SrStr;
+        o.srDelta = Mathf.RoundToInt(o.srAfter) - Mathf.RoundToInt(o.srBefore);
+        o.srDeltaStr = o.srDelta > 0 ? "+" + o.srDelta : o.srDelta < 0 ? "\u2013" + (-o.srDelta) : "\u00b10";
+        Reasons(o, rp);
+        Last = o;
     }
+
+    // up to three reasons for the safety change, the biggest first
+    static void Reasons(RaceOutcome o, RaceProgress rp)
+    {
+        o.reasons = 0;
+        if (rp == null) return;
+        string X(string s, int n) => n > 1 ? s + "  \u00d7" + n : s;
+        var lab = new[] { X("Clean sectors", rp.cleanSectors), "Clean race", X("Contact", rp.contacts), X("Ramming", rp.rams), X("Corner cutting", rp.cuts), X("Off track", rp.offTracks), X("Barrier", rp.barriers) };
+        var val = new[] { rp.gainSectors, rp.gainClean, -rp.lossContact, -rp.lossRam, -rp.lossCut, -rp.lossOff, -rp.lossBarrier };
+        var used = new bool[val.Length];
+        for (int k = 0; k < 3; k++)
+        {
+            int best = -1;
+            for (int i = 0; i < val.Length; i++) if (!used[i] && Mathf.Abs(val[i]) >= 0.05f && (best < 0 || Mathf.Abs(val[i]) > Mathf.Abs(val[best]))) best = i;
+            if (best < 0) break;
+            used[best] = true;
+            o.reason[o.reasons] = lab[best]; o.reasonVal[o.reasons] = Progression.Signed(val[best]); o.reasonGood[o.reasons] = val[best] > 0; o.reasons++;
+        }
+    }
+
+    // an unfinished race (restart, leave): its safety penalties still count, its clean driving does not
+    public static void CommitLoss(float loss)
+    {
+        Load();
+        if (loss <= 0f) return;
+        Sr = Mathf.Clamp(Sr - loss, 0f, 100f);
+        Save();
+    }
+
     public static void RecordPole()
     {
         Load();
-        Poles++; Xp += 80;
-        PlayerPrefs.SetInt("drvPoles", Poles); PlayerPrefs.SetInt("drvXp", Xp);
+        Poles++; PolePending = true;
+        PlayerPrefs.SetInt("drvPoles", Poles);
+        Build();
+    }
+
+    // debug (Settings > Game > Reset progress): XP, level, safety rating and career stats back to new
+    public static void ResetProgress()
+    {
+        Load();
+        Xp = 0; Sr = Progression.SrStart; Races = Wins = Podiums = Poles = 0; Last = null; Pending = null; PolePending = false;
+        Save();
+    }
+
+    static void Save()
+    {
+        PlayerPrefs.SetInt("drvRaces", Races); PlayerPrefs.SetInt("drvWins", Wins); PlayerPrefs.SetInt("drvPodiums", Podiums);
+        PlayerPrefs.SetInt("drvPoles", Poles); PlayerPrefs.SetInt("drvXp", Xp); PlayerPrefs.SetFloat("drvSr", Sr);
+        PlayerPrefs.Save();
         Build();
     }
 }
@@ -79,7 +165,6 @@ public static class MenuProfile
 public sealed partial class MenuUI
 {
     const string KeyDriver = "driver";
-    static readonly string[] SafetyGrades = { "S", "A", "B", "C", "D", "E" };
     static readonly Color sideShade = new Color(0.03f, 0.035f, 0.045f, 0.80f);
     GUIStyle nameStyle; int nameStyleH = -1; string nameTyped;
 
@@ -138,15 +223,17 @@ public sealed partial class MenuUI
 
         // ---- safety rating (green: good)
         UiKit.Eyebrow(new Rect(ix, y, iw, U(14)), "Safety rating", UiKit.Faint, 8f);
+        Color gc = Progression.GradeColor(MenuProfile.Grade);
+        UiKit.Text(new Rect(ix, y - U(2), iw, U(18)), MenuProfile.SrStr, UiKit.Bold, 12f, gc, TextAnchor.MiddleRight);
         y += U(17);
         float gw = (iw - 5 * U(6)) / 6f;
-        for (int i = 0; i < SafetyGrades.Length; i++)
+        for (int i = 0; i < Progression.Grades.Length; i++)
         {
             var g = new Rect(ix + i * (gw + U(6)), y, gw, U(30));
-            bool on = SafetyGrades[i] == MenuProfile.Safety;
+            bool on = i == MenuProfile.Grade;
             UiKit.Rect(g, new Color(1, 1, 1, on ? 0.06f : 0.03f), 8f);
-            UiKit.Outline(g, on ? UiKit.Good : UiKit.Line, 8f, on ? 1f : 0.7f);
-            UiKit.Text(g, SafetyGrades[i], UiKit.Bold, 12.5f, on ? UiKit.Good : UiKit.Faint, TextAnchor.MiddleCenter);
+            UiKit.Outline(g, on ? gc : UiKit.Line, 8f, on ? 1f : 0.7f);
+            UiKit.Text(g, Progression.Grades[i], UiKit.Bold, 12.5f, on ? gc : UiKit.Faint, TextAnchor.MiddleCenter);
         }
         y += U(30) + U(22);
 

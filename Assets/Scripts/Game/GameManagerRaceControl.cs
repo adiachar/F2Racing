@@ -92,8 +92,9 @@ public partial class GameManager
         // the weather changed in the settings: the rivals on the wrong tyres box
         if (Weather.Index != rcWeather) { rcWeather = Weather.Index; foreach (var d in rivals) d.SetWeather(rcWeather); }
         if (raceCtl == null) { if (scModel != null) scModel.Show(false); return; }
-        // track limits: one strike per lap with all four tyres off (the lap is deleted as before)
-        if (cut && !rcCutSeen && lapStart.HasValue && raceTime > Countdown)
+        // track limits: one strike per lap with all four tyres off (the lap is deleted as before); none when pushed off
+        // by another car (GameManagerProgress.cs: hit within 2 s)
+        if (cut && !rcCutSeen && lapStart.HasValue && raceTime > Countdown && !PgForcedOff)
         {
             int s = raceCtl.TrackLimits();
             if (s <= 2) Banner("TRACK LIMITS", "WARNING " + s + " OF 3", HudYellow);

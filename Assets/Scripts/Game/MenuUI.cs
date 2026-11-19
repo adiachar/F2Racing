@@ -8,8 +8,10 @@
 // Colour roles (UiKit palette): charcoal page, off-white text, red only for the main action and the selected state.
 //  * Loading: centred circuit name, a thin red shimmer and a tip; drawn for one frame before the (slow) build. The
 //    menu's 3D is released before it and the unused assets are purged on it (once).
-//  * Results: your position large, points / championship tags, a podium for the top 3 with team colours, and a
-//    timing table (best lap purple for the fastest). "Replay" (last 60 s, TV cameras) / "Menu" (Home) / "Race again".
+//  * Results: your position large, points / championship tags, a podium for the top 3 with team colours, a
+//    timing table (best lap purple for the fastest, time penalties "+5s" in amber) and beside it the driver's
+//    progress (MenuProgress.cs: +XP, the XP bar filling, level up, the safety rating change and why).
+//    "Replay" (last 60 s, TV cameras) / "Menu" (Home) / "Race again".
 // A plain C# class: GameManager owns the game settings and hands them in by ref; this class draws, keeps the page
 // that is up and the race-length setting. The game is paused while any page is showing (GameManager checks Showing).
 // Layout units: 390 units = screen height (UiKit.U). Touch targets are 42+ units; layouts keep to Screen.safeArea
@@ -48,7 +50,8 @@ public sealed partial class MenuUI
     public bool canReplay;                                 // GameManager: a recording of the race's end is there to play
 
     // one car in the results; GameManager fills these when the player takes the flag
-    public struct Row { public string name; public Color colour; public bool player; public double progress, best; }
+    // penalty: time penalties (s), already taken off progress (GameManagerProgress.cs); shown as "+5s"
+    public struct Row { public string name; public Color colour; public bool player; public double progress, best, penalty; }
 
     // the menu colours, shared with other screens (kept for callers; the design system is UiKit)
     public static readonly Color Accent = UiKit.Accent;      // #E10600
@@ -81,7 +84,7 @@ public sealed partial class MenuUI
     int tipIdx;
 
     // results
-    Row[] results; string[] gaps, bests; int fastestRow = -1; int resLaps, resPos, resStops; double resTime, resPenalty;
+    Row[] results; string[] gaps, bests, pens; int fastestRow = -1; int resLaps, resPos, resStops; double resTime, resPenalty;
     string resHead, resPosStr, resOfStr, resTimeStr, resBestStr, resStopsStr, resPenStr; bool resPlayerFastest;
     string noteParsed; string noteLine, notePts, noteChamp;   // resultNote split for display
 
@@ -156,7 +159,7 @@ public sealed partial class MenuUI
     {
         var list = new List<Row>(rows);
         list.Sort((a, b) => b.progress.CompareTo(a.progress));
-        results = list.ToArray(); gaps = new string[results.Length]; bests = new string[results.Length]; resultNote = null; seasonNext = false;
+        results = list.ToArray(); gaps = new string[results.Length]; bests = new string[results.Length]; pens = new string[results.Length]; resultNote = null; seasonNext = false;
         fastestRow = -1; for (int i = 0; i < results.Length; i++) if (results[i].best > 0 && !double.IsNaN(results[i].best) && (fastestRow < 0 || results[i].best < results[fastestRow].best)) fastestRow = i;
         resLaps = laps; resTime = raceTime; resPos = 1; resPlayerFastest = false; resStops = pitStops; resPenalty = penalty;
         double lead = results.Length > 0 ? results[0].progress : 0, myBest = double.NaN;
@@ -167,6 +170,7 @@ public sealed partial class MenuUI
             int lapsDown = (int)System.Math.Floor(behind);
             gaps[i] = i == 0 ? "Winner" : lapsDown >= 1 ? $"+{lapsDown} lap{(lapsDown > 1 ? "s" : "")}" : $"+{behind * refLap:0.0}s";
             bests[i] = Fmt(results[i].best);
+            pens[i] = results[i].penalty > 0 ? $"+{results[i].penalty:0}s" : null;
         }
         resHead = $"Race result  ·  {circuit}  ·  {laps} lap{(laps > 1 ? "s" : "")}";
         resPosStr = "P" + resPos; resOfStr = results.Length > 1 ? "of " + results.Length : "time trial";
@@ -174,7 +178,7 @@ public sealed partial class MenuUI
         resStopsStr = resStops > 0 ? resStops.ToString() : null;
         resPenStr = resPenalty > 0 ? $"+{resPenalty:0} s" : null;
         noteParsed = null; noteLine = notePts = noteChamp = null;
-        MenuProfile.RecordRace(resPos, results.Length); // career stats (Driver page)
+        MenuProfile.RecordRace(resPos, results.Length, resPlayerFastest); // career stats, XP and safety rating (MenuDriver.cs)
         page = Page.Results;
     }
 
@@ -507,12 +511,15 @@ public sealed partial class MenuUI
         cx += ChipAt(cx, cyy, chH, "Race time", resTimeStr, UiKit.TextCol);
         cx += ChipAt(cx, cyy, chH, resPlayerFastest ? "Fastest lap" : "Best lap", resBestStr, resPlayerFastest ? UiKit.Purple : UiKit.TextCol);
         if (resStopsStr != null) cx += ChipAt(cx, cyy, chH, "Pit stops", resStopsStr, UiKit.TextCol);
-        if (resPenStr != null) cx += ChipAt(cx, cyy, chH, "Jump start", resPenStr, UiKit.Warn);
+        if (resPenStr != null) cx += ChipAt(cx, cyy, chH, "Penalties", resPenStr, UiKit.Warn);
         UiKit.PopAlpha();
 
         // ---- timing table
         float bh = U(46), by = safe.yMax - U(14) - bh;
-        var tp = new Rect(x0, top + U(128), W, by - U(10) - (top + U(128)));
+        // the driver's progress (XP, level, safety rating) in a panel right of the table (MenuProgress.cs)
+        float progW = MenuProfile.Last != null ? Mathf.Clamp(W * 0.3f, U(184), U(224)) : 0f;
+        var tp = new Rect(x0, top + U(128), W - (progW > 0f ? progW + U(10) : 0f), by - U(10) - (top + U(128)));
+        if (progW > 0f) DrawProgressPanel(new Rect(x1 - progW, tp.y, progW, tp.height), scr);
         float et = UiKit.Enter(scr, 6, 0.04f, 0.45f);
         UiKit.PushAlpha(et);
         tp = UiKit.Rise(tp, et, 12f);
@@ -542,6 +549,7 @@ public sealed partial class MenuUI
             UiKit.Text(new Rect(x + U(8), y, cw * 0.08f, rh), Ord[Mathf.Min(i + 1, Ord.Length - 1)], UiKit.Bold, fs, i < 3 ? UiKit.TextCol : UiKit.Sub);
             UiKit.Bar(new Rect(x + cw * 0.115f, y + rh * 0.24f, U(3), rh * 0.52f), r.colour);
             UiKit.Text(new Rect(x + cw * 0.15f, y, cw * 0.40f, rh), r.name, f, fs, UiKit.TextCol);
+            if (pens[i] != null) UiKit.Text(new Rect(x + cw * 0.15f, y, cw * 0.40f - U(4), rh), pens[i], UiKit.Bold, fs * 0.85f, UiKit.Warn, TextAnchor.MiddleRight); // time penalty
             bool fl = i == fastestRow;
             if (fl) UiKit.Dot(new Vector2(x + cw * 0.55f - U(6), y + rh * 0.5f), 2.2f, UiKit.Purple);
             UiKit.Text(new Rect(x + cw * 0.55f, y, cw * 0.22f, rh), bests[i], fl ? UiKit.Bold : UiKit.Semi, fs, fl ? UiKit.Purple : UiKit.Sub);
