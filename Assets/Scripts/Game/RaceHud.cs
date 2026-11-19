@@ -9,7 +9,7 @@
 //  * dash (bottom centre): one slim glass bar: shift-light strip (green -> red -> blue), speed, big gear, battery
 //    with deploy / harvest state, tyre quad (temperature colour, tread fill). Beside it, when there is room,
 //    tyre / brake temperatures and fuel. Above it: X-MODE, TOW, YELLOW, BOX chips
-//  * BOOST and OVERTAKE buttons (right, above the brake pedal): boost = full MGU-K power while held; Overtake Mode
+//  * BOOST and OVERTAKE buttons (left beside the brake with tilt steering; right above the brake with touch): boost = full MGU-K power while held; Overtake Mode
 //    (2026, replaces DRS) lights up when armed at a detection point, a tap uses it, the ring is the energy left
 //  * local mini-map (GameManager.cs: DrawMiniMap) under the race card
 //  * banners (top centre): fastest lap, pit stop, track limits, jump start, flags; they slide in and out
@@ -665,7 +665,7 @@ public partial class GameManager
         var dash = new Rect(Mathf.Round(Screen.width * 0.5f - dw * 0.5f), Mathf.Round(hudB - dh), dw, dh);
         float dx = dash.x, dy = dash.y;
         float wingW = S(70), gap = S(5);
-        float rightLimit = tilt ? GasRect.x : BrakeRect.x, leftLimit = tilt ? BrakeRect.xMax : hudL + S(160);
+        float rightLimit = tilt ? GasRect.x : BrakeRect.x, leftLimit = tilt ? (ErsButtonsShown ? BoostRect.xMax : BrakeRect.xMax) : hudL + S(160); // with tilt the BOOST/OVERTAKE buttons sit left of the dash
         bool wings = hudInfo && dash.xMax + gap + wingW + S(8) < rightLimit && dash.x - gap - wingW - S(8) > leftLimit;
 
         // chips above: X-mode, slipstream, yellow flag, box
@@ -808,16 +808,30 @@ public partial class GameManager
     OvertakeRule otRule; RacingLine otLine; double otRace;
     bool otLatch, otBannerSeen; int boostFinger = -1;
     bool ErsButtonsShown => car != null && car.cfg.ersPower > 0 && !replaying && !menuOpen && (ui == null || !ui.Showing);
-    // OVERTAKE right of BOOST, both above the brake pedal (left of the gas pedal, below the mini-map)
+    // Tilt steering: OVERTAKE and BOOST on the LEFT, just right of the brake pedal, so the right thumb never leaves the
+    // gas (Adi). Touch steering (brake beside the gas on the right): OVERTAKE right of BOOST above the brake pedal.
     Rect OvertakeRect
     {
         get
         {
-            float d = S(44), x = Mathf.Min(GasRect.x - S(10) - d, UiKit.Safe.xMax - S(8) - d);
+            float d = S(44);
+            if (tilt)
+            {
+                var b = BrakeRect;
+                return new Rect(Mathf.Round(b.xMax + S(10)), Mathf.Round(Screen.height - S(64) - d), d, d);
+            }
+            float x = Mathf.Min(GasRect.x - S(10) - d, UiKit.Safe.xMax - S(8) - d);
             return new Rect(Mathf.Round(x), Mathf.Round(Mathf.Max(UiKit.Safe.y + S(4), Screen.height - S(136) - d)), d, d);
         }
     }
-    Rect BoostRect { get { var o = OvertakeRect; return new Rect(o.x - o.width - S(8), o.y, o.width, o.height); } }
+    Rect BoostRect
+    {
+        get
+        {
+            var o = OvertakeRect;
+            return tilt ? new Rect(o.xMax + S(8), o.y, o.width, o.height) : new Rect(o.x - o.width - S(8), o.y, o.width, o.height);
+        }
+    }
 
     // 60 times a second (StepRivals): every car past the detection points
     void OvertakeTick()

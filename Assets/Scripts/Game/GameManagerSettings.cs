@@ -26,7 +26,7 @@ public partial class GameManager
     // camera
     float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100;
     bool haloInCockpit = true;                           // cockpit view draws the halo (hoop + pillar); false hides all of it
-    int horizonMode = 1;                                 // 0 off, 1 cockpit only, 2 all views
+    int horizonMode = 0;                                 // Tilt lock: 0 off, 1 cockpit views, 2 all views
     // graphics
     // frame rate: 0 Auto (60, or a steady 40 / 30 if the phone can't hold it: GameManagerPerf.cs), 1 60, 2 40, 3 30 fps.
     // Saved as "fpsMode"; the old "fps" key (0 = 30, 1 = 60) is still written and read once when "fpsMode" is missing.
@@ -88,7 +88,7 @@ public partial class GameManager
         rideFmm = LoadF("rideF", 0, -5, 10); rideRmm = LoadF("rideR", 0, -10, 15);
         fovChase = LoadF("fovChase", 62, 50, 80); fovCockpit = LoadF("fovCockpit", 55, 45, 80);
         seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200);
-        horizonMode = LoadI("horizon", 1, 2);
+        horizonMode = LoadI("tiltLock", 0, 2);
         haloInCockpit = PlayerPrefs.GetInt("haloCockpit", 1) == 1;
         damageMode = LoadI("damage", 1, 2);
         flagsMode = LoadI("flags", 1, 1); raceDistIdx = LoadI("raceDist", 0, RaceDistNames.Length - 1);
@@ -116,7 +116,7 @@ public partial class GameManager
         PlayerPrefs.SetFloat("rideF", rideFmm); PlayerPrefs.SetFloat("rideR", rideRmm);
         PlayerPrefs.SetFloat("fovChase", fovChase); PlayerPrefs.SetFloat("fovCockpit", fovCockpit);
         PlayerPrefs.SetFloat("seatUp", seatUpCm); PlayerPrefs.SetFloat("seatFwd", seatFwdCm); PlayerPrefs.SetFloat("camShake", camShakePct);
-        PlayerPrefs.SetInt("horizon", horizonMode);
+        PlayerPrefs.SetInt("tiltLock", horizonMode);
         PlayerPrefs.SetInt("haloCockpit", haloInCockpit ? 1 : 0);
         PlayerPrefs.SetInt("damage", damageMode);
         PlayerPrefs.SetInt("flags", flagsMode); PlayerPrefs.SetInt("raceDist", raceDistIdx);
@@ -276,7 +276,7 @@ public partial class GameManager
         camTab.Slider("Camera shake", "How much the camera moves with braking, cornering, kerbs and bumps.", 0, 200, 10, 100, () => camShakePct, v => camShakePct = v, Pct);
         camTab.Choice("Halo in cockpit", "Show the halo in the cockpit view, as a real driver sees it, or hide all of it.", new[] { "Hide", "Show" }, 1, () => haloInCockpit ? 1 : 0, v => haloInCockpit = v == 1);
         camTab.Choice("Lens flare", "Sun flare with ghosts and an anamorphic streak when you look toward the sun (off on Low graphics).", new[] { "Off", "On" }, 1, () => PlayerPrefs.GetInt(LensFlare.PrefKey, 1), v => PlayerPrefs.SetInt(LensFlare.PrefKey, v));
-        camTab.Choice("Horizon lock", "With tilt steering: turns the picture against the phone's tilt.", new[] { "Off", "Cockpit", "All views" }, 1, () => horizonMode, v => horizonMode = v);
+        camTab.Choice("Tilt lock", "Keeps the picture level with your eyes when you tilt the phone, in real time.", new[] { "Off", "Cockpit", "All views" }, 0, () => horizonMode, v => horizonMode = v);
 
         // ---- GRAPHICS
         var gfx = new SettingsUI.Tab("GRAPHICS");

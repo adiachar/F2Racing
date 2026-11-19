@@ -700,6 +700,24 @@ public partial class GameManager : MonoBehaviour
         float lead = Mathf.Sign(tiltRateVotes) * wz * SensorLead * tiltConf * (invertTilt ? -1 : 1);
         return Mathf.Clamp(lead, -1f, 1f) * open; // only while the gate is open: no lead on tremor
     }
+    // Tilt lock: the phone's roll from the newest gyro-fused gravity, read in LateUpdate (after the steering read) so the
+    // picture stays level to the eyes in real time. Pure: it changes no steering state. Uses the steering's centre
+    // (the way the player holds the phone when straight); works with touch steering too (switches the gyro on).
+    float lockRoll;
+    float HorizonRoll()
+    {
+        if (!tilt && SystemInfo.supportsGyroscope && !Input.gyro.enabled) TiltSensors(true);
+        Vector3 a = TiltGravity();
+        float inPlane = Mathf.Sqrt(a.x * a.x + a.y * a.y);
+        if (inPlane < 0.1f) return lockRoll; // lying flat: keep the last angle
+        float th = Mathf.Atan2(a.y, a.x) * Mathf.Rad2Deg;
+        float axis = float.IsNaN(tiltAxis) ? Mathf.Round(th / 90f) * 90f : tiltAxis;
+        float deg = Mathf.Clamp(Mathf.DeltaAngle(axis, th), -85f, 85f);
+        float centre = invertTilt ? -tiltCenter : tiltCenter; // tiltCenter is kept in the steering's (maybe inverted) sense
+        float conf = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0.12f, 0.26f, inPlane));
+        lockRoll = (deg - centre) * conf;
+        return lockRoll;
+    }
     float TiltSteer()
     {
         float frameDt = Mathf.Clamp(Time.unscaledDeltaTime, 0.002f, 0.1f);
@@ -1120,7 +1138,8 @@ public partial class GameManager : MonoBehaviour
         cam.transform.LookAt(look);
         cam.transform.Rotate(feel.pitch, feel.yaw, feel.roll, Space.Self); // nod, look into the corner, head roll and shake
         // horizon lock (a setting): the picture turns against the phone's tilt; in the cockpit only, in every view, or not at all
-        if (tilt && (horizonMode == 2 || (horizonMode == 1 && camMode == 2))) cam.transform.Rotate(0, 0, -tiltSmooth * 0.6f, Space.Self);
+        // Tilt lock (a setting): the picture turns fully against the phone's roll, read fresh here every frame (no filter)
+        if (horizonMode == 2 || (horizonMode == 1 && (camMode == 2 || camMode == 3))) cam.transform.Rotate(0, 0, -HorizonRoll(), Space.Self);
         cam.fieldOfView += (fov - cam.fieldOfView) * Mathf.Min(1, Time.deltaTime * 4);
         CockpitBits(camMode == 2); tvWasOn = false;
         cam.nearClipPlane = camMode == 2 ? CockpitNear() : camMode == 3 ? HaloNear : ChaseNear;
