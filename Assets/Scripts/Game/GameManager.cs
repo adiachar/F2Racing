@@ -1065,7 +1065,7 @@ public partial class GameManager : MonoBehaviour
     static string Fmt(double? t) { if (!t.HasValue) return "--:--.---"; int m = (int)(t.Value / 60); return $"{m}:{t.Value - m * 60:00.000}"; }
 
     // ---------------------------------------------------------------- camera
-    Vector3 camVel; float gLon, gLat, visF, visR, carLit = 1;
+    Vector3 camVel, chaseDir; float gLon, gLat, visF, visR, carLit = 1;
     readonly DriverFeel feel = new DriverFeel(); // head / camera motion from the car's forces, steering wheel, shift lights (DriverFeel.cs)
     void LateUpdate()
     {
@@ -1100,15 +1100,22 @@ public partial class GameManager : MonoBehaviour
         {
             float back = camMode == 0 ? 6.2f : 10f, up = camMode == 0 ? 2f : 3.4f;
             back += Mathf.Clamp(lonG * 0.35f, -0.9f, 0.5f);
-            pos = tr.TransformPoint(new Vector3(0, up, -back));
-            look = tr.TransformPoint(new Vector3(0, 0.7f, 6));
+            // the camera is tied to the car's (interpolated) position every frame; only the direction it looks from is
+            // smoothed. The old world-position SmoothDamp let the camera fall ~5 m further back at 300 km/h and, with
+            // uneven frame times, made the car shuffle back and forth on screen (the "laggy" chase view)
+            Vector3 fwd = tr.forward;
+            if (tvWasOn || chaseDir.sqrMagnitude < 0.5f) chaseDir = fwd;
+            float kDir = 1f - Mathf.Exp(-Time.deltaTime / 0.11f); // ~0.11 s: swings round gently in a slide or spin
+            chaseDir = Vector3.Slerp(chaseDir, fwd, kDir).normalized;
+            Vector3 upV = tr.up, basePos = tr.position;
+            pos = basePos + upV * up - chaseDir * back;
+            look = basePos + upV * 0.7f + chaseDir * 6f;
             fov = fovChase; // a setting (default 62), fixed: widening the view with speed exaggerated how fast the car felt
             // the setting is the view on a 16:9 screen; on wider phones (19.5:9, 20:9, 21:9) keep that same side-to-side view
             // instead of stretching it, which made the road look narrow and far away
             float aspect = Mathf.Max(0.5f, cam.aspect);
             if (aspect > 16f / 9f) fov = 2f * Mathf.Rad2Deg * Mathf.Atan(Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad) * (16f / 9f) / aspect);
-            if (tvWasOn) { cam.transform.position = pos; camVel = Vector3.zero; } // back from the TV camera: no swoop across the circuit
-            cam.transform.position = Vector3.SmoothDamp(cam.transform.position, pos, ref camVel, 0.06f);
+            cam.transform.position = pos; camVel = Vector3.zero;
         }
         cam.transform.LookAt(look);
         cam.transform.Rotate(feel.pitch, feel.yaw, feel.roll, Space.Self); // nod, look into the corner, head roll and shake
