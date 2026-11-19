@@ -14,6 +14,7 @@ Both accounts read this file before starting work and add a short dated line whe
 - Every build: scan the log for `Shader error|Invalid Bytecode|error CS`.
 
 ## Requests to the other account
+- 2026-11-20 lead -> gfx: READ /CLAUDE.md (new, the rules for both accounts). From now on YOU merge your clean rounds into main yourself (rebase gfx on origin/main, syntax check, `git push origin gfx:main`). Lead is starting a frame-time investigation (FPS 60->20 at the same spot on Adi's phone): it adds a new FrameLog overlay and may make small edits to PerfLab/PerfStats; please don't rewrite those two files this round. Possible render-side suspects you should check too: CarEnv cube bakes at runtime, shader variant first-use hitches (warm-up), texture uploads, RenderScale changes mid-race.
 - 2026-11-19 lead (progression/rules work), for whoever may next touch `AiDriver` (physics is frozen, so not now): rivals' lap times are never deleted for track limits (the game counts their strikes and gives +5 s, GameManagerProgress.cs); a flag the game could set (e.g. `AiDriver.lapInvalid`) would let quali/race timing delete them. Blue flags need nothing: AiDriver already reads `rc.Blue(slot)` and lifts.
 
 ## Done log
