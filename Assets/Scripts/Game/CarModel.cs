@@ -465,6 +465,16 @@ public class CarModel : MonoBehaviour
         if (hasCol)
             foreach (var (mm, k) in new[] { (mats[0], 0.6f), (mats[1], 0.55f), (mats[2], 0.75f), (mats[3], 0.7f), (tyreF, 0.45f), (tyreR, 0.45f), (hubF, 0.7f), (hubR, 0.7f), (steerMat, 0.5f) })
                 if (mm.HasProperty("_AO")) mm.SetFloat("_AO", k);
+        // the halo: its own copy of the carbon (it is its own renderer anyway: no extra draw call) with the titanium /
+        // lacquered-carbon look (CarPaint _Rim: dark inside face, sky sheen on the edges). The player's carbon also gets
+        // the cockpit surround (CarPaint _Cockpit: shade inside the tub and under the dashboard, padded headrest).
+        Material haloMat = null;
+        if (mats[2].HasProperty("_Rim"))
+        {
+            haloMat = new Material(mats[2]) { name = "Halo" };
+            haloMat.SetFloat("_Rim", 1f); haloMat.SetFloat("_Cockpit", 0f); haloMat.SetFloat("_Coat", 0.5f); haloMat.SetFloat("_Metal", 0.15f);
+            if (!rival) mats[2].SetFloat("_Cockpit", 1f);
+        }
         meshCache.TryGetValue(cacheKey, out var cached); var made = cached == null ? new Mesh[n] : null;
         var root = new GameObject("Car");
         // the mesh was converted at Formula 2 size (3.135 m wheelbase); a 2026 F1 car is 3.40 m long between the axles and 1.9 m wide
@@ -545,6 +555,7 @@ public class CarModel : MonoBehaviour
             var mat = mats[Mathf.Clamp(mid, 0, mats.Length - 1)];
             bool front = name.StartsWith("wheel_F");
             if (name.StartsWith("steer_")) mat = cm.WheelRig != null ? cm.WheelRig.Mat : steerMat;
+            else if (haloMat != null && name.StartsWith("halo_")) mat = haloMat;
             else if (name.StartsWith("wheel_")) mat = name.EndsWith("_tyre") ? (front ? tyreF : tyreR) : (front ? hubF : hubR);
             var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = mat;
             if (cm.WheelRig != null && go.transform == cm.steerWheel) cm.WheelRig.Bind(r);

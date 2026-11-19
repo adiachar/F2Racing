@@ -29,7 +29,7 @@
 //           instanced call; on GLES2 (no instancing) the same properties are plain uniforms and each renderer is one
 //           draw call with the shared material (no material switch between cars).
 //           The driver (DriverModel.cs) uses this path too: merged into a rival's body, or as the player's own skinned
-//           mesh with one non-instanced material (part IDs 12..17: matte suit and gloves, glossy helmet, dark visor).
+//           mesh with one non-instanced material (part IDs 12..19: matte suit and gloves, glossy helmet, dark visor).
 // PRECISION RULE (GLES3 / Vulkan): every comparison, step() and ?: test, and every mask built from them, is FLOAT,
 // never half. On mobile `half` compiles to min16float, and FXC turns step()/compare chains on min16float values into
 // integer mask ops with min-precision operands ("Invalid Bytecode: Incompatible min precision type ... Expected int or
@@ -56,6 +56,8 @@ Shader "F2/CarPaint"
         _TyreRad ("Merged: tyre radius front, rear", Vector) = (0.33, 0.33, 0, 0)
         _Far ("Merged: far model (no carbon weave, no tyre sheen)", Float) = 0
         _Mirror ("Mirror glass where |x| > 0.45 (metal part)", Float) = 0
+        _Rim ("Carbon: halo look (titanium edge sheen, dark inside face)", Float) = 0
+        _Cockpit ("Carbon: cockpit surround (padded headrest, shade inside the tub)", Float) = 0
     }
     CGINCLUDE
     #include "UnityCG.cginc"
@@ -109,7 +111,7 @@ Shader "F2/CarPaint"
         half sat = saturate((mx - mn) / max(mx, 0.02));
         half lr = dot(refl, half3(0.2126, 0.7152, 0.0722));
         half3 hue = base / max(mx, 0.02);
-        half k = 0.8 * sat * sat * (1.0 - graze) * saturate(1.7 - lr * 1.4);
+        half k = 0.5 * sat * sat * (1.0 - graze) * saturate(1.5 - lr * 1.6); // (was 0.8: the sidepods seen from the cockpit lost every trace of the sky and read as flat red)
         return lerp(refl, hue * lr, k);
     }
     #if defined(_MERGED)
@@ -142,7 +144,8 @@ Shader "F2/CarPaint"
         }
         // part IDs (CarModel.Id*): 0 body paint, 1 wings (secondary), 2 carbon, 3 metal, 4/5 tyre front/rear,
         // 6/7 rim + brake front/rear, 8 rear lights, 9 tyre stripe, 11 steering wheel; the driver (DriverModel): 12 suit
-        // (livery primary), 13 suit trim and gloves (secondary), 14 / 15 helmet shell / design, 16 visor, 17 dark fabric.
+        // (livery primary), 13 suit trim (secondary), 14 / 15 helmet shell / design, 16 visor, 17 dark fabric, 18 glove
+        // (dark grey), 19 glove panel (livery primary).
         // base colour and (clear coat, gloss, metal): the values the per-part materials had (CarModel.CreateFromAsset)
         void MMat(float id, out half3 base, out half3 cgm)
         {
@@ -162,6 +165,9 @@ Shader "F2/CarPaint"
             k = step(13.5, id) * step(id, 15.5); base = lerp(base, lerp(MP(_HelmA).rgb, MP(_HelmB).rgb, MIs(id, 15)), k); cgm = lerp(cgm, half3(1.0, 0.95, 0.08), k);
             k = MIs(id, 16); base = lerp(base, half3(0.012, 0.013, 0.017), k); cgm = lerp(cgm, half3(1.0, 0.97, 0.3), k);
             k = MIs(id, 17); base = lerp(base, half3(0.025, 0.025, 0.028), k); cgm = lerp(cgm, half3(0.08, 0.3, 0.0), k);
+            // gloves: dark grey suede-like fabric (palms, fingers) with team-colour panels (back of the hand, cuff band)
+            k = MIs(id, 18); base = lerp(base, half3(0.034, 0.035, 0.038), k); cgm = lerp(cgm, half3(0.05, 0.32, 0.0), k);
+            k = MIs(id, 19); base = lerp(base, MP(_Color).rgb * 0.75, k); cgm = lerp(cgm, half3(0.06, 0.3, 0.0), k);
         }
     #endif
     ENDCG
@@ -188,6 +194,7 @@ Shader "F2/CarPaint"
             #endif
             fixed4 _Color2, _Color3;
             float _Livery, _Mirror, _Under; // (compared / used in step(): full float, see the note at the top)
+            float _Rim, _Cockpit;           // (masks: float)
             half _AO, _Wear, _Dirt, _TyreR, _Dust;
             half4 _Glow;
             half _Coat, _Gloss, _Metal;
@@ -245,6 +252,7 @@ Shader "F2/CarPaint"
                 half coatK = _Coat, metal = _Metal, specK = 1.0, glossAdd = 0.0, gloss0 = _Gloss;
                 float3 emis = 0; half3 envTint = 1; // (emis: built from part masks, float)
                 float visorK = 0.0; // (a part mask: float)
+                float fabric = 0.0, rimK = 0.0, inShade = 1.0; // fabric sheen (driver), halo edge sheen, cockpit-tub shade (float masks)
                 #if defined(_MERGED)
                 {
                     // one mesh, many parts: the part ID picks the material (see MMat)
@@ -287,6 +295,8 @@ Shader "F2/CarPaint"
                     emis = lerp(MP(_GlowR).rgb, MP(_GlowF).rgb, front) * disc + MP(_LightCol).rgb * MIs(id, 8);
                     // the driver's visor: smoked glass shows a little more of the sky than a clear coat would
                     visorK = MIs(id, 16);
+                    // the driver's fabric (suit, trim, dark fabric, gloves): matte, with a soft sheen at grazing angles
+                    fabric = step(11.5, id) * step(id, 13.5) + step(16.5, id) * step(id, 19.5);
                 }
                 #elif defined(_CARBON)
                 {
@@ -299,6 +309,30 @@ Shader "F2/CarPaint"
                     base = lerp(base, cb, mask);
                     coatK = lerp(coatK, 0.35, mask);
                     specK = lerp(1.0, wv.y, mask);
+                    // halo (its own material, _Rim 1): titanium-and-carbon. The inside face (down / towards the driver)
+                    // is darker and duller; the top and edges carry a stronger lacquer, a sky sheen along the rims
+                    // (rimK, added below) and a broader sun highlight
+                    float hr = step(0.5, _Rim);
+                    float up = saturate(on.y * 0.7 + 0.5);
+                    base *= lerp(1.0, lerp(0.55, 1.25, up), hr);
+                    coatK = lerp(coatK, lerp(0.3, 0.75, up), hr);
+                    gloss0 = lerp(gloss0, 0.9, hr);
+                    rimK = hr * (0.35 + 0.4 * up);
+                    // cockpit surround (the player's carbon, _Cockpit 1; body space: x across, y up, z forward, the
+                    // tub opening |x| < ~0.33 from behind the headrest to the dashboard): shade deepens below the
+                    // rim and under the dashboard; the headrest pads (beside and behind the helmet) are matte foam
+                    float ck = step(0.5, _Cockpit);
+                    float3 p = i.op; float ax = abs(p.x);
+                    float tub = ck * (1.0 - smoothstep(0.30, 0.38, ax)) * smoothstep(-0.55, -0.4, p.z) * (1.0 - smoothstep(1.05, 1.2, p.z)) * step(0.25, p.y);
+                    float depth = saturate((0.70 - p.y) * 4.0);
+                    float dash = smoothstep(0.45, 0.8, p.z) * saturate((0.66 - p.y) * 6.0); // under the dashboard / steering column
+                    inShade = 1.0 - tub * saturate(0.55 * depth + 0.35 * dash);
+                    float pad = ck * smoothstep(0.10, 0.16, ax) * (1.0 - smoothstep(0.34, 0.40, ax)) * step(p.z, 0.15) * step(-0.35, p.z) * step(0.45, p.y) * step(p.y, 0.92);
+                    // foam: a soft quilted bulge (no texture), very matte, a touch lighter than bare carbon
+                    float q = sin(p.z * 70.0) * sin(p.y * 70.0);
+                    base = lerp(base, half3(0.028, 0.028, 0.03) * (0.92 + 0.08 * q), pad);
+                    coatK = lerp(coatK, 0.06, pad); gloss0 = lerp(gloss0, 0.3, pad); specK = lerp(specK, 0.4, pad);
+                    fabric = pad;
                 }
                 #elif defined(_TYRE)
                 {
@@ -351,6 +385,17 @@ Shader "F2/CarPaint"
                 // sun with a little wrap (a softer terminator: flanks turned from the sun stay readable) + sky light
                 half wrapL = saturate((nl + 0.2) * (1.0 / 1.2));
                 half3 diff = base * (wrapL * _LightColor0.rgb + i.amb) * (1.0 - metal * 0.85) * (1.0 - 0.12 * _Wet) * ao; // metal: mostly mirror
+                // keep the light and shade on deep colours: a saturated paint's strongest channel (red) went into the
+                // grade's shoulder in the sun and clipped, so sunlit and turned-away panels came out the same flat red.
+                // A soft roll-off on that channel (hue kept) brings the shading back; whites and greys are unchanged.
+                {
+                    float3 df = diff;
+                    float mxc = max(df.r, max(df.g, df.b)), mnc = min(df.r, min(df.g, df.b));
+                    float satc = saturate((mxc - mnc) / max(mxc, 0.002));
+                    float roll = 1.0 / (1.0 + 0.55 * max(mxc - 0.35, 0.0));
+                    diff = (half3)(df * lerp(1.0, roll, max(satc * satc, fabric)));
+                }
+                diff *= inShade;
                 half3 R = reflect(-V, N);
                 // glossy paint reads the probe almost unblurred (mip ~0.25): the sky and clouds show as a mirror image
                 half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, (1.0 - gloss) * 5.0);
@@ -364,6 +409,7 @@ Shader "F2/CarPaint"
                 half3 gr = max(_GroundRefl.rgb, half3(grL, grL, grL));
                 env = lerp(env, gr, 1.0 - smoothstep(lerp(-0.35, -0.05, gloss), 0.015, R.y));
                 env *= lerp(0.35, 1.0, _CarLit) * (0.3 + 0.7 * ao) * envTint;
+                env *= inShade;
                 env *= 1.0 - 0.2 * saturate((coatK - 0.9) * 20.0); // paint's mirror coat adds a little less white: deep colours stay deep (no step() on a half: see the top)
                 half x = 1.0 - saturate(dot(N, V)), x2 = x * x;
                 // Fresnel by viewing angle: F0 0.04 (lacquer), the x^4 rise (sky on the flanks), a touch steeper at grazing
@@ -376,8 +422,16 @@ Shader "F2/CarPaint"
                 half spec = (half)pow(nh, (float)sp) * ndl * min(sp * 0.015, 6.0);
                 // a second, much tighter sun glint on glossy paint (the crisp hot spot of a polished clear coat)
                 spec += (half)pow(nh, 2048.0) * ndl * 14.0 * saturate((gloss - 0.8) * 6.0);
-                spec *= specK * ao;
+                // a broad soft sun sheen on the clear coat (the wide glow round the hot spot a real lacquer shows,
+                // so a panel turned towards the sun brightens over a large area, not only in a pin-point)
+                spec += (half)pow(nh, 48.0) * ndl * 0.35 * saturate((gloss - 0.7) * 5.0);
+                spec *= specK * ao * inShade;
                 half3 col = diff * (1.0 - coat) + KeepHue(env * coat, base, x2 * x2) + env * (metal * base) + spec * _LightColor0.rgb * (coatK + metal) + emis;
+                // fabric: a soft grazing sheen (fibres catching the light at the silhouette) and a lifted terminator,
+                // so the suit, gloves and pads read as cloth and not plastic
+                col += (half3)(fabric * x2 * x * (base * 2.0 + 0.012) * (i.amb + _LightColor0.rgb * saturate(nl + 0.5)));
+                // halo: sky sheen along its rims and top edge (titanium / lacquered carbon)
+                col += (half3)(rimK * x2 * env * 0.6);
                 fixed4 c = fixed4(col, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
