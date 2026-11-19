@@ -1131,11 +1131,16 @@ public partial class CarModel : MonoBehaviour
         for (int i = 0; i < v.Length; i++)
         {
             var p = v[i];
-            if (p.z < -1.5f && Mathf.Abs(p.x) < 0.62f && p.y > 0.5f) { p.y = 0.5f + (p.y - 0.5f) * 0.45f; v[i] = p; }
-            // (the body and tyres are solid: only a mild softening on the airbox / halo top; the thin rear wing more)
-            float hs = Mathf.Max(p.z < -1.55f ? 0.9f * Mathf.Clamp01((p.y - 0.45f) / 0.35f) : 0f, 0.35f * Mathf.Clamp01((p.y - 0.6f) / 0.4f));
+            // the rear wing, endplates and pillars squashed to ~0.45-0.61 (just under the rear tyres' top, 0.63): their
+            // shadow now ends inside the tyres' and gearbox's instead of landing ~1 m behind as a separate pale block
+            // (Spa, sun ahead). Ramped in over z -1.45..-1.6 so the engine cover's tail has no step.
+            float wf = Mathf.Clamp01((-1.45f - p.z) / 0.15f);
+            if (wf > 0f && Mathf.Abs(p.x) < 0.62f && p.y > 0.45f) { p.y -= wf * (p.y - 0.45f) * 0.7f; v[i] = p; }
+            // (the body and tyres are solid: only a mild softening on the airbox / halo top; the squashed wing a little:
+            // a strong fade there drew the wing as a lighter, outlined block that read as a second, detached shadow)
+            float hs = Mathf.Max(p.z < -1.55f ? 0.5f * Mathf.Clamp01((p.y - 0.45f) / 0.2f) : 0f, 0.35f * Mathf.Clamp01((p.y - 0.6f) / 0.4f));
             float xs = Mathf.Clamp01((Mathf.Abs(p.x) - 0.72f) / 0.14f);
-            float zs = Mathf.Max(Mathf.Clamp01((p.z - 2.55f) / 0.3f), Mathf.Clamp01((-1.85f - p.z) / 0.2f));
+            float zs = Mathf.Max(Mathf.Clamp01((p.z - 2.55f) / 0.3f), 0.45f * Mathf.Clamp01((-1.85f - p.z) / 0.2f));
             float s = Mathf.Clamp01(Mathf.Max(hs, Mathf.Max(xs, zs)));
             soft[i] = s; col[i] = new Color32(255, 255, 255, (byte)(s * 255f + 0.5f));
         }

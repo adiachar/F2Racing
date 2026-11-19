@@ -1375,6 +1375,13 @@ public static class Trackside
             int step = Mathf.Max(1, Mathf.RoundToInt((street ? 3f : 4f) / ds));
             float maxLen = street ? 6f : low ? 22f : 15f, maxTurn = Mathf.Cos(3.5f * Mathf.Deg2Rad);
             float postGap = low ? 12f : 8f;
+            // tunnel bore (Monaco, Waterfront.BuildTunnel: covered from tunnelFrom to tunnelTo): no debris fence inside it.
+            // The fence stands 0.25 m behind the barrier line and leans 0.55 m in at the top, so inside the bore its top
+            // came through the tunnel walls as diagonal strips of chain-link. A 2 m margin keeps the leaning top clear of
+            // the portals too; the walls themselves stay.
+            bool hasBore = t.def != null && t.def.tunnelTo > t.def.tunnelFrom;
+            double boreFrom = hasBore ? t.def.tunnelFrom - 2.0 : 0.0, boreTo = hasBore ? t.def.tunnelTo + 2.0 : 0.0;
+            bool InBore(int bi) { if (!hasBore) return false; double bs = t.pts[((bi % N) + N) % N].s; return bs >= boreFrom && bs <= boreTo; }
             var samples = new List<int>();
             for (int i = 0; i < N; i += step) samples.Add(i);
             if (N - samples[samples.Count - 1] < Mathf.Max(1, step / 2)) samples.RemoveAt(samples.Count - 1);
@@ -1392,7 +1399,7 @@ public static class Trackside
                     int i = i0 % N;
                     Vector3 up = Vector3.up, mid = (da + db).normalized, len3 = b - a;
                     float len = len3.magnitude;
-                    bool dirty = dirt[s, i] > 0.3f, fz = fences && (street || fenceZ[s, i]);
+                    bool dirty = dirt[s, i] > 0.3f, fz = fences && (street || fenceZ[s, i]) && !InBore(i0) && !InBore(i1) && !InBore((i0 + i1) / 2);
                     float topY;
                     if (IsWall(i))
                     {

@@ -461,9 +461,15 @@ public static class Environment
     static Vector3 Dir(float bearingDeg) { float a = bearingDeg * Mathf.Deg2Rad; return new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a)); }
 
     // ================================================================ backdrop: rings of distant land, and the sea
+    // wooded rings: a dark spruce / mixed canopy as a linear multiplier of the baked light (~1.6-2 on these faces, so
+    // ~sRGB 55,90,55 on screen before the fog), and the canopy texture's tile in metres (EnvTex.FarWood)
+    static readonly Color ForestLow = new Color(0.020f, 0.055f, 0.018f), ForestTop = new Color(0.027f, 0.062f, 0.026f);
+    const float FarWoodTile = 96f;
     public static void Backdrop(Transform parent, float cx, float cy, float ext)
     {
         var e = Cur; Buf bPlain = new Buf(), bWood = new Buf();
+        // the canopy texture first: the wooded rings' tint is divided by its mean (FarWoodMean is only known once it is made)
+        if (WorldBuilder.BakeReady && e.rings != null) for (int r = 0; r < e.rings.Length; r++) if (e.rings[r].wood > 0.01f) { EnvTex.FarWood(); break; }
         var haze = RenderSettings.fogColor;
         bool sea = !float.IsNaN(e.seaDir) && !RealWorld.HasWaterAreas;
         bool real = RealWorld.Active && RealWorld.HasTerrain;
@@ -486,16 +492,24 @@ public static class Environment
                 // dark wall. The tint is a linear multiplier of the baked light, which is about 1.6 on these up-turned faces,
                 // so the haze target is the fog colour in linear space over 1.6: far crests end up at the fog colour on screen)
                 float hz = Mathf.Lerp(0.30f, 0.56f, Mathf.Clamp01((g.dist - 450f) / 500f));
-                // wooded hills (gap list item 18: the Ardennes, Suzuka's hills read as bare pale shapes): the crowns
+                // wooded hills (gap list item 18: the Ardennes, Suzuka's hills read as bare pale shapes): the canopy
                 // texture (EnvTex.FarWood, one read like the white texture before), the tint divided by its mean so the
-                // average is kept, then darker (forest albedo) and a little less haze: dark blue-green woods
+                // average is kept. The ring's colour goes (by its wood share) to a dark forest canopy albedo, and nearly
+                // all of the tint's own haze goes: the linear fog (~15-20 % at the first ring) already lays the haze on top,
+                // and the two together left Spa's hills a pale blue-grey. Result: dark green woods, bluer towards the crest
+                // and on the far ring, melting into the fog
+                // (fw: how much of that applies; partly wooded rings, wood <= 0.4 such as Monaco's rock with scrub, keep
+                // their own colour, a little darker, as before)
                 bool wood = g.wood > 0.01f && WorldBuilder.BakeReady;
                 var rb = wood ? bWood : bPlain;
-                if (wood) hz *= 1f - 0.45f * g.wood; // (the linear fog still hazes them on top: Spa's hills were near the fog colour)
+                float fw = wood ? Mathf.Clamp01((g.wood - 0.4f) / 0.6f) : 0f;
+                if (wood) hz *= 1f - Mathf.Lerp(0.45f, 0.85f, fw) * g.wood;
                 Color hazeL = haze.linear / 1.6f;
-                Color low = Color.Lerp(g.low, hazeL, hz), top = Color.Lerp(g.top, hazeL, Mathf.Min(1f, hz + 0.2f));
-                if (wood) { float k = (1f - 0.3f * g.wood) / Mathf.Max(0.05f, EnvTex.FarWoodMean); low *= k; top *= k; low.a = top.a = 1f; }
-                float uScale = radius / 36f, vScale = 1f / 36f; // ~36 m per tile along the ring and up the slope
+                Color gLow = Color.Lerp(g.low, ForestLow, fw), gTop = Color.Lerp(g.top, ForestTop, fw);
+                Color low = Color.Lerp(gLow, hazeL, hz), top = Color.Lerp(gTop, hazeL, Mathf.Min(1f, hz + Mathf.Lerp(0.2f, 0.06f, fw)));
+                if (wood) { float k = (1f - 0.3f * g.wood * (1f - fw)) / Mathf.Max(0.05f, EnvTex.FarWoodMean); low *= k; top *= k; low.a = top.a = 1f; }
+                // ~96 m per tile along the ring (a whole number of tiles round it: no seam) and up the slope
+                float uScale = Mathf.Max(1f, Mathf.Round(radius * 2f * Mathf.PI / FarWoodTile)) / (2f * Mathf.PI), vScale = 1f / FarWoodTile;
                 float Crest(int i)
                 {
                     float a = i * Mathf.PI * 2 / Seg;

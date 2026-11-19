@@ -410,33 +410,38 @@ public static class EnvTex
     // a sill with its shadow, a lintel shadow and a faint string course at floor level. Texel (0, 0) is plain plaster,
     // so faces mapped to uv (0, 0) (cornices, parapets) come out as plaster.
     static Texture2D facade;
-    // Far woods (Environment.Backdrop, gap list item 18): a hillside of crowns seen from the side at 0.5-3 km, one tile =
-    // ~36 m. Grey, multiplied with the ring's baked vertex colour: lit crown tops, darker flanks, near-black gaps between
-    // them; spires for conifers on the upper half of each crown. Backdrop divides the tint by its linear mean (FarWoodMean). The mips
-    // average it out with distance, so far crests fade to an even tone. 128 px RGBA32 + mips: 85 KB, load time only.
+    // Far woods (Environment.Backdrop, gap list item 18): forest canopy seen from the side at 0.5-3 km, one tile = ~96 m
+    // (Environment.FarWoodTile), 0.75 m per texel. Grey, multiplied with the ring's baked vertex colour. Soft and LOW
+    // contrast on purpose: ~720 small round crowns (1.5-3 m radius) at random places (no grid: the old 8 x 8 grid of big
+    // crowns, 0.34-1.0 in value, read as a pale brick wall at 1-2 km), lit a little on top, over a darker understorey,
+    // on gentle stand-sized patches (fbm, 3 per tile). The mips average it to an even tone with distance. Backdrop
+    // divides the tint by its linear mean (FarWoodMean). 128 px RGBA32 + mips: 85 KB, load time only.
     static Texture2D farWood;
-    public static float FarWoodMean = 0.5f; // the texture's mean in linear (sRGB texture), set when it is made
+    public static float FarWoodMean = 0.17f; // the texture's mean in linear (sRGB texture), set when it is made
     public static Texture2D FarWood()
     {
         if (farWood != null) return farWood;
-        const int N = 128, G = 8; var val = new float[N * N];
-        for (int i = 0; i < val.Length; i++) val[i] = 0.34f + 0.06f * Hash(i % N, i / N, 211); // the dark understorey
-        // crowns on a jittered 8 x 8 grid (16 px per cell), drawn back to front (lower rows first: they sit in front)
-        for (int gy = G - 1; gy >= 0; gy--) for (int gx = 0; gx < G; gx++)
+        const int N = 128, Crowns = 720;
+        var bas = new float[N * N]; var val = new float[N * N];
+        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
         {
-            float cx = (gx + 0.2f + 0.6f * Hash(gx, gy, 221)) * (N / (float)G), cy = (gy + 0.2f + 0.6f * Hash(gx, gy, 223)) * (N / (float)G);
-            float rx = 7f + 4f * Hash(gx, gy, 227), ry = rx * (1.15f + 0.35f * Hash(gx, gy, 229));
-            float tone = 0.86f + 0.22f * Hash(gx, gy, 233); bool spire = Hash(gx, gy, 239) < 0.6f;
-            for (int dy = -(int)ry - 6; dy <= (int)ry + 6; dy++) for (int dx = -(int)rx - 1; dx <= (int)rx + 1; dx++)
+            int i = y * N + x;
+            bas[i] = 0.52f + 0.12f * (Fbm((x + 0.5f) / N, (y + 0.5f) / N, 3, 3, 251) - 0.5f); // stands: gentle patches
+            val[i] = bas[i] * (0.80f + 0.06f * Hash(x, y, 211));                                 // the shaded understorey
+        }
+        // crowns from the top of the tile down: the lower ones (nearer on the slope) overlap the ones above them
+        for (int k = 0; k < Crowns; k++)
+        {
+            float cy = (1f - (k + Hash(k, 1, 257)) / Crowns) * N, cx = Hash(k, 2, 257) * N;
+            float r = 2.0f + 1.8f * Hash(k, 3, 257), tone = 0.93f + 0.14f * Hash(k, 4, 257);
+            int ri = (int)r + 1, icx = (int)cx, icy = (int)cy;
+            for (int dy = -ri; dy <= ri; dy++) for (int dx = -ri; dx <= ri; dx++)
             {
-                float ux = dx / rx, uy = dy / ry;
-                // a spire narrows the top half to a point (spruce); otherwise a round crown
-                float w = spire && uy > 0f ? Mathf.Max(0f, 1f - uy * 0.85f) : Mathf.Sqrt(Mathf.Max(0f, 1f - uy * uy));
-                if (Mathf.Abs(ux) > w || uy < -1f || uy > (spire ? 1.15f : 1f)) continue;
-                int x = (((int)cx + dx) % N + N) % N, y = (((int)cy + dy) % N + N) % N;
-                // lit from above, a soft edge darkening and some leaf grain
-                float lit = 0.62f + 0.38f * Mathf.Clamp01(0.5f + 0.6f * uy) - 0.18f * (Mathf.Abs(ux) / Mathf.Max(w, 0.05f));
-                val[y * N + x] = Mathf.Clamp01(lit * tone * (0.9f + 0.2f * Hash(x, y, 241)));
+                float ux = dx / r, uy = dy / r, d2 = ux * ux + uy * uy;
+                if (d2 > 1f) continue;
+                int x = ((icx + dx) % N + N) % N, y = ((icy + dy) % N + N) % N, i = y * N + x;
+                float lit = 0.90f + 0.16f * uy - 0.07f * d2;                    // a lighter top, a soft darker rim
+                val[i] = Mathf.Clamp01(bas[i] * lit * tone * (0.96f + 0.08f * Hash(x, y, 241)));
             }
         }
         var px = new Color32[N * N]; double sum = 0; bool lin = QualitySettings.activeColorSpace == ColorSpace.Linear;
