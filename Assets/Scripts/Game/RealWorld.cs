@@ -1705,7 +1705,12 @@ public static class RealWorld
             float lat = u2[i].x, m = Bilinear(gFloor, v[i].x, v[i].z) * Smooth((lat - wallLat - 0.2f) / 5f);
             u3[i] = new Vector2(0f, m); any |= m > 0.01f;
         }
-        if (any) mesh.uv4 = u3; // (uv4 = TEXCOORD3 = Ground.cginc's uv3)
+        if (!any) return;
+        mesh.uv4 = u3; // (uv4 = TEXCOORD3 = Ground.cginc's uv3)
+        // Ground.cginc reads the mask only where _Forest = 1. The verge shares its grass material with other Ground
+        // meshes that have no uv3, so it gets its own copy (all the grass settings carried over) with the flag on.
+        var mr = vt.GetComponent<MeshRenderer>();
+        if (mr != null && mr.sharedMaterial != null) { var fm = new Material(mr.sharedMaterial) { name = "VergeForest" }; fm.SetFloat("_Forest", 1f); mr.sharedMaterial = fm; }
     }
 
     // open, unpaved ground for a plant (r: its radius)

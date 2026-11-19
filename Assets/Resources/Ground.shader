@@ -21,6 +21,7 @@ Shader "F2/Ground"
         _Ruts ("Ruts: inner edge m, strength", Vector) = (1000, 0, 0, 0)
         _Clumps ("Grass clumps from the detail alpha (0 off, 1 on)", Float) = 0
         _Turf ("Run-off strip behind the kerbs: turf / painted run-off (0 off, 1 on)", Float) = 0
+        _Forest ("Forest-floor mask in uv3.y (1 only where the mesh has it: RealWorld.VergeFloor)", Float) = 0
         _RunGreen ("Run-off paint green", Color) = (0.25, 0.48, 0.29, 1)
         _RunBlue ("Run-off paint blue", Color) = (0.19, 0.33, 0.58, 1)
     }

@@ -62,6 +62,7 @@ float4 _Wall;         // barrier line (m), darkening, -, -
 float4 _Ruts;         // gravel inner edge (m), strength, -, -
 float _Clumps;        // grass only (1): the detail's alpha as clumps / tufts and lush or thin patches (HQ), 0 = off
 float _Turf;          // run-off strip behind the kerbs (1): astroturf / painted run-off, 0 = off
+float _Forest;        // verge with a forest-floor mask in uv3.y (1, RealWorld.VergeFloor), 0 = no uv3: branch skipped
 fixed4 _RunGreen, _RunBlue; // the run-off paints
 sampler2D _F2RoadShadow; // global (RoadShadow.cs): sun shadows in track space, here continued onto verges and run-offs
 float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: across scale of the fine zone (1/m), w: outer half width (m)
@@ -110,8 +111,14 @@ fixed4 frag (v2f i) : SV_Target
 #endif
 
     // ---- forest floor under the trees behind the barrier (verge: uv3.y; the run-off strip's uv3 is its own data)
-    float forest = saturate(i.run.y) * saturate(1.0 - _Turf);
+    // Uniform branch on _Forest: only the verge whose mesh got RealWorld.VergeFloor's uv3 sets it (Monza). Every other
+    // Ground mesh (the procedural circuits' verges, terrain, gravel) has no TEXCOORD3 at all, and the unbound attribute
+    // read back as brown / olive "camouflage" blobs; with _Forest = 0 they never read it.
+    float forest = 0.0;
+    UNITY_BRANCH
+    if (_Forest > 0.5)
     {
+        forest = saturate(i.run.y) * saturate(1.0 - _Turf);
         half lumD = dot(d.rgb, half3(0.3, 0.59, 0.11));
 #ifdef GROUND_HQ
         float lit = saturate((0.55 - (float)tuft) * 3.0) * 0.6 + saturate(((float)mac.b - 0.4) * 2.5) * 0.4; // litter / moss patches

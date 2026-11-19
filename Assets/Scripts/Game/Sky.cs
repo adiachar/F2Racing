@@ -63,8 +63,10 @@ public class Sky : MonoBehaviour
                 k.fog = new Color(0.68f, 0.77f, 0.88f); k.fogStart = 380; k.fogEnd = 1800;
                 break;
             case "monza": // Po valley: warm, a little hazy, clear
-                k.cover = 0.25f; k.haze = 0.85f; k.tint = new Color(0.20f, 0.44f, 0.88f); k.atmosphere = 0.9f; k.exposure = 2.0f; // deep clean azure, little sunset scatter (RR3)
-                k.fog = new Color(0.62f, 0.76f, 0.90f); k.fogStart = 340; k.fogEnd = 1750;
+                // pale, hazy Po-valley blue (RR3 skies are soft): ~125,177,243 at 45 degrees towards the sun's side
+                // (was 95,139,245), paler towards the horizon
+                k.cover = 0.25f; k.haze = 0.85f; k.tint = new Color(0.38f, 0.54f, 0.64f); k.atmosphere = 1.2f; k.exposure = 1.6f;
+                k.fog = new Color(0.70f, 0.80f, 0.90f); k.fogStart = 340; k.fogEnd = 1750; // hazy blue-grey (~148,165,178 on screen)
                 break;
             case "suzuka":
                 k.cover = 0.38f; k.fog = new Color(0.68f, 0.78f, 0.90f);
@@ -123,19 +125,24 @@ public class Sky : MonoBehaviour
     static Color cloudLit = Color.white, cloudShade = Color.white, cloudSun = Color.white;
     static GradeLook dryGrade = Grade.Neutral;
 
+    static readonly Color SunsetTint = new Color(0.60f, 0.40f, 0.50f);
     static Look AtTime(Look k, TimeOfDay.Kind t)
     {
         cloudLit = cloudShade = cloudSun = Color.white; todGlare = 1f; wetGrey = 1f;
         switch (t)
         {
-            case TimeOfDay.Kind.Morning: // low, cool-gold sun, fresh haze
-                k.atmosphere *= 1.15f; k.exposure *= 0.95f; k.haze = Mathf.Min(1f, k.haze + 0.1f);
+            case TimeOfDay.Kind.Morning: // low, cool-gold sun, fresh haze (the tint a little towards the sunset one: a thicker
+                // atmosphere with a blue-heavy tint went yellow-green near the horizon)
+                k.tint = Color.Lerp(k.tint, SunsetTint, 0.3f); k.exposure *= 0.95f; k.haze = Mathf.Min(1f, k.haze + 0.1f);
                 k.fog = Color.Lerp(k.fog, new Color(0.80f, 0.84f, 0.90f), 0.3f); k.fogStart *= 0.8f; k.fogEnd *= 0.9f;
                 cloudLit = new Color(1f, 0.97f, 0.93f); cloudSun = new Color(1f, 0.9f, 0.75f);
                 break;
-            case TimeOfDay.Kind.Evening: // golden hour: orange sun low in the west, warm haze, long shadows
-                k.atmosphere = Mathf.Max(k.atmosphere, 1.2f); k.exposure *= 0.85f;
-                k.fog = Color.Lerp(k.fog, new Color(0.86f, 0.70f, 0.56f), 0.45f);
+            case TimeOfDay.Kind.Evening: // golden hour: orange sun low in the west, warm haze, long shadows.
+                // Unity's procedural sky with a blue-heavy tint and the sun 13 degrees up turns lime near the horizon
+                // (213,237,146): one tint for every circuit with the red channel not starved, and a taller peach haze band
+                // (CloudParams) over the bottom degrees: warm orange at the horizon -> pale -> soft blue, no green
+                k.tint = SunsetTint; k.atmosphere = 1.4f; k.exposure = 1.2f; k.haze = Mathf.Max(k.haze, 0.9f);
+                k.fog = Color.Lerp(k.fog, new Color(0.86f, 0.62f, 0.44f), 0.8f); // as seen on screen (Setup divides the grade out)
                 cloudLit = new Color(1f, 0.82f, 0.66f) * 0.92f; cloudShade = new Color(0.85f, 0.78f, 0.80f); cloudSun = new Color(1.4f, 0.85f, 0.42f);
                 todGlare = 1.25f; wetGrey = 0.75f;
                 break;
@@ -175,8 +182,8 @@ public class Sky : MonoBehaviour
                 break;
             case TimeOfDay.Kind.Evening: // golden hour: a strong, low, warm sun lights every wall that faces it
                 sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 2.0f; ambGain = 1.0f; carSun = 1.72f;
-                sky = new Color(0.29f, 0.32f, 0.45f);
-                RenderSettings.ambientSkyColor = new Color(0.53f, 0.57f, 0.69f); RenderSettings.ambientEquatorColor = new Color(0.58f, 0.52f, 0.46f);
+                sky = new Color(0.33f, 0.33f, 0.36f); // the dusk dome is orange low down, blue above: near-neutral fill (0.29,0.32,0.45 made the shade purple)
+                RenderSettings.ambientSkyColor = new Color(0.56f, 0.57f, 0.63f); RenderSettings.ambientEquatorColor = new Color(0.58f, 0.52f, 0.46f);
                 RenderSettings.ambientGroundColor *= new Color(1f, 0.85f, 0.7f);
                 break;
             case TimeOfDay.Kind.Night:   // the "sun" is the moon; the cars get the floodlights (Create)
@@ -279,7 +286,7 @@ public class Sky : MonoBehaviour
         cloudMat.SetFloat("_Cover", c);
         cloudMat.SetFloat("_Scale", k.deck);
         cloudMat.SetFloat("_Haze", k.haze);
-        cloudMat.SetFloat("_HazeHeight", 0.2f); // a little higher: covers the procedural sky's over-cyan bottom degrees
+        cloudMat.SetFloat("_HazeHeight", tod == TimeOfDay.Kind.Evening ? 0.3f : 0.2f); // covers the procedural sky's over-cyan (evening: yellow) bottom degrees
         cloudMat.SetColor("_LitCol", Color.Lerp(new Color(1f, 0.99f, 0.96f), new Color(0.90f, 0.91f, 0.92f), c * c) * cloudLit * (1f - 0.3f * Weather.Wetness));
         // fair-weather cumulus have light, sky-lit blue-grey bases; only a closing (rain) deck goes dark grey
         cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.74f, 0.78f, 0.86f), new Color(0.44f, 0.47f, 0.52f), c) * cloudShade * (1f - 0.2f * Weather.Wetness));
@@ -308,6 +315,12 @@ public class Sky : MonoBehaviour
         {
             float e = dryGrade.exposure * Grade.BaseExposure;
             dryLook.fog = new Color(Mathf.Min(dryLook.fog.r / (dryGrade.tint.x * e), 0.75f), Mathf.Min(dryLook.fog.g / (dryGrade.tint.y * e), 0.8f), Mathf.Min(dryLook.fog.b / (dryGrade.tint.z * e), 0.85f), 1f);
+        }
+        else if (tod == TimeOfDay.Kind.Evening)
+        {
+            // evening: the peach horizon would clip to white under the grade's exposure; divide it out in linear
+            float e = dryGrade.exposure * Grade.BaseExposure; var f = dryLook.fog.linear;
+            dryLook.fog = new Color(Mathf.Min(f.r / (dryGrade.tint.x * e), 1f), Mathf.Min(f.g / (dryGrade.tint.y * e), 1f), Mathf.Min(f.b / (dryGrade.tint.z * e), 1f), 1f).gamma;
         }
         if (sun != null) hazeSun = -sun.transform.forward;
         var k = Wetted(dryLook, Weather.Wetness);

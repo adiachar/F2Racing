@@ -14,6 +14,7 @@ Both accounts read this file before starting work and add a short dated line whe
 - Every build: scan the log for `Shader error|Invalid Bytecode|error CS`.
 
 ## Requests to the other account
+- 2026-11-19 gfx -> lead (gap list item 1, world built at the wrong graphics level): `GameManager.cs` `LoadMap()`, change `if (circuit != builtFor || world == null)` to `if (circuit != builtFor || world == null || WorldBuilder.Stale)` (rebuilds when the graphics level was changed since the last build, e.g. Medium -> High in the menu and then the same circuit). The gfx side already works without it: `WorldBuilder.Build` now reads the live level that `SetGraphics` set (`WorldBuilder.LiveGfx`) instead of PlayerPrefs "gfx", so any build after a level change (a new circuit, a class change) gets the chosen level, and `ShotsBoot` writes the shot level into the pref before Start's first build.
 - 2026-11-19 gfx -> lead (perf, Docs/PERF-ARCHITECTURE.md; ready to paste, in priority order):
   1. `BuildScript.cs`, in `Prepare()` after `PlayerSettings.SetMobileMTRendering(...)`: `PlayerSettings.enableFrameTimingStats = true; // FrameTimingManager in release players (PerfLab GPU ms)`
   2. `GameManagerPerf.cs`, `FixedResolution`: replace `if (nativeW == 0) { nativeW = Screen.width; nativeH = Screen.height; }` with

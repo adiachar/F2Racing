@@ -15,8 +15,31 @@ public static class WorldBuilder
     // true when Road.shader draws the road (asphalt, rubber, lines, kerbs, grid); Scenery.Rubber then adds no overlay
     public static bool RoadShaded;
     // graphics level the world is built for: 1 Low, 2 Medium, 3 High (GameManager's "gfx" setting; Auto = Medium,
-    // or Low once Auto has stepped down to it, which GameManager shows by switching anisotropic filtering off)
+    // or Low once Auto has stepped down to it). Set in Build from LiveGfx.
     public static int Gfx = 2;
+    // The level the game is running at now. GameManager.SetGraphics (start, every settings change, Auto's step down)
+    // leaves a signature no Unity default quality level has: shadowDistance 55 (Low/Medium) or 90 (High), anisotropic
+    // filtering Disable on Low and ForceEnable on Medium/High. That live state wins over PlayerPrefs "gfx", which
+    // StartSession only saves after it has built the world (so a level just changed in the menu is not there yet).
+    // Before the first SetGraphics (GameManager.Start's own build) the pref is still what Start loaded, so it is used
+    // (DebugShots writes the shot level into it first). Auto (0) without the signature = Medium.
+    public static int LiveGfx
+    {
+        get
+        {
+            float sd = QualitySettings.shadowDistance;
+            if (sd == 55f || sd == 90f)
+            {
+                var af = QualitySettings.anisotropicFiltering;
+                if (af == AnisotropicFiltering.Disable) return 1;
+                if (af == AnisotropicFiltering.ForceEnable) return sd == 90f ? 3 : 2;
+            }
+            int s = PlayerPrefs.GetInt("gfx", 0);
+            return s == 0 ? 2 : Mathf.Clamp(s, 1, 3);
+        }
+    }
+    // the world on screen was built for another level than the game now runs at (GameManager.LoadMap can rebuild on it)
+    public static bool Stale => LiveGfx != Gfx;
     // the baked vertex lighting will run (same test as LightBake.Begin): vertex-colour tints and the fence shader work
     public static bool BakeReady;
     // ---------------------------------------------------------------- hills
@@ -418,8 +441,8 @@ public static class WorldBuilder
     public static GameObject Build(Track t)
     {
         var root = new GameObject("World").transform;
-        int gfxSetting = PlayerPrefs.GetInt("gfx", 0);
-        Gfx = gfxSetting == 0 ? (QualitySettings.anisotropicFiltering == AnisotropicFiltering.Disable ? 1 : 2) : Mathf.Clamp(gfxSetting, 1, 3);
+        Gfx = LiveGfx; // the level actually chosen now, not the last saved one
+        Debug.Log("WorldBuilder: building " + (t.def != null ? t.def.id : "?") + " for graphics level " + Gfx); // (once per build; the shooter's console.log shows it)
         { var bs = Resources.Load<Shader>("Baked"); BakeReady = bs != null && bs.isSupported; }
         BakeTint.Clear();
         float Wd = (float)t.width;
