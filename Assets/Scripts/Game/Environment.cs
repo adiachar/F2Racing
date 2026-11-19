@@ -24,6 +24,7 @@ public class EnvRing
     public float dist, depth = 160, hMin, hVar, jag;   // m beyond the circuit's half-size; crest height = hMin + 0..hVar
     public Color low, top;                             // colour at the foot and at the highest crests
     public float peakDir = float.NaN, peakGain, peakWidth = 40; // an extra massif towards this compass bearing (deg, 0 = north / +z, 90 = east / +x)
+    public float wood;                                 // 0 bare / rock, 1 wooded hills: crowns texture (EnvTex.FarWood), darker, less haze
 }
 
 // a landmark, placed relative to the track like the real one
@@ -42,6 +43,7 @@ public class EnvDef
     // ground palette (albedo): main cover, second tone in patches, bare soil / rock / sand on high ground
     public Color grass = new Color(0.24f, 0.44f, 0.17f), dry = new Color(0.30f, 0.46f, 0.19f), soil = new Color(0.45f, 0.40f, 0.30f);
     public float patch = 0.3f, patchScale = 140, soilAt = 0;      // share of the second tone, its blob size (m), lift (m) where soil shows (0 = never)
+    public float scrub;                                           // share of the bare high ground (soil / rock) under scrub (maquis) in ~45 m patches
     // terrain away from the track
     public float flatTo = 60, ramp = 90;                          // m from the track where the land starts to move, and how gently
     public float rough = 3, roughScale = 220; public bool ridged; // rolling amplitude (m), wavelength (m), sharp dune crests
@@ -77,13 +79,13 @@ public static class Environment
         // Monaco: a city stacked on a steep slope between the harbour and pale limestone mountains. No countryside.
         ["monaco"] = new EnvDef
         {
-            grass = C(0.37f, 0.36f, 0.34f), dry = C(0.20f, 0.31f, 0.16f), soil = C(0.44f, 0.41f, 0.36f), patch = 0.2f, patchScale = 70, soilAt = 95,
+            grass = C(0.37f, 0.36f, 0.34f), dry = C(0.20f, 0.31f, 0.16f), soil = C(0.44f, 0.41f, 0.36f), patch = 0.2f, patchScale = 70, soilAt = 95, scrub = 0.55f,
             flatTo = 46, ramp = 70, rough = 8, roughScale = 180, rise = 120, riseDist = 300,
             tree = TreeKind.Palm, tree2 = TreeKind.Pine, tree2Share = 0.55f, treeMul = 0.9f, treeNear = 16, treeFar = 340,
             leaf = C(0.22f, 0.40f, 0.18f), leaf2 = C(0.17f, 0.30f, 0.15f), trunk = C(0.40f, 0.33f, 0.26f),
             rings = new[]
             {
-                new EnvRing { dist = 470, depth = 240, hMin = 230, hVar = 190, jag = 0.55f, low = C(0.27f, 0.31f, 0.22f), top = C(0.50f, 0.47f, 0.42f), peakDir = 250, peakGain = 170, peakWidth = 35 },
+                new EnvRing { dist = 470, depth = 240, hMin = 230, hVar = 190, jag = 0.55f, low = C(0.27f, 0.31f, 0.22f), top = C(0.50f, 0.47f, 0.42f), peakDir = 250, peakGain = 170, peakWidth = 35, wood = 0.45f },
                 new EnvRing { dist = 860, depth = 300, hMin = 420, hVar = 300, jag = 0.7f, low = C(0.33f, 0.36f, 0.32f), top = C(0.52f, 0.51f, 0.50f) },
             },
             blocks = 240, floorsMin = 5, floorsMax = 13,
@@ -106,8 +108,8 @@ public static class Environment
             leaf = C(0.10f, 0.23f, 0.13f), leaf2 = C(0.17f, 0.36f, 0.16f),
             rings = new[]
             {
-                new EnvRing { dist = 520, depth = 220, hMin = 95, hVar = 120, jag = 0.15f, low = C(0.11f, 0.22f, 0.15f), top = C(0.15f, 0.27f, 0.19f) },
-                new EnvRing { dist = 900, depth = 260, hMin = 190, hVar = 170, jag = 0.15f, low = C(0.20f, 0.30f, 0.28f), top = C(0.27f, 0.36f, 0.36f) },
+                new EnvRing { dist = 520, depth = 220, hMin = 95, hVar = 120, jag = 0.15f, low = C(0.11f, 0.22f, 0.15f), top = C(0.15f, 0.27f, 0.19f), wood = 1f },
+                new EnvRing { dist = 900, depth = 260, hMin = 190, hVar = 170, jag = 0.15f, low = C(0.20f, 0.30f, 0.28f), top = C(0.27f, 0.36f, 0.36f), wood = 0.8f },
             },
             groundRefl = C(0.10f, 0.14f, 0.10f),
         },
@@ -121,7 +123,7 @@ public static class Environment
             leaf = C(0.19f, 0.38f, 0.16f), leaf2 = C(0.27f, 0.42f, 0.15f),
             rings = new[]
             {
-                new EnvRing { dist = 430, depth = 60, hMin = 22, hVar = 12, jag = 0.5f, low = C(0.16f, 0.30f, 0.15f), top = C(0.22f, 0.37f, 0.18f) },
+                new EnvRing { dist = 430, depth = 60, hMin = 22, hVar = 12, jag = 0.5f, low = C(0.16f, 0.30f, 0.15f), top = C(0.22f, 0.37f, 0.18f), wood = 0.8f },
                 new EnvRing { dist = 900, depth = 300, hMin = 20, hVar = 30, jag = 0.6f, low = C(0.40f, 0.46f, 0.48f), top = C(0.55f, 0.59f, 0.63f), peakDir = 0, peakGain = 230, peakWidth = 70 },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Bridge, s = 3580, side = 1, off = 0 } }, // the old banked oval crosses over the Serraglio (where the map data has the bridge)
@@ -150,8 +152,8 @@ public static class Environment
             leaf = C(0.15f, 0.37f, 0.15f), leaf2 = C(0.10f, 0.26f, 0.14f),
             rings = new[]
             {
-                new EnvRing { dist = 500, depth = 200, hMin = 45, hVar = 60, jag = 0.2f, low = C(0.14f, 0.31f, 0.18f), top = C(0.18f, 0.36f, 0.21f) },
-                new EnvRing { dist = 900, depth = 280, hMin = 70, hVar = 90, jag = 0.35f, low = C(0.26f, 0.38f, 0.37f), top = C(0.34f, 0.44f, 0.46f), peakDir = 290, peakGain = 220, peakWidth = 60 },
+                new EnvRing { dist = 500, depth = 200, hMin = 45, hVar = 60, jag = 0.2f, low = C(0.14f, 0.31f, 0.18f), top = C(0.18f, 0.36f, 0.21f), wood = 1f },
+                new EnvRing { dist = 900, depth = 280, hMin = 70, hVar = 90, jag = 0.35f, low = C(0.26f, 0.38f, 0.37f), top = C(0.34f, 0.44f, 0.46f), peakDir = 290, peakGain = 220, peakWidth = 60, wood = 0.7f },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Wheel, s = 5560, side = -2, off = 150 } },
         },
@@ -179,7 +181,7 @@ public static class Environment
             leaf = C(0.21f, 0.37f, 0.16f), leaf2 = C(0.33f, 0.40f, 0.20f),
             rings = new[]
             {
-                new EnvRing { dist = 500, depth = 200, hMin = 40, hVar = 45, jag = 0.15f, low = C(0.36f, 0.42f, 0.23f), top = C(0.44f, 0.47f, 0.27f) },
+                new EnvRing { dist = 500, depth = 200, hMin = 40, hVar = 45, jag = 0.15f, low = C(0.36f, 0.42f, 0.23f), top = C(0.44f, 0.47f, 0.27f), wood = 0.5f },
                 new EnvRing { dist = 900, depth = 260, hMin = 70, hVar = 70, jag = 0.2f, low = C(0.42f, 0.47f, 0.36f), top = C(0.50f, 0.53f, 0.44f) },
             },
             groundRefl = C(0.16f, 0.16f, 0.11f),
@@ -209,7 +211,7 @@ public static class Environment
             leaf = C(0.10f, 0.25f, 0.13f), leaf2 = C(0.18f, 0.38f, 0.16f),
             rings = new[]
             {
-                new EnvRing { dist = 470, depth = 300, hMin = 240, hVar = 230, jag = 0.3f, low = C(0.12f, 0.27f, 0.15f), top = C(0.27f, 0.45f, 0.21f) },
+                new EnvRing { dist = 470, depth = 300, hMin = 240, hVar = 230, jag = 0.3f, low = C(0.12f, 0.27f, 0.15f), top = C(0.27f, 0.45f, 0.21f), wood = 0.9f },
                 new EnvRing { dist = 860, depth = 340, hMin = 480, hVar = 380, jag = 0.75f, low = C(0.22f, 0.34f, 0.30f), top = C(0.60f, 0.62f, 0.64f) },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Sculpture, side = 9 } }, // the big steel sculpture in the infield (generic shape)
@@ -380,6 +382,13 @@ public static class Environment
         {
             float s = Mathf.SmoothStep(0, 1, (lift - e.soilAt * 0.55f) / (e.soilAt * 0.45f)) * (0.55f + 0.45f * Noise(x / 37f, z / 37f, 41));
             c = Color.Lerp(c, e.soil, s);
+            if (e.scrub > 0)
+            {
+                // the rock is not bare everywhere: dark scrub (maquis, pines) in patches, more in the hollows (load time)
+                float sn = 0.65f * Noise(x / 45f, z / 45f, 47) + 0.35f * Noise(x / 13f, z / 13f, 49);
+                float sc = Mathf.SmoothStep(0, 1, (sn - (1f - e.scrub)) / 0.18f) * s;
+                c = Color.Lerp(c, Color.Lerp(e.leaf, e.leaf2, Noise(x / 30f, z / 30f, 53)) * (0.7f + 0.25f * Noise(x / 9f, z / 9f, 57)), sc);
+            }
         }
         float cn = Canopy(x, z);
         if (cn > 0) { var lf = Color.Lerp(e.leaf, e.leaf2, e.tree2Share * Noise(x / 60f, z / 60f, 95)) * (0.42f + 0.2f * Noise(x / 15f, z / 15f, 97) + 0.16f * Hash(Mathf.RoundToInt(x), Mathf.RoundToInt(z), 98)); c = Color.Lerp(c, lf, Mathf.Clamp01(cn * 5f)); }
@@ -454,7 +463,7 @@ public static class Environment
     // ================================================================ backdrop: rings of distant land, and the sea
     public static void Backdrop(Transform parent, float cx, float cy, float ext)
     {
-        var e = Cur; var b = new Buf();
+        var e = Cur; var bPlain = new Buf(), bWood = new Buf();
         var haze = RenderSettings.fogColor;
         bool sea = !float.IsNaN(e.seaDir) && !RealWorld.HasWaterAreas;
         bool real = RealWorld.Active && RealWorld.HasTerrain;
@@ -477,8 +486,16 @@ public static class Environment
                 // dark wall. The tint is a linear multiplier of the baked light, which is about 1.6 on these up-turned faces,
                 // so the haze target is the fog colour in linear space over 1.6: far crests end up at the fog colour on screen)
                 float hz = Mathf.Lerp(0.30f, 0.56f, Mathf.Clamp01((g.dist - 450f) / 500f));
+                // wooded hills (gap list item 18: the Ardennes, Suzuka's hills read as bare pale shapes): the crowns
+                // texture (EnvTex.FarWood, one read like the white texture before), the tint divided by its mean so the
+                // average is kept, then darker (forest albedo) and a little less haze: dark blue-green woods
+                bool wood = g.wood > 0.01f && WorldBuilder.BakeReady;
+                var rb = wood ? bWood : bPlain;
+                if (wood) hz *= 1f - 0.45f * g.wood; // (the linear fog still hazes them on top: Spa's hills were near the fog colour)
                 Color hazeL = haze.linear / 1.6f;
                 Color low = Color.Lerp(g.low, hazeL, hz), top = Color.Lerp(g.top, hazeL, Mathf.Min(1f, hz + 0.2f));
+                if (wood) { float k = (1f - 0.3f * g.wood) / Mathf.Max(0.05f, EnvTex.FarWoodMean); low *= k; top *= k; low.a = top.a = 1f; }
+                float uScale = radius / 36f, vScale = 1f / 36f; // ~36 m per tile along the ring and up the slope
                 float Crest(int i)
                 {
                     float a = i * Mathf.PI * 2 / Seg;
@@ -509,10 +526,22 @@ public static class Environment
                     var inward = mid + Vector3.up * 60 - (p0 + p1) * 0.5f;
                     Color cm0 = Color.Lerp(low, top, Mathf.Clamp01(h0 * 0.62f / hTop)), cm1 = Color.Lerp(low, top, Mathf.Clamp01(h1 * 0.62f / hTop));
                     Color ct0 = Color.Lerp(low, top, Mathf.Clamp01(h0 / hTop * 1.15f)), ct1 = Color.Lerp(low, top, Mathf.Clamp01(h1 / hTop * 1.15f));
-                    Band(b, p0, p1, m1, m0, inward, low, low, cm1, cm0);
-                    Band(b, m0, m1, t1, t0, inward, cm0, cm1, ct1, ct0);
+                    if (wood)
+                    {
+                        Vector2 q0 = new Vector2(a0 * uScale, p0.y * vScale), q1 = new Vector2(a1 * uScale, p1.y * vScale);
+                        Vector2 n0 = new Vector2(a0 * uScale, m0.y * vScale), n1 = new Vector2(a1 * uScale, m1.y * vScale);
+                        Vector2 w0 = new Vector2(a0 * uScale, t0.y * vScale), w1 = new Vector2(a1 * uScale, t1.y * vScale);
+                        Band(rb, p0, p1, m1, m0, inward, low, low, cm1, cm0, q0, q1, n1, n0);
+                        Band(rb, m0, m1, t1, t0, inward, cm0, cm1, ct1, ct0, n0, n1, w1, w0);
+                    }
+                    else
+                    {
+                        Band(rb, p0, p1, m1, m0, inward, low, low, cm1, cm0);
+                        Band(rb, m0, m1, t1, t0, inward, cm0, cm1, ct1, ct0);
+                    }
                 }
             }
+        var b = bPlain;
         if (sea)
         {
             // a beach, then the sea out to the horizon (a flat sheet: the dunes hide most of it from the track)
@@ -530,26 +559,34 @@ public static class Environment
         // not baked (old phones): vertex colours are not drawn, so the material carries an average colour
         Color avg = e.rings != null && e.rings.Length > 0 ? Color.Lerp(e.rings[0].low, haze, 0.15f) : new Color(0.3f, 0.4f, 0.33f);
         var bgo = Emit("EnvBackdrop", b, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : avg, null, 0f), parent);
-        if (bgo != null)
-        {
-            // normals turned mostly skywards: distant slopes are lit almost evenly (the haze washes out their shading),
-            // so the side of the ring away from the sun is not a dark band
-            var bm = bgo.GetComponent<MeshFilter>().sharedMesh; var bn = bm.normals;
-            for (int i = 0; i < bn.Length; i++) bn[i] = (bn[i] + Vector3.up * 1.6f).normalized;
-            bm.normals = bn;
-        }
+        SkyNormals(bgo);
+        // the wooded rings: one more draw call (only on circuits that have them), same shader, the crowns texture
+        SkyNormals(Emit("EnvBackdropWood", bWood, WorldBuilder.Mat(Color.white, EnvTex.FarWood(), 0f), parent));
+    }
+    // normals turned mostly skywards: distant slopes are lit almost evenly (the haze washes out their shading),
+    // so the side of the ring away from the sun is not a dark band
+    static void SkyNormals(GameObject bgo)
+    {
+        if (bgo == null) return;
+        var bm = bgo.GetComponent<MeshFilter>().sharedMesh; var bn = bm.normals;
+        for (int i = 0; i < bn.Length; i++) bn[i] = (bn[i] + Vector3.up * 1.6f).normalized;
+        bm.normals = bn;
     }
     // quad with a colour per corner
     static void Band(Buf b, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 outward, Color c0, Color c1, Color c2, Color c3)
+        => Band(b, p0, p1, p2, p3, outward, c0, c1, c2, c3, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero);
+    // ... and a uv per corner
+    static void Band(Buf b, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 outward, Color c0, Color c1, Color c2, Color c3,
+                     Vector2 u0, Vector2 u1, Vector2 u2, Vector2 u3)
     {
         if (Vector3.Dot(Vector3.Cross(p1 - p0, p2 - p0), outward) < 0)
         {
-            var tp = p1; p1 = p3; p3 = tp; var tc = c1; c1 = c3; c3 = tc;
+            var tp = p1; p1 = p3; p3 = tp; var tc = c1; c1 = c3; c3 = tc; var tu = u1; u1 = u3; u3 = tu;
         }
         int i = b.v.Count;
         b.v.Add(p0); b.v.Add(p1); b.v.Add(p2); b.v.Add(p3);
         b.col.Add(c0); b.col.Add(c1); b.col.Add(c2); b.col.Add(c3);
-        for (int k = 0; k < 4; k++) b.uv.Add(Vector2.zero);
+        b.uv.Add(u0); b.uv.Add(u1); b.uv.Add(u2); b.uv.Add(u3);
         b.tri.Add(i); b.tri.Add(i + 1); b.tri.Add(i + 2); b.tri.Add(i); b.tri.Add(i + 2); b.tri.Add(i + 3);
     }
 

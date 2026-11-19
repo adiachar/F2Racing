@@ -22,6 +22,8 @@
 //           (Fresnel, sun glint) and a share of the windows (a hash of the bay) is lit at dusk / night. The tint mask is
 //           alpha remapped from 0.06..1 (frames carry 0.055 so they are not glass). Cell 22 (map-stand crowd): every
 //           spectator bobs and sways by a texel or two (per-person phase, _Time), a cheap shimmer of movement.
+//  plain    (no keyword) with _WinGlow 1: the town facades (EnvTex.Facade, alpha 0 = glass) get the same lit windows
+//           at dusk / night (_F2Night) as F2_ATLAS, a share of the bays by hash.
 //  F2_CROWD the trackside crowd (TracksideArt.Crowd): uv1.rgb = the seat block's colour, applied where the crowd
 //           texture's alpha is 1 (empty seats, seat backs); people keep their colours. The same per-person shimmer
 //           (32 people per tile across, 4 bands), sampled with the unshifted gradients so no mip seams show.
@@ -35,6 +37,7 @@ Shader "F2/Baked"
         _LandMacro ("Land macro (F2_LAND)", 2D) = "gray" {}
         _LandRect ("Land map: x0, z0, 1/width, 1/depth (F2_LAND)", Vector) = (0, 0, 0.001, 0.001)
         _DetailScale ("Detail tiles per metre (F2_LAND)", Float) = 0.222
+        _WinGlow ("Lit windows at night (plain variant; texture alpha 0 = glass)", Float) = 0
     }
     SubShader
     {
@@ -98,6 +101,7 @@ Shader "F2/Baked"
             float _DetailScale;
         #endif
             float _F2Night; // 0 day, ~0.45 evening, 1 night (Trackside.Build)
+            float _WinGlow; // 1 on the town facades (Scenery.Town, Environment blocks: EnvTex.Facade, alpha 0 = glass)
 
             // sky, ground and sun mirrored in glass (float maths: see F2_LAND); gm = glass mask 0..1
             half3 Mirror(half3 c, float gm, float3 view, float3 nrm)
@@ -209,6 +213,12 @@ Shader "F2/Baked"
                 c.rgb = Mirror(c.rgb, gmA * 0.85, i.view, (float3)i.n); // (Low: the painted sky in the texture only)
             #endif
                 c.rgb += Lit(floor(i.uv) + i.cell.x * 31.0, gmA);
+            #elif !defined(F2_LAND) && !defined(F2_CROWD)
+                // town facades at dusk / night: a share of the windows glows warm (uv0 counts bays, so floor(uv) is one
+                // window). A uniform branch: by day and on every other plain material it costs one compare. The glass
+                // mask stays soft, so a far mip glows by its glass share instead of switching off
+                if (_WinGlow * _F2Night > 0.001)
+                    c.rgb += Lit(floor(i.uv), saturate(1.0 - (float)c.a) * _WinGlow);
             #endif
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)

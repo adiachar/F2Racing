@@ -103,7 +103,7 @@ public class LensFlare : MonoBehaviour
             Quad(3 + g, s * GhostAt[g], h / asp, h, c, GhostK[g] * vis * (0.35f + 0.65f * sl));
         }
         // 11 rainbow halo: a thin chromatic ring round the sun (dispersion in the front element), when the sun is in view
-        Quad(11, s, 0.42f / asp, 0.42f, new Color(1f, 1f, 1f), 0.10f * vis * (1f - 0.6f * sl));
+        Quad(11, s, 0.42f / asp, 0.42f, new Color(1f, 1f, 1f), 0.05f * vis * (1f - 0.6f * sl));
         if (!mr.enabled) mr.enabled = true;
         mesh.vertices = pos; mesh.colors32 = col;
     }

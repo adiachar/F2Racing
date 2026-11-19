@@ -34,6 +34,21 @@ REPO = "adiachar/F2Racing"
 ASSET = "F2Racing-WebGL.zip"
 DEFAULT_SPOTS = "300,850,1450,2500,3920,5150"  # Monza: straight, Rettifilo, Curva Grande, Lesmo 1, Ascari, Parabolica
 CHROME = "/usr/bin/google-chrome"
+# --preset: spots for features no default run puts in frame (gap list item 26). Sun spots come from the track data
+# (Physics Track tangents, 150 m ahead, nearly straight) against the sun of each time of day in Sky.cs / WorldBuilder.cs:
+# afternoon Euler(48,-35) (high: glare only, the disc is above the chase frame), evening Euler(13,70) (low: disc,
+# flare and glare in frame), morning Euler(24,-110). A preset fills in --track/--tod/--cam/--s not given on the
+# command line and adds its --param values; anything given on the command line wins.
+PRESETS = {
+    # Monza afternoon, the runs that face the sun most (Lesmo 1 exit 2620, Ascari-Parabolica 4411 / 4881)
+    "sun": {"track": "Monza", "tod": "afternoon", "cam": "chase,cockpit", "s": "2620,4411,4881"},
+    # Monza evening: the Lesmo 2 - Serraglio run heads straight into the low sun (2910, 3210)
+    "sun-evening": {"track": "Monza", "tod": "evening", "cam": "chase,cockpit", "s": "2910,3210"},
+    # plank sparks: 320 km/h on the main straight, chase and far (the far cam sees the floor from behind)
+    "sparks": {"track": "Monza", "cam": "chase,far", "s": "300,320,340", "param": ["kmh=320"]},
+    # LOD sweep: chase every 15 m down the main straight; flip through the frames for trees / stands / boards popping
+    "lod": {"track": "Monza", "cam": "chase", "s": ",".join(str(v) for v in range(150, 466, 15))},
+}
 CHROME_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
                "--autoplay-policy=no-user-gesture-required", "--mute-audio", "--disable-background-timer-throttling",
                "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"]
@@ -451,7 +466,15 @@ def main():
     ap.add_argument("--chrome", default=CHROME)
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--verbose", action="store_true", help="print every console line")
+    ap.add_argument("--preset", choices=sorted(PRESETS), help="ready-made spot set: sun, sun-evening, sparks, lod (see PRESETS)")
     args = ap.parse_args()
+    if args.preset:
+        given = {a.split("=", 1)[0][2:] for a in sys.argv[1:] if a.startswith("--")}
+        for k, v in PRESETS[args.preset].items():
+            if k == "param":
+                args.param = list(v) + (args.param or [])
+            elif k not in given:
+                setattr(args, k, v)
     sys.exit(run(args))
 
 

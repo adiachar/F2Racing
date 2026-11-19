@@ -227,6 +227,18 @@ public static class LightBake
             bool own = sn == "F2/Baked" || sn == "F2/Ground" || sn == "F2/Foliage"; // baked-light shaders already
             if (sn != "Legacy Shaders/Diffuse" && sn != "Standard" && !own) continue; // not the see-through or glowing ones
             if (r.sharedMaterial.IsKeywordEnabled("_EMISSION")) continue;                               // lamps keep their glow
+            if (mf.name == "TunnelLamps")
+            {
+                // the tunnel's ceiling fixtures are light sources, not lit surfaces (double-sided quads: their normals
+                // cancel, so the bake made them black slots): a flat warm glow, the same in the day and at night
+                var gc = new Color[mesh.vertexCount]; for (int i = 0; i < gc.Length; i++) gc[i] = TunnelGlow;
+                mesh.colors = gc; verts += gc.Length;
+                if (!own) { r.sharedMaterial.shader = shader; r.sharedMaterial.mainTexture = Texture2D.whiteTexture; r.sharedMaterial.color = Color.white; }
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
+                continue;
+            }
+            // town facades (EnvTex.Facade, alpha = glass): a share of the windows lit at dusk / night (Baked.shader)
+            if (mf.name == "Town" || mf.name == "EnvBlocks") r.sharedMaterial.SetFloat(WinGlowId, 1f);
             if (mesh.normals == null || mesh.normals.Length != mesh.vertexCount) mesh.RecalculateNormals(); // never fall back to 'all up': flat
             var v = mesh.vertices; var n = mesh.normals; var col = new Color[v.Length];
             bool hasN = n != null && n.Length == v.Length; int hint = -1, hint2 = -1;
@@ -259,6 +271,8 @@ public static class LightBake
     }
 
     const int BakeChunk = 2048;
+    static readonly int WinGlowId = Shader.PropertyToID("_WinGlow");
+    static readonly Color TunnelGlow = new Color(1.25f, 1.0f, 0.62f, 1f); // stored halved: 2.5x, a warm sodium-white
     // foliage vertices that are not in a mesh (ModelInstancing: world positions and normals of every instance vertex):
     // the same light as a vertex of a mesh on F2/Foliage gets in Apply (rgb halved, alpha 1), in the same parallel chunks
     public static void BakeFoliage(Vector3[] v, Vector3[] n, Color[] col)
@@ -332,8 +346,11 @@ public static class LightBake
     }
 
     // ---------------------------------------------------------------- night: floodlights along the track
-    const float LampStep = 25f, LampH = 11f, LampR0 = 14f, LampMax = 45f, LampI = 0.9f, LampCell = 45f;
-    static readonly Color FloodCol = new Color(1f, 0.94f, 0.84f);
+    const float LampStep = 25f, LampH = 11f, LampR0 = 14f, LampMax = 45f, LampI = 0.75f, LampCell = 45f;
+    // the pool right under each head (street lamps throw most of their light down): warmer, ~7 m across, on faces
+    // that look up (road, pavement, verge), so the road reads as pools of light between the posts, not one even wash
+    const float PoolR = 7f, PoolI = 0.45f;
+    static readonly Color FloodCol = new Color(1f, 0.94f, 0.84f), PoolCol = new Color(1f, 0.80f, 0.55f);
     static List<Vector3> lamps; static List<Vector3> lampBase;
     static Dictionary<long, List<int>> lampGrid;
     static long Key(int i, int j) => ((long)i << 32) ^ (uint)j;
@@ -365,7 +382,7 @@ public static class LightBake
     // ground under a lamp is lit evenly, and 3 roof-map samples on the way for buildings in between
     static Color Flood(Vector3 p, Vector3 n)
     {
-        float sum = 0; int ci = Mathf.FloorToInt(p.x / LampCell), cj = Mathf.FloorToInt(p.z / LampCell);
+        float sum = 0, pool = 0; int ci = Mathf.FloorToInt(p.x / LampCell), cj = Mathf.FloorToInt(p.z / LampCell);
         for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++)
         {
             if (!lampGrid.TryGetValue(Key(ci + di, cj + dj), out var list)) continue;
@@ -377,22 +394,28 @@ public static class LightBake
                 if (ndl < -0.2f) continue;
                 float w = 1f - d2 / (LampMax * LampMax); w *= w;
                 float e = LampI / (1f + d2 / (LampR0 * LampR0)) * w * Mathf.Clamp01(ndl * 0.85f + 0.15f);
+                // the heads are shielded and aim down: little light above them (upper floors of the facades stay dark,
+                // as at night, instead of a day-bright wall lit from the street side), full below ~25 deg under the head
+                float down = d.y / dist; // > 0: the point is below the lamp
+                e *= Mathf.Lerp(0.12f, 1f, Mathf.Clamp01(down * 2.4f + 0.1f));
+                float dh2 = d.x * d.x + d.z * d.z; // (by the distance across the ground: the pool is round on the road below the head)
+                float pl = n.y > 0.5f ? PoolI * n.y / (1f + dh2 / (PoolR * PoolR)) * Mathf.Clamp01(down * 3f) * w : 0f;
                 for (int s = 1; s <= 3; s++)
                 {
                     float u = s * 0.25f; Vector3 a = p + d * u;
-                    if (Roof(a.x, a.z) > a.y + 0.4f) { e *= 0.15f; break; }
+                    if (Roof(a.x, a.z) > a.y + 0.4f) { e *= 0.15f; pl *= 0.15f; break; }
                 }
-                sum += e;
+                sum += e; pool += pl;
             }
         }
-        return FloodCol * sum;
+        return FloodCol * sum + PoolCol * pool;
     }
 
     // the posts: one mesh (pole, arm, lamp head with a glowing underside), lit by hand in the vertex colours
     static void BuildPosts(Transform root)
     {
         var v = new List<Vector3>(); var nrm = new List<Vector3>(); var col = new List<Color>(); var tri = new List<int>();
-        Color dark = new Color(0.07f, 0.07f, 0.075f, 1), glow = new Color(1.6f, 1.5f, 1.32f, 1); // stored halved: glow = 3.2x
+        Color dark = new Color(0.07f, 0.07f, 0.075f, 1), glow = new Color(1.5f, 1.22f, 0.86f, 1); // stored halved: glow = 3x, warm (was a white slab)
         for (int i = 0; i < lamps.Count; i++)
         {
             Vector3 b = lampBase[i], h = lamps[i];

@@ -32,6 +32,22 @@ python3 Tools/Shots/shoot.py --param hud=1 --param class=F2 --param kmh=250 --we
 python3 Tools/Shots/shoot.py --build ~/Downloads/F2Racing-WebGL.zip --menu --out /tmp/menu
 ```
 
+Presets (`--preset`, gap list item 26): spot sets for features the default run never puts in frame. A preset fills
+in whichever of `--track/--tod/--cam/--s` are not on the command line and adds its `--param`s; anything on the command line wins.
+
+| preset | what | spots |
+|---|---|---|
+| `sun` | Monza afternoon, facing the sun (glare, flare, haze); the sun is 48 deg up, so the disc is above the chase frame | chase+cockpit, s 2620, 4411, 4881 |
+| `sun-evening` | Monza evening, straight into the low sun (13 deg): disc, lens flare and glare in frame | chase+cockpit, s 2910, 3210 |
+| `sparks` | plank sparks at 320 km/h on the main straight | chase+far, s 300, 320, 340, `kmh=320` |
+| `lod` | LOD sweep: chase every 15 m from 150 to 465 m; flip through the frames for popping trees / stands / boards | chase |
+
+The sun spots come from the Physics track tangents (150 m ahead, nearly straight runs) against the sun directions
+in `Sky.cs` (`SunAt`) and `WorldBuilder.cs` (afternoon `Euler(48, -35)`). Other circuits (Track tangent . sun):
+Spa afternoon s 1310 / 830, evening 2730; Suzuka afternoon 410 / 20, evening 3200 / 2080. Note: the sparks come
+from `car.bottoming` (physics), which stays false while physics is frozen, so `sparks` shows them only once shot
+mode can force the plank down (a `DebugShots.cs` / `CarModel.cs` change, not in this tool).
+
 Requirements: python3 with `playwright` and `Pillow` (without Pillow it falls back to ffmpeg, with no labels),
 and Chrome at `/usr/bin/google-chrome` (`--chrome` to change it). The download needs `gh` (it uses `gh api`, the
 REST API) or plain HTTPS access to github.com. Builds are cached in `~/.cache/f2racing-shots/<build time>/`.

@@ -67,6 +67,7 @@ fixed4 _RunGreen, _RunBlue; // the run-off paints
 sampler2D _F2RoadShadow; // global (RoadShadow.cs): sun shadows in track space, here continued onto verges and run-offs
 float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: across scale of the fine zone (1/m), w: outer half width (m)
 float4 _F2RoadShadowQ;   // the coarser outer zone: x: where it starts (m), y: its across scale (1/m), z: its first column (0..0.5)
+float _Wet;              // global (Weather.cs): 0 dry, 0.5 damp, 1 wet. In rain the deck takes most of the sun (as Road.cginc)
 
 v2f vert (appdata v)
 {
@@ -262,7 +263,12 @@ fixed4 frag (v2f i) : SV_Target
         float2 gsc = float2(_F2RoadShadowP.y, 1.0) * 1.5;
         half shade = tex2Dgrad(_F2RoadShadow, suv, sgx * gsc, sgy * gsc).r;
         half edge = (half)saturate((_F2RoadShadowP.w - lat) * 0.5); // fades out at the mask's outer edge
-        col *= 1.0 - sf * (1.0 - shade) * edge;
+        // rain (wet only, the same split as the road in Road.cginc): the cloud deck takes half the sun's share and blurs
+        // the shadows towards an even 0.75, the sky fill gains 20 %: no hard fence-post / tree shadows under a dark sky.
+        // Dry: (1 - sf) + sf * lerp(1, shade, edge) = the old 1 - sf * (1 - shade) * edge, unchanged
+        float rainK = saturate(_Wet * 2.0 - 1.0);
+        half shR = lerp(shade, (half)0.75, (half)(0.8 * rainK));
+        col *= (1.0 - sf) * (half)(1.0 + 0.2 * rainK) + sf * lerp((half)1.0, shR, edge) * (half)(1.0 - 0.5 * rainK);
     }
 
     col *= i.color;

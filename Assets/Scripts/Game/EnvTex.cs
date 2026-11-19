@@ -410,6 +410,41 @@ public static class EnvTex
     // a sill with its shadow, a lintel shadow and a faint string course at floor level. Texel (0, 0) is plain plaster,
     // so faces mapped to uv (0, 0) (cornices, parapets) come out as plaster.
     static Texture2D facade;
+    // Far woods (Environment.Backdrop, gap list item 18): a hillside of crowns seen from the side at 0.5-3 km, one tile =
+    // ~36 m. Grey, multiplied with the ring's baked vertex colour: lit crown tops, darker flanks, near-black gaps between
+    // them; spires for conifers on the upper half of each crown. Backdrop divides the tint by its linear mean (FarWoodMean). The mips
+    // average it out with distance, so far crests fade to an even tone. 128 px RGBA32 + mips: 85 KB, load time only.
+    static Texture2D farWood;
+    public static float FarWoodMean = 0.5f; // the texture's mean in linear (sRGB texture), set when it is made
+    public static Texture2D FarWood()
+    {
+        if (farWood != null) return farWood;
+        const int N = 128, G = 8; var val = new float[N * N];
+        for (int i = 0; i < val.Length; i++) val[i] = 0.34f + 0.06f * Hash(i % N, i / N, 211); // the dark understorey
+        // crowns on a jittered 8 x 8 grid (16 px per cell), drawn back to front (lower rows first: they sit in front)
+        for (int gy = G - 1; gy >= 0; gy--) for (int gx = 0; gx < G; gx++)
+        {
+            float cx = (gx + 0.2f + 0.6f * Hash(gx, gy, 221)) * (N / (float)G), cy = (gy + 0.2f + 0.6f * Hash(gx, gy, 223)) * (N / (float)G);
+            float rx = 7f + 4f * Hash(gx, gy, 227), ry = rx * (1.15f + 0.35f * Hash(gx, gy, 229));
+            float tone = 0.86f + 0.22f * Hash(gx, gy, 233); bool spire = Hash(gx, gy, 239) < 0.6f;
+            for (int dy = -(int)ry - 6; dy <= (int)ry + 6; dy++) for (int dx = -(int)rx - 1; dx <= (int)rx + 1; dx++)
+            {
+                float ux = dx / rx, uy = dy / ry;
+                // a spire narrows the top half to a point (spruce); otherwise a round crown
+                float w = spire && uy > 0f ? Mathf.Max(0f, 1f - uy * 0.85f) : Mathf.Sqrt(Mathf.Max(0f, 1f - uy * uy));
+                if (Mathf.Abs(ux) > w || uy < -1f || uy > (spire ? 1.15f : 1f)) continue;
+                int x = (((int)cx + dx) % N + N) % N, y = (((int)cy + dy) % N + N) % N;
+                // lit from above, a soft edge darkening and some leaf grain
+                float lit = 0.62f + 0.38f * Mathf.Clamp01(0.5f + 0.6f * uy) - 0.18f * (Mathf.Abs(ux) / Mathf.Max(w, 0.05f));
+                val[y * N + x] = Mathf.Clamp01(lit * tone * (0.9f + 0.2f * Hash(x, y, 241)));
+            }
+        }
+        var px = new Color32[N * N]; double sum = 0; bool lin = QualitySettings.activeColorSpace == ColorSpace.Linear;
+        for (int i = 0; i < px.Length; i++) { byte b = B(val[i]); px[i] = new Color32(b, b, b, 255); sum += lin ? Mathf.GammaToLinearSpace(b / 255f) : b / 255f; }
+        FarWoodMean = (float)(sum / px.Length);
+        return farWood = Count(Make(N, N, px, false, 1));
+    }
+
     public static Texture2D Facade()
     {
         if (facade != null) return facade;
@@ -418,7 +453,7 @@ public static class EnvTex
         {
             float u = (x + 0.5f) / N, v = (y + 0.5f) / N;
             float pl = 0.86f + 0.08f * Fbm(u, v, 8, 3, 101) + 0.04f * Hash(x, y, 103);
-            Color c = new Color(pl, pl, pl * 0.98f);
+            Color c = new Color(pl, pl, pl * 0.98f); byte ga = 255;
             if (v < 0.035f) c *= 0.86f;                                          // string course
             bool inF = u > 0.27f && u < 0.73f && v > 0.24f && v < 0.84f, inG = u > 0.31f && u < 0.69f && v > 0.28f && v < 0.80f;
             if (u > 0.25f && u < 0.75f && v > 0.19f && v < 0.24f) c = new Color(0.95f, 0.95f, 0.93f); // sill
@@ -429,15 +464,37 @@ public static class EnvTex
             {
                 float t = (v - 0.28f) / 0.52f;
                 c = Color.Lerp(new Color(0.20f, 0.27f, 0.34f), new Color(0.55f, 0.66f, 0.76f), t * t);  // sky in the glass
-                if (Mathf.Abs(u - 0.5f) < 0.012f || Mathf.Abs(v - 0.60f) < 0.012f) c = new Color(0.9f, 0.9f, 0.88f); // glazing bars
+                ga = 0; // alpha 0 = window glass: Baked.shader (_WinGlow) lights a share of the windows at dusk / night
+                if (Mathf.Abs(u - 0.5f) < 0.012f || Mathf.Abs(v - 0.60f) < 0.012f) { c = new Color(0.9f, 0.9f, 0.88f); ga = 255; } // glazing bars
                 if (u + v * 0.6f > 0.85f && u + v * 0.6f < 0.9f) c += new Color(0.12f, 0.12f, 0.12f);  // a streak of reflection
             }
             // side shutters
             if ((u > 0.13f && u < 0.26f || u > 0.74f && u < 0.87f) && v > 0.25f && v < 0.83f)
                 c = new Color(0.5f, 0.5f, 0.48f) * ((y / 3) % 2 == 0 ? 0.85f : 1f);
-            px[y * N + x] = new Color32(B(c.r), B(c.g), B(c.b), 255);
+            px[y * N + x] = new Color32(B(c.r), B(c.g), B(c.b), ga);
         }
-        return facade = Count(Make(N, N, px));
+        // sharpened mips (gap list item 18, Monaco's blank far blocks): a box-filtered bay melts into one pale tone by
+        // mip 4-5 (a block 300 m away), so the far towers read as white boxes. From mip 2 on, each level's contrast
+        // around its mean is raised (x1.25 per level, at most x2.2): the window grid stays a darker stipple at a distance.
+        // Same size and format, load time only.
+        var t = new Texture2D(N, N, TextureFormat.RGBA32, true, false) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
+        t.SetPixels32(px); t.Apply(true, false);
+        for (int m = 2; m < t.mipmapCount; m++)
+        {
+            var mp = t.GetPixels32(m); if (mp.Length < 4) break;
+            float mr = 0, mg = 0, mb = 0;
+            for (int i = 0; i < mp.Length; i++) { mr += mp[i].r; mg += mp[i].g; mb += mp[i].b; }
+            mr /= mp.Length; mg /= mp.Length; mb /= mp.Length;
+            float k = Mathf.Min(2.2f, Mathf.Pow(1.25f, m - 1));
+            for (int i = 0; i < mp.Length; i++)
+            {
+                var q = mp[i];
+                mp[i] = new Color32((byte)Mathf.Clamp(mr + (q.r - mr) * k, 0, 255), (byte)Mathf.Clamp(mg + (q.g - mg) * k, 0, 255), (byte)Mathf.Clamp(mb + (q.b - mb) * k, 0, 255), q.a);
+            }
+            t.SetPixels32(mp, m);
+        }
+        t.Apply(false, true);
+        return facade = Count(t);
     }
 
     // ---------------------------------------------------------------- real-world buildings (RealWorld.cs)

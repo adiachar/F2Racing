@@ -949,7 +949,15 @@ public static class RealWorld
             fClass = 3; fPal = 2; fBw = 6f; fFh = fGfH = 6f; fCap = 0.6f; fCornice = 0f;
             fUpC = CellUv(CIndustry); fGfC = CellUv(CIndustry, GLoading, 0.18f);
         }
-        else if (kind == 4) { fClass = 5; fPal = 2; fBw = fFh = fGfH = 4.6f; fUpC = fGfC = CellUv(CConcrete); fCornice = 0f; }
+        else if (kind == 4 && area < 900f) { fClass = 5; fPal = 2; fBw = fFh = fGfH = 4.6f; fUpC = fGfC = CellUv(CConcrete); fCornice = 0f; }
+        else if (kind == 4)
+        {
+            // a big sports hall / stand block that is not built as a stand (far, or not a long rectangle): no more blank
+            // precast box (gap list item 23): ribbed cladding with a strip window, or concrete panels with windows, over a
+            // glazed / windowed ground floor. Same atlas cells as the offices and sheds (no new swatch, no cost)
+            fClass = 3; fPal = 2; fBw = 4.6f; fFh = 4.6f; fGfH = 4.6f; fCap = 0.7f; fCornice = 0f;
+            fUpC = h2 < 0.5f ? CellUv(CIndustry) : CellUv(CPanelWin); fGfC = CellUv(CPanelWin, GLobby, 0.35f);
+        }
         else if (kind == 5 || kind == 6) { fClass = 6; fPal = 3; fFh = fGfH = 4f; fUpC = fGfC = CellUv(CStone); fCornice = 0.4f; fCap = 0.9f; }
         else if (kind == 8 && H > 26f) { fClass = 2; fPal = 2; fFh = 3.4f; fGfH = 4.2f; fUpC = CellUv(CTower); fGfC = CellUv(GLobby); fCornice = 0f; fCap = 0.9f; }
         else if (kind == 2 && (H > 11f || h > 0.5f))
@@ -2472,10 +2480,11 @@ public static class RealWorld
         SoftEdges(px, lnx, lnz);
         var tex = new Texture2D(lnx, lnz, TextureFormat.RGBA32, true, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 4, name = "RealLand" };
         tex.SetPixels32(px);
-        // Low / Medium: GPU-compressed (ETC2 / DXT5, 8 bits per texel instead of 32: 1280^2 = 2.2 MB instead of 8.7 MB, and
-        // a quarter of the texture bandwidth on every terrain pixel). The map is smooth (~3 m per texel, multiplied by the
-        // detail texture), so the block coding does not show; High keeps the exact RGBA32 map.
-        if (gfx <= 2 && (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))) { tex.Apply(true, false); tex.Compress(true); tex.Apply(false, true); }
+        // Every level: GPU-compressed (ETC2 / DXT5, 8 bits per texel instead of 32: 1280^2 = 2.2 MB instead of 8.7 MB, High's
+        // 2048^2 = 5.6 MB instead of 22 MB, and a quarter of the texture bandwidth on every terrain pixel). The map is smooth
+        // (~3 m per texel on Medium, ~2 m on High, multiplied by the detail texture), so the block coding does not show.
+        // (High used to keep the exact RGBA32 map: gap list P3. Compress is load-time only, ~100 ms more at 2048^2.)
+        if (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5)) { tex.Apply(true, false); tex.Compress(true); tex.Apply(false, true); }
         else tex.Apply(true, true);
         return tex;
     }
