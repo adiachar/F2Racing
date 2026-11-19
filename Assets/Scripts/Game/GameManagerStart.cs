@@ -9,6 +9,8 @@
 //    brake at rest does not select reverse (it did after 0.6 s: all cars reversed off the grid before lights out)
 //  * jump start: the player's car more than 0.5 m from its slot before lights out = 5 s added to the race time
 //    (the same time penalty a pit stop adds: pitLoss)
+//  * a pre-race intro (PreRace.cs) may run first: while it does the race clock stays at 0 (every car held on its
+//    brakes in its slot, no lights) and the grid revs come from its engine start
 using FormulaSim;
 using UnityEngine;
 
@@ -53,6 +55,7 @@ public partial class GameManager
     // end of ResetCar: a new start
     void StartReset()
     {
+        PreRaceAbort(); // a new start drops a running pre-race intro (PreRace.cs)
         jumped = false; gridThr = 0;
         gridX = car.x; gridY = car.y; gridRpm = car.cfg.idleRpm;
         Countdown = GridStart ? GridWait + 4 + UnityEngine.Random.Range(0.2f, 3.0f) : 0;
@@ -73,6 +76,7 @@ public partial class GameManager
     {
         car.gridHold = GridStart && raceTime < Countdown; // on the brakes without selecting reverse (FormulaCar.gridHold)
         if (!GridStart) return input;
+        if (PreRaceHold) { gridThr = PreRaceThrottle; return new CarInput(0, 0, 1); } // pre-race intro: held, its engine start revs (PreRace.cs)
         if (raceTime < Countdown) { gridThr = input.throttle; return new CarInput(input.steer, 0, 1); }
         double c = Clutch(raceTime - Countdown);
         return c >= 1 ? input : new CarInput(input.steer, input.throttle * c, input.brake);
@@ -101,6 +105,7 @@ public partial class GameManager
             car.rpm = System.Math.Max(car.rpm, gridRpm * (1 - c) + car.rpm * c); // the clutch pulls the revs down gradually
         }
         TracksideArt.SetStartLights(LitLights());
+        if (PreRaceHold) raceTime = -H; // the pre-race intro holds the race clock at 0 (+H after this step): no lights yet
     }
 
     // rival i's input this step: held until lights out plus his reaction time, then his launch clutch

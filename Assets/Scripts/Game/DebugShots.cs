@@ -15,6 +15,9 @@
 //   class    F1 | F2 | F3                                                 default F1
 //   kmh      player speed shown (wheels / spray only: physics is frozen)  default 0
 //   hud      1 = draw the race HUD                                        default 0 (clean frames)
+//   intro    list of times (s) into the pre-race intro (PreRace.cs): the race starts with the full intro, frozen at
+//            each time for one frame (replaces s; the cars stay on the grid; cam = the view it hands over to),
+//            e.g. intro=1.5,4,6,9,12,14.5,18. Captions are drawn (hud does not apply)
 //   settle   seconds to wait after each placement (real time)             default 1.0 (first shot + warm)
 //   warm     extra seconds before the first shot (shaders, textures)      default 3
 //   ack      1 = after SHOT_READY wait until the page sets window.__shotAck = i (the harness does this after its
@@ -57,6 +60,7 @@ public partial class GameManager
         mapIdx = map; playground = false;
         shotCars = Mathf.Clamp(DebugShots.GetInt(q, "cars", 6), 0, StartGrid.Slots - 1);
         shotHud = DebugShots.Get(q, "hud", "0") == "1";
+        shotIntro = DebugShots.Get(q, "intro", "") != ""; // intro=t1,t2,...: frames of the pre-race intro (PreRace.cs)
         string ql = DebugShots.Get(q, "quality", "High").ToLowerInvariant();
         int g = System.Array.FindIndex(GfxNames, n => n.ToLowerInvariant() == ql); gfxIdx = g >= 0 ? g : 3;
         string cl = DebugShots.Get(q, "class", "F1").ToUpperInvariant();
@@ -133,6 +137,7 @@ public class DebugShots : MonoBehaviour
     Dictionary<string, string> q;
     internal readonly List<string> cams = new List<string>();
     readonly List<double> spots = new List<double>();
+    readonly List<double> introTimes = new List<double>(); // intro=...: pre-race intro frames instead of spots x cams
     string error;
 
     // the page URL's query (WebGL player only; null everywhere else, so shot mode cannot start)
@@ -170,6 +175,8 @@ public class DebugShots : MonoBehaviour
         foreach (var s in Get(q, "s", "300,850,1450,2500,3920,5150").Split(ListSep, System.StringSplitOptions.RemoveEmptyEntries))
             if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)) spots.Add(v);
         if (spots.Count == 0) spots.Add(300);
+        foreach (var s in Get(q, "intro", "").Split(ListSep, System.StringSplitOptions.RemoveEmptyEntries))
+            if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)) introTimes.Add(v);
         Title("SHOT_BOOT");
         PerfStats.FromQuery(q); // stats=1: render stats overlay + a PERF_STATS console line per shot (PerfStats.cs)
         ModelInstancing.FromQuery(q); // inst=0: model trees merged as before (A/B against the GPU-instanced ones)
@@ -195,6 +202,25 @@ public class DebugShots : MonoBehaviour
         float settle = Mathf.Max(0f, GetF(q, "settle", 1f)), warm = Mathf.Max(0f, GetF(q, "warm", 3f)), hold = Mathf.Max(0f, GetF(q, "hold", 1.5f));
         float ackTimeout = Mathf.Max(1f, GetF(q, "acktimeout", 300f)), kmh = Mathf.Max(0f, GetF(q, "kmh", 0f));
         bool ack = Get(q, "ack", "0") == "1";
+        if (introTimes.Count > 0)
+        {
+            // the pre-race intro (PreRace.cs), frozen at each time; the car stays in its grid slot
+            for (int k = 0; k < introTimes.Count; k++)
+            {
+                gm.ShotIntro((float)introTimes[k]);
+                float wait = settle + (k == 0 ? warm : 0f), ts = Time.realtimeSinceStartup;
+                int f0 = Time.frameCount;
+                while (Time.frameCount - f0 < 8 || Time.realtimeSinceStartup - ts < wait) yield return null;
+                string sl = introTimes[k].ToString("0.0##", CultureInfo.InvariantCulture);
+                PerfStats.ShotLog($"intro={sl}");
+                Title($"SHOT_READY {k} {introTimes.Count} s={sl} cam=intro");
+                float tr = Time.realtimeSinceStartup;
+                if (ack) { while (ShotsAck() < k && Time.realtimeSinceStartup - tr < ackTimeout) yield return null; }
+                else { while (Time.realtimeSinceStartup - tr < hold) yield return null; }
+            }
+            Title("SHOT_DONE " + introTimes.Count);
+            yield break;
+        }
         int count = spots.Count * cams.Count, n = 0;
         foreach (double s in spots)
             foreach (string cam in cams)

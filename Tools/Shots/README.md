@@ -59,6 +59,7 @@ Without `ack=1` each frame holds for `hold` seconds (default 1.5). Watch the tab
 | `class` | `F1`, `F2`, `F3` | F1 |
 | `kmh` | speed shown (wheels, spray); physics is frozen | 0 |
 | `hud` | `1` draws the race HUD | 0 |
+| `intro` | list of times (s) into the pre-race intro (`PreRace.cs`), one frozen frame each, instead of `s`; e.g. `--param intro=1.5,4,6,8.5,11,13.5,17` | off |
 | `settle` / `warm` | seconds to wait after each placement / before the first shot | 1 / 3 (harness: 2 / 5) |
 | `ack` / `acktimeout` | `1` = wait for `window.__shotAck = i` (harness sets this) / max wait s | 0 / 300 |
 | `hold` | seconds per frame without `ack` | 1.5 |

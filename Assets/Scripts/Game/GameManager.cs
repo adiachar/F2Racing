@@ -1089,6 +1089,7 @@ public partial class GameManager : MonoBehaviour
     readonly DriverFeel feel = new DriverFeel(); // head / camera motion from the car's forces, steering wheel, shift lights (DriverFeel.cs)
     void LateUpdate()
     {
+        if (PreRaceCamera()) return; // the pre-race intro has the camera (PreRace.cs)
         var tr = model.transform;
         if (camMode == TvMode || replaying)
         {
@@ -1424,6 +1425,7 @@ public partial class GameManager : MonoBehaviour
         ResetCar(); Save();
         SessionStarted(); // qualifying timing, team livery (Qualifying.cs)
         acc = 0; ui.page = MenuUI.Page.None;
+        PreRaceBegin(); // the pre-race intro (PreRace.cs): the race clock and the lights wait for it
     }
 
     // the player has done raceLaps: freeze the race and rank every car by distance covered
@@ -1461,6 +1463,7 @@ public partial class GameManager : MonoBehaviour
             else if (choice != MenuUI.Choice.None) SessionChoice(choice); // weekend flow (Qualifying.cs)
             return;
         }
+        if (PreRaceGui()) return; // the pre-race intro: captions instead of the HUD (PreRace.cs)
         if (ShotsHideHud) return; // screenshot mode: clean frames (DebugShots.cs)
         HudInit(); HudLayout();
         if (replaying)
