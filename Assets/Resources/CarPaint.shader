@@ -1,6 +1,7 @@
 // Car paint for phones: one pass, no textures. The look aims at the polished "showroom" cars of mobile racers:
 //  * base colour lit by the car's sun (with a little wrap, so the flanks never go dead-dark) and the sky (SH),
-//  * a clear coat that mirrors the sky probe almost unblurred on glossy paint; Fresnel F0 0.04 with an x^4 rise
+//  * a clear coat that mirrors the sky probe almost unblurred on glossy paint (Medium / High with CarEnv.cs: a small
+//    baked cube of the world round the player's stretch of the lap instead: trees, stands, fences in the paint); Fresnel F0 0.04 with an x^4 rise
 //    (a touch broader than Schlick's x^5), so the sky reads on the flanks and not only at the silhouette; colour-
 //    preserving on saturated paint (KeepHue): deep reds stay red instead of going pink under the sky,
 //  * below the horizon the coat reflects the road instead of the sky, which gives the body its horizon line:
@@ -217,6 +218,9 @@ Shader "F2/CarPaint"
             half _CarLit;
             half _Wet;
             half4 _GroundRefl;
+            float _F2EnvOn, _F2EnvMix; // (CarEnv.cs; compared: float)
+            UNITY_DECLARE_TEXCUBE(_F2EnvCube);
+            UNITY_DECLARE_TEXCUBE_NOSAMPLER(_F2EnvCube2);
 
             struct v2f
             {
@@ -408,17 +412,33 @@ Shader "F2/CarPaint"
                 diff = (half3)PaintRoll((float3)diff, fabric);
                 diff *= inShade;
                 half3 R = reflect(-V, N);
-                // glossy paint reads the probe almost unblurred (mip ~0.25): the sky and clouds show as a mirror image
-                half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, (1.0 - gloss) * 5.0);
-                half3 env = DecodeHDR(envRaw, unity_SpecCube0_HDR);
-                // the sky reflection probe when there is one; without it (black cube) the sky light along R
-                env = max(env, i.envSH * 0.9);
-                // the road below the horizon: a crisp horizon line on glossy paint, a soft one on rubber. _GroundRefl
-                // arrives through SetGlobalColor (sRGB -> linear: 0.15 becomes 0.02, a black road); the grey sky light
-                // from below (SH along R) is the floor, about what sunlit asphalt sends back
-                half grL = dot(i.envSH, half3(0.2126, 0.7152, 0.0722)) * 0.9;
-                half3 gr = max(_GroundRefl.rgb, half3(grL, grL, grL));
-                env = lerp(env, gr, 1.0 - smoothstep(lerp(-0.35, -0.05, gloss), 0.015, R.y));
+                half3 env;
+                float envLod = (1.0 - gloss) * 5.0; // (mip of the 128 px sky probe)
+                if (_F2EnvOn > 0.5)
+                {
+                    // trackside cube (CarEnv.cs: the world round the player's stretch of the lap, sky and clouds in it,
+                    // baked once at load): ONE read, in place of the sky probe's. 48 px faces: 1.4 mips below the
+                    // probe's for the same blur. The road, verges and walls below the horizon are in it too, so no
+                    // flat ground colour; High cross-fades to the next cube while between two (_F2EnvMix > 0 only then)
+                    float cl = max(envLod - 1.4, 0.0);
+                    env = UNITY_SAMPLE_TEXCUBE_LOD(_F2EnvCube, R, cl).rgb;
+                    if (_F2EnvMix > 0.002)
+                        env = lerp(env, UNITY_SAMPLE_TEXCUBE_SAMPLER_LOD(_F2EnvCube2, _F2EnvCube, R, cl).rgb, (half)_F2EnvMix);
+                }
+                else
+                {
+                    // glossy paint reads the probe almost unblurred (mip ~0.25): the sky and clouds show as a mirror image
+                    half4 envRaw = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, R, envLod);
+                    env = DecodeHDR(envRaw, unity_SpecCube0_HDR);
+                    // the sky reflection probe when there is one; without it (black cube) the sky light along R
+                    env = max(env, i.envSH * 0.9);
+                    // the road below the horizon: a crisp horizon line on glossy paint, a soft one on rubber. _GroundRefl
+                    // arrives through SetGlobalColor (sRGB -> linear: 0.15 becomes 0.02, a black road); the grey sky light
+                    // from below (SH along R) is the floor, about what sunlit asphalt sends back
+                    half grL = dot(i.envSH, half3(0.2126, 0.7152, 0.0722)) * 0.9;
+                    half3 gr = max(_GroundRefl.rgb, half3(grL, grL, grL));
+                    env = lerp(env, gr, 1.0 - smoothstep(lerp(-0.35, -0.05, gloss), 0.015, R.y));
+                }
                 env *= lerp(0.35, 1.0, _CarLit) * (0.3 + 0.7 * ao) * envTint;
                 env *= inShade;
                 env *= 1.0 - 0.2 * saturate((coatK - 0.9) * 20.0); // paint's mirror coat adds a little less white: deep colours stay deep (no step() on a half: see the top)

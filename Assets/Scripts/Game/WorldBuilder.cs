@@ -912,6 +912,8 @@ public static class WorldBuilder
         probe.cullingMask = 1 << Sky.Layer; probe.farClipPlane = 3000;
         // clouds + sun glare (camera-following, so made after static batching); renders the probe once, clouds included
         Sky.Create(root, skyLook, -sunGo.transform.forward, probe);
+        // trackside reflections for the car paint: small world cubes along the lap, baked once (Medium / High; CarEnv.cs)
+        CarEnv.Attach(root, t);
         // what the car paint reflects below the horizon (the road), and full reflections unless in shade
         Shader.SetGlobalColor("_GroundRefl", env.groundRefl);
         Shader.SetGlobalFloat("_CarLit", 1f);

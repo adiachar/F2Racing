@@ -1848,34 +1848,58 @@ public static class Trackside
         // ---------------------------------------------------------------- Monza: asphalt run-offs with a painted edge
         // the real run-offs at the Rettifilo, the Roggia, Ascari and outside the Parabolica, between the astroturf and the
         // barrier where the layout has grass (the gravel traps stay); in the atlas mesh, so no extra draw call. (Visual:
-        // the tyres still read the layout's surface there.)
+        // the tyres still read the layout's surface there.) Drawn like asphalt, all load time:
+        //  * the atlas's run-off aggregate tile (TracksideArt.RunOff, one tile per 4 m x ~2 m cell, seamless), a neutral
+        //    road grey, with a slow tone drift from the world position (shared corners: no seams);
+        //  * columns of ~2 m across, so the vertex-baked light resolves the shade of trees and stands across a 10-20 m
+        //    run-off instead of one gradient between its four corners;
+        //  * a ragged outer edge (+-0.25 m, a slow noise) and a soft dirt decal over it (the grime layer), so it no longer
+        //    ends in a ruler-straight line against the grass.
         if (monza && t.runL != null)
         {
             float[,] zones = { { 790, 1070, 0 }, { 2030, 2270, 0 }, { 3850, 4200, 0 }, { 5050, 5430, 1 } }; // m along the lap, side (0 both, 1 left)
             int st = Mathf.Max(1, Mathf.RoundToInt(4f / ds));
+            float Tone(Vector3 q) => 0.93f + 0.1f * Mathf.PerlinNoise(q.x * 0.055f + 31.7f, q.z * 0.055f + 7.9f);
             for (int zn = 0; zn < zones.GetLength(0); zn++)
                 for (int sg = -1; sg <= 1; sg += 2)
                 {
                     if (zones[zn, 2] != 0f && sg != (int)zones[zn, 2]) continue;
                     var run = sg > 0 ? t.runL : t.runR;
                     int i0 = Mathf.RoundToInt(zones[zn, 0] / ds), i1 = Mathf.RoundToInt(zones[zn, 1] / ds);
-                    bool have = false; Vector3 pIn = Vector3.zero, pOut = Vector3.zero, pD = Vector3.zero;
+                    bool have = false; Vector3 pOut = Vector3.zero, pD = Vector3.zero, pC = Vector3.zero; float pA = 0f, pO = 0f, pRag = 0f;
                     for (int i = i0; i <= i1; i += st)
                     {
                         int k = W(i); var p = t.pts[k]; Vector3 D = Nrm(p) * sg, c = P(p), up = Vector3.up;
                         float a = hw + (sg > 0 ? t.kerbL[k] : t.kerbR[k]) + 2f, o = Off(k, sg) - 1.2f;
-                        Vector3 qi = c + D * a, qo = c + D * o;
+                        Vector3 qo = c + D * o;
                         bool ok = run[k] != SurfaceType.Gravel && o - a > 1.5f && !InPit(k, sg) && grid.MinDist(qo) >= o - 0.6f && !Waterfront.InWater(qo.x, qo.z);
                         if (ok && have && Vector3.Dot(qo - pOut, Tan(p)) < 0.3f * st * ds) ok = false; // folds back inside a bend
+                        // the ragged outer edge (asphalt only; the painted line keeps to the straight edge 0.35 m inside it)
+                        float rag = 0.25f * (Mathf.PerlinNoise(i * ds * 0.11f, zn * 3.1f + sg * 1.7f) * 2f - 1f);
                         if (ok && have)
                         {
                             SetChunk(k);
                             Vector3 y1 = up * 0.032f, y2 = up * 0.038f;
-                            Quad(A, pIn + y1, qi + y1, qo + y1, pOut + y1, up, TracksideArt.Sw(TracksideArt.PitAsphalt));
+                            float wA = pO - pA, wB = o - a; int nc = Mathf.Max(1, Mathf.CeilToInt(Mathf.Max(wA, wB) / 2f));
+                            for (int cI = 0; cI < nc; cI++)
+                            {
+                                float f0 = cI / (float)nc, f1 = (cI + 1) / (float)nc;
+                                // the last column carries the ragged edge
+                                float lA0 = pA + wA * f0, lA1 = cI == nc - 1 ? pO + pRag : pA + wA * f1;
+                                float lB0 = a + wB * f0, lB1 = cI == nc - 1 ? o + rag : a + wB * f1;
+                                Vector3 a0 = pC + pD * lA0 + y1, a1 = pC + pD * lA1 + y1, b0 = c + D * lB0 + y1, b1 = c + D * lB1 + y1;
+                                int v0 = A.col.Count;
+                                Quad(A, a0, a1, b1, b0, up, TracksideArt.RunOff);
+                                A.col[v0] *= Tone(a0); A.col[v0 + 1] *= Tone(a1); A.col[v0 + 2] *= Tone(b1); A.col[v0 + 3] *= Tone(b0);
+                            }
                             Quad(A, pOut - pD * 0.35f + y2, qo - D * 0.35f + y2, qo - D * 0.05f + y2, pOut - pD * 0.05f + y2, up, TracksideArt.Sw(TracksideArt.LineWhite));
+                            // soft edge into the grass: worn soil over the boundary (u = 0 on the asphalt, 1 in the grass)
+                            if (decals)
+                                Decal(G, pC + pD * (pO + pRag - 0.55f), pC + pD * (pO + pRag + 0.75f), c + D * (o + rag - 0.55f), c + D * (o + rag + 0.75f), 0.045f,
+                                      (i - st) * ds / 5f, i * ds / 5f, TracksideArt.GrimeCol(TracksideArt.GrimeDirt));
                         }
                         have = ok;
-                        if (ok) { pIn = qi; pOut = qo; pD = D; }
+                        if (ok) { pOut = qo; pD = D; pC = c; pA = a; pO = o; pRag = rag; }
                     }
                 }
         }

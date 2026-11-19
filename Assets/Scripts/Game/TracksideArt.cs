@@ -69,6 +69,27 @@ public static class TracksideArt
     // grandstand name banners (k 0..3), race control, pit-lane floor lettering
     public static Vector4 StandBanner(int k) { k = ((k % 4) + 4) % 4; return Reg(512, 320 + k * 32, 512, 32); }
     public static readonly Vector4 RaceControl = Reg(512, 448, 512, 32), PitText = Reg(512, 480, 512, 32);
+    // run-off asphalt (Monza's asphalt run-offs, Trackside): one 32 x 16 tile of aggregate (4 m along x 2 m across, 8 px
+    // per metre) that repeats seamlessly. The whole free swatch block (x 64..255, y 32..63) is filled with the same
+    // periodic pattern, so the tile's edges and its mip levels only ever blend into more of itself: the UVs are exact
+    // (no inset) and the quads join without a seam. Tone: a neutral mid grey like the road's (not the dark, blue-grey
+    // pit swatch).
+    public static readonly Vector4 RunOff = new Vector4(128f / AW, 40f / AH, 160f / AW, 56f / AH);
+    static bool InRunOffBlock(int x, int y) => y >= 32 && y < 64 && x >= 64 && x < AS;
+    static Color32 RunOffPixel(int x, int y)
+    {
+        int px = ((x % 32) + 32) % 32, py = ((y - 40) % 16 + 16) % 16;
+        // coarse binder / aggregate drift: periodic value noise on 8 px cells (4 x 2 cells per tile), smoothly blended
+        float fx = px / 8f, fy = py / 8f; int cx = (int)fx, cy = (int)fy; float tx = fx - cx, ty = fy - cy;
+        tx = tx * tx * (3f - 2f * tx); ty = ty * ty * (3f - 2f * ty);
+        float V(int a, int b) => Hash(((a % 4) + 4) % 4, ((b % 2) + 2) % 2, 71);
+        float coarse = Mathf.Lerp(Mathf.Lerp(V(cx, cy), V(cx + 1, cy), tx), Mathf.Lerp(V(cx, cy + 1), V(cx + 1, cy + 1), tx), ty);
+        float n = Hash(px, py, 72), n2 = Hash(px / 2, py / 2, 73);
+        float k = 0.93f + 0.10f * coarse + 0.07f * (n - 0.5f) + 0.05f * (n2 - 0.5f);
+        if (n > 0.93f) k += 0.16f;      // light stones
+        else if (n < 0.06f) k -= 0.14f; // binder pits
+        return Mul(new Color32(124, 123, 120, 255), k);
+    }
     static readonly string[] StandNames = { "TRIBUNA AURORA", "TRIBUNA DEL PARCO", "TRIBUNA VELOCE", "TRIBUNA SOLE" };
     static readonly Color32[] StandBack = { new Color32(150, 22, 30, 255), new Color32(22, 40, 92, 255), new Color32(18, 92, 52, 255), new Color32(26, 26, 30, 255) };
     // x 512..1023, y 320..511 (lx 0..511, ly 0..191)
@@ -205,6 +226,7 @@ public static class TracksideArt
                 else if (x >= 512) c = AdPixel(8 + ((x - 512) / 256) + (y / 64) * 2, (x - 512) % 256, y % 64);
                 else if (y >= 128) c = ArchPixel(x, y - 128);
                 else if (x >= AS) c = DetailPixel(x - AS, y);
+                else if (InRunOffBlock(x, y)) c = RunOffPixel(x, y);
                 else if (y < 64)
                 {
                     int s = (y / 16) * 16 + x / 16;

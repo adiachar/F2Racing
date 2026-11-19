@@ -22,7 +22,7 @@ using FormulaSim;
 
 public static class ModelLib
 {
-    public sealed class Lod { public Vector3[] v, n; public Vector2[] uv; public byte[] ao; public int[] tri; }
+    public sealed class Lod { public Vector3[] v, n; public Vector2[] uv; public byte[] ao; public int[] tri; public float[] wood; }
     public sealed class Model
     {
         public string name; public int kind; // 0 tree, 1 shrub, 2 prop
@@ -80,6 +80,7 @@ public static class ModelLib
                     l.uv[i] = new Vector2(r.ReadUInt16() / 65535f, r.ReadUInt16() / 65535f);
                 }
                 for (int i = 0; i < nt * 3; i++) l.tri[i] = r.ReadUInt16();
+                if (m.kind == 0) l.wood = CrownWood(l, m.height);
                 m.lods[li] = l;
             }
             d[m.name] = m;
@@ -157,6 +158,40 @@ public static class ModelLib
     // in v 0.25..0.5; leaf clumps and impostor cards above (v >= 0.5) and, for the park species, below (v < 0.25)
     public static bool IsWood(Vector2 uv) => uv.y < 0.5f && uv.y >= 0.2505f;
 
+    // Wood inside the crown (the branches): the bake lights each vertex from its own spot, and a branch among the leaf
+    // clumps sees open sky there (the roof map only knows what is above it, not the clumps around it) but no sun: on the
+    // pale park barks (plane, oak) that came out as bright sky-cyan streaks through the crowns (gap list item 9). Load
+    // time, per model LOD: a factor on the wood tint, 1 on the trunk below the crown, ~0.38 and a little warmer (the
+    // green-filtered, bounced light inside a crown, not the blue sky) from the crown's base up. Crown base: the 8th
+    // percentile of the leaf vertices' heights. null = no wood above it (or no leaves: shrubs, props).
+    static float[] CrownWood(Lod l, float height)
+    {
+        int nl = 0; for (int i = 0; i < l.uv.Length; i++) if (!IsWood(l.uv[i])) nl++;
+        if (nl < 8) return null;
+        var hs = new float[nl]; int k = 0;
+        for (int i = 0; i < l.uv.Length; i++) if (!IsWood(l.uv[i])) hs[k++] = l.v[i].y;
+        System.Array.Sort(hs);
+        float b = hs[nl * 8 / 100], w = Mathf.Max(0.3f, 0.08f * height);
+        var f = new float[l.v.Length]; bool any = false;
+        for (int i = 0; i < f.Length; i++)
+        {
+            f[i] = 1f;
+            if (!IsWood(l.uv[i])) continue;
+            float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((l.v[i].y - (b - 0.5f * w)) / w));
+            f[i] = 1f - 0.62f * t; if (t > 0f) any = true;
+        }
+        return any ? f : null;
+    }
+    // the per-vertex tint of a wood vertex (ao x the instance's shade; in the crown darker and warmer), as the merged
+    // path (Put) and the instanced bake (ModelInstancing.Bake) both store it
+    public static Color WoodTint(Lod l, int i, float ao, float shade)
+    {
+        float k = ao * shade; if (l.wood == null) return new Color(k, k, k, 1f);
+        float f = l.wood[i], warm = 1f - f; // 0 on the trunk, up to 0.62 in the crown
+        k *= f;
+        return new Color(k * (1f + 0.10f * warm), k * (1f - 0.02f * warm), k * (1f - 0.22f * warm), 1f);
+    }
+
     static float Hash(uint a) { a ^= a >> 16; a *= 0x7feb352du; a ^= a >> 15; a *= 0x846ca68bu; a ^= a >> 16; return (a & 0xffffff) / 16777216f; }
 
     // one instance: yaw about y, scale (sxz, sy), tint on the leaves (vertices on the clump / impostor tiles), shade on wood
@@ -183,7 +218,7 @@ public static class ModelLib
             b.uv2.Add(new Vector2(sway * hh * hh, phase));
             float ao = l.ao[i] / 255f;
             bool wood = IsWood(l.uv[i]);
-            b.col.Add(wood ? new Color(ao * shade, ao * shade, ao * shade, 1f) : new Color(ao * leafTint.r, ao * leafTint.g, ao * leafTint.b, 1f));
+            b.col.Add(wood ? WoodTint(l, i, ao, shade) : new Color(ao * leafTint.r, ao * leafTint.g, ao * leafTint.b, 1f));
         }
         for (int i = 0; i < l.tri.Length; i++) b.tri.Add(o + l.tri[i]);
         used[budget] += l.v.Length; Vertices += l.v.Length;

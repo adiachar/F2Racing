@@ -10,9 +10,10 @@
 // Shade: a MULTIPLY (DstColor) by the same ratio the baked shade has on the road, worked out per vertex from the road's
 // mean ambient (_F2RoadAmb, RoadShadow.cs) and sun (_F2SunLin) through the grade: graded(ambient) / graded(ambient + sun),
 // so a car's shadow and a tree's shadow on the asphalt are the same darkness and the same cool blue-grey.
-// Edge: two passes. The core (full shade), then the same silhouette pushed ~10-20 cm outwards in the ground plane
-// (wider the higher the part that casts it) at half shade, drawn only where the core is not (same stencil bit):
-// a soft penumbra round a crisp shape. (One more draw of the ~12k-triangle silhouette per near car; no extra reads.)
+// Edge: one pass. CarModel.ShadowSoften bakes a softness into the vertex alpha at load (0 = full shade: the low floor;
+// towards 1: high parts such as the rear wing, the outer tyre walls and the wing tips) and sorts the triangles softest
+// last, so with the stencil's "first triangle wins" the floor's full shade covers the core and only the overhang shows
+// the gradient: a soft, lighter penumbra round a crisp core, no second draw. The rim helper is kept (rim = 0 only).
 // Everything is float (no half compares: the min-precision bytecode fallback).
 Shader "F2/CarShadow"
 {
@@ -30,7 +31,7 @@ Shader "F2/CarShadow"
     struct v2f { float4 pos : SV_POSITION; float4 col : TEXCOORD0; };
 
     // rim: 0 = the core, 1 = the soft outer rim
-    v2f vertShadow(float4 vertex, float rim)
+    v2f vertShadow(float4 vertex, float soft, float rim)
     {
         v2f o;
         float3 wp = mul(unity_ObjectToWorld, float4(vertex.xyz, 1.0)).xyz;
@@ -65,12 +66,11 @@ Shader "F2/CarShadow"
             ratio = saturate(gs / max(gl, 1e-3));
         }
         // _ShadowSun.w: up to ~0.52 (sun height, cloud, rain, the car in baked shade): 0.52 = the full baked shade
-        float k = saturate(_ShadowSun.w / 0.52) * fade * fog * (1.0 - 0.5 * rim);
+        float k = saturate(_ShadowSun.w / 0.52) * fade * fog * (1.0 - 0.5 * rim) * (1.0 - 0.7 * soft);
         o.col = float4(lerp(float3(1.0, 1.0, 1.0), ratio, k), 1.0);
         return o;
     }
-    v2f vertCore(float4 vertex : POSITION) { return vertShadow(vertex, 0.0); }
-    v2f vertRim(float4 vertex : POSITION) { return vertShadow(vertex, 1.0); }
+    v2f vertCore(float4 vertex : POSITION, float4 color : COLOR) { return vertShadow(vertex, color.a, 0.0); }
     float4 frag(v2f i) : SV_Target { return i.col; }
     ENDCG
 

@@ -205,6 +205,9 @@ public class Sky : MonoBehaviour
     static Look dryLook; static bool haveLook;
     static Material skyInst; static Light sunLight; static float sunBase = -1f, shadowBase = 1f;
     public static Sky Current;                                         // the live sky (null before the first build)
+    // CarEnv.cs (trackside reflection cubes) puts the cloud sphere round each of its bake points and back afterwards
+    public static Transform CloudDome => Current != null ? Current.dome : null;
+    public const float CloudFill = DomeFill;
     // 0..1: how much of the sun reaches the ground through the cloud (the cars' sun light follows this)
     public static float SunShare => (1f - 0.55f * Weather.Wetness) * todSun;
     // the cars' sun relative to the world's (SunAt: carSun); GameManager drives LightBake.CarSun with CarSunShare
@@ -230,6 +233,7 @@ public class Sky : MonoBehaviour
             if (s.dome != null) { s.dome.position = s.probeRef.transform.position; s.dome.localScale = Vector3.one * (s.probeRef.farClipPlane * DomeFill); }
             s.probeId = s.probeRef.RenderProbe();
         }
+        CarEnv.Rebake(); // the trackside cubes hold the old sky: bake them again (one per frame)
     }
 
     // ---------------------------------------------------------------- aerial perspective (Grade.cginc F2Haze)
