@@ -443,6 +443,7 @@ public partial class GameManager : MonoBehaviour
     // one physics step for every rival; they think 60 times a second
     void StepRivals()
     {
+        if (form != null) { FormRivals(); return; } // the formation lap: its own pace, the grid order, the slots (GameManagerFormation.cs)
         if (raceTime >= Countdown && aiTick++ % 4 == 0)
         {
             UpdateTow();
@@ -844,7 +845,8 @@ public partial class GameManager : MonoBehaviour
         {
             px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn;
             input.steer = steerF.Step(H);
-            if (pRun != null) { PlayerPitStep(); LineCheck(simTime + H); } // in the pit lane: driven along the lane at the limiter (PitCrew.cs); idx is after the step
+            if (PreRaceCarPosed) PreRaceRevs(); // the pre-race cinematic poses the car in its pit box / the pit lane: no physics step (PreRace.cs)
+            else if (pRun != null) { PlayerPitStep(); LineCheck(simTime + H); } // in the pit lane: driven along the lane at the limiter (PitCrew.cs); idx is after the step
             else
             {
                 SetSurface();
@@ -1043,7 +1045,7 @@ public partial class GameManager : MonoBehaviour
     // is timed and shown, an invalid one (track limits, recovery) too; only valid laps can be the best.
     void LineCheck(double t)
     {
-        if (playground || track == null) return;
+        if (playground || track == null || form != null) return; // (no lap on the formation lap)
         double jx = car.x - lineX, jy = car.y - lineY; // a teleport (restart, shot mode): start again from here
         if (idx < 0 || lineIdx < 0 || double.IsNaN(lineT) || jx * jx + jy * jy > 50 * 50) { lineIdx = idx; lineX = car.x; lineY = car.y; lineT = t; return; }
         int dir = TimingLine.Cross(track, lineIdx, idx, lineX, lineY, lineT, car.x, car.y, t, out double at);
@@ -1110,6 +1112,7 @@ public partial class GameManager : MonoBehaviour
     void LateUpdate()
     {
         if (PreRaceCamera()) return; // the pre-race intro has the camera (PreRace.cs)
+        if (FormCamera()) return; // a TV shot of the formation lap (GameManagerFormation.cs)
         var tr = model.transform;
         if (camMode == TvMode || replaying)
         {
@@ -1494,6 +1497,7 @@ public partial class GameManager : MonoBehaviour
             return;
         }
         if (PreRaceGui()) return; // the pre-race intro: captions instead of the HUD (PreRace.cs)
+        if (FormGui()) return; // the formation lap's TV shots: captions instead of the HUD (GameManagerFormation.cs)
         if (ShotsHideHud) return; // screenshot mode: clean frames (DebugShots.cs)
         HudInit(); HudLayout();
         if (replaying)
@@ -1531,6 +1535,7 @@ public partial class GameManager : MonoBehaviour
 
         if (Time.realtimeSinceStartup < 8f)
             UiKit.Text(new Rect(hudL, hudB - S(86), Mathf.Max(S(120), Screen.width * 0.5f - S(140) - hudL), S(30)), CarModel.Credit, UiKit.Regular, 5.8f, new Color(1f, 1f, 1f, 0.55f), TextAnchor.LowerLeft, true);
+        FormHud(); // the formation lap: banner, hint, skip, the dip at its end (GameManagerFormation.cs)
     }
 
     // top right, left of the race card: settings, camera, restart (round glass icons) and the BOX pill in a race
@@ -1543,7 +1548,7 @@ public partial class GameManager : MonoBehaviour
         x -= b + g;
         if (RoundBtn(new Rect(x, y, b, b), icoGear)) menuOpen = true;
         // pit stop: arm it during a race (not on the last lap); it happens when the car next crosses the line
-        if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps && pRun == null)
+        if (!menuOpen && !playground && raceLaps > 0 && pLap < raceLaps && pRun == null && form == null)
         {
             float pw = S(58); x -= pw + g;
             bool armed = boxArmed, blink = armed && Mathf.Repeat(Time.unscaledTime * 2f, 1f) < 0.5f;

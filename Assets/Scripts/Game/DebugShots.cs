@@ -15,9 +15,14 @@
 //   class    F1 | F2 | F3                                                 default F1
 //   kmh      player speed shown (wheels / spray only: physics is frozen)  default 0
 //   hud      1 = draw the race HUD                                        default 0 (clean frames)
-//   intro    list of times (s) into the pre-race intro (PreRace.cs): the race starts with the full intro, frozen at
-//            each time for one frame (replaces s; the cars stay on the grid; cam = the view it hands over to),
-//            e.g. intro=1.5,4,6,9,12,14.5,18. Captions are drawn (hud does not apply)
+//   intro    list of times (s) into the race start (Race start: Full): the cinematic (PreRace.cs), frozen at each
+//            time for one frame (replaces s; cam = the view it hands over to). With a pit lane and the driver model
+//            (Monza): flyover 0-5.0, garage walk 5.0-10.6, cockpit edge 10.6-12.5, onboard / ignition 12.5-16.3, release
+//            from the box 16.3-19.6, pit exit 19.6-22.6, the grid 22.6-25.0. Past the cinematic (25.0) the formation
+//            lap (GameManagerFormation.cs), the cars posed along it: +0-3.2 TV as the field pulls away, +3.2-6.8 high
+//            behind the player, +6.8-30 the player's camera mid-lap (its banner / hint / skip need hud=1), +30-36 back
+//            to the grid (TV), +36 every car in its slot.
+//            e.g. intro=1.5,4,6.5,9.5,11.5,14,17,21,24,26.5,30,40,57,62. Captions are drawn (hud does not apply to them)
 //   settle   seconds to wait after each placement (real time)             default 1.0 (first shot + warm)
 //   warm     extra seconds before the first shot (shaders, textures)      default 3
 //   ack      1 = after SHOT_READY wait until the page sets window.__shotAck = i (the harness does this after its

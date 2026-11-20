@@ -73,7 +73,7 @@ public partial class GameManager
         HudInit();
         HudTick();
         DrawRaceCard();
-        DrawTower();
+        if (form == null) DrawTower(); // (the formation lap keeps the grid order: no tower)
         DrawWheel(speed);
         DrawErsButtons();
         DrawBanners();
@@ -832,7 +832,7 @@ public partial class GameManager
     // usually on the gas.
     OvertakeRule otRule; RacingLine otLine; double otRace;
     bool otLatch, otBannerSeen; int boostFinger = -1;
-    bool ErsButtonsShown => car != null && car.cfg.ersPower > 0 && !replaying && !menuOpen && (ui == null || !ui.Showing);
+    bool ErsButtonsShown => car != null && car.cfg.ersPower > 0 && !replaying && !menuOpen && (ui == null || !ui.Showing) && form == null; // (none on the formation lap)
     // Tilt steering: OVERTAKE and BOOST on the LEFT, just right of the brake pedal, so the right thumb never leaves the
     // gas (Adi). Touch steering (brake beside the gas on the right): OVERTAKE right of BOOST above the brake pedal.
     Rect OvertakeRect

@@ -112,6 +112,11 @@ namespace FormulaSim
         // instead of the instant stop at the line; without it (the headless tools) everything is as before
         public PitLane pitLane; public int pitBay = -1; public PitRun pit; int pitLapAfter;
         public bool InPit => pit != null;
+        // the formation lap (set by the game; formation false = everything exactly as before): no lap is counted, no pit
+        // entry, no passing, no ERS buttons, never "stuck" while it waits in the queue. formCap caps the speed (m/s: the
+        // pace, the gap to the car ahead in grid order, the stop on its grid slot); formLat (m from the centreline, + = left)
+        // pulls the aim point towards its grid slot's side by weight formLatW (0..1); formWeave (m) weaves on the straights
+        public bool formation; public double formCap = double.MaxValue, formLat, formLatW, formWeave;
         // the set the next stop will most likely fit (for the crew's tyres)
         public int PredictedSet => strat != null && strat.next + 1 < strat.sets.Count ? strat.sets[strat.next + 1] : tyreSet;
 
@@ -187,8 +192,9 @@ namespace FormulaSim
             prevIdx = idx < 0 ? near.idx : idx; idx = near.idx; lateral = near.lateral;
             double v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
 
-            // laps
-            if (prevIdx > N * 0.8 && idx < N * 0.2)
+            // laps (none on the formation lap: the game puts the car back in its grid slot after it)
+            if (formation) { }
+            else if (prevIdx > N * 0.8 && idx < N * 0.2)
             {
                 if (!double.IsNaN(lapStart)) { lastLap = simTime - lapStart; if (double.IsNaN(bestLap) || lastLap < bestLap) bestLap = lastLap; }
                 lapStart = simTime; lap++; car.NewLap();
@@ -203,15 +209,15 @@ namespace FormulaSim
             else if (prevIdx < N * 0.2 && idx > N * 0.8) lap--;
             if (car.cfg.damage && car.damage.NeedsPit && !boxing) { boxing = true; boxReason = 1; }
             // race control: no overtaking under VSC / SC, blue flags, a cheap stop under the safety car
-            bool noPass = false, blueFlag = false;
+            bool noPass = formation, blueFlag = false;
             if (rc != null)
             {
-                noPass = rc.NoOvertaking; blueFlag = rc.Blue(slot);
+                noPass = noPass || rc.NoOvertaking; blueFlag = rc.Blue(slot);
                 if (rc.ScOnTrack) { if (!scChecked && strat != null && !boxing) { scChecked = true; if (strat.CheapStop(lap, Math.Max(car.wearF, car.wearR))) { boxing = true; boxReason = 2; } } }
                 else scChecked = false;
             }
             // boxing, at the pit entry (and not on the last lap): into the pit lane
-            if (boxing && pitLane != null && raceLaps > 0 && lap >= 1 && lap < raceLaps && prevIdx >= 0 && v > 3)
+            if (boxing && !formation && pitLane != null && raceLaps > 0 && lap >= 1 && lap < raceLaps && prevIdx >= 0 && v > 3)
             {
                 double u0 = PitLane.RelS(track, prevIdx), u1 = PitLane.RelS(track, idx);
                 if (u0 < pitLane.sEntry && u1 >= pitLane.sEntry && u1 - u0 < 30)
@@ -249,6 +255,7 @@ namespace FormulaSim
             double room = track.HalfWidth(ia) - 1.0;
             double offA = Clamp(line.off[ia] + offset, -room, room);
             if (bounds > 0) offA = ApplyBounds(ia, offA, Ld / Math.Max(5, v), room);   // leave room for the cars beside
+            if (formation) { if (formLatW > 0) offA += (Clamp(formLat, -room, room) - offA) * Math.Min(1, formLatW); offA = Clamp(offA + formWeave, -room, room); }
             var pa = track.pts[ia];
             double tx = pa.x + pa.nx * offA - car.x, ty = pa.y + pa.ny * offA - car.y;
             double ch = Math.Cos(car.heading), sh = Math.Sin(car.heading);
@@ -304,6 +311,7 @@ namespace FormulaSim
                 if (blueFlag && straight) cap = Math.Min(cap, vt * 0.9);   // blue flag: lift on the straight and let him by
                 if (cap < vt) { vt = cap; capped = true; }
             }
+            if (formation && formCap < vt) { vt = Math.Max(0, formCap); capped = true; }   // the formation lap's pace / queue / grid slot
             target = vt;
             double err = vt - v;
             double thr = Clamp(err * tune.kThr, 0, 1), brk = Clamp(-err * tune.kBrk, 0, 1);
@@ -321,7 +329,7 @@ namespace FormulaSim
             // held back by a car in the lane (or a tight off-line lane): brake for it, not only on the profile's error
             if (held && v > vt + 0.3) { brk = Math.Max(brk, Clamp((v - vt) * 0.3, 0, 1)); thr = 0; }
             ErsButtons(v, (straight || (ersAttack && line.phase[idx] > 0)) && !noPass && !blueFlag && !capped, brakingZone);   // attacking: from the exit
-            if ((car.otOn || car.boostOn || car.tow > 0.15 || (seen > 0 && (mode == 1 || prepPass) && !noPass && !blueFlag)) && !held && !brakingZone && v > 40 && Math.Abs(car.r * v) < 6)
+            if (!formation && (car.otOn || car.boostOn || car.tow > 0.15 || (seen > 0 && (mode == 1 || prepPass) && !noPass && !blueFlag)) && !held && !brakingZone && v > 40 && Math.Abs(car.r * v) < 6)
             {
                 // the extra power (or the slipstream's lower drag) takes the car over its own speed profile: stay flat
                 // while the profile does not fall within the next 0.6 s (then the normal control sheds the extra speed
@@ -378,7 +386,7 @@ namespace FormulaSim
             // ---- stuck, spun or far off the track: put the car back on the line ----
             var pt = track.pts[idx];
             double hd = Math.Atan2(Math.Sin(car.heading - Math.Atan2(pt.ty, pt.tx)), Math.Cos(car.heading - Math.Atan2(pt.ty, pt.tx)));
-            stuckT = (v < 2.5 && simTime > 4 && !(rc != null && rc.InQueue(slot))) || Math.Abs(hd) > 1.6 ? stuckT + dt : 0; // queued behind the safety car is not stuck
+            stuckT = (v < 2.5 && simTime > 4 && !formation && !(rc != null && rc.InQueue(slot))) || Math.Abs(hd) > 1.6 ? stuckT + dt : 0; // queued behind the safety car (or in the formation queue) is not stuck
             offT = Math.Abs(lateral) > track.HalfWidth(idx) + 3.0 ? offT + dt : 0;
             recovered = false;
             if (stuckT > 2.0 || offT > 1.2)
@@ -442,7 +450,7 @@ namespace FormulaSim
         void ErsButtons(double v, bool racing, bool brakingZone)
         {
             var c = car.cfg;
-            if (c.ersPower <= 0 || (rc != null && rc.NoOvertaking)) { car.otOn = car.boostOn = false; otWasArmed = car.otArmed; wasStraight = false; return; }
+            if (c.ersPower <= 0 || formation || (rc != null && rc.NoOvertaking)) { car.otOn = car.boostOn = false; otWasArmed = car.otArmed; wasStraight = false; return; }
             bool onStraight = racing && !brakingZone && v > 40 && line.phase != null && line.phase[idx] > 0;
             if (car.otArmed && !otWasArmed) otSave = ersRng.NextDouble() < 0.3 * (1 - who.aggression);
             otWasArmed = car.otArmed;
