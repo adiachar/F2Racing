@@ -52,7 +52,7 @@ public partial class CarModel
     // RR3-style: the simplified levels draw with F2/CarPaintFar (CarPaint's per-vertex pass, any graphics level): a far
     // car is a few hundred pixels, so per-pixel probe reads and pows there bought nothing. One clone per rival set
     // (same keywords and values, so instancing still batches every rival of a level). PerfLab "car LOD" off = full.
-    public static bool RivalFarLite = true;
+    public static bool RivalFarLite = false; // off (21 Nov, Adi: old lighting back): every level draws with the rival material
     static Shader farShader; static bool farTried;
     static readonly Dictionary<Material, Material> farMats = new Dictionary<Material, Material>();
     static Material FarMat(RivalSet set)

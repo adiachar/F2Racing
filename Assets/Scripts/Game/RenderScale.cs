@@ -103,7 +103,7 @@ public static class RenderScale
     // thermal headroom at 0.92-0.97 (Docs/PERF-INVESTIGATION.md round 2): close to throttling, and a throttled 60 ends
     // at 20-30. Those GPUs get ~1.1 Mpx (2400x1080 -> 0.65, 1560x702: ~15% less fragment work); the CAS sharpen in the
     // upscale keeps the edges crisp. Others keep 1.3 Mpx.
-    public const float MidBudget = 1.10e6f;
+    public const float MidBudget = PixelBudget; // was 1.1 Mpx for a day (21 Nov: Adi wants the 1.3 Mpx picture back: the size was not the cause)
     static int budgetKind; // 0 unread, 1 normal, 2 mid-range Mali
     public static float Budget
     {
