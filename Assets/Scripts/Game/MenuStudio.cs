@@ -1,23 +1,25 @@
-// MenuStudio.cs — the 3D behind the front end (MenuUI): a dark studio garage with the player's driver standing alone
-// in the middle, lit like a showroom. Only the driver: no car (fewer objects, cheaper).
+// MenuStudio.cs — the 3D behind the front end (MenuUI): the player's driver standing alone on seamless paper, in soft
+// daylight, so he sits on the front end's "Paper" page (UiKit.cs). Only the driver: no car, no set (cheap).
 //  * Where: far below the circuit (Origin), on its own layer (Layer 30, unused by the game). Only the studio camera
 //    draws that layer, and while the studio exists the game's main camera is switched off (the circuit is not
 //    rendered at all behind the menu). Every light that exists is told to skip the layer, so the track's sun does not
 //    reach the stage.
+//  * Backdrop: the studio camera clears to the page colour (UiKit.Paper, #F3F1EC), so the 2D paper of the page and the
+//    3D background are the same colour with no seam. There is no floor or wall geometry: the only thing under the
+//    driver is a soft contact shadow (People.Blobs, multiplied onto the paper: about the mockup's 18% ellipse).
 //  * Driver: one of the rigged CC0 people (People.cs: Quaternius, crew helmet with a dark visor) in a race suit in the
 //    livery colours, standing relaxed: idle clip with the arms hanging naturally (IK), chest and shoulders relaxed,
 //    a normal stance; small breathing, weight shift and head movement, and on Home every 6-12 s a calm gesture
 //    (adjust the gloves, a hand to the visor, a glance aside, fold the arms, nod).
-//  * Light: a key light (real directional light, studio layer only); fill, rim and floor bounce baked into custom
-//    spherical harmonics given to the driver (People.shader reads ShadeSH9). The set (floor pool, curved back wall,
-//    LED strips, a red line at the wall base, an overhead softbox) is ONE vertex-coloured mesh (Baked.shader): one
-//    draw call. No reflection probe, no render textures. Fog is switched off only while the studio camera renders.
+//  * Light: soft daylight. A key light (real directional light, studio layer only, neutral-warm, from high front left)
+//    and custom spherical harmonics given to the driver (People.shader reads ShadeSH9): a bright sky from above, a
+//    soft fill from the camera's right, a warm bounce off the paper from below and a gentle rim. No reflection probe,
+//    no render textures. Fog is switched off only while the studio camera renders.
 //  * Cost rules: everything is created in Create() when a menu page needs it and destroyed in Release() (MenuUI calls
-//    it in BeginLoading; GameManager.StartSession calls it again to be sure): GameObjects, the set mesh and material,
-//    the camera and light, the driver rig and its shadow mesh; the main camera is switched back on and the frame rate
-//    the menu capped (MenuFps) is given back. Nothing here has an Update: MenuUI calls Tick() once a frame while a
-//    menu page is up, never in a race.
-using System.Collections.Generic;
+//    it in BeginLoading; GameManager.StartSession calls it again to be sure): GameObjects, the camera and light, the
+//    driver rig and its shadow mesh; the main camera is switched back on and the frame rate the menu capped (MenuFps)
+//    is given back. Nothing here has an Update: MenuUI calls Tick() once a frame while a menu page is up, never in a
+//    race.
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -27,14 +29,13 @@ public sealed class MenuStudio
     public const int MenuFps = 30;
     public const int ShotHome = 0, ShotDriver = 1, ShotHidden = 3;
     static readonly Vector3 Origin = new Vector3(0f, -1500f, 0f);
-    // stage positions (studio frame, metres): the driver at the centre facing the camera (-z); the set centred behind him
-    static readonly Vector3 DriverAt = Vector3.zero, PoolAt = new Vector3(0f, 0f, 1.2f);
+    // stage position (studio frame, metres): the driver at the centre facing the camera (-z)
+    static readonly Vector3 DriverAt = Vector3.zero;
     static readonly Color HelmetCol = new Color(1f, 0.82f, 0.18f); // the player's helmet (as CarModel's driver)
 
     GameObject root; Camera cam, mainCam; Transform driverPivot;
     People.Rig rig; People.Blobs blob; SkinnedMeshRenderer rigSmr; MaterialPropertyBlock rigBlock;
     readonly Vector4[] pal = new Vector4[People.NReg];
-    readonly List<Object> made = new List<Object>();          // meshes / materials made here: destroyed in Release
     readonly SphericalHarmonicsL2[] sh = new SphericalHarmonicsL2[1];
     readonly People.PoseBuf buf = new People.PoseBuf(), buf2 = new People.PoseBuf();
     Camera.CameraCallback preCb, postCb;
@@ -56,7 +57,6 @@ public sealed class MenuStudio
         var lights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
         for (int i = 0; i < lights.Length; i++) lights[i].cullingMask &= ~(1 << Layer);
         BuildLighting();
-        BuildSet();
         driverPivot = Child("DriverPivot", DriverAt, 0f);
         if (People.Ready) BuildDriver(liv);
         BuildCamera();
@@ -75,10 +75,8 @@ public sealed class MenuStudio
         if (fogOff) { RenderSettings.fog = fogWas; fogOff = false; }
         if (blob != null) blob.Destroy();
         blob = null; rig = null; rigSmr = null; rigBlock = null;
-        Object.Destroy(root); // camera, key light, driver rig, set
+        Object.Destroy(root); // camera, key light, driver rig
         root = null; cam = null; driverPivot = null;
-        for (int i = 0; i < made.Count; i++) if (made[i] != null) Object.Destroy(made[i]);
-        made.Clear();
         if (mainCam != null) mainCam.enabled = true;
         mainCam = null;
         if (savedFps > 0) Application.targetFrameRate = savedFps;
@@ -106,19 +104,21 @@ public sealed class MenuStudio
 
     void BuildLighting()
     {
-        // key: warm, high on the camera's left
+        // key: soft daylight, neutral-warm, high on the camera's left
         var kg = new GameObject("Key"); kg.transform.SetParent(root.transform, false);
-        kg.transform.rotation = Quaternion.LookRotation(new Vector3(0.5f, -0.62f, 0.6f));
+        kg.transform.rotation = Quaternion.LookRotation(new Vector3(0.45f, -0.70f, 0.55f));
         var key = kg.AddComponent<Light>();
-        key.type = LightType.Directional; key.color = new Color(1f, 0.95f, 0.88f); key.intensity = 1.15f;
+        key.type = LightType.Directional; key.color = new Color(1f, 0.97f, 0.92f); key.intensity = 0.85f;
         key.shadows = LightShadows.None; key.cullingMask = 1 << Layer; key.renderMode = LightRenderMode.ForcePixel;
-        // fill (cool, camera right), rim (from behind, above), floor bounce and a dark garage ambient
+        // a bright open sky from above, a soft fill from the camera's right, the paper's warm bounce from below, a gentle
+        // rim from behind: a daylight studio, no dark sides
         var s = new SphericalHarmonicsL2();
         s.Clear();
-        s.AddAmbientLight(new Color(0.030f, 0.034f, 0.042f));
-        s.AddDirectionalLight(new Vector3(0.85f, 0.25f, -0.45f).normalized, new Color(0.62f, 0.72f, 0.95f), 0.42f);
-        s.AddDirectionalLight(new Vector3(-0.35f, 0.55f, 0.75f).normalized, new Color(1f, 0.97f, 0.92f), 0.85f);
-        s.AddDirectionalLight(Vector3.down, new Color(0.5f, 0.5f, 0.55f), 0.06f);
+        s.AddAmbientLight(new Color(0.20f, 0.20f, 0.21f));
+        s.AddDirectionalLight(Vector3.up, new Color(0.92f, 0.95f, 1f), 0.42f);
+        s.AddDirectionalLight(new Vector3(0.85f, 0.25f, -0.45f).normalized, new Color(1f, 0.98f, 0.95f), 0.40f);
+        s.AddDirectionalLight(Vector3.down, new Color(0.95f, 0.92f, 0.86f), 0.22f);
+        s.AddDirectionalLight(new Vector3(-0.35f, 0.55f, 0.75f).normalized, new Color(1f, 0.98f, 0.95f), 0.35f);
         sh[0] = s;
     }
 
@@ -126,107 +126,10 @@ public sealed class MenuStudio
     {
         var cg = new GameObject("StudioCamera"); cg.transform.SetParent(root.transform, false);
         cam = cg.AddComponent<Camera>();
-        cam.clearFlags = CameraClearFlags.SolidColor; cam.backgroundColor = new Color(0.018f, 0.02f, 0.026f);
+        cam.clearFlags = CameraClearFlags.SolidColor; cam.backgroundColor = UiKit.Paper; // the page colour: no seam between 2D and 3D
         cam.cullingMask = 1 << Layer; cam.depth = 10; cam.nearClipPlane = 0.1f; cam.farClipPlane = 60f; cam.fieldOfView = 30f;
         cam.allowHDR = false; cam.allowMSAA = true; cam.useOcclusionCulling = false; cam.allowDynamicResolution = false;
-        cg.transform.position = Origin + new Vector3(0f, 1.08f, -5.5f);
-    }
-
-    // ------------------------------------------------------------------ the set: one mesh, vertex colours (Baked.shader: light 0.5 = full)
-    void BuildSet()
-    {
-        var v = new List<Vector3>(1400); var c = new List<Color>(1400); var t = new List<int>(9000);
-        // floor: a disc round the pool, a soft lit pool under the driver
-        float[] rings = { 0f, 0.7f, 1.4f, 2.1f, 2.8f, 3.6f, 4.5f, 5.6f, 7f, 9f, 12f, 16f };
-        const int seg = 56;
-        for (int r = 0; r < rings.Length; r++)
-            for (int s = 0; s < seg; s++)
-            {
-                float a = s * Mathf.PI * 2f / seg;
-                var p = PoolAt + new Vector3(Mathf.Cos(a) * rings[r], 0f, Mathf.Sin(a) * rings[r]);
-                v.Add(p); c.Add(FloorCol(p));
-            }
-        for (int r = 0; r < rings.Length - 1; r++)
-            for (int s = 0; s < seg; s++)
-            {
-                int s1 = (s + 1) % seg;
-                Quad(t, r * seg + s, r * seg + s1, (r + 1) * seg + s1, (r + 1) * seg + s);
-            }
-        // curved back wall (cyclorama), behind the stage as the camera sees it
-        float[] hs = { 0f, 0.3f, 1.2f, 2.6f, 4.6f, 8f };
-        float[] ks = { 0.012f, 0.009f, 0.007f, 0.0055f, 0.004f, 0.0025f };
-        const int cols = 44; const float R = 13f, a0 = -100f, a1 = 100f;
-        int wb = v.Count;
-        for (int h = 0; h < hs.Length; h++)
-            for (int i = 0; i <= cols; i++)
-            {
-                float a = Mathf.Lerp(a0, a1, i / (float)cols) * Mathf.Deg2Rad;
-                v.Add(PoolAt + new Vector3(Mathf.Sin(a) * R, hs[h], Mathf.Cos(a) * R));
-                float k = ks[h]; c.Add(new Color(k, k * 1.03f, k * 1.12f, 1f));
-            }
-        for (int h = 0; h < hs.Length - 1; h++)
-            for (int i = 0; i < cols; i++)
-            {
-                int q = wb + h * (cols + 1) + i;
-                Quad(t, q, q + 1, q + cols + 2, q + cols + 1);
-            }
-        // the red line at the wall base and a white strip high across the middle
-        Arc(v, c, t, R - 0.05f, a0, a1, cols, 0.05f, 0.11f, new Color(0.42f, 0.01f, 0f, 1f));
-        Arc(v, c, t, R - 0.05f, -40f, 40f, 16, 4.45f, 4.55f, new Color(0.40f, 0.42f, 0.46f, 1f));
-        // vertical LED bars
-        float[] bars = { -64f, -36f, 36f, 64f };
-        for (int b = 0; b < bars.Length; b++)
-        {
-            float a = bars[b] * Mathf.Deg2Rad;
-            var n = new Vector3(Mathf.Sin(a), 0f, Mathf.Cos(a)); var tg = new Vector3(Mathf.Cos(a), 0f, -Mathf.Sin(a)) * 0.06f;
-            var p = PoolAt + n * (R - 0.1f);
-            AddQuad(v, c, t, p - tg + Vector3.up * 0.45f, p + tg + Vector3.up * 0.45f, p + tg + Vector3.up * 4.0f, p - tg + Vector3.up * 4.0f, new Color(0.46f, 0.48f, 0.52f, 1f));
-        }
-        // overhead softbox
-        var sb = PoolAt + Vector3.up * 5f;
-        AddQuad(v, c, t, sb + new Vector3(-2.5f, 0, -1.3f), sb + new Vector3(2.5f, 0, -1.3f), sb + new Vector3(2.5f, 0, 1.3f), sb + new Vector3(-2.5f, 0, 1.3f), new Color(0.6f, 0.6f, 0.62f, 1f));
-
-        var mesh = new Mesh { name = "MenuStudioSet" };
-        mesh.SetVertices(v); mesh.SetColors(c); mesh.SetTriangles(t, 0); mesh.RecalculateBounds();
-        made.Add(mesh);
-        var shd = Resources.Load<Shader>("Baked"); if (shd == null || !shd.isSupported) shd = Shader.Find("Sprites/Default");
-        var mat = new Material(shd) { name = "MenuStudioSet", mainTexture = Texture2D.whiteTexture, color = Color.white };
-        made.Add(mat);
-        var go = new GameObject("Set"); go.transform.SetParent(root.transform, false);
-        go.AddComponent<MeshFilter>().sharedMesh = mesh;
-        var mr = go.AddComponent<MeshRenderer>(); mr.sharedMaterial = mat;
-        mr.shadowCastingMode = ShadowCastingMode.Off; mr.receiveShadows = false;
-        mr.lightProbeUsage = LightProbeUsage.Off; mr.reflectionProbeUsage = ReflectionProbeUsage.Off;
-    }
-
-    static Color FloorCol(Vector3 p)
-    {
-        float d1 = (p - DriverAt).magnitude / 2.2f;
-        float b = 0.0035f + 0.022f * Mathf.Exp(-d1 * d1);
-        return new Color(b, b * 1.03f, b * 1.12f, 1f);
-    }
-    // a quad seen from both sides (the set is looked at from inside and from the probe)
-    static void Quad(List<int> t, int a, int b, int c, int d)
-    {
-        t.Add(a); t.Add(b); t.Add(c); t.Add(a); t.Add(c); t.Add(d);
-        t.Add(a); t.Add(c); t.Add(b); t.Add(a); t.Add(d); t.Add(c);
-    }
-    static void AddQuad(List<Vector3> v, List<Color> c, List<int> t, Vector3 a, Vector3 b, Vector3 d2, Vector3 d, Color col)
-    {
-        int o = v.Count; v.Add(a); v.Add(b); v.Add(d2); v.Add(d);
-        for (int i = 0; i < 4; i++) c.Add(col);
-        Quad(t, o, o + 1, o + 2, o + 3);
-    }
-    static void Arc(List<Vector3> v, List<Color> c, List<int> t, float r, float a0, float a1, int n, float y0, float y1, Color col)
-    {
-        int o = v.Count;
-        for (int i = 0; i <= n; i++)
-        {
-            float a = Mathf.Lerp(a0, a1, i / (float)n) * Mathf.Deg2Rad;
-            var p = PoolAt + new Vector3(Mathf.Sin(a) * r, 0f, Mathf.Cos(a) * r);
-            v.Add(p + Vector3.up * y0); v.Add(p + Vector3.up * y1); c.Add(col); c.Add(col);
-        }
-        for (int i = 0; i < n; i++) { int q = o + i * 2; Quad(t, q, q + 2, q + 3, q + 1); }
+        cg.transform.position = Origin + new Vector3(0f, 1.0f, -6.0f);
     }
 
     // ------------------------------------------------------------------ driver
@@ -382,11 +285,11 @@ public sealed class MenuStudio
         var look = head + fwd * 3f + right * (Mathf.Sin(t * 0.23f) * 0.6f + Mathf.Sin(t * 0.61f) * 0.2f) + up * (Mathf.Sin(t * 0.17f) * 0.18f - 0.08f);
         rig.LookAt(look, 0.5f);
         if (gKind == GGlance) rig.LookAt(head - right * 3f + fwd * 1.2f - up * 0.1f, gw);
-        // soft contact shadow under him (local to the studio root)
+        // soft contact shadow under him on the paper (local to the studio root; the ellipse stays level to the camera)
         if (blob != null)
         {
             var pel = rig.Pelvis - Origin; pel.y = 0f;
-            blob.Begin(); blob.Set(0, pel, fwd, 0.45f, 0.8f, 0.75f); blob.Flush(); blob.Show(true);
+            blob.Begin(); blob.Set(0, pel, Vector3.forward, 0.30f, 2.2f, 0.62f); blob.Flush(); blob.Show(true); // a wide, soft ellipse (~18% darker at its centre)
         }
     }
 
@@ -402,12 +305,13 @@ public sealed class MenuStudio
         rig.Arm(left, palm, w, -fwd + right * (side * 0.35f));
     }
 
-    // the camera for the page: Home = the driver in the middle, Driver = the driver on the left
+    // the camera for the page: the driver standing in the middle of the page, his feet just above the bottom rule and
+    // his helmet under the top rule (Home and Driver frame him the same way, so going between them does not move him)
     void Frame(int shot, float dt)
     {
         Vector3 subject, pos; float fov, fx;
-        if (shot == ShotDriver) { subject = new Vector3(0f, 0.9f, 0f); pos = new Vector3(0.35f, 1.05f, -5.0f); fov = 30f; fx = 0.25f; }
-        else { subject = new Vector3(0f, 0.86f, 0f); pos = new Vector3(0f, 1.08f, -5.5f); fov = 30f; fx = 0.5f; }
+        if (shot == ShotDriver) { subject = new Vector3(0f, 0.80f, 0f); pos = new Vector3(0.12f, 1.0f, -6.0f); fov = 30f; fx = 0.5f; }
+        else { subject = new Vector3(0f, 0.80f, 0f); pos = new Vector3(0f, 1.0f, -6.0f); fov = 30f; fx = 0.5f; }
         subject += Origin; pos += Origin;
         float aspect = Screen.height > 0 ? Screen.width / (float)Screen.height : 1.78f;
         var dir = subject - pos; float dist = dir.magnitude;

@@ -1,15 +1,22 @@
-// UiKit.cs — the shared look of every screen (menus, settings, championship, race HUD), drawn with IMGUI.
-// One design system so all screens match: Titillium Web (OFL, Assets/Resources/Fonts), dark glass panels with soft
-// shadows and rounded corners (IMGUI's own rounded DrawTexture, no extra textures), one red accent, and short eased
-// animations. Layout unit U(1) = 1/390 of the screen height (the same unit the old screens used).
+// UiKit.cs — the shared drawing kit of every screen, drawn with IMGUI. Two looks, one kit:
+//  * PAPER, the front end (Home, Play steps, Driver, Settings, Season hub, Loading, Results, Qualifying results): a
+//    light editorial / Swiss page. Warm paper (#F3F1EC), ink text (#111111) and one grey (#4B4B4B), 1 px ink rules that
+//    frame the page (under the masthead, above the actions), whitespace and strict left / right alignment on a 28-unit
+//    margin. Typeface Archivo (SIL OFL 1.1, Assets/Resources/Fonts/OFL-Archivo.txt): Regular, SemiBold, ExtraBold and
+//    ExtraBold Italic (the giant number). Red #E10600 is the ONLY accent: the giant italic number, the active nav
+//    underline, the small square on the black primary button, selected states. The primary button is solid black with
+//    white tracked capitals (rectangular, no glow); secondary actions are ExtraBold text links with a grey sub-line.
+//    Green / amber appear only as good / bad tags. No glass, gradients, glows or dark panels; the only shadow is the soft
+//    ellipse under the 3D driver (MenuStudio.cs).
+//  * GLASS, the in-race HUD and captions drawn over the 3D view (RaceHud.cs, TeamRadio.cs, PreRace.cs...): dark glass,
+//    Titillium Web (OFL), kept as it was for readability over the moving picture.
+// Layout unit U(1) = 1/390 of the screen height (the mockups are drawn on a 844 x 390 artboard in these units).
 //
-// Use:  UiKit.Panel(r);  UiKit.Text(r, "LAP 3/10", UiKit.Bold, 14, UiKit.TextCol);  if (UiKit.Button(r, "RACE", true)) ...
-// Fonts can be null on a platform where the .ttf failed to import; every helper then falls back to the default font.
-//
-// Type scale (layout units): display 40-64 Black · title 22-30 Black · heading 14-16 Bold · body 12-13 Semi ·
-// eyebrow 9-10 Bold caps (tracked) · micro 8-9 Regular. Radii: cards 14, controls 12, chips 9, pills = full.
-// Everything here is allocation-free per frame once warmed up: styles, gradients, caps strings and the few
-// textures (glow, vignette) are cached. Fade groups with PushAlpha / PopAlpha (every helper multiplies GUI.color).
+// Use (paper):  var f = UiKit.PaperFrame();  UiKit.PaperPage();  int nav = UiKit.Masthead(f, UiKit.NavPlay);
+//               UiKit.Text(r, "Monza", UiKit.Heavy, 26f, UiKit.Ink);  if (UiKit.BlackButton(r, "Race")) ...
+// Fonts can be null on a platform where a .ttf failed to import; every helper then falls back (Archivo -> Titillium ->
+// the default font). Everything here is allocation-free per frame once warmed up: styles, caps strings and the few
+// textures are cached. Fade groups with PushAlpha / PopAlpha (every helper multiplies GUI.color).
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -28,41 +35,53 @@ public static class UiKit
         }
     }
 
-    // ---------- palette ----------
-    // Colour roles (one meaning each; contrast of text on Base: TextCol ~15:1, Sub ~7:1, Faint ~4.6:1):
-    //  * neutrals: Base (cool charcoal page), Surface / SurfaceHi (cards, raised), Line (hairlines), TextCol (off-white),
-    //    Sub (one quiet grey for secondary text), Faint (captions only)
-    //  * Accent (racing red #E10600): ONLY the primary action (RACE / START / NEXT) and the selected state. Never decoration.
-    //  * Info (cyan): progress, XP, live data. Good (green): "good" only (safety rating, personal best). Warn (amber):
-    //    warnings only. Purple / Gold / Silver / Bronze: timing conventions (fastest lap, podium) on timing screens.
-    //  At most one of these accents on a screen besides red.
-    public static readonly Color Base = new Color(0.071f, 0.078f, 0.094f, 1f);           // #121418 page background (cool charcoal)
-    public static readonly Color Ink = Base;                                               // (older name)
-    public static readonly Color Surface = new Color(0.098f, 0.106f, 0.125f, 0.92f);      // card
-    public static readonly Color SurfaceHi = new Color(0.135f, 0.145f, 0.168f, 0.95f);    // raised / selected card
-    public static readonly Color PanelCol = new Color(0.086f, 0.094f, 0.112f, 0.90f);    // glass panel
-    public static readonly Color PanelHi = SurfaceHi;                                      // raised / selected panel
-    public static readonly Color Line = new Color(1f, 1f, 1f, 0.08f);                    // hairlines and outlines
-    public static readonly Color TextCol = new Color(0.94f, 0.945f, 0.955f, 1f);         // off-white
-    public static readonly Color Sub = new Color(0.64f, 0.67f, 0.71f, 1f);               // secondary text (quiet grey)
-    public static readonly Color Faint = new Color(0.50f, 0.53f, 0.57f, 1f);             // captions (still >= 4.5:1 on Base)
-    public static readonly Color Accent = new Color(0.882f, 0.024f, 0f, 1f);             // #E10600 racing red: action / selected only
-    public static readonly Color AccentHi = new Color(1f, 0.20f, 0.12f, 1f);
-    public static readonly Color Info = new Color(0f, 0.78f, 0.95f, 1f);                 // cyan: progress, XP, live data
-    public static readonly Color Good = new Color(0.20f, 0.78f, 0.42f, 1f);              // green: good (safety rating, personal best)
-    public static readonly Color Warn = new Color(0.98f, 0.74f, 0.16f, 1f);              // amber: warnings
-    public static readonly Color Purple = new Color(0.66f, 0.33f, 0.97f, 1f);            // overall best
-    public static readonly Color Gold = new Color(1f, 0.80f, 0.32f, 1f);                 // podium P1
-    public static readonly Color Silver = new Color(0.80f, 0.83f, 0.88f, 1f);            // podium P2
-    public static readonly Color Bronze = new Color(0.86f, 0.55f, 0.33f, 1f);            // podium P3
-    static readonly Color Glass = new Color(1f, 1f, 1f, 0.055f);                         // control body on a panel
-    static readonly Color GlassHi = new Color(1f, 1f, 1f, 0.11f);
-
+    static Color Hex(int rgb, float a = 1f) => new Color(((rgb >> 16) & 255) / 255f, ((rgb >> 8) & 255) / 255f, (rgb & 255) / 255f, a);
     public static Color A(Color c, float a) { c.a *= a; return c; }
 
+    // ---------- PAPER palette (front end) ----------
+    // Contrast on Paper: Ink 16.7:1, InkSub 7.7:1, InkMuted 4.7:1 (captions only), GoodInk 4.7:1, BadInk 5.2:1; white on
+    // Ink 18.9:1, white on GoodInk / BadInk >= 5.2:1. Red on Paper is 4.4:1: only for large type and marks, never small text.
+    public static readonly Color Paper = Hex(0xF3F1EC);          // the page
+    public static readonly Color Ink = Hex(0x111111);            // text, rules, the primary button
+    public static readonly Color InkSub = Hex(0x4B4B4B);         // secondary text
+    public static readonly Color InkMuted = Hex(0x6B6B6B);       // captions, hints, credits
+    public static readonly Color PaperTrack = Hex(0xDAD6CE);     // meter tracks, quiet row dividers
+    public static readonly Color PaperTint = Hex(0x111111, 0.05f); // pressed / the player's row
+    public static readonly Color InkPressed = Hex(0x2E2E2E);     // the black button while held
+    public static readonly Color Red = Hex(0xE10600);            // THE accent: giant number, active nav, selection, the button's mark
+    public static readonly Color GoodInk = Hex(0x1E7B3A);        // good tags (safety up, gains)
+    public static readonly Color BadInk = Hex(0x9A5200);         // bad tags (safety down, penalties)
+    public static readonly Color PaperShadow = Hex(0x000000, 0.18f);
+
+    // safety grade S A B -> good, C -> ink, D E -> bad (Progression.Grades order)
+    public static Color PaperGrade(int g) => g <= 2 ? GoodInk : g == 3 ? Ink : BadInk;
+
+    // ---------- GLASS palette (in-race HUD and captions only; the front end does not use these) ----------
+    public static readonly Color Base = new Color(0.071f, 0.078f, 0.094f, 1f);           // #121418 charcoal
+    public static readonly Color Surface = new Color(0.098f, 0.106f, 0.125f, 0.92f);
+    public static readonly Color SurfaceHi = new Color(0.135f, 0.145f, 0.168f, 0.95f);
+    public static readonly Color PanelCol = new Color(0.086f, 0.094f, 0.112f, 0.90f);
+    public static readonly Color PanelHi = SurfaceHi;
+    public static readonly Color Line = new Color(1f, 1f, 1f, 0.08f);
+    public static readonly Color TextCol = new Color(0.94f, 0.945f, 0.955f, 1f);
+    public static readonly Color Sub = new Color(0.64f, 0.67f, 0.71f, 1f);
+    public static readonly Color Faint = new Color(0.50f, 0.53f, 0.57f, 1f);
+    public static readonly Color Accent = Red;                                             // #E10600 (same red in both looks)
+    public static readonly Color AccentHi = new Color(1f, 0.20f, 0.12f, 1f);
+    public static readonly Color Info = new Color(0f, 0.78f, 0.95f, 1f);
+    public static readonly Color Good = new Color(0.20f, 0.78f, 0.42f, 1f);
+    public static readonly Color Warn = new Color(0.98f, 0.74f, 0.16f, 1f);
+    public static readonly Color Purple = new Color(0.66f, 0.33f, 0.97f, 1f);
+    public static readonly Color Gold = new Color(1f, 0.80f, 0.32f, 1f);
+    public static readonly Color Silver = new Color(0.80f, 0.83f, 0.88f, 1f);
+    public static readonly Color Bronze = new Color(0.86f, 0.55f, 0.33f, 1f);
+
     // ---------- fonts ----------
+    // Front end (Archivo): Body 400, Medium 600, Heavy 800, HeavyItalic 800 italic.
+    // HUD (Titillium Web): Regular, Semi, Bold, Black, BoldItalic.
     static bool fontsLoaded;
     static Font regular, semi, bold, black, boldItalic;
+    static Font body, medium, heavy, heavyItalic;
     static void LoadFonts()
     {
         if (fontsLoaded) return; fontsLoaded = true;
@@ -71,12 +90,20 @@ public static class UiKit
         bold = Resources.Load<Font>("Fonts/TitilliumWeb-Bold");
         black = Resources.Load<Font>("Fonts/TitilliumWeb-Black");
         boldItalic = Resources.Load<Font>("Fonts/TitilliumWeb-BoldItalic");
+        body = Resources.Load<Font>("Fonts/Archivo-Regular");
+        medium = Resources.Load<Font>("Fonts/Archivo-SemiBold");
+        heavy = Resources.Load<Font>("Fonts/Archivo-ExtraBold");
+        heavyItalic = Resources.Load<Font>("Fonts/Archivo-ExtraBoldItalic");
     }
     public static Font Regular { get { LoadFonts(); return regular; } }
     public static Font Semi { get { LoadFonts(); return semi ?? regular; } }
     public static Font Bold { get { LoadFonts(); return bold ?? semi ?? regular; } }
     public static Font Black { get { LoadFonts(); return black ?? bold ?? regular; } }
     public static Font BoldItalic { get { LoadFonts(); return boldItalic ?? bold ?? regular; } }
+    public static Font Body { get { LoadFonts(); return body ?? Regular; } }
+    public static Font Medium { get { LoadFonts(); return medium ?? body ?? Semi; } }
+    public static Font Heavy { get { LoadFonts(); return heavy ?? medium ?? Black; } }
+    public static Font HeavyItalic { get { LoadFonts(); return heavyItalic ?? heavy ?? BoldItalic; } }
 
     // ---------- text ----------
     static readonly Dictionary<long, GUIStyle> styles = new Dictionary<long, GUIStyle>();
@@ -102,7 +129,7 @@ public static class UiKit
         var old = GUI.color; GUI.color = c * old; GUI.Label(r, s, st); GUI.color = old;
     }
 
-    // text with a soft dark drop behind it, for text drawn straight over the 3D view
+    // text with a soft dark drop behind it, for text drawn straight over the 3D view (HUD)
     public static void TextShadow(Rect r, string s, Font f, float size, Color c, TextAnchor anchor = TextAnchor.MiddleLeft)
     {
         float o = Mathf.Max(1f, U(0.8f));
@@ -110,7 +137,8 @@ public static class UiKit
         Text(r, s, f, size, c, anchor);
     }
 
-    // wide-tracked capitals (IMGUI has no letter spacing, so pad with spaces); cached, so no garbage per frame
+    // wide-tracked capitals (IMGUI has no letter spacing, so pad with spaces: an Archivo space is ~0.19 em, the
+    // mockups' 3 px tracking at 14 px); cached, so no garbage per frame
     static readonly Dictionary<string, string> capsCache = new Dictionary<string, string>();
     public static string Caps(string s)
     {
@@ -135,6 +163,8 @@ public static class UiKit
 
     static readonly GUIContent gc = new GUIContent();
     public static float Width(string s, Font f, float size) { gc.text = s; return Style(f, size).CalcSize(gc).x; }
+    // the height of s wrapped to width w
+    public static float Height(string s, Font f, float size, float w) { gc.text = s; return Style(f, size, TextAnchor.UpperLeft, true).CalcHeight(gc, w); }
     // the largest size <= size (down to minSize) at which s fits in maxW
     public static float Fit(string s, Font f, float size, float maxW, float minSize)
     {
@@ -142,7 +172,7 @@ public static class UiKit
         if (w <= maxW || w <= 0) return size;
         return Mathf.Max(minSize, size * maxW / w * 0.98f);
     }
-    // small tracked caps label (section headers, data captions)
+    // small tracked caps label in the glass look (HUD captions)
     public static void Eyebrow(Rect r, string s, Color c, float size = 9.5f, TextAnchor anchor = TextAnchor.MiddleLeft) => Text(r, Caps(s), Bold, size, c, anchor);
 
     // ---------- shapes ----------
@@ -163,7 +193,7 @@ public static class UiKit
     // a filled circle (centre, radius in layout units)
     public static void Dot(Vector2 c, float radius, Color col) { float r = U(radius); Rect(new Rect(c.x - r, c.y - r, 2 * r, 2 * r), col, 999f); }
 
-    // soft shadow: a few widening, fading rounded rects
+    // soft shadow (glass look): a few widening, fading rounded rects
     public static void Shadow(Rect r, float radius = 12f, float spread = 8f, float alpha = 0.35f, float dropY = 3f)
     {
         const int N = 4;
@@ -177,8 +207,8 @@ public static class UiKit
 
     static readonly Dictionary<long, Texture2D> gradients = new Dictionary<long, Texture2D>();
     static long Key(Color a) => ((long)(a.r * 255) << 24) | ((long)(a.g * 255) << 16) | ((long)(a.b * 255) << 8) | (long)(a.a * 255);
-    // a vertical (or horizontal: top = left) two-colour gradient, rounded. Pass FIXED colours (fade with GUI.color /
-    // PushAlpha): every distinct pair makes one small cached texture.
+    // a vertical (or horizontal: top = left) two-colour gradient, rounded (glass look). Pass FIXED colours (fade with
+    // GUI.color / PushAlpha): every distinct pair makes one small cached texture.
     public static void Gradient(Rect r, Color top, Color bottom, float radius = 0f, bool horizontal = false)
     {
         if (r.width <= 0 || r.height <= 0) return;
@@ -201,7 +231,7 @@ public static class UiKit
     }
 
     static readonly Color panelTop = new Color(0.112f, 0.120f, 0.140f, 0.92f);
-    // the standard glass card: shadow, body, a faint top highlight and a hairline edge
+    // the glass card (in-race captions): shadow, body, a faint top highlight and a hairline edge
     public static void Panel(Rect r, float radius = 12f, float alpha = 1f, bool shadow = true)
     {
         if (shadow) Shadow(r, radius, 10f, 0.32f * alpha);
@@ -212,67 +242,8 @@ public static class UiKit
         PopAlpha();
     }
 
-    // a thin accent bar (left edge of a selected row, under a title...)
+    // a thin bar with round ends (a team-colour stripe...)
     public static void Bar(Rect r, Color c) => Rect(r, c, Mathf.Min(r.width, r.height) * 0.5f / Mathf.Max(0.0001f, U(1)));
-
-    // ---------- glow, vignette and the page backdrop ----------
-    static Texture2D radialTex, vignetteTex;
-    static Texture2D MakeRadial(int n, bool vignette)
-    {
-        var t = new Texture2D(n, n, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.HideAndDontSave };
-        var px = new Color32[n * n];
-        for (int y = 0; y < n; y++)
-            for (int x = 0; x < n; x++)
-            {
-                float dx = (x + 0.5f) / n * 2f - 1f, dy = (y + 0.5f) / n * 2f - 1f, d = Mathf.Sqrt(dx * dx + dy * dy);
-                float a = vignette ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.45f, 1.42f, d)) : Mathf.Pow(Mathf.Clamp01(1f - d), 2.2f);
-                px[y * n + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
-            }
-        t.SetPixels32(px); t.Apply(false, true);
-        return t;
-    }
-    public static Texture2D RadialTex { get { if (radialTex == null) radialTex = MakeRadial(64, false); return radialTex; } }
-    static Texture2D VignetteTex { get { if (vignetteTex == null) vignetteTex = MakeRadial(64, true); return vignetteTex; } }
-
-    // a soft round light (white texture tinted c), e.g. behind a title or under the primary button
-    public static void Glow(Rect r, Color c)
-    {
-        if (c.a <= 0.001f) return;
-        var o = GUI.color; GUI.color = c * o; GUI.DrawTexture(r, RadialTex, ScaleMode.StretchToFill, true); GUI.color = o;
-    }
-
-    static readonly Color bgTop = new Color(0.082f, 0.090f, 0.108f, 0.92f), bgBottom = new Color(0.052f, 0.057f, 0.070f, 0.98f);
-    static readonly Color leftShade = new Color(0f, 0f, 0f, 0.38f), clear = new Color(0f, 0f, 0f, 0f);
-    // the dark page behind a menu: gradient, side shade, a red and a blue light, angled "speed" slashes, vignette.
-    // opacity fades all of it (the 3D scene shows through a little at 1).
-    public static void Backdrop(float opacity = 1f, bool slashes = true)
-    {
-        float sw = Screen.width, sh = Screen.height;
-        var full = new Rect(0, 0, sw, sh);
-        PushAlpha(opacity);
-        Gradient(full, bgTop, bgBottom);
-        Gradient(new Rect(0, 0, sw * 0.62f, sh), leftShade, clear, 0f, true);
-        Glow(new Rect(-sh * 0.75f, -sh * 0.85f, sh * 1.9f, sh * 1.6f), new Color(Accent.r, Accent.g, Accent.b, 0.20f));
-        Glow(new Rect(sw - sh * 0.9f, sh * 0.30f, sh * 1.5f, sh * 1.3f), new Color(0.10f, 0.35f, 0.65f, 0.10f));
-        if (slashes) Slashes();
-        var o = GUI.color; GUI.color = new Color(0, 0, 0, 0.62f) * o; GUI.DrawTexture(full, VignetteTex, ScaleMode.StretchToFill, true); GUI.color = o;
-        PopAlpha();
-    }
-
-    // three long angled bars across the right of the screen: a quiet F1-graphics motif (a handful of draws)
-    static void Slashes()
-    {
-        float sw = Screen.width, sh = Screen.height;
-        var m = GUI.matrix;
-        var pivot = new Vector2(sw * 0.78f, sh * 0.5f);
-        GUIUtility.RotateAroundPivot(28f, pivot);
-        float len = sh * 2.4f, y0 = pivot.y - len * 0.5f;
-        Rect(new Rect(pivot.x - U(70), y0, U(46), len), new Color(1, 1, 1, 0.022f));
-        Rect(new Rect(pivot.x - U(14), y0, U(14), len), new Color(1, 1, 1, 0.030f));
-        Rect(new Rect(pivot.x + U(10), y0, U(3), len), new Color(Accent.r, Accent.g, Accent.b, 0.30f));
-        Rect(new Rect(pivot.x + U(120), y0, U(90), len), new Color(1, 1, 1, 0.014f));
-        GUI.matrix = m;
-    }
 
     // ---------- alpha groups and entry motion ----------
     static readonly Stack<Color> colStack = new Stack<Color>();
@@ -286,8 +257,6 @@ public static class UiKit
     // ---------- animation ----------
     public static float EaseOut(float t) { t = Mathf.Clamp01(t); float u = 1f - t; return 1f - u * u * u; }
     public static float EaseInOut(float t) { t = Mathf.Clamp01(t); return t < 0.5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) * 0.5f; }
-    // a little overshoot at the end (pop-in of chips and badges)
-    public static float EaseBack(float t) { t = Mathf.Clamp01(t); const float c1 = 1.70158f, c3 = c1 + 1f; float u = t - 1f; return 1f + c3 * u * u * u + c1 * u * u; }
 
     // a value that eases toward a target, kept per id (hover / press / selection highlights)
     static readonly Dictionary<int, float> anim = new Dictionary<int, float>();
@@ -358,62 +327,6 @@ public static class UiKit
         return clicked;
     }
 
-    // ---------- buttons ----------
-    public enum Look { Primary, Secondary, Ghost, Armed }
-
-    // a touch-friendly button: fires on release inside, shows press feedback. primary = filled red.
-    public static bool Button(Rect r, string label, bool primary = false, bool enabled = true, float size = 13f, float radius = 10f)
-        => Button(r, label, primary ? Look.Primary : Look.Secondary, enabled, size, null, radius);
-
-    static readonly Color priTop = new Color(1f, 0.16f, 0.09f, 1f), priBottom = new Color(0.78f, 0.02f, 0f, 1f);
-    // the full button: Primary (red, the one main action), Secondary (glass), Ghost (outline only), Armed (a
-    // confirm-to-do state, red outline). sub = an optional small second line (e.g. "5 laps · 10 rivals").
-    public static bool Button(Rect r, string label, Look look, bool enabled = true, float size = 13f, string sub = null, float radius = 12f)
-    {
-        bool clicked = Press(r, enabled, out float p);
-        var rr = Scale(r, 1f - 0.03f * p);
-        PushAlpha(enabled ? 1f : 0.35f);
-        Color tc = TextCol;
-        switch (look)
-        {
-            case Look.Primary:
-                Glow(new Rect(rr.x - rr.width * 0.15f, rr.y - rr.height * 0.4f, rr.width * 1.3f, rr.height * 2.0f), new Color(Accent.r, Accent.g, Accent.b, 0.30f * (1f - 0.5f * p)));
-                Shadow(rr, radius, 6f, 0.30f, 2f);
-                Gradient(rr, priTop, priBottom, radius);
-                Rect(new Rect(rr.x + U(radius) * 0.7f, rr.y + U(0.8f), rr.width - U(radius) * 1.4f, Mathf.Max(1f, U(0.8f))), new Color(1, 1, 1, 0.30f)); // top light
-                Rect(rr, new Color(0, 0, 0, 0.22f * p), radius);
-                Outline(rr, new Color(1, 1, 1, 0.16f), radius, 0.7f);
-                tc = Color.white;
-                break;
-            case Look.Secondary:
-                Rect(rr, Color.Lerp(new Color(0.13f, 0.14f, 0.18f, 0.90f), new Color(0.20f, 0.21f, 0.26f, 0.95f), p), radius);
-                Outline(rr, new Color(1, 1, 1, 0.13f + 0.12f * p), radius, 0.7f);
-                break;
-            case Look.Ghost:
-                Rect(rr, new Color(1, 1, 1, 0.025f + 0.08f * p), radius);
-                Outline(rr, new Color(1, 1, 1, 0.12f + 0.1f * p), radius, 0.7f);
-                tc = Color.Lerp(Sub, TextCol, 0.5f + 0.5f * p);
-                break;
-            case Look.Armed:
-                Rect(rr, new Color(Accent.r, Accent.g, Accent.b, 0.16f + 0.14f * p), radius);
-                Outline(rr, Accent, radius, 1.2f);
-                tc = Color.white;
-                break;
-        }
-        Font f = look == Look.Primary ? Black : Bold;
-        string up = Upper(label); float room = rr.width - U(14);
-        float ls = Fit(up, f, size, room, size * 0.7f);
-        if (sub == null) Text(rr, up, f, ls, tc, TextAnchor.MiddleCenter);
-        else
-        {
-            float h = rr.height, ss = Mathf.Max(8.5f, size * 0.52f);
-            Text(new Rect(rr.x, rr.y + h * 0.10f, rr.width, h * 0.52f), up, f, ls, tc, TextAnchor.MiddleCenter);
-            Text(new Rect(rr.x, rr.y + h * 0.56f, rr.width, h * 0.30f), sub, Semi, Fit(sub, Semi, ss, room, 7.5f), A(tc, 0.78f), TextAnchor.MiddleCenter);
-        }
-        PopAlpha();
-        return clicked;
-    }
-
     public static Rect Scale(Rect r, float k)
     {
         float w = r.width * k, h = r.height * k;
@@ -459,136 +372,195 @@ public static class UiKit
         }
     }
 
-    // a round glass button with an icon (settings, close)
-    public static bool IconButton(Rect r, int icon, bool enabled = true)
+    // =====================================================================================================================
+    // PAPER: the front end's page, masthead and controls
+    // =====================================================================================================================
+
+    // The page grid: x0 / x1 = the 28-unit margins inside the safe area; head = the rule under the masthead; foot = the
+    // rule above the actions (footH units above the safe bottom); top = where content starts under the head rule;
+    // actY = the centre line of the action row (links and the black button).
+    public struct Frame { public float x0, x1, w, head, foot, top, bottom, actY; public Rect safe; }
+    public const float Margin = 28f;
+    public static Frame PaperFrame(float footH = 82f)
     {
-        bool clicked = Press(r, enabled, out float p);
-        var rr = Scale(r, 1f - 0.06f * p);
-        PushAlpha(enabled ? 1f : 0.35f);
-        Shadow(rr, 999f, 6f, 0.25f, 2f);
-        Rect(rr, Color.Lerp(new Color(0.12f, 0.13f, 0.17f, 0.88f), new Color(0.22f, 0.23f, 0.28f, 0.95f), p), 999f);
-        Outline(rr, new Color(1, 1, 1, 0.14f + 0.12f * p), 999f, 0.7f);
-        Icon(Scale(rr, 0.48f), icon, TextCol);
-        PopAlpha();
-        return clicked;
+        var s = Safe; var f = new Frame();
+        f.safe = s; f.x0 = s.x + U(Margin); f.x1 = s.xMax - U(Margin); f.w = f.x1 - f.x0;
+        f.head = s.y + U(56); f.foot = s.yMax - U(footH); f.top = f.head + U(14); f.bottom = s.yMax;
+        f.actY = f.foot + (f.bottom - f.foot) * 0.5f + U(3);
+        return f;
     }
 
-    // ---------- pickers ----------
-    // a segmented picker (‹ value ›) for small choice lists; returns the new index
-    public static int Stepper(Rect r, string value, int index, int count, bool wrap = true)
+    // the whole screen in paper (opacity < 1 lets a paused race show through a little)
+    public static void PaperPage(float opacity = 1f) => Rect(new Rect(0, 0, Screen.width, Screen.height), A(Paper, opacity));
+
+    // a 1 px-class rule (U(0.7) rounded, at least one pixel), ink by default
+    public static float HairPx => Mathf.Max(1f, Mathf.Round(U(0.7f)));
+    public static void Hair(float x0, float x1, float y) => Hair(x0, x1, y, Ink);
+    public static void Hair(float x0, float x1, float y, Color c) => Rect(new Rect(x0, Mathf.Round(y), x1 - x0, HairPx), c);
+    public static void VHair(float x, float y0, float y1, Color c) => Rect(new Rect(Mathf.Round(x), y0, HairPx, y1 - y0), c);
+
+    // a tracked-caps caption (Archivo Regular; "NEXT · QUICK RACE"), InkSub by default
+    public static void Kicker(Rect r, string s, float size = 10.5f, TextAnchor anchor = TextAnchor.MiddleLeft) => Text(r, Caps(s), Body, size, InkSub, anchor);
+    public static void Kicker(Rect r, string s, Color c, float size = 10.5f, TextAnchor anchor = TextAnchor.MiddleLeft) => Text(r, Caps(s), Body, size, c, anchor);
+
+    // ---- masthead: "APEX WORLD SERIES" (tap = Home) and the text nav, the top rule under them
+    public const int NavNone = -1, NavPlay = 0, NavDriver = 1, NavSettings = 2, NavHome = 3;
+    static readonly string[] NavNames = { "PLAY", "DRIVER", "SETTINGS" };
+    const string Wordmark = "Apex World Series";
+    // Set by a page that is not MenuUI's (Settings) when its nav is tapped; MenuUI.Draw takes it (then sets it back to NavNone).
+    public static int NavRequest = NavNone;
+
+    // Draws the masthead and returns the item tapped (NavPlay / NavDriver / NavSettings / NavHome) or NavNone.
+    // active: the nav item of this page (NavNone: none underlined). nav = false: the wordmark only (session screens, a
+    // paused race), with an optional caption on the right instead (tracked caps, grey).
+    public static int Masthead(Frame f, int active, bool nav = true, string caption = null)
     {
-        Rect(r, Glass, 10f); Outline(r, Line, 10f, 0.7f);
-        float bw = Mathf.Min(r.height, r.width * 0.3f);
-        var lb = new Rect(r.x, r.y, bw, r.height); var rb = new Rect(r.xMax - bw, r.y, bw, r.height);
-        if (Arrow(lb, IconBack, wrap || index > 0)) index = wrap ? (index - 1 + count) % count : Mathf.Max(0, index - 1);
-        if (Arrow(rb, IconNext, wrap || index < count - 1)) index = wrap ? (index + 1) % count : Mathf.Min(count - 1, index + 1);
-        Text(new Rect(r.x + bw, r.y, r.width - 2 * bw, r.height), value, Semi, 12.5f, TextCol, TextAnchor.MiddleCenter);
-        return index;
+        int hit = NavNone; float y = f.safe.y;
+        string mark = Caps(Wordmark);
+        float mw = Width(mark, Heavy, 13.5f);
+        if (nav)
+        {
+            if (Press(new Rect(f.x0 - U(8), y + U(4), mw + U(16), U(46)), true, out float pm)) hit = NavHome;
+            Text(new Rect(f.x0, y + U(17), mw + U(4), U(20)), mark, Heavy, 13.5f, Color.Lerp(Ink, Red, pm));
+            // items right to left from the margin, 22 units apart; the touch target is the item plus half the gap each side
+            float x = f.x1;
+            for (int i = NavNames.Length - 1; i >= 0; i--)
+            {
+                float w = Width(NavNames[i], Medium, 12.5f);
+                var r = new Rect(x - w, y + U(15), w, U(22));
+                if (Press(new Rect(r.x - U(11), y + U(4), w + U(22), U(46)), true, out float p)) hit = i;
+                bool on = i == active;
+                Text(r, NavNames[i], on ? Heavy : Medium, 12.5f, Color.Lerp(on ? Ink : InkSub, Red, p));
+                if (on) Rect(new Rect(r.x, r.yMax + U(1.5f), Width(NavNames[i], Heavy, 12.5f), Mathf.Max(2f, Mathf.Round(U(2f)))), Red);
+                x -= w + U(22);
+            }
+        }
+        else
+        {
+            Text(new Rect(f.x0, y + U(17), mw + U(4), U(20)), mark, Heavy, 13.5f, Ink);
+            if (caption != null)
+            {
+                string cs = Caps(caption); float cw = f.x1 - f.x0 - mw - U(24);
+                Text(new Rect(f.x1 - cw, y + U(17), cw, U(20)), cs, Body, Fit(cs, Body, 10.5f, cw, 7f), InkSub, TextAnchor.MiddleRight);
+            }
+        }
+        Hair(f.x0, f.x1, f.head);
+        return hit;
     }
-    // a chevron tap zone (the whole rect is the touch target; the chevron sits in a small round chip)
-    static bool Arrow(Rect r, int icon, bool enabled)
+
+    // ---- the primary button: solid black, white tracked caps, a small red square after the label. Rectangular.
+    // Width for a label (30 units padding each side, as the mockup)
+    public static float BlackButtonWidth(string label, float size = 16f) => Width(Caps(label), Heavy, size) + U(12 + 10 + 60);
+    public static bool BlackButton(Rect r, string label, float size = 16f, bool enabled = true)
     {
         bool clicked = Press(r, enabled, out float p);
-        float d = Mathf.Min(r.width, r.height) * 0.62f;
-        var chip = new Rect(r.center.x - d * 0.5f, r.center.y - d * 0.5f, d, d);
         PushAlpha(enabled ? 1f : 0.3f);
-        Rect(Scale(chip, 1f - 0.08f * p), new Color(1, 1, 1, 0.06f + 0.16f * p), 999f);
-        Icon(Scale(chip, 0.62f), icon, TextCol);
+        Rect(r, Color.Lerp(Ink, InkPressed, p));
+        string s = Caps(label);
+        float mark = Mathf.Round(U(9f)), gap = U(12);
+        float ts = Fit(s, Heavy, size, r.width - U(32) - mark - gap, size * 0.6f);
+        float tw = Width(s, Heavy, ts), x = r.center.x - (tw + gap + mark) * 0.5f;
+        Text(new Rect(x, r.y, tw + U(2), r.height), s, Heavy, ts, Color.white);
+        Rect(new Rect(Mathf.Round(x + tw + gap), Mathf.Round(r.center.y - mark * 0.5f), mark, mark), Red);
         PopAlpha();
         return clicked;
     }
 
-    static readonly Dictionary<int, float> pillDir = new Dictionary<int, float>();
-    // a compact option pill: small caption on top, the value below, ‹ › on the right. Tapping the body steps
-    // forward too (one-thumb friendly). The value slides in when it changes. Returns the new index.
-    public static int Pill(Rect r, string caption, string value, int index, int count, bool enabled = true, bool wrap = true)
+    // ---- a secondary action: an ExtraBold link with an optional grey sub-line ("Championship / Round 3 of 10 · P4").
+    // The rect is the touch target (>= 44 high); the text block is centred in it vertically. Red while pressed;
+    // armed (tap again to confirm): a red underline under the title.
+    public static float LinkWidth(string title, string sub, float size = 13f) => Mathf.Max(Width(title, Heavy, size), sub != null ? Width(sub, Body, size * 0.92f) : 0f);
+    public static bool Link(Rect r, string title, string sub, bool enabled = true, float size = 13f, TextAnchor align = TextAnchor.MiddleLeft, bool armed = false)
     {
-        int key = caption.GetHashCode();
-        float a = enabled ? 1f : 0.38f;
-        PushAlpha(a);
-        Rect(r, new Color(0.11f, 0.12f, 0.155f, 0.92f), 12f);
-        Outline(r, new Color(1, 1, 1, 0.07f), 12f, 0.7f);
-        float aw = Mathf.Min(U(34), r.width * 0.22f);
-        var body = new Rect(r.x, r.y, r.width - 2 * aw, r.height);
-        var lb = new Rect(r.xMax - 2 * aw, r.y, aw, r.height); var rb = new Rect(r.xMax - aw, r.y, aw, r.height);
-        int old = index; float dirNow = 0f;
-        if (Press(body, enabled && count > 1, out float pb)) { index = wrap ? (index + 1) % count : Mathf.Min(count - 1, index + 1); dirNow = 1f; }
-        if (pb > 0.01f) Rect(body, new Color(1, 1, 1, 0.06f * pb), 12f);
-        if (Arrow(lb, IconBack, enabled && (wrap || index > 0))) { index = wrap ? (index - 1 + count) % count : Mathf.Max(0, index - 1); dirNow = -1f; }
-        if (Arrow(rb, IconNext, enabled && (wrap || index < count - 1))) { index = wrap ? (index + 1) % count : Mathf.Min(count - 1, index + 1); dirNow = 1f; }
-        Rect(new Rect(lb.x, r.y + r.height * 0.28f, Mathf.Max(1f, U(0.6f)), r.height * 0.44f), new Color(1, 1, 1, 0.07f));
-        if (index != old) { Mark(key); pillDir[key] = dirNow; }
-        float t = EaseOut(Since(key) / 0.22f), dir = pillDir.TryGetValue(key, out float sd) ? sd : 1f;
-        float px = U(12);
-        Text(new Rect(r.x + px, r.y + r.height * 0.10f, body.width - px, r.height * 0.36f), Caps(caption), Bold, 8.2f, Faint);
-        float vs = Fit(value, Bold, 13.5f, body.width - px * 1.3f, 10f);
-        PushAlpha(0.25f + 0.75f * t);
-        Text(new Rect(r.x + px + U(8) * dir * (1f - t), r.y + r.height * 0.42f, body.width - px, r.height * 0.46f), value, Bold, vs, TextCol);
+        bool clicked = Press(r, enabled, out float p);
+        PushAlpha(enabled ? 1f : 0.35f);
+        Color tc = Color.Lerp(Ink, Red, p);
+        float th = U(size * 1.3f), sh = sub != null ? U(size * 1.15f) : 0f, y0 = r.center.y - (th + sh) * 0.5f;
+        Text(new Rect(r.x, y0, r.width, th), title, Heavy, size, tc, align);
+        if (sub != null) Text(new Rect(r.x, y0 + th, r.width, sh), sub, Body, size * 0.92f, armed ? Ink : InkSub, align);
+        if (armed) // a confirm-to-do state: a red underline under the title (red is not used for small text)
+        {
+            float tw = Width(title, Heavy, size), ux = align == TextAnchor.MiddleRight ? r.xMax - tw : r.x;
+            Rect(new Rect(ux, y0 + th - U(1), tw, Mathf.Max(2f, Mathf.Round(U(2f)))), Red);
+        }
         PopAlpha();
-        PopAlpha();
+        return clicked;
+    }
+
+    // ---- a text glyph button ("−", "+", "‹", "›"): the whole rect is the touch target; red while pressed
+    public static bool Glyph(Rect r, string glyph, float size = 20f, bool enabled = true)
+    {
+        bool clicked = Press(r, enabled, out float p);
+        Text(r, glyph, Heavy, size, enabled ? Color.Lerp(Ink, Red, p) : A(Ink, 0.22f), TextAnchor.MiddleCenter);
+        return clicked;
+    }
+    public const string Minus = "−", Plus = "+", Prev = "‹", Next = "›";
+
+    // ---- "‹ value ›" picker on a hairline; returns the new index
+    public static int Stepper(Rect r, string value, int index, int count, bool wrap = true, float size = 14f)
+    {
+        float bw = Mathf.Min(U(44), r.width * 0.34f);
+        var lb = new Rect(r.x, r.y, bw, r.height); var rb = new Rect(r.xMax - bw, r.y, bw, r.height);
+        if (Glyph(lb, Prev, 22f, wrap || index > 0)) index = wrap ? (index - 1 + count) % count : Mathf.Max(0, index - 1);
+        if (Glyph(rb, Next, 22f, wrap || index < count - 1)) index = wrap ? (index + 1) % count : Mathf.Min(count - 1, index + 1);
+        var mid = new Rect(r.x + bw, r.y, r.width - 2 * bw, r.height);
+        Text(mid, value, Heavy, Fit(value, Heavy, size, mid.width - U(4), size * 0.65f), Ink, TextAnchor.MiddleCenter);
+        Hair(r.x, r.xMax, r.yMax - HairPx, Ink);
         return index;
     }
 
-    // segmented control (2-5 choices): a sliding highlight. accent = the highlight is red (setting values), else glass
-    // (navigation). key: any stable number for the highlight's motion (0 = from the names array).
-    public static int Segmented(Rect r, string[] names, int sel, bool accent = false, bool enabled = true, float size = 11.5f, int key = 0)
+    // ---- text tabs: names left to right, the chosen one ExtraBold ink with a red underline; returns the new choice
+    public static int Tabs(Rect r, string[] names, int sel, float size = 12.5f, bool enabled = true)
     {
-        int n = names.Length; if (n == 0) return sel;
-        if (key == 0) key = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(names);
-        PushAlpha(enabled ? 1f : 0.38f);
-        Rect(r, new Color(0.05f, 0.06f, 0.08f, 0.85f), 999f);
-        Outline(r, new Color(1, 1, 1, 0.07f), 999f, 0.7f);
-        float inset = U(3), w = (r.width - 2 * inset) / n;
-        float pos = Smooth(key, sel, 16f);
-        var hl = new Rect(r.x + inset + pos * w, r.y + inset, w, r.height - 2 * inset);
-        if (sel >= 0 && sel < n)
+        float x = r.x, gap = U(24); int res = sel;
+        for (int i = 0; i < names.Length; i++)
         {
-            if (accent) { Shadow(hl, 999f, 4f, 0.25f, 1.5f); Gradient(hl, priTop, priBottom, 999f); }
-            else { Rect(hl, new Color(1, 1, 1, 0.13f), 999f); Outline(hl, new Color(1, 1, 1, 0.14f), 999f, 0.7f); }
+            bool on = i == sel;
+            float w = Width(names[i], Heavy, size);
+            var tr = new Rect(x, r.y, w, r.height);
+            float pad = Mathf.Max(0f, (U(44) - r.height) * 0.5f); // a 44-unit touch target however thin the row
+            if (Press(new Rect(x - gap * 0.5f, r.y - pad, w + gap, r.height + 2f * pad), enabled, out float p) && !on) res = i;
+            Text(tr, names[i], on ? Heavy : Medium, size, Color.Lerp(on ? Ink : InkSub, Red, p));
+            if (on) Rect(new Rect(tr.x, r.center.y + U(size * 0.62f) + U(2), w, Mathf.Max(2f, Mathf.Round(U(2f)))), Red);
+            x += w + gap;
         }
-        int res = sel;
-        for (int i = 0; i < n; i++)
-        {
-            var cr = new Rect(r.x + inset + i * w, r.y, w, r.height);
-            if (Press(cr, enabled, out float p) && i != sel) res = i;
-            if (p > 0.01f && i != sel) Rect(Scale(new Rect(cr.x, r.y + inset, cr.width, r.height - 2 * inset), 1f - 0.04f * p), new Color(1, 1, 1, 0.07f * p), 999f);
-            float on = Mathf.Clamp01(1f - Mathf.Abs(pos - i));
-            Text(cr, names[i], on > 0.5f ? Bold : Semi, Fit(names[i], Bold, size, w - U(10), 8f), Color.Lerp(Sub, Color.white, on), TextAnchor.MiddleCenter);
-        }
-        PopAlpha();
         return res;
     }
 
-    // ---------- data chips and tags ----------
-    // a data chip: tracked caption over a value; returns the width it used (for laying chips in a row)
-    public static float ChipWidth(string caption, string value, float valueSize = 13f) => Mathf.Max(Width(Caps(caption), Bold, 8.2f), Width(value, Bold, valueSize)) + U(22);
-    public static void Chip(Rect r, string caption, string value, Color valueCol, float valueSize = 13f)
+    // ---- data: a tracked caption over a value (no box); returns the width used
+    public static float DatumWidth(string caption, string value, float valueSize = 15f) => Mathf.Max(Width(Caps(caption), Body, 9f), Width(value, Heavy, valueSize));
+    public static void Datum(Rect r, string caption, string value, Color valueCol, float valueSize = 15f, TextAnchor anchor = TextAnchor.MiddleLeft)
     {
-        Rect(r, new Color(1, 1, 1, 0.05f), 10f);
-        Outline(r, new Color(1, 1, 1, 0.07f), 10f, 0.7f);
-        float px = U(11);
-        Text(new Rect(r.x + px, r.y + r.height * 0.08f, r.width - px, r.height * 0.40f), Caps(caption), Bold, 8.2f, Faint);
-        Text(new Rect(r.x + px, r.y + r.height * 0.42f, r.width - px, r.height * 0.48f), value, Bold, valueSize, valueCol);
-    }
-    // a small filled pill tag ("+18 PTS", "FASTEST LAP"); returns its width
-    public static float TagWidth(string text, float size = 9f) => Width(text, Black, size) + U(16);
-    public static void Tag(Rect r, string text, Color bg, Color fg, float size = 9f)
-    {
-        Rect(r, bg, 999f);
-        Text(r, text, Black, size, fg, TextAnchor.MiddleCenter);
+        Kicker(new Rect(r.x, r.y, r.width, U(13)), caption, 9f, anchor);
+        Text(new Rect(r.x, r.y + U(13), r.width, Mathf.Max(U(valueSize * 1.3f), r.height - U(13))), value, Heavy, valueSize, valueCol, anchor);
     }
 
-    // a table row background: zebra, or the player's row (red tint with a bar)
-    public static void RowBg(Rect r, int i, bool player)
+    // ---- a small rectangular tag ("+18 PTS", "LEVEL UP"): white on ink, or white on GoodInk / BadInk
+    public static float StampWidth(string text, float size = 9f) => Width(text, Heavy, size) + U(12);
+    public static void Stamp(Rect r, string text, Color bg, Color fg, float size = 9f)
+    {
+        Rect(r, bg);
+        Text(r, text, Heavy, size, fg, TextAnchor.MiddleCenter);
+    }
+
+    // ---- a meter: a 3-unit track with an ink fill (XP, loading)
+    public static void Meter(Rect r, float frac)
+    {
+        Rect(r, PaperTrack);
+        if (frac > 0.001f) Rect(new Rect(r.x, r.y, Mathf.Max(r.height, r.width * Mathf.Clamp01(frac)), r.height), Ink);
+    }
+
+    // ---- a table row: a quiet divider under it; the player's row tinted with a red bar at its left edge
+    public static void PaperRow(Rect r, bool player)
     {
         if (player)
         {
-            Gradient(r, new Color(Accent.r, Accent.g, Accent.b, 0.34f), new Color(Accent.r, Accent.g, Accent.b, 0.10f), 6f, true);
-            Bar(new Rect(r.x, r.y + r.height * 0.18f, U(2.5f), r.height * 0.64f), AccentHi);
+            Rect(r, PaperTint);
+            Rect(new Rect(r.x, r.y, Mathf.Max(2f, Mathf.Round(U(3f))), r.height), Red);
         }
-        else if (i % 2 == 0) Rect(r, new Color(1, 1, 1, 0.035f), 6f);
+        Hair(r.x, r.xMax, r.yMax - HairPx, PaperTrack);
     }
 
-    // full-screen dim behind a modal page
-    public static void Scrim(float a = 0.55f) => Rect(new Rect(0, 0, Screen.width, Screen.height), new Color(0, 0, 0, a));
+    // ---- the giant italic number (driver number, finishing position): ExtraBold Italic, red
+    public static void BigNumber(Rect r, string s, float size, Color c, TextAnchor anchor = TextAnchor.MiddleLeft) => Text(r, s, HeavyItalic, size, c, anchor);
 }

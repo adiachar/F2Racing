@@ -8,8 +8,14 @@
 //  * Every tab has "Reset tab to defaults" (two taps, so a slip of the thumb does not reset anything).
 // The list scrolls by dragging it. IMGUI's own buttons fire on release even after a drag, so all controls here
 // are hit-tested by hand: a press becomes a tap, a list scroll (moved up/down) or a slider drag (moved sideways).
-// Layout units are the HUD's: 390 units = screen height. Touch targets are 44 units; tabs sit in a column on the
-// left, so the same layout fits a 19.5:9 phone (844 units wide) and a 4:3 tablet (520 units wide).
+// Look: the front end's "Paper" page (UiKit.cs), from the menu and in a paused race alike: the masthead (in the menu
+// with the nav, SETTINGS underlined, PLAY / DRIVER / the wordmark leave through UiKit.NavRequest; in a race the wordmark
+// and "GAME PAUSED"), tabs as a row of text tabs under it (the chosen one ExtraBold with a red underline that slides;
+// two rows on a narrow screen), rows as label / help on the left and the control on the right over quiet rules: sliders with an ink fill, choices as text options with a
+// red underline under the chosen one, "‹ value ›" steppers, outlined action buttons; under the bottom rule the
+// "Reset tab to defaults" link and the black DONE (RESUME in a race) button.
+// Layout units: 390 units = screen height. Touch targets are 44 units (the tabs' 30 when they need two rows on a 4:3
+// tablet), so the same layout fits a 19.5:9 phone (844 units wide) and a 4:3 tablet (520 units wide).
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -60,7 +66,12 @@ public sealed class SettingsUI
     readonly Action commit;   // called after a change is finished (finger lifted): GameManager saves
     public int tab;
 
-    public SettingsUI(List<Tab> tabs, Action commit) { this.tabs = tabs; this.commit = commit; scroll = new float[tabs.Count]; }
+    readonly float[] tabX, tabY, tabW;   // the tab row's layout, measured each draw (no allocation)
+    public SettingsUI(List<Tab> tabs, Action commit)
+    {
+        this.tabs = tabs; this.commit = commit; scroll = new float[tabs.Count];
+        tabX = new float[tabs.Count]; tabY = new float[tabs.Count]; tabW = new float[tabs.Count];
+    }
 
     // ------------------------------------------------------------------ pointer (one finger or the mouse)
     const int EvNone = 0, EvDown = 1, EvDrag = 2, EvUp = 3, EvWheel = 4;
@@ -91,50 +102,51 @@ public sealed class SettingsUI
     // ------------------------------------------------------------------ drawing (UiKit look)
     static float S(float v) => UiKit.U(v);
     const int LookGlass = 0, LookAccent = 1, LookGhost = 2, LookArmed = 3, LookNone = 4;
-    const float LabelSize = 13.5f, HelpSize = 10f, SegSize = 11.5f;
+    const float LabelSize = 13.5f, HelpSize = 10f, SegSize = 11.5f, TabSize = 11.5f;
 
-    // a hand-tested button: true on the frame it is tapped. Draws a rounded body by look (LookNone = only the press
-    // tint) and the text centred; radius in layout units (999 = pill).
-    bool Btn(Rect r, int id, string text, int look, bool live = true, float size = SegSize, float radius = 10f)
+    // a hand-tested button: true on the frame it is tapped. Draws by look: LookGlass = an outlined ink rectangle (a
+    // secondary action), LookAccent = the black primary (tracked caps, the red square), LookGhost = a text link,
+    // LookArmed = ink text over a red underline (confirm), LookNone = only the press tint. Text centred.
+    bool Btn(Rect r, int id, string text, int look, bool live = true, float size = SegSize, float radius = 0f)
     {
         var sr = OnScreen(r);
         bool held = live && mode == Pending && pressId == id && Hit(sr);
         float p = UiKit.Smooth(id ^ 0x3A000000, held ? 1f : 0f, 26f);
-        var rr = UiKit.Scale(r, 1f - 0.03f * p);
-        Color tc = UiKit.TextCol;
+        Color tc = Color.Lerp(UiKit.Ink, UiKit.Red, p);
         switch (look)
         {
             case LookGlass:
-                UiKit.Rect(rr, Color.Lerp(new Color(1, 1, 1, 0.07f), new Color(1, 1, 1, 0.16f), p), radius);
-                UiKit.Outline(rr, new Color(1, 1, 1, 0.09f), radius, 0.7f);
+                if (p > 0.01f) UiKit.Rect(r, UiKit.A(UiKit.PaperTint, p));
+                UiKit.Outline(r, UiKit.Ink, 0f, 0.7f);
                 break;
             case LookAccent:
-                UiKit.Gradient(rr, accTop, accBottom, radius);
-                UiKit.Rect(rr, new Color(0, 0, 0, 0.2f * p), radius);
-                tc = Color.white;
+            {
+                UiKit.Rect(r, Color.Lerp(UiKit.Ink, UiKit.InkPressed, p));
+                if (text != null)
+                {
+                    string cs = UiKit.Caps(text); float mark = Mathf.Round(S(9f)), gap = S(12);
+                    float ts = UiKit.Fit(cs, UiKit.Heavy, size, r.width - S(32) - mark - gap, size * 0.6f), tw = UiKit.Width(cs, UiKit.Heavy, ts);
+                    float x = r.center.x - (tw + gap + mark) * 0.5f;
+                    UiKit.Text(new Rect(x, r.y, tw + S(2), r.height), cs, UiKit.Heavy, ts, Color.white);
+                    UiKit.Rect(new Rect(Mathf.Round(x + tw + gap), Mathf.Round(r.center.y - mark * 0.5f), mark, mark), UiKit.Red);
+                    text = null;
+                }
                 break;
+            }
             case LookGhost:
-                UiKit.Rect(rr, new Color(1, 1, 1, 0.02f + 0.08f * p), radius);
-                UiKit.Outline(rr, new Color(1, 1, 1, 0.12f), radius, 0.7f);
-                tc = UiKit.Sub;
                 break;
             case LookArmed:
-                UiKit.Rect(rr, new Color(UiKit.Accent.r, UiKit.Accent.g, UiKit.Accent.b, 0.18f + 0.15f * p), radius);
-                UiKit.Outline(rr, UiKit.Accent, radius, 1.2f);
-                tc = Color.white;
+                UiKit.Rect(new Rect(r.x, r.yMax - Mathf.Max(2f, Mathf.Round(S(2f))), r.width, Mathf.Max(2f, Mathf.Round(S(2f)))), UiKit.Red);
                 break;
             default:
-                if (p > 0.01f) UiKit.Rect(rr, new Color(1, 1, 1, 0.08f * p), radius);
+                if (p > 0.01f) UiKit.Rect(r, UiKit.A(UiKit.PaperTint, p));
                 break;
         }
-        if (text != null) UiKit.Text(rr, text, UiKit.Bold, size, tc, TextAnchor.MiddleCenter);
+        if (text != null) UiKit.Text(r, text, UiKit.Heavy, size, tc, TextAnchor.MiddleCenter);
         if (!live) return false;
         if (evt == EvDown && Hit(sr)) pressId = id;
         return evt == EvUp && clickId == id && Hit(sr);
     }
-    static readonly Color accTop = new Color(1f, 0.16f, 0.09f, 1f), accBottom = new Color(0.78f, 0.02f, 0f, 1f);
-    static readonly Color panelTop = new Color(0.105f, 0.113f, 0.133f, 0.97f), panelBottom = new Color(0.078f, 0.085f, 0.102f, 0.97f); // UiKit charcoal family
-    static readonly Color sliderFill = new Color(0.80f, 0.82f, 0.86f, 0.85f);
     const int KeyTabHl = 0x5E77AB, KeyTabSwitch = 0x5E77AC;
 
     void Set(Item it, float v)
@@ -149,20 +161,26 @@ public sealed class SettingsUI
     public bool Draw(string subtitle)
     {
         var e = Event.current; evt = EventKind(e); mp = e.mousePosition;
-        float sw = Screen.width, sh = Screen.height, m = S(8);
+        float sw = Screen.width, sh = Screen.height;
         origin = Vector2.zero; clip = new Rect(0, 0, sw, sh);
         bool close = false;
 
-        // ---- layout
-        var safe = UiKit.Safe; // keeps clear of a notch at the short edges
-        float left = Mathf.Max(m, safe.xMin + S(6)), right = Mathf.Min(sw - m, safe.xMax - S(6));
-        float pw = Mathf.Min(right - left, S(920)), px = left + (right - left - pw) / 2;
-        var panel = new Rect(px, Mathf.Max(m, safe.y + S(6)), pw, Mathf.Min(sh, safe.yMax) - Mathf.Max(m, safe.y + S(6)) - m);
-        float pad = S(12), headH = S(54), bodyY = panel.y + headH, bodyH = panel.yMax - S(10) - bodyY;
-        float tabW = Mathf.Clamp(pw * 0.2f, S(108), S(164)), tabGap = S(4);
-        float tabH = Mathf.Min(S(44), (bodyH - (tabs.Count - 1) * tabGap) / tabs.Count);
-        float cx = panel.x + pad + tabW + S(16), cw = panel.xMax - pad - cx;
-        float footH = S(44), listH = bodyH - footH - S(8);
+        // ---- layout: the paper page frame; a row of text tabs under the masthead (two on a narrow screen), the rows
+        bool inRace = !string.IsNullOrEmpty(subtitle);
+        var f = UiKit.PaperFrame(72f);
+        int nt = tabs.Count; float tgap = S(26), total = -tgap;
+        for (int i = 0; i < nt; i++) { tabW[i] = UiKit.Width(tabs[i].name, UiKit.Heavy, TabSize); total += tabW[i] + tgap; }
+        int perRow = total <= f.w ? nt : (nt + 1) / 2, tabRows = (nt + perRow - 1) / perRow;
+        float tabH = tabRows == 1 ? S(44) : S(30), tabsTop = f.head + S(4);
+        for (int i = 0, k = 0; i < nt; i++, k++)
+        {
+            if (k == perRow) k = 0;
+            tabX[i] = k == 0 ? f.x0 : tabX[i - 1] + tabW[i - 1] + tgap;
+            tabY[i] = tabsTop + (i / perRow) * tabH;
+        }
+        float bodyY = tabsTop + tabRows * tabH + S(6);
+        float cx = f.x0, cw = f.w;
+        float listH = f.foot - S(8) - bodyY;
         var view = new Rect(cx, bodyY, cw, listH);
         float lw = Mathf.Min(cw * 0.42f, S(300)), ctlW = cw - lw - S(10);
         float rowH = lw < S(220) ? S(70) : S(60); // a narrow label column (4:3 screens): room for three lines of help
@@ -189,40 +207,31 @@ public sealed class SettingsUI
         else if (evt == EvWheel && view.Contains(mp)) scroll[tab] += e.delta.y * S(18);
         scroll[tab] = Mathf.Clamp(scroll[tab], 0, maxScroll);
 
-        // ---- frame: dimmed page, one big glass sheet
-        bool inRace = !string.IsNullOrEmpty(subtitle);
-        MenuUI.Plain(inRace ? 0.86f : 1f);
+        // ---- frame: the paper page and the masthead (nav in the menu; the wordmark and "game paused" in a race)
+        UiKit.PaperPage(inRace ? 0.97f : 1f);
         float ent = UiKit.Enter("settings", 0, 0.04f, 0.4f);
+        if (!inRace)
+        {
+            int nav = UiKit.Masthead(f, UiKit.NavSettings);
+            if (nav == UiKit.NavPlay || nav == UiKit.NavDriver || nav == UiKit.NavHome) { UiKit.NavRequest = nav; close = true; }
+        }
+        else UiKit.Masthead(f, UiKit.NavNone, false, subtitle);
         UiKit.PushAlpha(ent);
-        panel = UiKit.Rise(panel, ent, 14f);
-        UiKit.Shadow(panel, 18f, 14f, 0.45f, 4f);
-        UiKit.Gradient(panel, panelTop, panelBottom, 18f);
-        UiKit.Outline(panel, new Color(1, 1, 1, 0.08f), 18f, 0.7f);
-        UiKit.Text(new Rect(panel.x + pad + S(2), panel.y + S(8), S(200), S(40)), "Settings", UiKit.Bold, 22f, UiKit.TextCol);
-        if (inRace)
-        {
-            string tag = UiKit.Upper(subtitle); float tw = UiKit.TagWidth(tag, 9f);
-            float tx = panel.x + pad + S(2) + UiKit.Width("Settings", UiKit.Bold, 22f) + S(12);
-            UiKit.Tag(new Rect(tx, panel.y + S(19), tw, S(18)), tag, new Color(1f, 1f, 1f, 0.12f), UiKit.Sub, 9f); // (paused is a state, not a warning)
-        }
-        var closeR = new Rect(panel.xMax - pad - S(44), panel.y + S(6), S(44), S(44));
-        if (Btn(closeR, IdClose, null, LookGlass, true, SegSize, 999f)) close = true;
-        UiKit.Icon(UiKit.Scale(closeR, 0.42f), UiKit.IconClose, UiKit.TextCol);
-        UiKit.Rect(new Rect(panel.x + pad, bodyY - S(2), panel.width - 2 * pad, Mathf.Max(1f, S(0.6f))), new Color(1, 1, 1, 0.07f));
 
-        // ---- tabs (a column on the left) with a sliding highlight
+        // ---- tabs: text, the chosen one ExtraBold ink with a red underline that slides; a quiet rule under the row(s)
         float hy = UiKit.Smooth(KeyTabHl, tab, 16f);
-        var hl = new Rect(panel.x + pad, bodyY + S(6) + hy * (tabH + tabGap), tabW, tabH);
-        UiKit.Rect(hl, new Color(1, 1, 1, 0.09f), 12f);
-        UiKit.Bar(new Rect(hl.x + S(6), hl.y + tabH * 0.28f, S(3), tabH * 0.44f), UiKit.Accent);
-        for (int i = 0; i < tabs.Count; i++)
+        int h0 = Mathf.Clamp(Mathf.FloorToInt(hy), 0, nt - 1), h1 = Mathf.Min(nt - 1, h0 + 1); float hk = hy - h0;
+        float ux = Mathf.Lerp(tabX[h0], tabX[h1], hk), uw = Mathf.Lerp(tabW[h0], tabW[h1], hk), uy = Mathf.Lerp(tabY[h0], tabY[h1], hk) + tabH * 0.5f + S(9);
+        UiKit.Rect(new Rect(ux, uy, uw, Mathf.Max(2f, Mathf.Round(S(2f)))), UiKit.Red);
+        for (int i = 0; i < nt; i++)
         {
-            var r = new Rect(panel.x + pad, bodyY + S(6) + i * (tabH + tabGap), tabW, tabH);
+            var r = new Rect(tabX[i] - tgap * 0.5f, tabY[i], tabW[i] + tgap, tabH);
             bool on = i == tab;
-            if (Btn(r, IdTab + i, null, LookNone, true, SegSize, 12f) && !on) { tab = i; resetArmedTab = -1; UiKit.Mark(KeyTabSwitch); }
+            if (Btn(r, IdTab + i, null, LookNone, true, SegSize) && !on) { tab = i; resetArmedTab = -1; UiKit.Mark(KeyTabSwitch); }
             float onK = Mathf.Clamp01(1f - Mathf.Abs(hy - i));
-            UiKit.Text(new Rect(r.x + S(18), r.y, r.width - S(20), r.height), tabs[i].name, UiKit.Bold, Mathf.Min(11.5f, UiKit.Fit(tabs[i].name, UiKit.Bold, 11.5f, r.width - S(22), 8.5f)), Color.Lerp(UiKit.Faint, UiKit.TextCol, onK));
+            UiKit.Text(new Rect(tabX[i], tabY[i], tabW[i] + S(4), tabH), tabs[i].name, onK > 0.5f ? UiKit.Heavy : UiKit.Medium, TabSize, Color.Lerp(UiKit.InkSub, UiKit.Ink, onK));
         }
+        UiKit.Hair(f.x0, f.x1, bodyY - S(4), UiKit.PaperTrack);
 
         // ---- rows (a scrolling list); they slide in after a tab switch
         float since = UiKit.Since(KeyTabSwitch);
@@ -241,34 +250,38 @@ public sealed class SettingsUI
             string why = it.locked != null ? it.locked() : null;
             bool live = why == null;
             int id = tab * 10000 + i * 20;
-            UiKit.Rect(new Rect(0, y + rowH - S(1), cw - S(8), Mathf.Max(1f, S(0.6f))), new Color(1, 1, 1, 0.06f));
+            UiKit.Hair(0, cw - S(8), y + rowH - UiKit.HairPx, UiKit.PaperTrack);
             var oc = GUI.color; if (!live) GUI.color = new Color(oc.r, oc.g, oc.b, oc.a * 0.38f);
-            UiKit.Text(new Rect(0, y + S(6), lw - S(10), S(19)), it.label, UiKit.Bold, UiKit.Fit(it.label, UiKit.Bold, LabelSize, lw - S(10), 10.5f), UiKit.TextCol);
+            UiKit.Text(new Rect(0, y + S(6), lw - S(10), S(19)), it.label, UiKit.Heavy, UiKit.Fit(it.label, UiKit.Heavy, LabelSize, lw - S(10), 10.5f), UiKit.Ink);
             GUI.color = oc;
-            UiKit.Text(new Rect(0, y + S(25), lw - S(12), rowH - S(27)), live ? it.help : why, UiKit.Regular, HelpSize, live ? UiKit.Sub : UiKit.Warn, TextAnchor.UpperLeft, true);
+            UiKit.Text(new Rect(0, y + S(25), lw - S(12), rowH - S(27)), live ? it.help : why, UiKit.Body, HelpSize, live ? UiKit.InkSub : UiKit.BadInk, TextAnchor.UpperLeft, true);
             if (!live) GUI.color = new Color(oc.r, oc.g, oc.b, oc.a * 0.38f);
             var cr = new Rect(lw, y + (rowH - S(44)) / 2, ctlW - S(8), S(44));
             if (it.kind == Kind.Slider) DrawSlider(it, cr, id, live);
             else if (it.kind == Kind.Choice) DrawChoice(it, cr, id, live);
-            else if (Btn(new Rect(cr.x, cr.y, Mathf.Min(cr.width, S(280)), cr.height), id, it.actText != null ? it.actText() : it.label, LookGlass, live, 12f, 12f)) { it.act?.Invoke(); dirty = true; }
+            else if (Btn(new Rect(cr.x, cr.y, Mathf.Min(cr.width, S(280)), cr.height), id, it.actText != null ? it.actText() : it.label, LookGlass, live, 12f)) { it.act?.Invoke(); dirty = true; }
             GUI.color = oc;
             UiKit.PopAlpha();
         }
         if (maxScroll > 0)
         {
             float bar = Mathf.Max(S(20), listH * listH / (shown * rowH)), bw = S(3);
-            UiKit.Rect(new Rect(cw - bw, S(4), bw, listH - S(8)), new Color(1, 1, 1, 0.05f), 2f);
-            UiKit.Rect(new Rect(cw - bw, S(4) + (listH - S(8) - bar) * scroll[tab] / maxScroll, bw, bar), new Color(1, 1, 1, mode == Scrolling ? 0.55f : 0.30f), 2f);
+            UiKit.Rect(new Rect(cw - bw, S(4), bw, listH - S(8)), UiKit.PaperTrack);
+            UiKit.Rect(new Rect(cw - bw, S(4) + (listH - S(8) - bar) * scroll[tab] / maxScroll, bw, bar), mode == Scrolling ? UiKit.Ink : UiKit.InkSub);
         }
         GUI.EndGroup();
         origin = Vector2.zero; clip = new Rect(0, 0, sw, sh);
 
-        // ---- footer: hint and "Reset tab to defaults"
-        float fy = panel.yMax - S(10) - footH, now = Time.realtimeSinceStartup, rbw = Mathf.Min(cw, S(220));
-        UiKit.Rect(new Rect(cx, fy - S(4), cw, Mathf.Max(1f, S(0.6f))), new Color(1, 1, 1, 0.07f));
-        if (cw - rbw > S(120)) UiKit.Text(new Rect(cx, fy, cw - rbw - S(8), footH), maxScroll <= 0 ? "Changes apply at once" : cw - rbw < S(280) ? "Drag the list to scroll" : "Drag the list to scroll  ·  changes apply at once", UiKit.Regular, 10f, UiKit.Faint);
+        // ---- the action row: "Reset tab to defaults" (two taps) and a hint on the left, the black DONE / RESUME right
+        UiKit.Hair(f.x0, f.x1, f.foot);
+        float now = Time.realtimeSinceStartup, ah = S(44), ay = f.actY - ah * 0.5f;
+        float doneW = Mathf.Max(S(150), UiKit.BlackButtonWidth(inRace ? "Resume" : "Done"));
+        if (Btn(new Rect(f.x1 - doneW, f.actY - S(24), doneW, S(48)), IdClose, inRace ? "Resume" : "Done", LookAccent, true, 16f)) close = true;
         bool armed = resetArmedTab == tab && now - resetArmedT < 3f, done = now - resetDoneT < 1.5f;
-        if (Btn(new Rect(cx + cw - rbw, fy + S(2), rbw, footH - S(4)), IdReset, done ? "DEFAULTS RESTORED" : armed ? "TAP AGAIN TO RESET" : "RESET TAB TO DEFAULTS", armed ? LookArmed : LookGhost, true, 10.5f, 999f))
+        string rt = done ? "Defaults restored" : armed ? "Tap again to reset" : "Reset tab to defaults";
+        float rbw = UiKit.Width(rt, UiKit.Heavy, 12.5f) + S(8);
+        var rr = new Rect(f.x0, ay, rbw, ah);
+        if (Btn(rr, IdReset, null, LookNone, true))
         {
             if (!armed) { resetArmedTab = tab; resetArmedT = now; resetDoneT = -10; }
             else
@@ -277,6 +290,9 @@ public sealed class SettingsUI
                 resetArmedTab = -1; resetDoneT = now; dirty = true;
             }
         }
+        UiKit.Text(new Rect(rr.x, rr.y + S(3), rr.width, S(20)), rt, UiKit.Heavy, 12.5f, UiKit.Ink);
+        if (armed) UiKit.Rect(new Rect(rr.x, rr.y + S(21), rbw - S(8), Mathf.Max(2f, Mathf.Round(S(2f)))), UiKit.Red); // armed: a red underline (no small red text)
+        UiKit.Text(new Rect(rr.x, rr.y + S(24), S(300), S(18)), armed ? "Every row on this tab goes back to its default" : maxScroll <= 0 ? "Changes apply at once" : "Drag the list to scroll  ·  changes apply at once", UiKit.Body, 11f, UiKit.InkSub);
         UiKit.PopAlpha();
 
         if (evt == EvUp)
@@ -290,43 +306,39 @@ public sealed class SettingsUI
         return close;
     }
 
-    // round "-" / "+" button drawn from bars
+    // a "−" / "+" text button
     bool StepBtn(Rect r, int id, bool plus, bool live)
     {
-        bool hit = Btn(r, id, null, LookGlass, live, SegSize, 999f);
-        float w = r.width * 0.34f, t = Mathf.Max(1.5f, S(1.6f)), cx = r.center.x, cy = r.center.y;
-        UiKit.Rect(new Rect(cx - w * 0.5f, cy - t * 0.5f, w, t), UiKit.TextCol, 99f);
-        if (plus) UiKit.Rect(new Rect(cx - t * 0.5f, cy - w * 0.5f, t, w), UiKit.TextCol, 99f);
+        bool hit = Btn(r, id, null, LookNone, live, SegSize);
+        bool held = live && mode == Pending && pressId == id && Hit(OnScreen(r));
+        UiKit.Text(r, plus ? UiKit.Plus : UiKit.Minus, UiKit.Heavy, 20f, held ? UiKit.Red : UiKit.Ink, TextAnchor.MiddleCenter);
         return hit;
     }
 
     void DrawSlider(Item it, Rect r, int id, bool live)
     {
-        float v = it.get(), vw = S(84);
-        var box = new Rect(r.xMax - vw, r.y + S(5), vw, r.height - S(10));
-        UiKit.Rect(box, new Color(1, 1, 1, 0.06f), 999f);
-        UiKit.Outline(box, new Color(1, 1, 1, 0.07f), 999f, 0.7f);
-        UiKit.Text(box, it.fmt != null ? it.fmt(v) : v.ToString("0.##"), UiKit.Bold, 12.5f, UiKit.TextCol, TextAnchor.MiddleCenter);
+        float v = it.get(), vw = S(72);
+        var box = new Rect(r.xMax - vw, r.y, vw, r.height);
+        UiKit.Text(box, it.fmt != null ? it.fmt(v) : v.ToString("0.##"), UiKit.Heavy, 13f, UiKit.Ink, TextAnchor.MiddleRight);
         var ta = new Rect(r.x, r.y, r.width - vw - S(8), r.height);
         if (ta.width > S(250))
         {
-            float b = S(36), by = ta.y + (ta.height - b) / 2;
+            float b = S(44), by = ta.y + (ta.height - b) / 2;
             if (StepBtn(new Rect(ta.x, by, b, b), id + 1, false, live)) Set(it, v - it.step);
             if (StepBtn(new Rect(ta.xMax - b, by, b, b), id + 2, true, live)) Set(it, v + it.step);
             ta = new Rect(ta.x + b + S(4), ta.y, ta.width - 2 * b - S(8), ta.height);
         }
-        float x0 = ta.x + S(12), w = Mathf.Max(1, ta.width - S(24)), cy = ta.y + ta.height / 2;
+        float x0 = ta.x + S(10), w = Mathf.Max(1, ta.width - S(20)), cy = ta.y + ta.height / 2;
         float t = Mathf.InverseLerp(it.min, it.max, v);
         bool active = live && mode == SliderDrag && pressId == id;
-        float th = S(4);
-        UiKit.Rect(new Rect(x0, cy - th / 2, w, th), new Color(1, 1, 1, 0.12f), 99f);
-        if (t > 0.001f) UiKit.Rect(new Rect(x0, cy - th / 2, Mathf.Max(th, w * t), th), sliderFill, 99f); // neutral: red is for selection
-        if (it.resettable) UiKit.Rect(new Rect(x0 + w * Mathf.InverseLerp(it.min, it.max, it.def) - S(0.75f), cy - S(8), Mathf.Max(1f, S(1.5f)), S(16)), new Color(1, 1, 1, 0.30f), 1f); // the default
+        float th = Mathf.Max(2f, Mathf.Round(S(3f)));
+        UiKit.Rect(new Rect(x0, cy - th / 2, w, th), UiKit.PaperTrack);
+        if (t > 0.001f) UiKit.Rect(new Rect(x0, cy - th / 2, Mathf.Max(th, w * t), th), UiKit.Ink);
+        if (it.resettable) UiKit.Rect(new Rect(x0 + w * Mathf.InverseLerp(it.min, it.max, it.def) - UiKit.HairPx * 0.5f, cy - S(7), UiKit.HairPx, S(14)), UiKit.InkMuted); // the default
         float a = UiKit.Smooth(id ^ 0x2B000000, active ? 1f : 0f, 20f);
         var kc = new Vector2(x0 + w * t, cy);
-        UiKit.Dot(kc + new Vector2(0, S(1.2f)), 11.5f + 2f * a, new Color(0, 0, 0, 0.35f));
-        UiKit.Dot(kc, 10.5f + 2f * a, Color.white);
-        UiKit.Dot(kc, 4f, Color.Lerp(new Color(0.75f, 0.77f, 0.8f), UiKit.Accent, a));
+        UiKit.Dot(kc, 8f + 2f * a, UiKit.Paper);
+        UiKit.Dot(kc, 6.5f + 2f * a, Color.Lerp(UiKit.Ink, UiKit.Red, a)); // the knob: red while dragged (the selected state)
         if (!live) return;
         var hit = OnScreen(ta);
         if (evt == EvDown && Hit(hit)) { pressId = id; pressSlider = true; }
@@ -337,43 +349,42 @@ public sealed class SettingsUI
     void DrawChoice(Item it, Rect r, int id, bool live)
     {
         int n = it.options.Length, sel = Mathf.Clamp(Mathf.RoundToInt(it.get()), 0, n - 1);
-        float inset = S(3), sw = (r.width - 2 * inset) / n;
+        float sw = r.width / n;
         bool fits = n <= 5;
-        for (int k = 0; k < n && fits; k++) if (UiKit.Width(it.options[k], UiKit.Bold, SegSize) + S(10) > sw) fits = false;
+        for (int k = 0; k < n && fits; k++) if (UiKit.Width(it.options[k], UiKit.Heavy, SegSize) + S(10) > sw) fits = false;
         if (fits)
         {
-            // segmented: a dark track, the chosen value in a red pill that slides
-            UiKit.Rect(r, new Color(0.03f, 0.035f, 0.05f, 0.75f), 999f);
-            UiKit.Outline(r, new Color(1, 1, 1, 0.07f), 999f, 0.7f);
-            float pos = UiKit.Smooth(id ^ 0x1C000000, sel, 16f);
-            var hl = new Rect(r.x + inset + pos * sw, r.y + inset, sw, r.height - 2 * inset);
-            UiKit.Gradient(hl, accTop, accBottom, 999f);
+            // text options on a quiet rule; the chosen one ExtraBold ink with a red underline that slides
+            float pos = UiKit.Smooth(id ^ 0x1C000000, sel, 16f), uy = r.center.y + S(11), uh = Mathf.Max(2f, Mathf.Round(S(2f)));
+            UiKit.Rect(new Rect(r.x, uy + uh - UiKit.HairPx, r.width, UiKit.HairPx), UiKit.PaperTrack);
+            float uw = Mathf.Min(sw - S(12), S(60));
+            UiKit.Rect(new Rect(r.x + pos * sw + (sw - uw) * 0.5f, uy, uw, uh), UiKit.Red);
             for (int k = 0; k < n; k++)
             {
-                var sr = new Rect(r.x + inset + k * sw, r.y + inset, sw, r.height - 2 * inset);
-                bool tapped = Btn(sr, id + 1 + k, null, LookNone, live, SegSize, 999f);
+                var sr = new Rect(r.x + k * sw, r.y, sw, r.height);
+                bool tapped = Btn(sr, id + 1 + k, null, LookNone, live, SegSize);
                 float on = Mathf.Clamp01(1f - Mathf.Abs(pos - k));
-                UiKit.Text(sr, it.options[k], on > 0.5f ? UiKit.Bold : UiKit.Semi, SegSize, Color.Lerp(UiKit.Sub, Color.white, on), TextAnchor.MiddleCenter);
+                UiKit.Text(new Rect(sr.x, sr.y - S(2), sr.width, sr.height), it.options[k], on > 0.5f ? UiKit.Heavy : UiKit.Medium, SegSize, Color.Lerp(UiKit.InkSub, UiKit.Ink, on), TextAnchor.MiddleCenter);
                 if (tapped && k != sel) Set(it, k);
             }
             return;
         }
-        // too many or too long for segments: "< value >"
+        // too many or too long for options in a row: "‹ value ›" on a quiet rule, position ticks under the value
         float b = r.height;
-        UiKit.Rect(r, new Color(1, 1, 1, 0.05f), 999f);
-        UiKit.Outline(r, new Color(1, 1, 1, 0.07f), 999f, 0.7f);
         var lb = new Rect(r.x, r.y, b, b); var rb = new Rect(r.xMax - b, r.y, b, b);
-        if (Btn(lb, id + 1, null, LookNone, live, SegSize, 999f)) Set(it, (sel - 1 + n) % n);
-        if (Btn(rb, id + 2, null, LookNone, live, SegSize, 999f)) Set(it, (sel + 1) % n);
-        UiKit.Icon(UiKit.Scale(lb, 0.36f), UiKit.IconBack, UiKit.TextCol);
-        UiKit.Icon(UiKit.Scale(rb, 0.36f), UiKit.IconNext, UiKit.TextCol);
+        bool lh = live && mode == Pending && pressId == id + 1 && Hit(OnScreen(lb)), rh = live && mode == Pending && pressId == id + 2 && Hit(OnScreen(rb));
+        if (Btn(lb, id + 1, null, LookNone, live, SegSize)) Set(it, (sel - 1 + n) % n);
+        if (Btn(rb, id + 2, null, LookNone, live, SegSize)) Set(it, (sel + 1) % n);
+        UiKit.Text(lb, UiKit.Prev, UiKit.Heavy, 22f, lh ? UiKit.Red : UiKit.Ink, TextAnchor.MiddleCenter);
+        UiKit.Text(rb, UiKit.Next, UiKit.Heavy, 22f, rh ? UiKit.Red : UiKit.Ink, TextAnchor.MiddleCenter);
         var mid = new Rect(r.x + b, r.y, r.width - 2 * b, b);
-        UiKit.Text(mid, it.options[sel], UiKit.Bold, UiKit.Fit(it.options[sel], UiKit.Bold, 12.5f, mid.width - S(6), 9f), UiKit.TextCol, TextAnchor.MiddleCenter);
-        // position dots under the value (up to 12 choices)
+        UiKit.Text(new Rect(mid.x, mid.y - S(3), mid.width, mid.height), it.options[sel], UiKit.Heavy, UiKit.Fit(it.options[sel], UiKit.Heavy, 12.5f, mid.width - S(6), 9f), UiKit.Ink, TextAnchor.MiddleCenter);
+        UiKit.Hair(r.x, r.xMax, r.yMax - UiKit.HairPx, UiKit.PaperTrack);
+        // position ticks under the value (up to 12 choices), the chosen one red
         if (n <= 12)
         {
-            float d = S(4), dg = S(3), tw = n * d + (n - 1) * dg, dx = mid.center.x - tw / 2, dy = r.yMax - S(7);
-            for (int k = 0; k < n; k++) UiKit.Rect(new Rect(dx + k * (d + dg), dy, d, Mathf.Max(1f, S(1.5f))), k == sel ? UiKit.Accent : new Color(1, 1, 1, 0.18f), 1f);
+            float d = S(4), dg = S(3), tw = n * d + (n - 1) * dg, dx = mid.center.x - tw / 2, dy = r.yMax - S(9);
+            for (int k = 0; k < n; k++) UiKit.Rect(new Rect(dx + k * (d + dg), dy, d, Mathf.Max(1f, Mathf.Round(S(1.5f)))), k == sel ? UiKit.Red : UiKit.PaperTrack);
         }
     }
 }
