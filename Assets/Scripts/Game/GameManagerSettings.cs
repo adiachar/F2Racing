@@ -97,7 +97,7 @@ public partial class GameManager
         volMaster = LoadF("volMaster", 100, 0, 100); volEngine = LoadF("volEngine", 100, 0, 100); volFx = LoadF("volFx", 100, 0, 100); volTyres = LoadF("volTyres", 100, 0, 100);
         unitsIdx = LoadI("units", 0, 1); hudInfo = PlayerPrefs.GetInt("hudInfo", 1) == 1; hudMap = PlayerPrefs.GetInt("hudMap", 1) == 1;
         hudTower = PlayerPrefs.GetInt("hudTower", 1) == 1; hudSectors = PlayerPrefs.GetInt("hudSectors", 1) == 1; hudDelta = PlayerPrefs.GetInt("hudDelta", 1) == 1;
-        preRaceIdx = LoadI("preRace", 0, PreRaceNames.Length - 1); // race intro: On / Short / Off (PreRace.cs)
+        preRaceIdx = LoadI("preRace", 0, PreRaceNames.Length - 1); // race start: Full / Short / Off (PreRace.cs; the old "Race intro" On / Short / Off, same values)
     }
 
     void SaveSettings()
@@ -327,7 +327,7 @@ public partial class GameManager
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
         game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => damageMode, v => { damageMode = v; SetupChanged(); });
         game.Choice("Flags & safety car", "On: yellow flags, Virtual Safety Car and Safety Car after crashes, blue flags and penalties: track limits (3 warnings, then +5 s), +5 / +10 s for causing a collision, +5 s for a place gained off track and not given back. Fitted at the next restart.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
-        game.Choice("Race intro", "Before a race: a flyover of the circuit, your walk to the car, engine start and the grid. Short: engine start and the grid only. A tap skips it. From the next race.",
+        game.Choice("Race start", "Full: like F1. You walk to your car in the garage, leave the pit lane, then a formation lap to warm your tyres (keep your place; SKIP TO START ends it), then the lights. Short: engine start on the grid, then the lights. Off: straight to the lights. A tap skips the film. From the next race.",
             PreRaceNames, 0, () => preRaceIdx, v => preRaceIdx = v);
         game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });

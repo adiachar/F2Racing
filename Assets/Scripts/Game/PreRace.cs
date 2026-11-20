@@ -1,24 +1,32 @@
-// PreRace.cs — the pre-race intro before a race start, built around the player's driver (F1 25 / GT7 style), another
-// part of GameManager (a partial class; the intro itself is the nested PreRace class). 15-20 s; any tap skips it.
-// Setting "Race intro" (Settings > GAME, saved as "preRace"): On (default) / Short (cockpit + grid only) / Off.
+// PreRace.cs — the cinematic before a race start, built around the player's driver (F1 25 / GT7 style), another part
+// of GameManager (a partial class; the cinematic itself is the nested PreRace class). Any tap skips it.
+// Setting "Race start" (Settings > GAME, saved as "preRace", same values as the old "Race intro" On / Short / Off):
+//   Full (default): the garage, the pit exit and the formation lap (GameManagerFormation.cs), then the lights
+//   Short: engine start in the cockpit and the grid, then the lights          Off: straight to the lights
+// Full, on a circuit with a pit lane (the real order of an F1 race start):
 //  1. two drone shots (wide, 48-64 deg, eased drift): high over the showcase corner (the longest sustained bend in the
-//     second half of the lap), then down over the field onto the player's car
-//  2. the driver (People.cs rig, helmet on, race suit in the team colours: the menu driver's look, MenuStudio.cs):
-//     walks out of the team's garage into the pit box (long lens from the fast lane; only with a pit building), walks
-//     up along his car on the grid (low front quarter), then stands at the cockpit edge (across the cockpit, long lens)
-//     with the menu driver's relaxed stance and idle motion, a hand on the tub, and reaches for his visor
-//  3. a dip to black, then his eyes: hands on the wheel (DriverModel), the visor comes down, ignition (the wheel
-//     display lights up, LED sweep), the engine catches with two rev blips (the grid revs, GameManagerStart), the view
-//     lifts to the road
-//  4. low TV shot down the grid (long lens from the track edge 9 m ahead of the player, the field behind), then a crane
-//     swoop into the chase camera (chase views) or a cut (cockpit, halo, TV), and the normal start: GridWait, lights.
-// While it runs the race clock is held at 0 (GameManagerStart: StartInput / StartAfterStep), so every car stays held on
-// its brakes in its slot and the lights wait. The HUD is replaced by F1-TV lower-third captions, a "TAP TO SKIP" hint
-// and thin letterbox bars. The view mode (camMode) is set per shot (TV for the outside shots: rival detail by zoom, no
-// car cull, the sound heard from the camera; cockpit for the onboard: the full car model) and given back at the end.
+//     second half of the lap), then down over the start straight onto the team's garage
+//  2. the player's car stands in its pit box (PitRun.InBox, posed every frame: no physics), the rivals are already on the
+//     grid. The driver (People.cs rig, helmet on, race suit in the team colours: the menu driver's look, MenuStudio.cs)
+//     walks from the back of the garage to the car (wide from the fast lane, then low at the nose), stands at the
+//     cockpit edge with a hand on the tub and reaches for his visor
+//  3. a dip to black (he climbs in), then his eyes: hands on the wheel, the visor comes down, ignition (the wheel display
+//     lights up, LED sweep), the engine catches with two blips; the pit crew stands round the car (PitCrew, its stop
+//     clock held just before the release)
+//  4. the release: the light goes green, the car pulls out of the box and the crew steps away (low from the fast lane),
+//     then a cut to the pit exit: the car runs the last metres down the lane at the 80 km/h limiter onto the track
+//     (the lane's own path, PitLane.cs, as a function of time: driven, not simulated; a cut skips the middle)
+//  5. a dip to black: the reconnaissance lap is cut, the car is in its grid slot; a low TV shot down the grid, then the
+//     formation lap (GameManagerFormation.cs) and the lights.
+//  Without a pit lane: the drones, the driver walks up to his car on the grid, the cockpit, the grid, the formation lap.
+// While it runs the race clock is held at 0 (GameManagerStart: StartInput / StartAfterStep / PreRaceRevs), so every car
+// stays held on its brakes in its slot and the lights wait. The HUD is replaced by F1-TV lower-third captions, a "TAP TO
+// SKIP" hint and thin letterbox bars. The view mode (camMode) is set per shot (TV for the outside shots: rival detail by
+// zoom, no car cull, the sound heard from the camera; cockpit for the onboard: the full car model) and given back at the end.
 // Cost: one People rig and one contact-shadow quad, created in PreRaceBegin and destroyed in Finish (played out,
 // skipped, a restart or an error); nothing of it runs in the race. Nothing allocates per frame (captions are built once).
-// Shot mode (DebugShots.cs): ?intro=t1,t2,... freezes the intro at those times (s), one frame each.
+// Shot mode (DebugShots.cs): ?intro=t1,t2,... freezes the cinematic at those times (s), one frame each; times past its
+// end show the formation lap (GameManagerFormation.cs: the cars posed along it).
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
@@ -26,13 +34,14 @@ using UnityEngine;
 public partial class GameManager
 {
     // ---------------------------------------------------------------- setting, state, hooks
-    static readonly string[] PreRaceNames = { "On", "Short", "Off" };
-    int preRaceIdx;                         // 0 on, 1 short (cockpit + grid), 2 off ("preRace")
+    static readonly string[] PreRaceNames = { "Full", "Short", "Off" };
+    int preRaceIdx;                         // 0 full (garage + formation lap), 1 short (cockpit + grid), 2 off ("preRace")
     bool shotIntro; float shotIntroT = -1f; // shot mode: intro=... given / the time it is frozen at (-1 = not yet)
     PreRace intro; float introPostFade;     // the running intro (null = none); black fading out after a skip
 
     bool PreRaceHold => intro != null;                              // race clock held, cars on their brakes (GameManagerStart)
     float PreRaceThrottle => intro != null ? intro.Throttle : 0f;  // the engine-start blips (grid revs)
+    bool PreRaceCarPosed => intro != null && intro.Posed;           // the car is in its pit box / the pit lane: no physics step (GameManager.Update)
 
     // StartSession, after the car is reset: the intro, if this is a race start and the setting wants it
     void PreRaceBegin()
@@ -44,10 +53,10 @@ public partial class GameManager
         if (mode >= 2) return;
         try
         {
-            var p = new PreRace(this, mode == 1);
-            if (p.Valid) intro = p; else p.Finish();
+            var p = new PreRace(this, mode == 0);
+            if (p.Valid) intro = p; else { p.Finish(); if (mode == 0) FormBegin(); }
         }
-        catch (System.Exception e) { Debug.LogWarning("PreRace: " + e.Message); PreRaceAbort(); }
+        catch (System.Exception e) { Debug.LogWarning("PreRace: " + e.Message); PreRaceAbort(); if (mode == 0) FormBegin(); }
     }
 
     // StartReset (any new start): a running intro is dropped at once
@@ -75,19 +84,29 @@ public partial class GameManager
         return true;
     }
 
-    // shot mode: freeze the intro at t seconds (DebugShots.cs)
-    internal void ShotIntro(float t) { shotIntroT = Mathf.Max(0f, t); }
+    // shot mode: freeze the intro at t seconds (DebugShots.cs); a time before the formation lap after one: the
+    // cinematic again from the start (the car back in its pit box)
+    internal void ShotIntro(float t)
+    {
+        shotIntroT = Mathf.Max(0f, t);
+        if (form != null && formShotBase >= 0f && shotIntroT < formShotBase) { FormAbort(true); PreRaceBegin(); }
+        else if (intro != null && intro.BackToBox(shotIntroT)) PreRaceBegin(); // (an earlier time than the cut to the grid)
+    }
 
     // ---------------------------------------------------------------- the intro
     sealed class PreRace
     {
         public const float SkipFade = 0.3f;
-        enum K { FlyCorner, FlyGrid, Garage, GridWalk, Edge, Cockpit, GridTv }
+        enum K { FlyCorner, FlyGrid, FlyPits, Garage, GridWalk, Edge, Cockpit, BoxOut, PitExit, GridTv }
         sealed class Cap { public string eyebrow, title, sub, block; public float from; }
         struct Shot { public K k; public float t0, dur; public Cap cap; }
 
         // timings (s)
         const float DFlyCorner = 2.4f, DFlyGrid = 2.6f, DGarage = 2.2f, DGridWalk = 2.8f, DEdge = 1.9f, DCockpit = 3.8f;
+        const float DBoxWalk = 3.2f, DBoxOut = 3.3f, DPitExit = 3.0f; // (full, with a pit lane: the garage walk, the release, the pit exit)
+        const float MoveDelay = 0.4f;       // the car pulls away this long into the release shot (the crew's light goes green first)
+        const float CrewHeld = 2.0f;        // the crew's stop clock while the car waits (PitCrew: jacks down, guns off; green 2.12, release 2.4)
+        const float WalkV = 1.55f;          // m/s, the garage walk at most
         const float TvMain = 2.4f, Handover = 1.6f;
         const float Ign = 1.1f;             // ignition, from the start of the onboard shot
         const float DipHalf = 0.28f;        // the dip to black between the cockpit edge and the onboard
@@ -98,17 +117,24 @@ public partial class GameManager
 
         readonly GameManager g;
         readonly List<Shot> shots = new List<Shot>();
-        readonly int userCam; readonly bool crane;
+        readonly int userCam; readonly bool crane, full;
         float T, total, skipT; bool skipping, finished, cranked, buzzed, ledsCleared;
-        float ignAt = -1f, walkStart, edgeEnd = -1f, dipAt = -1f; // dipAt: the cut into the onboard (a dip to black)
+        float ignAt = -1f, walkStart, walkTime, edgeEnd = -1f, dipAt = -1f; // dipAt: the cut into the onboard (a dip to black)
         public bool Valid => shots.Count > 0;
+        // the pit box and the pit lane (full, with a pit lane): the car posed on its lane path until the cut to the grid
+        readonly bool pits; readonly int bay; PitRun boxRun; readonly PitLane lane;
+        float moveAt = -1f, exitAt = -1f, cutAt = -1f, crewFrom = -1f, crewT = CrewHeld; bool crewOn; System.Func<float> crewClock;
+        double uMoveEnd, uExit0;
+        public bool Posed => boxRun != null;
+        public bool BackToBox(float t) => pits && boxRun == null && cutAt > 0f && t < cutAt; // shot mode: the car has left its box already
+        public float Total => total;
 
         // the field
         readonly double playerS, playerLat, cornerS; readonly float cornerSign;
-        readonly Vector3 outer;                      // the player's car: its side away from the field (flat)
+        Vector3 outer;                               // the player's car: its side away from the field (flat); in the pit box: the garage side
         readonly Color suit, trimCol; readonly string tapTxt;
         // the garage
-        readonly bool bayOk; readonly Vector3 bc, bg; readonly float gd;
+        readonly bool bayOk; readonly Vector3 bc, bg, bf; readonly float gd;
         // the driver's rig (the menu driver's look and stance, MenuStudio.cs)
         GameObject root; People.Rig rig; People.Blobs blob;
         readonly People.PoseBuf pa = new People.PoseBuf(), pb = new People.PoseBuf();
@@ -118,9 +144,10 @@ public partial class GameManager
         readonly List<SteeringWheel> darkWheels = new List<SteeringWheel>(); readonly List<Texture> darkTex = new List<Texture>();
         CarModel dmFor; SkinnedMeshRenderer dmR;
 
-        public PreRace(GameManager owner, bool shortMode)
+        public PreRace(GameManager owner, bool fullMode)
         {
-            g = owner; userCam = g.camMode == TvMode ? TvMode : Mathf.Clamp(g.camMode, 0, 3); crane = userCam == 0 || userCam == 1;
+            bool shortMode = !fullMode; full = fullMode;
+            g = owner; userCam = g.camMode == TvMode ? TvMode : Mathf.Clamp(g.camMode, 0, 3); crane = !full && (userCam == 0 || userCam == 1); // (full: the formation lap's own shots follow)
             var tk = g.track;
             int slot = g.playerSlot, cars = g.rivals.Count + 1;
             playerS = StartGrid.SlotS(tk, slot); playerLat = StartGrid.SlotLat(tk, slot);
@@ -143,16 +170,30 @@ public partial class GameManager
                 var pc = g.pitCrew;
                 if (pc != null && Trackside.Bays.Count > 0)
                 {
-                    int b = pc.PlayerBay;
+                    int b = pc.PlayerBay; bay = b;
                     if (b >= 0 && b < Trackside.Bays.Count)
                     {
-                        var bay = Trackside.Bays[b];
-                        bc = bay.centre; bg = Flat(bay.side); gd = bay.garageDist;
-                        bayOk = bay.side.sqrMagnitude > 0.25f && gd > 1f && gd < 40f;
+                        var pbay = Trackside.Bays[b];
+                        bc = pbay.centre; bg = Flat(pbay.side); bf = Flat(pbay.fwd); gd = pbay.garageDist;
+                        bayOk = pbay.side.sqrMagnitude > 0.25f && gd > 1f && gd < 40f;
                     }
                 }
             }
             catch (System.Exception) { bayOk = false; }
+            // full: the car starts in its pit box when the circuit has a pit lane (else on the grid, as before)
+            lane = Lane;
+            pits = full && bayOk && g.PitLaneOn && g.pitCrew != null && lane != null && bay >= 0 && bay < lane.bayU.Length;
+            if (pits)
+            {
+                try
+                {
+                    boxRun = PitRun.InBox(lane, bay, g.playerPitKey, 0);
+                    boxRun.ApplyTo(g.car); g.car.vx = g.car.vy = 0; g.car.r = 0; g.car.delta = 0;
+                    g.SnapDrawn();
+                    outer = Flat(bg - bf * Vector3.Dot(bg, bf)); // the driver comes from the garage side
+                }
+                catch (System.Exception e) { Debug.LogWarning("PreRace: no pit box (" + e.Message + ")"); if (boxRun != null) boxRun.Cancel(); boxRun = null; pits = false; }
+            }
 
             // captions (built once: nothing is formatted per frame)
             float km = (float)(tk.length / 1000.0);
@@ -169,6 +210,7 @@ public partial class GameManager
             var capDriver = new Cap { eyebrow = "Driver", title = driver, sub = team + "  ·  Grid " + gridP, block = "#" + num };
             var capGrid = new Cap { eyebrow = "On the grid", title = "Starts " + gridP + " of " + cars, sub = Weather.TyreName(g.carSet) + " tyres  ·  " + Weather.Names[Mathf.Clamp(Weather.Index, 0, Weather.Names.Length - 1)] };
             var capStart = new Cap { eyebrow = session, title = shortMode ? circuit : "Race start", sub = shortMode ? lenLaps : g.raceLaps + " laps  ·  " + (km * g.raceLaps).ToString("0", System.Globalization.CultureInfo.InvariantCulture) + " km" };
+            var capPit = new Cap { eyebrow = "Pit lane open", title = "Reconnaissance lap", sub = "Pit limiter  ·  80 km/h" };
 
             // the driver himself (the People models; none = no shots on foot)
             bool rigOk = false;
@@ -192,22 +234,54 @@ public partial class GameManager
             }
 
             // the running order
-            if (!shortMode)
+            if (pits)
             {
-                Add(K.FlyCorner, DFlyCorner, capCircuit); Add(K.FlyGrid, DFlyGrid, capPole);
-                if (rigOk && bayOk) Add(K.Garage, DGarage, capDriver);
-                if (rigOk) { Add(K.GridWalk, DGridWalk, bayOk ? capGrid : capDriver); Add(K.Edge, DEdge, null); }
+                Add(K.FlyCorner, DFlyCorner, capCircuit); Add(K.FlyPits, DFlyGrid, capPole);
+                if (rigOk) { Add(K.Garage, DBoxWalk, capDriver); Add(K.GridWalk, DGridWalk - 0.4f, null); Add(K.Edge, DEdge, null); }
+                else capDriver.from = 0.9f;
+                Add(K.Cockpit, DCockpit, rigOk ? null : capDriver);
+                Add(K.BoxOut, DBoxOut, null); Add(K.PitExit, DPitExit, capPit);
+                Add(K.GridTv, TvMain, capGrid);
             }
-            if (shortMode || !rigOk) capDriver.from = 0.9f; // over the onboard: after the visor is down
-            Add(K.Cockpit, DCockpit, shortMode || !rigOk ? capDriver : null);
-            Add(K.GridTv, TvMain + (crane ? Handover : 0f), shortMode ? capStart : rigOk ? capStart : capGrid);
+            else
+            {
+                if (!shortMode)
+                {
+                    Add(K.FlyCorner, DFlyCorner, capCircuit); Add(K.FlyGrid, DFlyGrid, capPole);
+                    if (rigOk && bayOk) Add(K.Garage, DGarage, capDriver);
+                    if (rigOk) { Add(K.GridWalk, DGridWalk, bayOk ? capGrid : capDriver); Add(K.Edge, DEdge, null); }
+                }
+                if (shortMode || !rigOk) capDriver.from = 0.9f; // over the onboard: after the visor is down
+                Add(K.Cockpit, DCockpit, shortMode || !rigOk ? capDriver : null);
+                Add(K.GridTv, TvMain + (crane ? Handover : 0f), shortMode ? capStart : full ? capGrid : rigOk ? capStart : capGrid);
+            }
+            walkTime = WalkTime;
             for (int i = 0; i < shots.Count; i++)
             {
                 var s = shots[i];
-                if (s.k == K.Cockpit) { ignAt = s.t0 + Ign; if (i > 0) dipAt = s.t0; }
+                if (s.k == K.Cockpit) { ignAt = s.t0 + Ign; if (i > 0 && shots[i - 1].k == K.Edge) dipAt = s.t0; if (pits) crewFrom = s.t0; }
                 if (s.k == K.Edge) edgeEnd = s.t0 + s.dur;
-                if (s.k == K.GridWalk) walkStart = s.t0 - WalkLead;
+                if (s.k == K.GridWalk && !pits) walkStart = s.t0 - WalkLead;
+                if (s.k == K.Garage && pits) { walkStart = s.t0 - 0.3f; walkTime = DBoxWalk + DGridWalk - 0.4f + 0.3f - 0.45f; }
+                if (s.k == K.BoxOut) moveAt = s.t0 + MoveDelay;
+                if (s.k == K.PitExit) exitAt = s.t0;
+                if (s.k == K.GridTv && pits) cutAt = s.t0;
             }
+            if (pits)
+            {
+                // the release shot accelerates the car out of the box to the limiter; the pit-exit shot then shows its last
+                // metres to the end of the lane (a cut: the middle of the lane is skipped)
+                uMoveEnd = BoxU(exitAt - moveAt);
+                uExit0 = System.Math.Max(uMoveEnd, lane.sExit - 4 - PitLane.Limiter * DPitExit);
+                crewClock = () => crewT;
+            }
+        }
+        // the car's lane distance t s after it pulls away: AOut to the limiter, then the limiter
+        double BoxU(double t)
+        {
+            if (t <= 0) return boxRun != null ? boxRun.BoxU : 0;
+            double vL = PitLane.Limiter, tA = vL / PitLane.AOut, u0 = boxRun != null ? boxRun.BoxU : 0;
+            return t < tA ? u0 + 0.5 * PitLane.AOut * t * t : u0 + 0.5 * PitLane.AOut * tA * tA + vL * (t - tA);
         }
 
         void Add(K k, float d, Cap c) { shots.Add(new Shot { k = k, t0 = total, dur = d, cap = c }); total += d; }
@@ -220,7 +294,12 @@ public partial class GameManager
             if (finished) return false;
             if (g.model == null || g.cam == null || g.car == null) { g.PreRaceAbort(); return false; }
             float dt = Mathf.Min(Time.unscaledDeltaTime, 0.05f); // the first frames (and a car build) can be long: never jump a shot
-            if (g.shotIntro) T = Mathf.Clamp(g.shotIntroT < 0f ? 0f : g.shotIntroT, 0f, total - 0.02f); // shot mode: frozen
+            if (g.shotIntro)
+            {
+                float st = g.shotIntroT < 0f ? 0f : g.shotIntroT;
+                if (full && st >= total) { g.formShotBase = total; End(); return false; } // shot mode: past the cinematic = the formation lap
+                T = Mathf.Clamp(st, 0f, total - 0.02f); // shot mode: frozen
+            }
             else
             {
                 T += dt;
@@ -237,8 +316,16 @@ public partial class GameManager
             if (s.k == K.Cockpit || (dipAt > 0f && T >= dipAt - DipHalf * 0.5f && T < dipAt)) want = 2;
             g.camMode = want;
 
+            // the pit box and the pit lane: the car on its lane path, the crew round it; under the dip: to the grid
+            if (boxRun != null)
+            {
+                if (cutAt > 0f && T >= cutAt) ToGrid();
+                else PoseBox();
+            }
+            Crew();
+
             // the driver is in his car from the onboard shot on; before that he is on foot
-            bool inCar = s.k == K.Cockpit || s.k == K.GridTv;
+            bool inCar = s.k == K.Cockpit || s.k == K.GridTv || s.k == K.BoxOut || s.k == K.PitExit;
             CarBits(s.k == K.Cockpit, inCar);
             Engine();
             Rig(s.k);
@@ -248,7 +335,10 @@ public partial class GameManager
             {
                 case K.FlyCorner: FlyCorner(u, out pos, out rot, out fov); near = 1f; break;
                 case K.FlyGrid: FlyGrid(u, out pos, out rot, out fov); near = 0.7f; break;
-                case K.Garage: Garage(u, out pos, out rot, out fov); break;
+                case K.FlyPits: FlyPits(u, out pos, out rot, out fov); near = 0.7f; break;
+                case K.Garage: if (pits) BoxWide(u, out pos, out rot, out fov); else Garage(u, out pos, out rot, out fov); break;
+                case K.BoxOut: BoxOut(u, out pos, out rot, out fov); break;
+                case K.PitExit: PitExit(u, out pos, out rot, out fov); break;
                 case K.GridWalk: GridWalk(u, out pos, out rot, out fov); break;
                 case K.Edge: Edge(u, out pos, out rot, out fov); near = 0.3f; break;
                 case K.Cockpit: Onboard(lt, out pos, out rot, out fov); break;
@@ -263,6 +353,55 @@ public partial class GameManager
             g.camVel = Vector3.zero;
             g.FpsWindowReset(2f); // the flyover draws the whole circuit: Auto never steps the frame rate or graphics down for it
             return true;
+        }
+
+        // ---------------------------------------------------------------- the pit box and the pit lane
+        // the car on its lane path at this moment (a function of T: shot mode freezes it like the rest): in the box until
+        // the release, out of the box to the limiter, then (after the cut) the last metres to the pit exit
+        void PoseBox()
+        {
+            var r = boxRun; var c = g.car;
+            double u, v, mv = moveAt > 0f ? T - moveAt : -1; bool accel = false;
+            if (mv <= 0) { u = r.BoxU; v = 0; }
+            else if (exitAt < 0f || T < exitAt)
+            {
+                u = BoxU(mv); double tA = PitLane.Limiter / PitLane.AOut;
+                accel = mv < tA; v = accel ? PitLane.AOut * mv : PitLane.Limiter;
+            }
+            else { u = uExit0 + PitLane.Limiter * (T - exitAt); v = PitLane.Limiter; }
+            u = System.Math.Min(u, lane.sExit - 0.5);
+            r.phase = mv > 0 ? 2 : 1;
+            // the path's curvature 1 m either side (the steering), then the pose itself (a frozen run only poses: Step(0))
+            r.u = u + 1; r.Step(0); double h1 = r.heading;
+            r.u = u - 1; r.Step(0); double h0 = r.heading;
+            r.u = u; r.v = v; r.Step(0);
+            r.ApplyTo(c);
+            double k = System.Math.Atan2(System.Math.Sin(h1 - h0), System.Math.Cos(h1 - h0)) / 2;
+            c.delta = v > 0.3 ? System.Math.Atan(c.cfg.wheelbase * k) : 0; c.r = v * k;
+            c.throttle = accel ? 0.5 : v > 1 ? 0.18 : 0; c.brake = v > 0.3 ? 0 : 1; c.axLong = accel ? PitLane.AOut : 0;
+            g.SnapDrawn();
+        }
+
+        // the pit crew round the car from the onboard on: its stop clock held just before the release, then running (the
+        // light goes green, the car is released and they step away)
+        void Crew()
+        {
+            var pc = g.pitCrew;
+            if (pc == null || crewFrom < 0f) return;
+            crewT = Mathf.Min(CrewHeld + Mathf.Max(0f, moveAt > 0f ? T - (moveAt - MoveDelay) : 0f), PitCrew.ReleaseT + 1.9f);
+            bool want = boxRun != null && T >= crewFrom - DipHalf && T < cutAt;
+            if (want && !crewOn) crewOn = pc.Begin(-1, bay, Livery.Player[Livery.PlayerIndex], Weather.Stripe(g.carSet), Weather.Stripe(g.carSet), 0f, g.PlayerPitModel, crewClock);
+            else if (!want && crewOn) { crewOn = false; if (pc.Owns(-1)) pc.Stop(); }
+        }
+
+        // under the dip after the pit exit: the reconnaissance lap is cut, the car stands in its grid slot
+        void ToGrid()
+        {
+            if (crewOn) { crewOn = false; if (g.pitCrew != null && g.pitCrew.Owns(-1)) g.pitCrew.Stop(); }
+            if (boxRun != null) { boxRun.Cancel(); boxRun = null; }
+            g.ParkOnGrid();
+            TrackAt(playerS, out _, out Vector3 slotN, out _);
+            outer = slotN * (playerLat >= 0 ? 1f : -1f);
         }
 
         static bool SkipPressed()
@@ -367,7 +506,7 @@ public partial class GameManager
             if (on != rigShown) { rigShown = on; rig.Show(on); if (blob != null) blob.Show(on); }
             if (!on) return;
             float ground;
-            if (k == K.Garage)
+            if (k == K.Garage && !pits)
             {
                 // out of the garage into the box, at a steady walk
                 Vector3 a = bc + bg * (gd + 2.3f), b = bc + bg * (gd - 2.2f);
@@ -384,19 +523,22 @@ public partial class GameManager
             {
                 // along his car to the cockpit (from behind it): he slows, stops, turns to the car and stands as the
                 // menu driver does; a hand on the tub, a look into the cockpit, then a hand to his visor
+                // (in the pit box: straight out of the back of the garage to the car's side, at most WalkV)
                 CarFrame(out Vector3 c, out Vector3 f, out float along);
-                Vector3 a = c + f * (along - 4.6f) + outer * 1.95f, b = c + f * (along + 0.05f) + outer * 1.2f;
-                float rt = T - walkStart, len = Vector3.Distance(a, b), v0 = len / (WalkTime - 0.25f), d;
-                if (rt < WalkTime - 0.5f) d = v0 * Mathf.Max(0f, rt);
-                else if (rt < WalkTime) { float tau = rt - (WalkTime - 0.5f); d = v0 * (WalkTime - 0.5f) + v0 * (tau - tau * tau); }
+                float wt = walkTime;
+                Vector3 b = c + f * (along + 0.05f) + outer * 1.2f;
+                Vector3 a = pits ? b + outer * Mathf.Min(gd + 6.2f - 1.2f, WalkV * (wt - 0.25f)) : c + f * (along - 4.6f) + outer * 1.95f;
+                float rt = T - walkStart, len = Vector3.Distance(a, b), v0 = len / (wt - 0.25f), d;
+                if (rt < wt - 0.5f) d = v0 * Mathf.Max(0f, rt);
+                else if (rt < wt) { float tau = rt - (wt - 0.5f); d = v0 * (wt - 0.5f) + v0 * (tau - tau * tau); }
                 else d = len;
                 d = Mathf.Min(d, len);
                 Vector3 pos = a + (b - a) * (d / Mathf.Max(len, 0.01f));
                 ground = GroundAt(pos, c.y); pos.y = ground;
                 Vector3 dir = b - a, face = -outer;
                 float walkYaw = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg, faceYaw = Mathf.Atan2(face.x, face.z) * Mathf.Rad2Deg;
-                float stop = Smooth((rt - (WalkTime - 0.35f)) / 0.6f);
-                rig.Place(pos, Mathf.LerpAngle(walkYaw, faceYaw, Smooth((rt - (WalkTime - 0.2f)) / 0.7f)));
+                float stop = Smooth((rt - (wt - 0.35f)) / 0.6f);
+                rig.Place(pos, Mathf.LerpAngle(walkYaw, faceYaw, Smooth((rt - (wt - 0.2f)) / 0.7f)));
                 People.Sample(People.WalkClip, d / Stride(v0) * People.Length(People.WalkClip), pa);
                 People.Sample(People.MIdle, T, pb);
                 People.Blend(pa, pb, stop, pa);
@@ -406,7 +548,7 @@ public partial class GameManager
                 // the hand nearer the car's nose on the cockpit rim
                 bool noseLeft = Vector3.Dot(Vector3.Cross(Vector3.up, face), f) < 0f;
                 Vector3 rim = c + f * (along + 0.25f) + outer * 0.5f; rim.y = c.y + 0.68f;
-                float onTub = Smooth((rt - (WalkTime + 0.1f)) / 0.45f);
+                float onTub = Smooth((rt - (wt + 0.1f)) / 0.45f);
                 rig.Arm(noseLeft, rim, onTub, -face + Vector3.up * 0.3f);
                 // the other hand to the visor at the end of the edge shot (it comes down in the onboard)
                 float visor = edgeEnd > 0f ? Smooth((T - (edgeEnd - 0.95f)) / 0.45f) : 0f;
@@ -420,7 +562,7 @@ public partial class GameManager
                 Vector3 head = rig.b[People.JHead].position;
                 Vector3 cockpit = c + f * (along + 0.1f) + Vector3.up * 0.75f;
                 rig.LookAt(head + Flat(dir) * 4f, 0.35f * (1f - stop));
-                rig.LookAt(cockpit, 0.85f * Smooth((rt - (WalkTime - 0.6f)) / 0.8f) * (1f - visor));
+                rig.LookAt(cockpit, 0.85f * Smooth((rt - (wt - 0.6f)) / 0.8f) * (1f - visor));
                 rig.LookAt(head + fwd * 3f + up * 0.05f, 0.5f * visor);
                 rigPos = pos;
             }
@@ -500,6 +642,51 @@ public partial class GameManager
             Vector3 right = Vector3.Cross(Vector3.up, subj - pos).normalized;
             fov = Fit(25f);
             rot = Aim(pos, subj, fov, -0.28f * Sgn(Vector3.Dot(-bg, right)), 0.06f) * Shake(0.35f, 0.9f, 10.9f);
+        }
+        // (pit box) 1b. down over the start straight onto the team's garage, the drone easing to a stop off the pit wall
+        void FlyPits(float u, out Vector3 pos, out Quaternion rot, out float fov)
+        {
+            float e = Smooth(u);
+            CarFrame(out Vector3 c, out Vector3 f, out _);
+            Vector3 a = c - outer * 62f - f * 75f + Vector3.up * 40f, b = c - outer * 17f - f * 15f + Vector3.up * 7.5f;
+            pos = Above(Vector3.Lerp(a, b, e), 3f);
+            fov = Fit(Mathf.Lerp(56f, 44f, e));
+            rot = Aim(pos, c + outer * 2.5f + Vector3.up * 1.2f, fov, 0f, -0.1f) * Shake(0.18f, 0.4f, 5.9f);
+        }
+        // (pit box) 2a. the team's garage: wide and high from the fast lane over the car in its box, he walks out of the
+        //    back of the garage towards it (a slow push in)
+        void BoxWide(float u, out Vector3 pos, out Quaternion rot, out float fov)
+        {
+            float e = Smooth(u);
+            CarFrame(out Vector3 c, out Vector3 f, out float along);
+            pos = c - outer * (6.4f - 0.6f * e) + f * (along + 2.6f - 0.5f * e); pos.y = GroundAt(pos, c.y) + 2.5f - 0.3f * e;
+            Vector3 subj = Vector3.Lerp(rigPos + Vector3.up * 1.2f, c + Vector3.up * 0.6f, 0.25f);
+            Vector3 right = Vector3.Cross(Vector3.up, subj - pos).normalized;
+            fov = Fit(Mathf.Lerp(40f, 35f, e));
+            rot = Aim(pos, subj, fov, 0.12f * Sgn(Vector3.Dot(f, right)), 0.04f) * Shake(0.25f, 0.7f, 9.7f);
+        }
+        // (pit box) 4a. the release: low from the fast lane ahead, by the pit wall; the car pulls out of the box towards us,
+        //    the crew stepping away behind it
+        void BoxOut(float u, out Vector3 pos, out Quaternion rot, out float fov)
+        {
+            double uc = System.Math.Min(boxRun != null ? boxRun.BoxU + 44 : 0, lane.sExit - 2);
+            lane.Pos(uc, lane.BaseLat(uc) - lane.side * 2.6, out double x, out double y);
+            pos = new Vector3((float)x, 0f, (float)y); pos.y = GroundAt(pos, g.model.transform.position.y) + 1.05f;
+            Vector3 subj = g.model.transform.position + Vector3.up * 0.5f;
+            float dist = Mathf.Max(4f, (subj - pos).magnitude);
+            fov = Fit(Mathf.Clamp(2f * Mathf.Atan(4.2f / dist) * Mathf.Rad2Deg, 12f, 48f));
+            rot = Aim(pos, subj, fov, 0f, -0.05f) * Shake(0.12f, 0.6f, 29.3f);
+        }
+        // (pit box) 4b. the pit exit: on the track past the end of the lane, long lens back up the exit at the car
+        void PitExit(float u, out Vector3 pos, out Quaternion rot, out float fov)
+        {
+            Vector3 p = TrackAt(lane.sExit + 22.0, out _, out Vector3 n, out int i);
+            float hw = (float)g.track.HalfWidth(i);
+            pos = p + n * (lane.side * Mathf.Max(1f, hw - 3.2f)) + Vector3.up * 1.3f;
+            Vector3 subj = g.model.transform.position + Vector3.up * 0.5f;
+            float dist = Mathf.Max(4f, (subj - pos).magnitude);
+            fov = Fit(Mathf.Clamp(2f * Mathf.Atan(4.8f / dist) * Mathf.Rad2Deg, 9f, 45f));
+            rot = Aim(pos, subj, fov, 0f, -0.05f) * Shake(0.1f, 0.5f, 31.1f);
         }
         // 2b. on the grid: low at the front quarter, his car's nose in the foreground, he walks up to the cockpit
         void GridWalk(float u, out Vector3 pos, out Quaternion rot, out float fov)
@@ -705,6 +892,7 @@ public partial class GameManager
             // black: in from the loading screen, the dip into the cockpit, a skip
             float black = 1f - Mathf.Clamp01(T / 0.6f);
             if (dipAt > 0f) black = Mathf.Max(black, 1f - Mathf.Abs(T - dipAt) / DipHalf);
+            if (cutAt > 0f) black = Mathf.Max(black, 1f - Mathf.Abs(T - cutAt) / DipHalf);
             if (skipping) black = Mathf.Max(black, skipT / SkipFade);
             if (black > 0.004f) UiKit.Rect(new Rect(0, 0, W, H), new Color(0f, 0f, 0f, Mathf.Clamp01(black)));
         }
@@ -750,7 +938,8 @@ public partial class GameManager
         }
 
         // ---------------------------------------------------------------- the end: everything back as it was
-        void End() { g.PreRaceAbort(); }
+        // (full: the formation lap follows, GameManagerFormation.cs)
+        void End() { bool f = full; var gm = g; gm.PreRaceAbort(); if (f) gm.FormBegin(); }
 
         // played out, skipped, dropped by a new start or an error: all restore the same things (GameManager.PreRaceAbort)
         public void Finish()
@@ -759,6 +948,9 @@ public partial class GameManager
             finished = true;
             try
             {
+                // still in the pit box / lane (a skip, a restart): the car to its grid slot, the crew away
+                if (crewOn) { crewOn = false; if (g.pitCrew != null && g.pitCrew.Owns(-1)) g.pitCrew.Stop(); }
+                if (boxRun != null) { boxRun.Cancel(); boxRun = null; g.ParkOnGrid(); }
                 for (int i = 0; i < hiddenDrivers.Count; i++) if (hiddenDrivers[i] != null) hiddenDrivers[i].enabled = true;
                 hiddenDrivers.Clear();
                 for (int i = 0; i < darkWheels.Count; i++) if (darkWheels[i] != null && darkWheels[i].Mat != null) darkWheels[i].Mat.SetTexture(DashId, darkTex[i]);
