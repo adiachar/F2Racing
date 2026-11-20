@@ -21,7 +21,7 @@
 // (ScalableBufferManager: read here and folded into the off-screen size) and, on GLES, GameManagerPerf.FixedResolution
 // (it shrinks the screen; with HUD native it should set RenderScale.Extra instead: request in Docs/COORDINATION.md).
 //
-// Adaptive scale (Auto only): while racing, the GPU time (FrameTimingManager) is averaged over 10 s windows against the
+// Adaptive scale: OFF since 20 Nov (Adi wants a fixed size the player picks; AdaptOn = false). Kept for reference:
 // frame-rate lock's budget. At the next session start (the menu hands the 3D back, behind the loading screen; never
 // mid-race) the scale goes up 0.05 if every window of the last session stayed under 60% of the budget (at least 30 s
 // measured, phone not hot), down 0.05 if one went over 85% or the phone got hot. Range: the Auto base .. 0.85 of
@@ -49,6 +49,7 @@ public static class RenderScale
         set { PlayerPrefs.SetInt("renderHud", value ? 1 : 0); Apply(); }
     }
     // the adaptive scale's bonus over the Auto base (0 .. MaxAdaptScale - base)
+    public const bool AdaptOn = false; // the adaptive scale is off: the 3D size is fixed (see Apply)
     public static float Adapt
     {
         get => PlayerPrefs.GetFloat("renderAdapt", 0f);
@@ -126,7 +127,9 @@ public static class RenderScale
 #if UNITY_ANDROID && !UNITY_EDITOR
         int pct = Pct;
         float a = AutoScale(NativeW, NativeH);
-        float s = pct <= 0 ? (a < 1f ? Mathf.Clamp(a + Adapt, a, Mathf.Max(a, MaxAdaptScale)) : 1f) : Mathf.Clamp(pct, 40, 100) * 0.01f;
+        // fixed (Adi, 20 Nov: "no auto resolution, a fixed one the player chooses"): 0 = this phone's default size, never
+        // changed by the game; the adaptive bonus (Adapt / Decide) is no longer applied
+        float s = pct <= 0 ? a : Mathf.Clamp(pct, 40, 100) * 0.01f;
         Scale = s;
         bool land = Screen.width >= Screen.height;
         if (HudNative)
@@ -154,7 +157,7 @@ public static class RenderScale
     internal static void Decide(int windows, float worstRatio, bool hot)
     {
 #if UNITY_ANDROID && !UNITY_EDITOR
-        if (Pct != 0 || windows <= 0) return;
+        if (!AdaptOn || Pct != 0 || windows <= 0) return;
         float a = AutoScale(NativeW, NativeH);
         if (a >= 1f) return;
         float was = Adapt, now = was;
