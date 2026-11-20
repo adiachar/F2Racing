@@ -18,6 +18,9 @@ Outputs
                                  _puresky, 8K, sun 47.9 deg up), upper hemisphere only: u = azimuth with the sun at u = 0,
                                  v = sin(elevation) (0 horizon .. 1 zenith: no asin in the shader, more rows near the
                                  horizon where the clouds bunch up); tone-mapped to display values (no HDR format needed)
+    sky_evening_hq.png 4096x1024 golden-hour cumulus (Poly Haven kloppenheim_06_puresky, sun 8 deg), ASTC 4x4
+    sky_morning_hq.png 4096x1024 clear hazy morning (Poly Haven autumn_field_puresky, sun 29 deg), ASTC 4x4
+    sky_overcast.png  4096x1024  rain overcast (Poly Haven overcast_soil_puresky, no sun), ASTC 6x6
     means.txt         "name r g b" linear mean colour of each albedo (the shader gain = circuit colour / mean)
   Assets/Resources/Textures/  (JPEG / PNG bytes, decoded at load by EnvTex.LoadPhoto for the runtime-built textures)
     asphalt.bytes     1024 JPEG  Poly Haven asphalt_track (EnvTex.RoadDetail R: the road's fine grain, 3.2 m tile)
@@ -41,6 +44,19 @@ SOURCES = {  # local file -> (mirror path, original page)
     "asphalt_track.jpg": ("Rodrigo-AO/FS_assetto_track_creator/HEAD/presets/common/cc0/asphalt_track_diff.jpg", "https://polyhaven.com/a/asphalt_track"),
     "concrete_floor_worn_001.jpg": ("Kitjesen/MapPilot/HEAD/sim/library/sources/polyhaven/textures/concrete_floor_worn_001/2k/concrete_floor_worn_001_diff_2k.jpg", "https://polyhaven.com/a/concrete_floor_worn_001"),
     "sky.hdr": ("cdav1990/OverWatch2/HEAD/FrontEnd/public/hdr/kloofendal_48d_partly_cloudy_puresky_8k.hdr", "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky"),
+    "sky_evening.hdr": ("Brooklyn-Dev/ray-tracing/HEAD/skyboxes/kloppenheim_06_puresky_4k.hdr", "https://polyhaven.com/a/kloppenheim_06_puresky"),
+    "sky_morning.hdr": ("FionaWright/CherryPip/HEAD/Assets/Textures/Env%20Maps/autumn_field_puresky_4k.hdr", "https://polyhaven.com/a/autumn_field_puresky"),
+    "sky_overcast.hdr": ("efimco/BakeForge/HEAD/res/overcast_soil_puresky_4k.hdr", "https://polyhaven.com/a/overcast_soil_puresky"),
+    # wave 2: trackside (zinc rail, cast concrete wall) and the building atlas photos (512 px, were 256)
+    "metal032.jpg": ("rito15/Unity-Shader-Graph-Study/HEAD/Textures/Metalic/Metal032_2K_Color.jpg", "https://ambientcg.com/view?id=Metal032"),
+    "concrete_wall_008.jpg": ("i-machine-think/grasp/HEAD/GRASP/Assets/Resources/Textures/ConcreteWall/concrete_wall_008_diff_4k.jpg", "https://polyhaven.com/a/concrete_wall_008"),
+    "plastered_wall.png": ("Kacper79/UKSW_Escape_Within_Reach_Gr_1/HEAD/Assets/Textures/plastered_wall_diff_2k.png", "https://polyhaven.com/a/plastered_wall"),
+    "red_brick.jpg": ("mitarthpathak/Blender-Fable-5.2/HEAD/game/assets/town/textures/red_brick_diff_2k.jpg", "https://polyhaven.com/a/red_brick"),
+    "clay_roof_tiles_02.jpg": ("dunkean/magna-urbis/HEAD/assets/materials/buildings/roof/polyhaven-clay_roof_tiles_02/clay_roof_tiles_02_diff_1k.jpg", "https://polyhaven.com/a/clay_roof_tiles_02"),
+    "concrete_slab_wall.jpg": ("shadow-kernel/Vortex-Engine-OpenWorld-Template/HEAD/Assets/Textures/concrete_slab_wall/concrete_slab_wall_diff_2k.jpg", "https://polyhaven.com/a/concrete_slab_wall"),
+    "box_profile_metal_sheet.jpg": ("Shahidul-Khan2004/UIU-Sim/HEAD/unity-client/UIU-Sim/Assets/Art/Environment/Walls/UIU%20Front/box_profile_metal_sheet_diff_2k.jpg", "https://polyhaven.com/a/box_profile_metal_sheet"),
+    "corrugated_iron_02.jpg": ("Rodrigo-AO/FS_assetto_track_creator/HEAD/presets/common/cc0/corrugated_iron_02_diff.jpg", "https://polyhaven.com/a/corrugated_iron_02"),
+    "painted_metal_shutter.png": ("mrxizao/gundam-hathaway/HEAD/assets/materials/adelaide_pbr/painted_metal_shutter_diff_2k.png", "https://polyhaven.com/a/painted_metal_shutter"),
     "leafset002_col.jpg": (SC + "ambientcg/LeafSet002/LeafSet002_2K-JPG_Color.jpg", "https://ambientcg.com/view?id=LeafSet002"),
     "leafset002_op.jpg": (SC + "ambientcg/LeafSet002/LeafSet002_2K-JPG_Opacity.jpg", "https://ambientcg.com/view?id=LeafSet002"),
     "leafset005_col.jpg": (SC + "ambientcg/LeafSet005/LeafSet005_2K-JPG_Color.jpg", "https://ambientcg.com/view?id=LeafSet005"),
@@ -75,7 +91,10 @@ def half(a):  # exact 2x2 box: a seamless tile stays seamless
 
 
 def load_lin(path, size=1024):
-    a = lin(np.asarray(Image.open(path).convert("RGB")))
+    im = Image.open(path)
+    if im.mode.startswith("I;16") or im.mode == "I":       # 16-bit PNG
+        im = Image.fromarray((np.asarray(im, np.float32) / 257.0).clip(0, 255).astype(np.uint8))
+    a = lin(np.asarray(im.convert("RGB")))
     while a.shape[0] > size:
         a = half(a)
     return a
@@ -145,8 +164,8 @@ def gravel(src):
     means["gravel"] = lin(rgb).reshape(-1, 3).mean(axis=0)
 
 
-def jpeg_bytes(src, name, out, q=92):
-    c = load_lin(os.path.join(src, name))
+def jpeg_bytes(src, name, out, q=92, size=1024):
+    c = load_lin(os.path.join(src, name), size)
     Image.fromarray(srgb8(c), "RGB").save(os.path.join(TEX, out), "JPEG", quality=q, optimize=True)
 
 
@@ -156,12 +175,22 @@ def read_hdr(path):
     return im[:, :, ::-1].astype(np.float32)
 
 
-def sky(src, R=2048):
-    im = read_hdr(os.path.join(src, "sky.hdr"))
+# name, source, out, rows, exposure target (luminance of the 25-40 deg band), blue boost, sun (True: roll it to u = 0)
+SKIES = [
+    ("day", "sky.hdr", "sky_day.png", 2048, 0.42, 0.4, True),            # 8K: 8192 x 2048
+    ("evening", "sky_evening.hdr", "sky_evening_hq.png", 1024, 0.30, 0.0, True),   # 4K: 4096 x 1024, sun 8 deg
+    ("morning", "sky_morning.hdr", "sky_morning_hq.png", 1024, 0.40, 0.2, True),   # sun 29 deg
+    ("overcast", "sky_overcast.hdr", "sky_overcast.png", 1024, 0.36, 0.0, False),  # no sun: the brightest part at u = 0
+]
+
+
+def sky(src, name="sky.hdr", outname="sky_day.png", R=2048, target=0.42, blue=0.4, sun=True):
+    im = read_hdr(os.path.join(src, name))
     H, Ws, _ = im.shape
     im = im[: H // 2 + 1]                               # zenith .. horizon only
     L = im @ np.array([0.2126, 0.7152, 0.0722], np.float32)
-    sy, sx = np.unravel_index(np.argmax(L), L.shape)
+    import cv2
+    sy, sx = np.unravel_index(np.argmax(cv2.GaussianBlur(L, (0, 0), 3)), L.shape)  # (blurred: no single hot pixel)
     del L
     print("sky: %dx%d, sun at column %d, %.1f deg up" % (Ws, H, sx, 90 - (sy + 0.5) / H * 180))
     im = np.roll(im, -sx, axis=1)                       # the sun at u = 0
@@ -178,12 +207,12 @@ def sky(src, R=2048):
     Y = np.array([0.2126, 0.7152, 0.0722], np.float32)
     Lo = out @ Y
     band = Lo[int(R * (1 - np.sin(np.radians(40)))): int(R * (1 - np.sin(np.radians(25))))]
-    e = 0.42 / float(np.median(band))
+    e = target / float(np.median(band))
     x = out * e
     del out, Lo
     lum = (x @ Y)[..., None]
     # bluer clear sky (the scan is grey-blue against the game's sunny palette); clouds keep their white
-    sat = 1.0 + 0.4 * np.clip(1.0 - (lum - 0.45) / 0.4, 0, 1)
+    sat = 1.0 + blue * np.clip(1.0 - (lum - 0.45) / 0.4, 0, 1)
     x = lum + (x - lum) * sat
     # soft shoulder above 0.62: cloud tops keep their modelling instead of clipping
     lum = (x @ Y)[..., None]
@@ -191,7 +220,7 @@ def sky(src, R=2048):
     lm = np.where(lum > k, k + (1 - k) * (1 - np.exp(-(lum - k) / (1 - k))), lum)
     x = x * (lm / np.maximum(lum, 1e-5))
     rgb = srgb8(x)
-    Image.fromarray(rgb, "RGB").save(os.path.join(PHOTO, "sky_day.png"), optimize=True)
+    Image.fromarray(rgb, "RGB").save(os.path.join(PHOTO, outname), optimize=True)
     print("sky: %dx%d, exposure %.3f, mean sRGB %s" % (rgb.shape[1], rgb.shape[0], e, rgb.reshape(-1, 3).mean(axis=0).round(1)))
 
 
@@ -250,8 +279,18 @@ def main():
     grass(src); gravel(src)
     jpeg_bytes(src, "asphalt_track.jpg", "asphalt.bytes")
     jpeg_bytes(src, "concrete_floor_worn_001.jpg", "kerbconc.bytes")
+    # wave 2 (runtime-built atlases: TracksideArt.Atlas, EnvTex.BuildingAtlas)
+    jpeg_bytes(src, "metal032.jpg", "zinc.bytes", size=512)
+    jpeg_bytes(src, "concrete_wall_008.jpg", "wallconc.bytes")
+    for f, o in (("plastered_wall.png", "plaster"), ("red_brick.jpg", "brick"), ("clay_roof_tiles_02.jpg", "rooftiles"),
+                 ("concrete_slab_wall.jpg", "panels"), ("box_profile_metal_sheet.jpg", "cladding"),
+                 ("corrugated_iron_02.jpg", "corrugated"), ("painted_metal_shutter.png", "shutter")):
+        jpeg_bytes(src, f, o + ".bytes", size=512, q=90)
     leafspray(src)
-    sky(src)
+    only = os.environ.get("F2_SKIES")  # e.g. F2_SKIES=evening,morning: rebuild only those
+    for nm, f, outn, R, tgt, blue, sun in SKIES:
+        if (only is None or nm in only.split(",")) and os.path.exists(os.path.join(src, f)):
+            sky(src, f, outn, R, tgt, blue, sun)
     with open(os.path.join(PHOTO, "means.txt"), "w") as f:
         f.write("# linear mean colour of each photo albedo (Tools/Photo/make_photos.py); EnvTex.PhotoMean\n")
         for k, v in sorted(means.items()):

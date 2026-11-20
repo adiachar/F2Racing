@@ -29,7 +29,8 @@ using UnityEngine;
 
 public static class TracksideArt
 {
-    public const int AS = 256, AW = 1024, AH = 512; // AS: the old 256 square part (swatches, regions, first ads)
+    public const int AS = 256, AW = 2048, AH = 512; // AS: the old 256 square part (swatches, regions, first ads)
+    const int OW = 1024; // the original 1024 x 512 layout (x < OW); x 1024..2047: the photo-detailed barrier regions
 
     // ---------------------------------------------------------------- swatches
     public const int Concrete = 0, ConcreteDark = 1, PaintRed = 2, PaintWhite = 3, PaintYellow = 4, PaintBlue = 5, Steel = 6,
@@ -58,10 +59,17 @@ public static class TracksideArt
         return new Vector4(u, v, u, v);
     }
     static Vector4 Reg(int x, int y, int w, int h) => new Vector4((x + 1f) / AW, (y + 1f) / AH, (x + w - 1f) / AW, (y + h - 1f) / AH);
-    public static readonly Vector4 Door = Reg(0, 64, 64, 64), Glass = Reg(64, 64, 64, 64), TyreTops = Reg(128, 64, 64, 64), Scuff = Reg(192, 64, 64, 64);
+    public static readonly Vector4 Door = Reg(0, 64, 64, 64), Glass = Reg(64, 64, 64, 64);
     // surface detail regions (each is mapped whole onto one block / rail / panel, see Trackside.Pieces)
-    public static readonly Vector4 ConcreteBlock = Reg(256, 0, 128, 64), ConcreteBlock2 = Reg(384, 64, 128, 64), Armco = Reg(384, 0, 64, 64),
-        BeltRedR = Reg(448, 0, 32, 64), BeltWhiteR = Reg(480, 0, 32, 64), Cladding = Reg(256, 64, 64, 64), PanelWall = Reg(320, 64, 64, 64);
+    public static readonly Vector4 Cladding = Reg(256, 64, 64, 64), PanelWall = Reg(320, 64, 64, 64);
+    // photo wave 2 (Docs/ASSETS.md): the barrier regions at 4x the texels in x 1024..2047, each the original painted
+    // region (bilinear x 4: joints, bolts, streaks, dirt as before) times a CC0 photo's fine structure (zinc spangle,
+    // cast-concrete pores and trowel marks, worn rubber), so the barriers by the road stop reading as flat paint near
+    // the car. The original 64 / 128 px regions stay painted in the left half (unused by the meshes now).
+    static readonly RectInt[] HrSrc = { new RectInt(256, 0, 128, 64), new RectInt(384, 64, 128, 64), new RectInt(384, 0, 64, 64), new RectInt(128, 64, 64, 64), new RectInt(448, 0, 32, 64), new RectInt(480, 0, 32, 64), new RectInt(192, 64, 64, 64) };
+    static readonly RectInt[] HrDst = { new RectInt(1024, 0, 512, 256), new RectInt(1536, 0, 512, 256), new RectInt(1024, 256, 256, 256), new RectInt(1280, 256, 256, 256), new RectInt(1536, 256, 128, 256), new RectInt(1664, 256, 128, 256), new RectInt(1792, 256, 256, 256) };
+    public static readonly Vector4 ConcreteBlock = Reg(1024, 0, 512, 256), ConcreteBlock2 = Reg(1536, 0, 512, 256), Armco = Reg(1024, 256, 256, 256),
+        TyreTops = Reg(1280, 256, 256, 256), BeltRedR = Reg(1536, 256, 128, 256), BeltWhiteR = Reg(1664, 256, 128, 256), Scuff = Reg(1792, 256, 256, 256);
     // architecture detail (each mapped whole onto one bay / panel; see the pixel functions below)
     public static readonly Vector4 GlassWall = Reg(0, 128, 128, 128), Truss = Reg(128, 128, 128, 64), RoofSeam = Reg(128, 192, 64, 64),
         Louvre = Reg(192, 192, 64, 64), Balustrade = Reg(256, 128, 64, 64), Vomitory = Reg(320, 128, 64, 64), Screen = Reg(384, 128, 128, 64),
@@ -164,7 +172,7 @@ public static class TracksideArt
     {
         var px = new Color32[AW * AH];
         for (int y = 0; y < AH; y++)
-            for (int x = 0; x < AW; x++)
+            for (int x = 0; x < OW; x++)
             {
                 Color32 c;
                 if (y >= 256)
@@ -221,11 +229,63 @@ public static class TracksideArt
                 else c = new Color32(128, 128, 128, 255);
                 px[y * AW + x] = c;
             }
+        PhotoDetail(px);
         // aniso 8 + a slight negative mip bias (Docs/PERFORMANCE.md "Clarity"): boards and barriers line the track and are seen at grazing
         // angles, where 2x went to mush ~30 m out; the global setting is Enable on Medium/High (off on Low: no cost there)
         var t = new Texture2D(AW, AH, TextureFormat.RGBA32, 5, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 8, mipMapBias = -0.25f };
         t.SetPixels32(px); t.Apply(true, true);
         return t;
+    }
+
+    // ---------------------------------------------------------------- photo detail (wave 2; CC0, Docs/ASSETS.md)
+    // Resources/Textures: kerbconc (Poly Haven concrete_floor_worn_001), zinc (ambientCG Metal032), wallconc (Poly Haven
+    // concrete_wall_008), corrugated / plaster (the building photos). Missing photo: the region is still upscaled, flat.
+    static void PhotoDetail(Color32[] px)
+    {
+        var conc = EnvTex.LoadPhoto("kerbconc", true); var zinc = EnvTex.LoadPhoto("zinc", true);
+        // tiles of the photo across x along each region: block 4 m (photo ~2 m), rail 4 m, belt / tyres / scuff ~2 m
+        float[] pu = { 2f, 2f, 3f, 1f, 1f, 1f, 1f }, pv = { 0.5f, 0.5f, 0.75f, 1f, 2f, 2f, 1f }, ct = { 0.75f, 0.75f, 1.6f, 0.3f, 0.35f, 0.35f, 0.6f };
+        for (int r = 0; r < HrSrc.Length; r++) Upscale(px, HrSrc[r], HrDst[r], r == 2 ? zinc : conc, pu[r], pv[r], ct[r], r * 0.37f);
+        // regions kept at their size: in place, each texel the mean of 4 x 4 photo samples (no aliasing)
+        InPlace(px, new RectInt(256, 192, 128, 64), EnvTex.LoadPhoto("wallconc", true), 2f, 0.5f, 0.8f);  // poured concrete wall
+        InPlace(px, new RectInt(256, 64, 64, 64), EnvTex.LoadPhoto("corrugated", true), 1f, 1f, 0.5f);    // ribbed cladding
+        InPlace(px, new RectInt(320, 64, 64, 64), EnvTex.LoadPhoto("plaster", true), 1f, 1f, 0.6f);        // wall panels
+        foreach (var n in new[] { "kerbconc", "zinc", "wallconc", "corrugated", "plaster" }) EnvTex.ForgetPhoto(n);
+    }
+    static float Detail(EnvTex.Photo ph, float u, float v, float contrast) =>
+        ph == null ? 1f : Mathf.Clamp(1f + contrast * (ph.L(u, v) - 1f), 0.55f, 1.5f);
+    static void Upscale(Color32[] px, RectInt src, RectInt dst, EnvTex.Photo ph, float pu, float pv, float contrast, float off)
+    {
+        float sx = (float)src.width / dst.width, sy = (float)src.height / dst.height;
+        FormulaSim.Par.For(0, dst.height, j =>
+        {
+            for (int i = 0; i < dst.width; i++)
+            {
+                // bilinear in the source region, clamped inside it (no bleeding from the neighbours)
+                float fx = Mathf.Clamp((i + 0.5f) * sx - 0.5f, 0f, src.width - 1.001f), fy = Mathf.Clamp((j + 0.5f) * sy - 0.5f, 0f, src.height - 1.001f);
+                int ix = (int)fx, iy = (int)fy; float tx = fx - ix, ty = fy - iy;
+                int b = (src.y + iy) * AW + src.x + ix;
+                Color32 c00 = px[b], c10 = px[b + 1], c01 = px[b + AW], c11 = px[b + AW + 1];
+                float k = Detail(ph, off + (i + 0.5f) / dst.width * pu, off * 1.7f + (j + 0.5f) / dst.height * pv, contrast);
+                float r = Mathf.Lerp(Mathf.Lerp(c00.r, c10.r, tx), Mathf.Lerp(c01.r, c11.r, tx), ty) * k;
+                float g = Mathf.Lerp(Mathf.Lerp(c00.g, c10.g, tx), Mathf.Lerp(c01.g, c11.g, tx), ty) * k;
+                float bl = Mathf.Lerp(Mathf.Lerp(c00.b, c10.b, tx), Mathf.Lerp(c01.b, c11.b, tx), ty) * k;
+                float a = Mathf.Lerp(Mathf.Lerp(c00.a, c10.a, tx), Mathf.Lerp(c01.a, c11.a, tx), ty);
+                px[(dst.y + j) * AW + dst.x + i] = new Color32(B(r), B(g), B(bl), B(a));
+            }
+        });
+    }
+    static void InPlace(Color32[] px, RectInt rc, EnvTex.Photo ph, float pu, float pv, float contrast)
+    {
+        if (ph == null) return;
+        for (int j = 0; j < rc.height; j++) for (int i = 0; i < rc.width; i++)
+        {
+            float k = 0f;
+            for (int q = 0; q < 16; q++) k += Detail(ph, (i + ((q & 3) + 0.5f) / 4f) / rc.width * pu, (j + ((q >> 2) + 0.5f) / 4f) / rc.height * pv, contrast);
+            k /= 16f;
+            int o = (rc.y + j) * AW + rc.x + i; var c = px[o];
+            px[o] = new Color32(B(c.r * k), B(c.g * k), B(c.b * k), c.a);
+        }
     }
 
     // one advertising board, 256 x 64 (~5.6 x 1.1 m): invented name in smooth slanted capitals with an invented mark;
@@ -534,13 +594,18 @@ public static class TracksideArt
         return Tone(Swatch[BuildWhite], k, k, k);
     }
 
-    // ---------------------------------------------------------------- crowd: 32 seats (16 x 32 px each) x 4 bands
+    // ---------------------------------------------------------------- crowd: 32 seats x 4 bands, 1024 x 256 (wave 2: twice the
+    // texels of the old 512 x 128; the same layout, so Baked F2_CROWD and the stand UVs are unchanged)
     // band 0 mixed fans, band 1 mostly red (Ferrari), band 2 mixed and thinner, band 3 sparse. Seated people: shoulders,
-    // head, hair or cap, sometimes both arms up, a flag pole, and now and then a banner across four seats. Only mid-sized
-    // contrasts (no single-pixel detail), so the mips turn into soft coloured noise.
+    // head, hair or cap, sometimes both arms up, a flag pole, and now and then a banner across four seats. Shapes are
+    // drawn in the old 16 x 32 seat units as floats, so edges are twice as fine; an empty seat is a moulded plastic shell
+    // (a lit rounded back rim, the shaded seat pan, a dark gap under the back). Only mid-sized contrasts.
+    static float Cov(float d, float w) => Mathf.Clamp01(0.5f - d / w); // signed distance (seat units) -> coverage, w wide
+    static Color32 Over(Color32 a, Color32 b, float t) { if (t <= 0f) return a; if (t >= 1f) return b; return new Color32(B(a.r + (b.r - a.r) * t), B(a.g + (b.g - a.g) * t), B(a.b + (b.b - a.b) * t), 255); }
     public static Texture2D Crowd()
     {
-        const int W = 512, H = 128, CW = 16, CH = 32;
+        const int S = 2, W = 512 * S, H = 128 * S, CW = 16 * S, CH = 32 * S;
+        const float px1 = 1f / S; // one texel in seat units (the antialiasing width)
         Color32[] shirts = {
             new Color32(230, 40, 40, 255), new Color32(245, 245, 245, 255), new Color32(30, 30, 34, 255), new Color32(240, 130, 20, 255),
             new Color32(250, 210, 40, 255), new Color32(40, 90, 200, 255), new Color32(30, 140, 70, 255), new Color32(120, 120, 128, 255),
@@ -550,14 +615,23 @@ public static class TracksideArt
         Color32[] hair = { new Color32(30, 24, 20, 255), new Color32(70, 46, 28, 255), new Color32(150, 110, 60, 255), new Color32(210, 190, 140, 255), new Color32(120, 120, 120, 255) };
         float[] fill = { 0.9f, 0.9f, 0.82f, 0.55f };
         var px = new Color32[W * H];
-        for (int y = 0; y < H; y++)
+        FormulaSim.Par.For(0, H, y =>
+        {
             for (int x = 0; x < W; x++)
             {
-                int band = y / CH, ly = y % CH, seat = x / CW, lx = x % CW;
-                // seats in a neutral light grey: Baked F2_CROWD colours them per seat block (uv1) where alpha is 1
+                int band = y / CH, seat = x / CW;
+                float lx = (x % CW + 0.5f) * px1, ly = (y % CH + 0.5f) * px1; // seat units: 0..16 across, 0..32 up
+                int ily = (int)ly;
+                // the empty seat, neutral light grey (Baked F2_CROWD colours it per seat block where alpha is 1): a moulded
+                // shell, its back rounded (lit at the rim, shaded towards the sides), the dark gap under the back
                 Color32 seatCol = new Color32(206, 206, 210, 255);
-                Color32 c = ly < 4 ? Mul(seatCol, 0.45f) : Mul(seatCol, 0.8f + 0.2f * (lx > 1 && lx < 14 ? 1f : 0f)); // seat back with a dark gap under it
-                Color32 seat0 = c;
+                float sideD = Mathf.Abs(lx - 8f) / 6.5f;                                   // 0 centre .. 1 shell edge
+                float shell = 0.86f + 0.14f * (1f - sideD * sideD) + 0.08f * Cov(Mathf.Abs(ly - 12.5f) - 0.6f, px1); // lit rim
+                if (ly < 9f) shell *= 0.82f + 0.03f * ly;                                 // the pan, under the back's shade
+                float edge = Cov(Mathf.Abs(lx - 8f) - 6.5f, px1);                         // between seats: the shell's edge
+                Color32 c = Mul(seatCol, Mathf.Lerp(0.8f, shell, edge));
+                c = Over(c, Mul(seatCol, 0.45f), Cov(ly - 4f, px1));                      // dark gap at the foot
+                bool person = false;
                 if (Hash(seat, band, 21) < fill[band])
                 {
                     bool redBand = band == 1;
@@ -567,38 +641,58 @@ public static class TracksideArt
                     Color32 sk = skin[(int)(Hash(seat, band, 23) * skin.Length) % skin.Length];
                     Color32 hr = hair[(int)(Hash(seat, band, 27) * hair.Length) % hair.Length];
                     int dx = (int)(Hash(seat, band, 24) * 3f) - 1;                        // lean -1, 0, +1
-                    int cx = 8 + dx, hy = 21 + (int)(Hash(seat, band, 28) * 3f);           // head centre
+                    float cx = 8 + dx + 0.5f, hy = 21 + (int)(Hash(seat, band, 28) * 3f) + 0.5f; // head centre
                     bool cap = Hash(seat, band, 29) < (redBand ? 0.35f : 0.14f), arms = Hash(seat, band, 30) < 0.09f;
                     float sw = 0.88f + 0.22f * Hash(x / 2, y / 3, 25);
-                    // torso with rounded shoulders
-                    int half = ly >= 15 ? 4 - (ly - 14) / 2 : 5;
-                    if (ly >= 4 && ly <= 17 && Mathf.Abs(lx - cx) <= half) c = Mul(sh, sw * (ly < 7 ? 0.7f : 1f));
-                    // arms up: two skin columns beside the head, or a flag on a pole
-                    if (arms && ly >= 14 && ly <= 29 && (lx == cx - 5 || lx == cx + 5) && lx > 0 && lx < 15) c = sk;
-                    // head
-                    float dxh = lx - cx, dyh = (ly - hy) * 0.9f;
-                    if (dxh * dxh + dyh * dyh <= 10.5f) c = ly > hy + 1 && !cap ? hr : sk;
-                    if (cap && ly >= hy + 2 && ly <= hy + 3 && Mathf.Abs(lx - cx) <= 4) c = Mul(sh, 1.1f);
-                    if (ly >= 17 && ly <= 18 && Mathf.Abs(lx - cx) <= 1) c = Mul(sk, 0.9f);   // neck
+                    // torso with rounded shoulders, folds (lighter / darker vertical shading) and a shaded belly
+                    float half = ly >= 15f ? 5f - (ly - 14f) * 0.5f : 5.5f;
+                    float torso = Cov(Mathf.Abs(lx - cx) - half, px1) * Cov(4f - ly, px1) * Cov(ly - 18f, px1);
+                    float fold = 0.94f + 0.1f * (lx > cx ? 1f : 0f) - 0.06f * Mathf.Abs(lx - cx) / 5.5f;
+                    var tc = Mul(sh, sw * fold * (ly < 7f ? 0.7f : 1f));
+                    if (torso > 0f) { c = Over(c, tc, torso); person |= torso > 0.5f; }
+                    // arms up: two skin columns beside the head
+                    if (arms && ly >= 14f && ly <= 30f)
+                        for (int side = -1; side <= 1; side += 2)
+                        {
+                            float ax = cx + 5f * side, ac = Cov(Mathf.Abs(lx - ax) - 0.6f, px1);
+                            if (ac > 0f && ax > 0.5f && ax < 15.5f) { c = Over(c, sk, ac); person |= ac > 0.5f; }
+                        }
+                    // head (round, a lit side), hair or cap
+                    float dxh = lx - cx, dyh = (ly - hy) * 0.9f, hd = Mathf.Sqrt(dxh * dxh + dyh * dyh);
+                    float headC = Cov(hd - 3.24f, px1);
+                    if (headC > 0f)
+                    {
+                        Color32 hc = ly > hy + 1.5f && !cap ? hr : Mul(sk, 0.92f + 0.12f * Mathf.Clamp(dxh / 3f, -1f, 1f));
+                        c = Over(c, hc, headC); person |= headC > 0.5f;
+                    }
+                    if (cap) { float capC = Cov(Mathf.Abs(ly - (hy + 2.5f)) - 1f, px1) * Cov(Mathf.Abs(lx - cx) - 4.5f, px1); if (capC > 0f) { c = Over(c, Mul(sh, 1.1f), capC); person = true; } }
+                    float neck = Cov(Mathf.Abs(ly - 18f) - 1f, px1) * Cov(Mathf.Abs(lx - cx) - 1.5f, px1) * (headC < 0.5f ? 1f : 0f);
+                    if (neck > 0f) { c = Over(c, Mul(sk, 0.9f), neck); person |= neck > 0.5f; }
                     if (Hash(seat, band, 26) > 0.94f)                                      // flag on a pole
                     {
-                        if (lx == 13 && ly >= 8) c = new Color32(210, 210, 210, 255);
-                        if (lx >= 9 && lx <= 12 && ly >= 24 && ly <= 30)
-                            c = (seat & 1) == 0 ? (lx < 11 ? new Color32(30, 150, 60, 255) : new Color32(230, 40, 40, 255)) : (ly > 27 ? new Color32(245, 245, 245, 255) : new Color32(230, 40, 40, 255));
+                        float pole = Cov(Mathf.Abs(lx - 13.5f) - 0.4f, px1) * Cov(8f - ly, px1);
+                        if (pole > 0f) { c = Over(c, new Color32(210, 210, 210, 255), pole); person = true; }
+                        if (lx >= 9f && lx < 13f && ly >= 24f && ly < 31f)
+                        {
+                            c = (seat & 1) == 0 ? (lx < 11f ? new Color32(30, 150, 60, 255) : new Color32(230, 40, 40, 255)) : (ly >= 28f ? new Color32(245, 245, 245, 255) : new Color32(230, 40, 40, 255));
+                            c = Mul(c, 0.92f + 0.12f * Mathf.Sin(lx * 1.7f + ly * 0.4f)); person = true; // cloth folds
+                        }
                     }
                 }
                 // banner stretched over a run of four seats
                 int run = seat / 4;
-                if (Hash(run, band, 50) > 0.955f && ly >= 8 && ly <= 15)
+                if (Hash(run, band, 50) > 0.955f && ly >= 8f && ly < 16f)
                 {
                     bool two = Hash(run, band, 51) > 0.5f;
                     Color32 b0 = two ? new Color32(220, 30, 35, 255) : new Color32(25, 60, 150, 255), b1 = new Color32(245, 240, 225, 255);
-                    bool txt = ly >= 10 && ly <= 13 && ((x / 3) % 3 != 2) && Hash(x / 3, run, 52) > 0.3f;
-                    c = txt ? b1 : (ly == 8 || ly == 15 ? Mul(b1, 0.9f) : b0);
+                    int lgx = x / S;
+                    bool txt = ily >= 10 && ily <= 13 && ((lgx / 3) % 3 != 2) && Hash(lgx / 3, run, 52) > 0.3f;
+                    c = txt ? b1 : (ily == 8 || ily == 15 ? Mul(b1, 0.9f) : b0); person = true;
                 }
-                c.a = c.r == seat0.r && c.g == seat0.g && c.b == seat0.b ? (byte)255 : (byte)0; // seat (tinted) or person
+                c.a = person ? (byte)0 : (byte)255; // seat (tinted) or person
                 px[y * W + x] = c;
             }
+        });
         var t = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
         t.SetPixels32(px); t.Apply(true, true);
         return t;

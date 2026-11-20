@@ -42,12 +42,28 @@ licence is the original publisher's, CC0 1.0, whatever the mirror repository's o
 | `Resources/Textures/kerbconc.bytes` | Poly Haven [concrete_floor_worn_001](https://polyhaven.com/a/concrete_floor_worn_001) (2K diffuse, halved) | CC0 1.0 | 1024² JPEG -> EnvTex.RoadDetail G | kerb concrete under the paint (same fetch as the asphalt grain) |
 | `Resources/Textures/leafspray.bytes` | ambientCG [LeafSet002](https://ambientcg.com/view?id=LeafSet002), [LeafSet005](https://ambientcg.com/view?id=LeafSet005) (2K colour + opacity) | CC0 1.0 | 1024 x 512 PNG, 8 cut-out sprays -> EnvTex.Foliage (2048 x 1024 atlas, ETC2/DXT5 at load, 2.8 MB) | the broad-leaf tree cards' leaf clusters (real silhouettes) |
 
-Mirrors used: `kennyhassmusic/sky-city` (SourceArt/CC0: Poly Haven + ambientCG), `RosaryMala/BlaseballStadiumViewer`,
+### Wave 2 (2026-11-20: skies for every time of day and rain, barriers, walls, tyre walls, buildings, stand seats)
+
+| File | Source (original page) | Licence | Size / format in the build | Used for |
+|---|---|---|---|---|
+| `Resources/Photo/sky_evening_hq.png` | Poly Haven [kloppenheim_06_puresky](https://polyhaven.com/a/kloppenheim_06_puresky) (4K HDR) | CC0 1.0 | 4096 x 1024, ASTC 4x4, no mips (4.2 MB) | evening sky (golden-hour cumulus, sun 8 deg: the world's evening sun moves 13 -> 8 deg with it) |
+| `Resources/Photo/sky_morning_hq.png` | Poly Haven [autumn_field_puresky](https://polyhaven.com/a/autumn_field_puresky) (4K HDR) | CC0 1.0 | 4096 x 1024, ASTC 4x4 (4.2 MB) | morning sky (clear, hazy, sun 29 deg: the world's morning sun moves 24 -> 29 deg) |
+| `Resources/Photo/sky_overcast.png` | Poly Haven [overcast_soil_puresky](https://polyhaven.com/a/overcast_soil_puresky) (4K HDR) | CC0 1.0 | 4096 x 1024, ASTC 6x6 (1.9 MB) | wet weather, any time but night (the closed grey deck) |
+| `Resources/Textures/zinc.bytes` | ambientCG [Metal032](https://ambientcg.com/view?id=Metal032) | CC0 1.0 | 512² JPEG -> TracksideArt atlas | Armco rail zinc mottling (rail region 256² , 4x the texels) |
+| `Resources/Textures/wallconc.bytes` | Poly Haven [concrete_wall_008](https://polyhaven.com/a/concrete_wall_008) (4K, quartered) | CC0 1.0 | 1024² JPEG -> TracksideArt atlas | poured concrete walls (pores, form-tie holes, panel marks) |
+| `Resources/Textures/kerbconc.bytes` (wave 1) | Poly Haven concrete_floor_worn_001 | CC0 1.0 | (as above) | also the precast barrier blocks (512 x 256 regions), tyre-wall belts, tyre tops, scuffed concrete (4x the texels) |
+| `Resources/Textures/plaster, brick, rooftiles, panels, cladding, corrugated, shutter.bytes` | Poly Haven [plastered_wall](https://polyhaven.com/a/plastered_wall), [red_brick](https://polyhaven.com/a/red_brick), [clay_roof_tiles_02](https://polyhaven.com/a/clay_roof_tiles_02), [concrete_slab_wall](https://polyhaven.com/a/concrete_slab_wall), [box_profile_metal_sheet](https://polyhaven.com/a/box_profile_metal_sheet), [corrugated_iron_02](https://polyhaven.com/a/corrugated_iron_02), [painted_metal_shutter](https://polyhaven.com/a/painted_metal_shutter) | CC0 1.0 | 512² JPEGs (were 256) -> EnvTex.BuildingAtlas, now 2048 x 1024 with 256 px cells, ETC2 / DXT5 at load (2.8 MB) | building facades and roofs (RealWorld map buildings) |
+| (procedural) grandstand seats and crowd | TracksideArt.Crowd | ours | 1024 x 256 (was 512 x 128) | moulded seat shells, anti-aliased people |
+
+Not found on any reachable mirror: a CC0 astroturf / artificial-grass scan (the turf strip stays procedural) and a CC0
+tyre-stack photo (tyre walls keep their painted shapes, with photo rubber wear).
+
+Mirrors used: `kennyhassmusic/sky-city` (SourceArt/CC0: Poly Haven + ambientCG), wave 2: `Brooklyn-Dev/ray-tracing`, `FionaWright/CherryPip`, `efimco/BakeForge`, `rito15/Unity-Shader-Graph-Study`, `i-machine-think/grasp`, `Kacper79/UKSW_Escape_Within_Reach_Gr_1`, `mitarthpathak/Blender-Fable-5.2`, `dunkean/magna-urbis`, `shadow-kernel/Vortex-Engine-OpenWorld-Template`, `Shahidul-Khan2004/UIU-Sim`, `mrxizao/gundam-hathaway`; `RosaryMala/BlaseballStadiumViewer`,
 `Rodrigo-AO/FS_assetto_track_creator` (presets/common/cc0, its LICENSE.txt names the Poly Haven pages), `Kitjesen/
 MapPilot` (Poly Haven library), `cdav1990/OverWatch2` (8K HDR). Checked candidates, not used yet: Poly Haven leafy_grass,
 sparse_grass, large_pebbles, asphalt_02, clean_asphalt, concrete_floor_painted (all 2K, same mirrors), ambientCG
 Grass004, LeafSet001 / 004; skies overcast_soil_puresky, belfast_sunset_puresky, industrial_sunset_puresky,
-kloofendal_43d_clear_puresky, qwantani_dusk_2_puresky (mirrored at 4K, for rain / evening / morning in a later wave).
+kloofendal_43d_clear_puresky, qwantani_dusk_2_puresky, belfast_sunset_puresky, industrial_sunset_puresky, citrus_orchard_road_puresky, sunflowers_puresky (4K; wave 2 took kloppenheim_06, autumn_field, overcast_soil).
 
 ## Downloaded models and textures (Resources/Models: models.bytes + atlas.bytes)
 

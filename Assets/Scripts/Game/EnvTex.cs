@@ -156,6 +156,13 @@ public static class EnvTex
         photoTex[name] = t;
         return t;
     }
+    // drop an imported photo from memory (the next PhotoTex loads it again): skies the session does not use
+    public static void UnloadPhotoTex(string name)
+    {
+        Texture2D t;
+        if (photoTex.TryGetValue(name, out t) && t != null) Resources.UnloadAsset(t);
+        photoTex.Remove(name);
+    }
     public static bool PhotoMean(string name, out Color mean)
     {
         mean = Color.gray;
@@ -195,6 +202,8 @@ public static class EnvTex
     }
     // Gravel's photo twin (Resources/Photo/gravel: Poly Haven gravel_floor_02 at 1024), the same mean as MakeGravel
     public static Texture2D GravelPhoto(out Vector4 gain) => PhotoAlbedo("gravel", new Color(0.50f, 0.45f, 0.36f), out gain);
+
+    public static void ForgetPhoto(string name) => photos.Remove(name); // (free a decoded photo once a texture is built)
 
     public static int Bytes; // texture memory made here (RGBA32 + mips), for the performance notes
     static Texture2D Count(Texture2D t) { Bytes += t.width * t.height * 4 * 4 / 3; return t; }
@@ -602,12 +611,19 @@ public static class EnvTex
     //                       27 concrete panel with a window  28 plaster  29, 30 shutters closed  31 blind down
     public const int AtlasCols = 8, AtlasRows = 4;
     static Texture2D bAtlas;
-    static Color[] dPl, dBr, dTi, dPa, dCl, dCo, dSh, dGr; // photo detail per tile (128 x 128, linear, relative to the photo's mean)
+    static Color[] dPl, dBr, dTi, dPa, dCl, dCo, dSh, dGr; // photo detail per tile (DN x DN, linear, relative to the photo's mean)
+    // Cells are 256 px (atlas 2048 x 1024, GPU-compressed at load: 2.8 MB, as the old 1024 x 512 RGBA32). The bay drawing
+    // (BCell) still works in 128-unit cell coordinates; the photo detail (CC0 Poly Haven scans, 512 px now) is looked up
+    // per real texel (hx, hy), so plaster, brick, tiles and cladding are twice as sharp. Baked.shader F2_ATLAS knows the
+    // 256 px cell and its 4 px margin.
+    public const int AtlasCell = 256;
+    const int DN = 256;
+    static int hx, hy; // the texel being painted, in the cell (0 .. AtlasCell - 1)
     static float mk; // tint mask of the pixel being painted
     public static Texture2D BuildingAtlas()
     {
         if (bAtlas != null) return bAtlas;
-        const int C = 128, W = C * AtlasCols, H = C * AtlasRows; var px = new Color32[W * H];
+        const int C = AtlasCell, W = C * AtlasCols, H = C * AtlasRows, Mg = C / 64; var px = new Color32[W * H];
         dPl = Det("plaster", 1, 0.3f, 3f); dBr = Det("brick", 2, 1f, 1f); dTi = Det("rooftiles", 1, 0.55f, 0.75f);
         dPa = Det("panels", 2, 0.3f, 1f); dCl = Det("cladding", 3, 0f, 2.5f); dCo = Det("corrugated", 1, 0.2f, 1.6f);
         dSh = Det("shutter", 1, 0f, 1.3f); dGr = Det("gravel", 2, 0.2f, 0.6f);
@@ -616,10 +632,11 @@ public static class EnvTex
             int ox0 = (cell % AtlasCols) * C, oy0 = (cell / AtlasCols) * C;
             for (int y = 0; y < C; y++) for (int x = 0; x < C; x++)
             {
-                // the tile spans pixels 2 .. 126 (the shader's margin); the margin repeats the opposite edge
-                float u = ((x - 2 + 0.5f) / 124f + 1f) % 1f, v = ((y - 2 + 0.5f) / 124f + 1f) % 1f;
+                // the tile spans pixels Mg .. C - Mg (the shader's margin); the margin repeats the opposite edge
+                float u = ((x - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f, v = ((y - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f;
                 mk = 1f; glassPx = false;
-                var c = BCell(cell, u, v, Mathf.Min(127, (int)(u * C)), Mathf.Min(127, (int)(v * C)));
+                hx = Mathf.Min(C - 1, (int)(u * C)); hy = Mathf.Min(C - 1, (int)(v * C));
+                var c = BCell(cell, u, v, Mathf.Min(127, (int)(u * 128)), Mathf.Min(127, (int)(v * 128)));
                 // ground-floor bays: splash grime and shade towards the pavement (darker bases)
                 if (cell >= 8 && cell <= 15) { float g = Mathf.Clamp01(v / 0.3f); c *= 0.7f + 0.3f * g * (2f - g); }
                 // alpha: 0 = window glass (Baked F2_ATLAS mirrors the sky there and lights some windows at night);
@@ -630,15 +647,19 @@ public static class EnvTex
         }
         dPl = dBr = dTi = dPa = dCl = dCo = dSh = dGr = null;
         var t = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
-        t.SetPixels32(px); t.Apply(true, true);
+        t.SetPixels32(px);
+        // GPU-compressed (ETC2 on phones, DXT5 on desktop / WebGL): 2.8 MB instead of 11 MB RGBA32
+        if (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))
+        { t.Apply(true, false); t.Compress(true); t.Apply(false, true); Bytes += W * H * 4 / 3; return bAtlas = t; }
+        t.Apply(true, true);
         return bAtlas = Count(t);
     }
-    // a photo box-filtered to 128 x 128 per tile with "rep" repeats, as colour relative to its mean (luminance ~1):
+    // a photo box-filtered to DN x DN per tile with "rep" repeats, as colour relative to its mean (luminance ~1):
     // chroma 0 = grey detail only, contrast scales the deviation from 1. Null if the photo is missing.
     static Color[] Det(string name, int rep, float chroma, float contrast)
     {
         var p = LoadPhoto(name); if (p == null) return null;
-        const int N = 128; var d = new Color[N * N];
+        const int N = DN; var d = new Color[N * N];
         float step = (float)p.W * rep / N; int k = Mathf.Max(1, Mathf.RoundToInt(step));
         for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
         {
@@ -651,7 +672,8 @@ public static class EnvTex
         return d;
     }
     static Color32 Col(Color c) => new Color32(B(c.r), B(c.g), B(c.b), 255);
-    static Color Dt(Color[] d, int x, int y) => d == null ? Color.white : d[(y & 127) * 128 + (x & 127)];
+    // (x, y: the 128-unit coordinates BCell passes; the detail is read at the real texel hx, hy of the 256 px cell)
+    static Color Dt(Color[] d, int x, int y) => d == null ? Color.white : d[(hy & (DN - 1)) * DN + (hx & (DN - 1))];
     // linear albedo x photo detail -> sRGB colour
     static Color Lin(Color[] d, int x, int y, Color lin)
     {

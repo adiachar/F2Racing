@@ -180,9 +180,9 @@ Shader "F2/Baked"
                 half crown = saturate(a - 2.0);
                 fixed4 c = fixed4(L.rgb * (0.55 + 0.9 * k) * lerp(0.88 + 0.24 * m.r, 0.38 + 1.05 * m.g, crown), 1);
             #elif defined(F2_ATLAS)
-                float2 g = i.uv * 128.0;                       // texels of one 128 px cell
+                float2 g = i.uv * 256.0;                       // texels of one 256 px cell (EnvTex.AtlasCell)
                 float2 dx = ddx(g), dy = ddy(g);
-                float lod = clamp(0.5 * log2(max(dot(dx, dx), dot(dy, dy))), 0.0, 4.0);
+                float lod = clamp(0.5 * log2(max(dot(dx, dx), dot(dy, dy))), 0.0, 5.0);
                 float h = frac(sin(dot(floor(i.uv), float2(12.9898, 78.233))) * 43758.5453);
                 float alt = frac(i.cell.y);
                 float idx = h < (alt - 0.05) * 1.1111 ? floor(i.cell.y) : floor(i.cell.x + 0.5);
@@ -191,7 +191,7 @@ Shader "F2/Baked"
                 // map-stand crowd (cell 22, 16 people x 4 rows per tile): each spectator moves a little
                 float crowd = abs(idx - 22.0) < 0.5 ? 1.0 : 0.0;
                 fu = frac(fu + crowd * Shimmer(floor(fu * float2(16.0, 4.0)) + floor(i.uv) * 17.0, float2(1.0 / 124.0, 1.0 / 124.0)));
-                float2 a = (float2(idx - cy * 8.0, cy) + (2.0 + fu * 124.0) / 128.0) * float2(0.125, 0.25);
+                float2 a = (float2(idx - cy * 8.0, cy) + (4.0 + fu * 248.0) / 256.0) * float2(0.125, 0.25); // 4 px margin
                 fixed4 c = tex2Dlod(_MainTex, float4(a, 0, lod));
                 half3 tc = i.tint.rgb;
                 float tw = i.tint.w, e = min(i.uv.x, tw - i.uv.x); // (float compares, see F2_LAND)

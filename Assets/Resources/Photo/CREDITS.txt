@@ -3,4 +3,7 @@ All CC0 1.0 (public domain). Original pages:
 grass.png      ambientCG Grass001                                https://ambientcg.com/view?id=Grass001
 gravel.png     Poly Haven gravel_floor_02                        https://polyhaven.com/a/gravel_floor_02
 sky_day.png    Poly Haven kloofendal_48d_partly_cloudy_puresky   https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky
+sky_evening_hq.png  Poly Haven kloppenheim_06_puresky  https://polyhaven.com/a/kloppenheim_06_puresky
+sky_morning_hq.png  Poly Haven autumn_field_puresky    https://polyhaven.com/a/autumn_field_puresky
+sky_overcast.png    Poly Haven overcast_soil_puresky   https://polyhaven.com/a/overcast_soil_puresky
 means.txt      linear mean colour of each albedo (EnvTex.PhotoMean)

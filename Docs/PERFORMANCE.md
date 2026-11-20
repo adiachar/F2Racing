@@ -23,6 +23,21 @@ RoadDetail builds 2 x 1 M texels (was 0.26 M), the tree atlas paints 4x the texe
 (~0.3-0.8 s more on a phone, a guess: measure); transient managed heap +~30 MB while the atlas is painted (float
 arrays, freed after). A/B: shot parameter `photo=0` (procedural textures and sky, EnvTex.NoPhotos / Sky.NoPhotoSky).
 
+### Photo textures, wave 2 (20 Nov 2026, gfx; untested in a build)
+
+| Surface | Before | After | Reads per pixel | GPU memory |
+|---|---|---|---|---|
+| Sky, morning / evening / wet | procedural skybox + cloud dome (2 / 4 reads) | 4K CC0 panoramas (morning, evening ASTC 4x4, overcast 6x6); dome haze only (dry) | 4 -> 1 (HQ), 2 -> 1 (Low) | only the session's sky is loaded (others unloaded): +4.2 MB evening / morning, +1.9 MB when wet |
+| Barriers (Armco, precast blocks, tyre-wall belts and tops, scuffed concrete) | 64 / 128 px regions of the trackside atlas | 4x the texels (256-512 px regions), painted detail x CC0 zinc / concrete; atlas 1024 x 512 -> 2048 x 512 RGBA32 | same 1 | 2.8 -> 5.6 MB |
+| Poured concrete walls, cladding, wall panels | painted | same size, CC0 photo detail baked in | same | +0 |
+| Building facades / roofs (map buildings) | 128 px cells, 256 px photos, RGBA32 1024 x 512 | 256 px cells, 512 px photos, 2048 x 1024 ETC2 / DXT5 at load | same 1 (Baked F2_ATLAS: 256 px cell, 4 px margin, lod clamp 5) | 2.8 -> 2.8 MB |
+| Grandstand seats + crowd | 512 x 128 | 1024 x 256, anti-aliased shapes, moulded seat shells | same | 0.35 -> 1.4 MB |
+
+Wave 2 net: GPU about +4 MB plus the session's sky (+1.9 to +4.2 MB); APK about +11 MB (three ASTC skies 10.3 MB, photo
+bytes +0.5 MB). Totals after both waves: GPU textures ~55-60 MB on High, APK ~+21 MB. Load time: the building atlas
+paints 4x the texels and compresses (ETC2), the trackside atlas adds 0.65 M upscaled texels, the crowd 4x (in
+parallel rows): est. +0.3-0.6 s on a phone, measure.
+
 ## Clarity (20 Nov 2026, gfx)
 
 What made the picture soft on the Redmi (WebGL shots at the phone's 1700x765 3D size, Monza s=300/850/2500, High and
