@@ -244,6 +244,8 @@ public static class LightBake
             bool hasN = n != null && n.Length == v.Length; int hint = -1, hint2 = -1;
             bool groundShade = (mf.name == "Verge" || mf.name == "Gravel" || mf.name == "Astroturf") && track != null && !night; // alpha: sign + sun share for the shadow mask (Ground.cginc)
             bool foliage = sn == "F2/Foliage"; bool cards = mf.name == "Trees" && v.Length % 4 == 0;
+            // the procedural land (WorldBuilder's "Terrain"): valley shade and the woods' mask in the alpha (BakeVertex)
+            bool land = mf.name == "Terrain" && sn == "F2/Ground" && !RealWorld.Active;
             // standing things (barriers, walls, boards, posts, tyre walls, stands, buildings), not the ground itself:
             // their faces get a tight contact shade where they meet the ground (Foot)
             string mn = mf.name;
@@ -256,11 +258,14 @@ public static class LightBake
                 FormulaSim.Par.For(0, (v.Length + BakeChunk - 1) / BakeChunk, ch =>
                 {
                     int h1 = -1, h2 = -1, e = System.Math.Min(v.Length, (ch + 1) * BakeChunk);
-                    for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref h1, ref h2, obj);
+                    for (int i = ch * BakeChunk; i < e; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref h1, ref h2, obj, land);
                 });
             else
-                for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref hint, ref hint2, obj);
+                for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, groundShade, foliage, cards, ref hint, ref hint2, obj, land);
             mesh.colors = col; verts += v.Length;
+            // explicit (0, 0) track coordinates on the land, so Ground.cginc's woods test (lat < 0.5) never reads an
+            // unbound attribute (an unbound TEXCOORD3 read back as garbage on the verges, gap list item 2)
+            if (land && mesh.uv3.Length == 0) mesh.SetUVs(2, new Vector2[v.Length]);
             if (!own) r.sharedMaterial.shader = shader;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
         }
@@ -271,6 +276,7 @@ public static class LightBake
     }
 
     const int BakeChunk = 2048;
+    static readonly float[] ValleyC = { 1f, 0.5f, -0.5f, -1f, -0.5f, 0.5f }, ValleyS = { 0f, 0.866f, 0.866f, 0f, -0.866f, -0.866f };
     static readonly int WinGlowId = Shader.PropertyToID("_WinGlow");
     static readonly Color TunnelGlow = new Color(1.25f, 1.0f, 0.62f, 1f); // stored halved: 2.5x, a warm sodium-white
     // foliage vertices that are not in a mesh (ModelInstancing: world positions and normals of every instance vertex):
@@ -289,7 +295,7 @@ public static class LightBake
             for (int i = 0; i < v.Length; i++) col[i] = BakeVertex(i, v, n, hasN, false, true, false, ref hint, ref hint2);
     }
     // the light of vertex i (rgb halved: the shader doubles it; alpha: the ground's shadow-mask data)
-    static Color BakeVertex(int i, Vector3[] v, Vector3[] n, bool hasN, bool groundShade, bool foliage, bool cards, ref int hint, ref int hint2, bool obj = false)
+    static Color BakeVertex(int i, Vector3[] v, Vector3[] n, bool hasN, bool groundShade, bool foliage, bool cards, ref int hint, ref int hint2, bool obj = false, bool land = false)
     {
         Vector3 p = v[i], nn = hasN ? n[i] : Vector3.up;
         // merged meshes share vertices between a wall and its top / the ground, so their smooth normals lean
@@ -324,6 +330,25 @@ public static class LightBake
         // inside a tunnel: no sky, warm lamp light instead (darker into the corners)
         if (sun < 0.5f && Roof(p.x, p.z) - p.y > 1f && Roof(p.x, p.z) - p.y < 9f && Waterfront.InTunnel(p.x, p.z)) c = (amb * 0.15f + LampCol) * TunnelAo(p, ref hint);
         float alpha = 1f;
+        if (land)
+        {
+            // valleys darker, crests a touch lighter: the land's height against the mean of a 45 m ring round it (less sky
+            // and bounce reach a hollow; the vertex bake alone lit every slope facing up the same). Inside the woods the
+            // crowns shade each other and the gaps between them: the canopy is darker than open grass under the same
+            // sky. The woods' share goes to the alpha (1 = open land .. 0.5 = deep wood) for Ground.cginc's crowns
+            // (the terrain has no track coordinates, so its alpha carries nothing else). Load time only, pure maths.
+            float self = WorldBuilder.H(p.x, p.z) + Environment.Lift(p.x, p.z), ring = 0f;
+            for (int k = 0; k < 6; k++)
+            {
+                float rx = p.x + ValleyC[k] * 45f, rz = p.z + ValleyS[k] * 45f;
+                ring += WorldBuilder.H(rx, rz) + Environment.Lift(rx, rz);
+            }
+            // (none near the road: the land there meets the verges, which keep their own light, without a seam)
+            float dh = (ring / 6f - self) * Mathf.SmoothStep(0f, 1f, (Environment.Clear(p.x, p.z) - Environment.Cur.flatTo) / 60f);
+            float cn = Environment.Canopy(p.x, p.z);
+            c *= (1f - 0.34f * Mathf.Clamp01(dh / 10f)) * (1f + 0.07f * Mathf.Clamp01(-dh / 10f)) * (1f - 0.16f * cn);
+            alpha = 1f - 0.5f * cn;
+        }
         if (groundShade)
         {
             // sign of the side (+ = left) and the sun's share of this light, for Ground.cginc's shadow-mask lookup

@@ -112,6 +112,28 @@ fixed4 frag (v2f i) : SV_Target
     col *= lerp(half3(1.0, 1.0, 1.0), half3(1.10, 1.06, 0.88), saturate((0.40 - lush) * 3.5));
 #endif
 
+    // ---- the woods on the open land, seen from the track (gap list item 18): tree crowns on the procedural terrain.
+    // Only the "Terrain" mesh has track coordinates (0, 0) and a vertex alpha below 1 (LightBake: 1 - 0.5 x the woods'
+    // share, Environment.Canopy); verges, gravel and run-offs have lat > 0.5, the flat sheet alpha 1, so they skip it.
+    // ~7 m crowns (the detail tile is 4.5 m): two turned, warped egg-crate waves, broken up by the detail's clumps
+    // (alpha), lit tops and dark gaps between them, faded to their mean once a crown is under ~3 px (no shimmer).
+    // No reads: maths on the reads above, in a branch only the woods take.
+    float2 fq = fwidth(i.uv.xy) * 0.64; // (outside the branch)
+    float wood = lat < 0.5 ? saturate((1.0 - (float)i.sideSun) * 2.0) : 0.0;
+    if (wood > 0.004)
+    {
+        float2 q = i.uv.xy * 0.64;
+        float2 r = float2(q.x * 0.6 - q.y * 0.8, q.x * 0.8 + q.y * 0.6) * 1.37 + 0.31;
+        float k1 = sin(q.x * 6.2832 + 1.3 * sin(q.y * 2.4)) * sin(q.y * 6.2832 + 1.1 * sin(q.x * 1.9));
+        float k2 = sin(r.x * 6.2832) * sin(r.y * 6.2832);
+        float crown = saturate(0.5 + 0.34 * k1 + 0.24 * k2 + 0.5 * ((float)d.a - 0.5));
+        float fade = saturate(1.6 - max(fq.x, fq.y) * 2.5);
+        crown = lerp(0.55, crown, fade);
+        // gaps: dark and a little blue (shade under the crowns); tops: warmer, catching the sky
+        half3 wc = col * (half)(0.40 + 1.0 * crown) * lerp(half3(0.82, 0.92, 1.04), half3(1.06, 1.02, 0.88), (half)crown);
+        col = lerp(col, wc, (half)wood);
+    }
+
     // ---- forest floor under the trees behind the barrier (verge: uv3.y; the run-off strip's uv3 is its own data)
     // Uniform branch on _Forest: only the verge whose mesh got RealWorld.VergeFloor's uv3 sets it (Monza). Every other
     // Ground mesh (the procedural circuits' verges, terrain, gravel) has no TEXCOORD3 at all, and the unbound attribute

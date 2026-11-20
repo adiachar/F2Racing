@@ -55,6 +55,9 @@ public class EnvDef
     // canopy m and coloured like tree tops, so a few hundred real trees along its edge read as a deep forest
     public float canopy = 0, canopyAt = 48, cover = 0.5f;
     public float poplar = 0.06f;                                  // share of Lombardy poplars among the broad-leaf trees
+    // the woods on the hillsides (gap list item 18): extra crowns inside the woods where the land rises (2 cards each,
+    // sunk so only the upper crown stands out of the canopy-textured ground), and farmhouses / barns in the clearings
+    public int slopeTrees, farms;
     public bool realModels;                                       // real tree / shrub / lamp models near the track (ModelLib.cs; Medium and High)
     public Color leaf = new Color(0.19f, 0.42f, 0.21f), leaf2 = new Color(0.19f, 0.42f, 0.21f), trunk = new Color(0.36f, 0.25f, 0.19f);
     // backdrop
@@ -104,7 +107,7 @@ public static class Environment
             grass = C(0.16f, 0.31f, 0.13f), dry = C(0.21f, 0.34f, 0.14f), patch = 0.3f,
             flatTo = 62, ramp = 110, rough = 12, roughScale = 260, rise = 60, riseDist = 300,
             tree = TreeKind.Spruce, tree2 = TreeKind.Broadleaf, tree2Share = 0.12f, treeNear = 22, treeFar = 330, treeSize = 1.1f,
-            canopy = 15, canopyAt = 46, cover = 0.82f,
+            canopy = 15, canopyAt = 38, cover = 0.82f, slopeTrees = 1400, farms = 9,
             leaf = C(0.10f, 0.23f, 0.13f), leaf2 = C(0.17f, 0.36f, 0.16f),
             rings = new[]
             {
@@ -148,7 +151,7 @@ public static class Environment
             grass = C(0.19f, 0.39f, 0.14f), dry = C(0.24f, 0.41f, 0.16f), patch = 0.3f,
             flatTo = 62, rough = 8, roughScale = 240, rise = 14, riseDist = 260,
             tree = TreeKind.Broadleaf, tree2 = TreeKind.Spruce, tree2Share = 0.3f, treeMul = 1.3f, treeNear = 24, treeFar = 420, treeSize = 1.15f,
-            canopy = 11, canopyAt = 52, cover = 0.5f,
+            canopy = 11, canopyAt = 52, cover = 0.5f, slopeTrees = 900, farms = 4,
             leaf = C(0.15f, 0.37f, 0.15f), leaf2 = C(0.10f, 0.26f, 0.14f),
             rings = new[]
             {
@@ -207,7 +210,7 @@ public static class Environment
             grass = C(0.20f, 0.40f, 0.14f), dry = C(0.26f, 0.43f, 0.16f), patch = 0.3f,
             flatTo = 62, ramp = 110, rough = 10, roughScale = 260, rise = 70, riseDist = 300,
             tree = TreeKind.Spruce, tree2 = TreeKind.Broadleaf, tree2Share = 0.2f, treeMul = 1.1f, treeNear = 40, treeFar = 380, clump = 0.4f, treeSize = 1.1f,
-            canopy = 14, canopyAt = 70, cover = 0.42f,
+            canopy = 14, canopyAt = 70, cover = 0.42f, slopeTrees = 1100, farms = 10,
             leaf = C(0.10f, 0.25f, 0.13f), leaf2 = C(0.18f, 0.38f, 0.16f),
             rings = new[]
             {
@@ -391,7 +394,16 @@ public static class Environment
             }
         }
         float cn = Canopy(x, z);
-        if (cn > 0) { var lf = Color.Lerp(e.leaf, e.leaf2, e.tree2Share * Noise(x / 60f, z / 60f, 95)) * (0.42f + 0.2f * Noise(x / 15f, z / 15f, 97) + 0.16f * Hash(Mathf.RoundToInt(x), Mathf.RoundToInt(z), 98)); c = Color.Lerp(c, lf, Mathf.Clamp01(cn * 5f)); }
+        if (cn > 0)
+        {
+            // the canopy: stands of the second species in ~70 m patches (lighter broad-leaf among the spruce), and a
+            // little less blue than the leaf colour (with the haze on top the old tint read as a grey-green slope).
+            // Ground.cginc draws the crowns themselves on it (the terrain's vertex alpha, LightBake)
+            float sp = Mathf.SmoothStep(0f, 1f, (Noise(x / 70f, z / 70f, 95) - (1f - Mathf.Min(0.9f, e.tree2Share * 2f))) / 0.15f);
+            var lf = Color.Lerp(e.leaf, e.leaf2, sp) * (0.40f + 0.2f * Noise(x / 15f, z / 15f, 97) + 0.12f * Hash(Mathf.RoundToInt(x), Mathf.RoundToInt(z), 98));
+            lf.b *= 0.85f;
+            c = Color.Lerp(c, lf, Mathf.Clamp01(cn * 5f));
+        }
         float k = 0.93f + 0.14f * Noise(x / 23f, z / 23f, 43); // mottling
         return new Color(c.r / e.grass.r * k, c.g / e.grass.g * k, c.b / e.grass.b * k, 1f);
     }
@@ -763,6 +775,7 @@ public static class Environment
             ModelLib.Flush(root);
         }
         if (e.canopy > 0) WoodBands(t, bb, near, far, v, nrm, uv, uv2, col, tri, rnd);
+        if (e.canopy > 0 && e.slopeTrees > 0) SlopeTrees(bb, low, v, nrm, uv, uv2, col, tri);
         if (tri.Count == 0) return;
         // (named "Trees" as before: WorldBuilder.Drape lays them onto the circuit's height field and keeps these normals)
         var fm = FoliageMaterial();
@@ -809,6 +822,92 @@ public static class Environment
                 count++;
             }
         }
+    }
+
+    // The hillsides inside the woods (gap list item 18: Spa's near hills read as smooth bare slopes behind the barrier):
+    // crowns standing out of the canopy where the land rises, so the slope has a broken, treed outline and texture
+    // instead of a painted one. Two cards each (no sway), sunk by a third of their height into the ground (only the upper
+    // crown shows above the canopy-textured terrain: fewer pixels than a whole tree), denser low on the slope near the
+    // track where they are seen. Same mesh and draw call as the other trees; own random stream (the trees above are
+    // placed exactly as before).
+    static void SlopeTrees((double minX, double minY, double maxX, double maxY) bb, bool low, List<Vector3> v, List<Vector3> nrm, List<Vector2> uv, List<Vector2> uv2, List<Color> col, List<int> tri)
+    {
+        var e = Cur; var rnd = new System.Random(29);
+        int want = low ? e.slopeTrees / 2 : e.slopeTrees, placed = 0, tries = 0;
+        float reach = 520f;
+        while (placed < want && tries++ < want * 30)
+        {
+            float x = (float)(bb.minX - reach + rnd.NextDouble() * (bb.maxX - bb.minX + 2 * reach));
+            float z = (float)(bb.minY - reach + rnd.NextDouble() * (bb.maxY - bb.minY + 2 * reach));
+            float d = Clear(x, z);
+            if (d < e.canopyAt + 14f || d > reach) continue;
+            if (Canopy(x, z) < 0.6f) continue;
+            // on rising land: the environment's own relief, or the circuit's hillside (Eau Rouge: the height field)
+            float lift = Lift(x, z);
+            if (lift < 4f)
+            {
+                float g = (Mathf.Abs(GroundY(x + 8f, z) - GroundY(x - 8f, z)) + Mathf.Abs(GroundY(x, z + 8f) - GroundY(x, z - 8f))) / 16f;
+                if (g < 0.06f) continue;
+            }
+            // denser near the track (seen large) than far up the hill
+            if (rnd.NextDouble() > 1.15f - d / reach) continue;
+            if (Waterfront.InWater(x, z) || Trackside.Blocked(x, z, 6f) || Taken(x, z, 10f)) continue;
+            bool second = e.tree2 != TreeKind.None && rnd.NextDouble() < e.tree2Share * 1.5f;
+            var kind = second ? e.tree2 : e.tree;
+            float sz = (0.95f + (float)rnd.NextDouble() * 0.6f) * e.treeSize, hh = kind == TreeKind.Spruce ? 15f * sz : 10f * sz;
+            var foot = new Vector3(x, lift - 0.33f * hh, z);
+            var leaf = Color.Lerp(e.leaf, e.leaf2, second ? 1f : 0.15f * (float)rnd.NextDouble()).linear * 0.85f; leaf.a = 1f;
+            EmitTree(v, nrm, uv, uv2, col, tri, foot, kind, sz, leaf, rnd, 2);
+            placed++;
+        }
+    }
+
+    // Farmhouses and barns in the clearings of the wooded hills (Spa, Spielberg, Suzuka): white or stone walls under a
+    // dark slate or red tile roof, on open land just outside the woods. Into the props mesh (no new draw call); they
+    // claim their ground, so the trees keep off.
+    static void Farms(Buf props, System.Random rnd)
+    {
+        var e = Cur; if (e.farms <= 0 || dist == null || RealWorld.Active) return;
+        Color[] walls = { C(0.86f, 0.84f, 0.79f), C(0.62f, 0.58f, 0.52f), C(0.78f, 0.72f, 0.62f) };
+        Color[] roofs = { C(0.22f, 0.23f, 0.26f), C(0.50f, 0.25f, 0.18f), C(0.30f, 0.29f, 0.29f) };
+        int placed = 0, tries = 0;
+        while (placed < e.farms && tries++ < e.farms * 400)
+        {
+            float x = fx0 + 120 + (float)rnd.NextDouble() * (fx1 - fx0 - 240), z = fz0 + 120 + (float)rnd.NextDouble() * (fz1 - fz0 - 240);
+            float d = Clear(x, z);
+            if (d < 110f || d > 480f) continue;
+            // a clearing: open here, woods close by on at least two sides
+            if (Canopy(x, z) > 0.05f) continue;
+            int woods = 0;
+            for (int q = 0; q < 6; q++) { float a = q * 1.0472f; if (Canopy(x + Mathf.Cos(a) * 55f, z + Mathf.Sin(a) * 55f) > 0.5f) woods++; }
+            if (woods < 2 || Waterfront.InWater(x, z) || Taken(x, z, 40f) || Trackside.Blocked(x, z, 20f)) continue;
+            float gx = Lift(x + 6, z) - Lift(x - 6, z), gz = Lift(x, z + 6) - Lift(x, z - 6);
+            if (gx * gx + gz * gz > 9f) continue; // not on a steep bit (> ~15 %)
+            Vector3 ax = new Vector3(gx, 0, gz); if (ax.sqrMagnitude < 1e-4f) ax = new Vector3(1, 0, 0.4f); ax = new Vector3(-ax.z, 0, ax.x).normalized;
+            Vector3 az = new Vector3(-ax.z, 0, ax.x);
+            // a house and a barn beside it (the barn longer, lower), each a box with a pitched roof
+            for (int b = 0; b < 2; b++)
+            {
+                Vector3 c = new Vector3(x, 0, z) + (b == 0 ? Vector3.zero : az * 16f + ax * 6f);
+                c.y = GroundY(c.x, c.z) - 0.6f;
+                float ex = b == 0 ? 6f + (float)rnd.NextDouble() * 2f : 10f + (float)rnd.NextDouble() * 4f, ez = b == 0 ? 4.5f : 5.5f, h = b == 0 ? 6.4f : 5.2f;
+                var wc = walls[rnd.Next(walls.Length)] * (0.9f + 0.1f * (float)rnd.NextDouble()); wc.a = 1f;
+                var rc = roofs[(b + rnd.Next(roofs.Length)) % roofs.Length];
+                Box(props, c + Vector3.up * ((h - 1.5f) * 0.5f), ax, Vector3.up, az, ex, (h + 1.5f) * 0.5f, ez, wc); // (a plinth 1.5 m into the slope)
+                Gable(props, c + Vector3.up * h, ax, az, ex + 0.5f, ez + 0.6f, ez * 0.75f, rc, wc);
+            }
+            Claim(new Vector3(x, 0, z), 26f); placed++;
+        }
+    }
+    // a pitched roof along ax over a (2 ex) x (2 ez) plan: two slopes and the two gable triangles (wall colour)
+    static void Gable(Buf b, Vector3 c, Vector3 ax, Vector3 az, float ex, float ez, float h, Color roof, Color wall)
+    {
+        Vector3 x = ax * ex, z = az * ez, r = Vector3.up * h;
+        Quad(b, c - x - z, c + x - z, c + x + r, c - x + r, -az + Vector3.up, roof);
+        Quad(b, c - x + z, c + x + z, c + x + r, c - x + r, az + Vector3.up, roof);
+        Vector3 xi = ax * (ex - 0.5f);
+        Tri(b, c + xi - z, c + xi + z, c + xi + r, ax, wall);
+        Tri(b, c - xi - z, c - xi + z, c - xi + r, -ax, wall);
     }
 
     // ground a landmark will stand on (known before the town rows are built, so they leave room)
@@ -980,6 +1079,7 @@ public static class Environment
             }
         }
 
+        Farms(props, rnd);
         Emit("EnvProps", props, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : C(0.85f, 0.84f, 0.80f), null, 0.1f), root);
         if (blocks.tri.Count > 0)
         {

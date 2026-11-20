@@ -52,6 +52,22 @@ public static class Trackside
     static Vector4 seatTint = new Vector4(0.36f, 0.37f, 0.40f, 1f); // crowd quads: colour of the empty seats (F2_CROWD)
     static Material crowdMat;
     static readonly int[] BoldAds = { 1, 6, 4, 0, 15, 12, 3, 8, 13, 2 };
+    // Per-circuit stand layouts (gap list item 18): where the real grandstands are, in priority order (the graphics
+    // level takes the first 1 / 3 / 5, as the generic layout did). Each entry: { s (m along the lap, from the circuit's
+    // corner data), side (2 = the outside of the sharpest bend within 60 m of s, +1 left, -1 right), m before the apex
+    // (or before s for a fixed side; negative = after), half length (m) }. Circuits not listed keep the generic layout
+    // (the sharpest braking corners). MainRows: rows of the main-straight stands where they are much bigger than usual.
+    static readonly Dictionary<string, float[][]> StandLayout = new Dictionary<string, float[][]>
+    {
+        // La Source (hairpin, outside), the Eau Rouge exit (up the left side of Raidillon, ~1112-1210 m), the Bus Stop
+        // chicane, the Les Combes braking zone, Pouhon
+        ["spa"] = new[] { new[] { 384f, 2f, 15f, 20f }, new[] { 1180f, 1f, 0f, 22f }, new[] { 6733f, 2f, 18f, 20f }, new[] { 2412f, 2f, 30f, 20f }, new[] { 3818f, 2f, 10f, 18f } },
+        // the last chicane, T1 (braking from the main straight), the Esses, the hairpin, Spoon
+        ["suzuka"] = new[] { new[] { 5402f, 2f, 18f, 20f }, new[] { 728f, 2f, 30f, 22f }, new[] { 1198f, 2f, 0f, 18f }, new[] { 2905f, 2f, 15f, 18f }, new[] { 3802f, 2f, 10f, 18f } },
+        // T3 (the big uphill stop), T1, the last corner, T4
+        ["spielberg"] = new[] { new[] { 1402f, 2f, 18f, 20f }, new[] { 463f, 2f, 25f, 20f }, new[] { 3994f, 2f, 15f, 20f }, new[] { 2225f, 2f, 15f, 18f }, new[] { 3790f, 2f, 15f, 18f } },
+    };
+    static readonly Dictionary<string, int> MainRows = new Dictionary<string, int> { ["suzuka"] = 17 };
     static bool aoOn = true;
     // Armco W-beam profile (Medium / High): heights up the 0.31 m beam and depth behind its front plane (m)
     static readonly float[] WY = { 0f, 0.075f, 0.155f, 0.235f, 0.31f }, WDep = { 0.035f, 0f, 0.075f, 0f, 0.035f };
@@ -1190,7 +1206,9 @@ public static class Trackside
             int ms = pitSide == 0 ? -1 : -pitSide;
             int mainN = low ? 1 : high ? 3 : 2;
             float mhl = street ? 18f : 24f;
-            int mrows = low ? 9 : 13;
+            string cid = t.def != null && t.def.id != null ? t.def.id : "";
+            int mrows = low ? 9 : 13, bigRows;
+            if (!low && MainRows.TryGetValue(cid, out bigRows)) mrows = bigRows; // (Suzuka: the huge main-straight stands)
             float[] at = { 0f, -(2f * mhl + 6f), 2f * mhl + 6f };
             endScreens = false;
             for (int k = 0; k < mainN; k++)
@@ -1212,6 +1230,29 @@ public static class Trackside
             scored.Sort((a, b) => b.Key.CompareTo(a.Key));
             var used = new List<int>();
             int placed = 0;
+            float[][] layout;
+            if (!street && StandLayout.TryGetValue(cid, out layout))
+            {
+                // this circuit's own layout: the real stands' corners, nothing else (scored stays for no one)
+                scored.Clear();
+                int pw = Mathf.Max(2, Mathf.RoundToInt(60f / ds));
+                foreach (var st in layout)
+                {
+                    if (placed >= cornerN) break;
+                    int si = W(Mathf.RoundToInt(st[0] / ds)), apex = si, side;
+                    if (st[1] > 1.5f)
+                    {
+                        for (int j = -pw; j <= pw; j++) if (curvAbs[W(si + j)] > curvAbs[apex]) apex = W(si + j);
+                        side = Outside(apex);
+                    }
+                    else side = st[1] > 0f ? 1 : -1;
+                    bool nearU = false; foreach (int u in used) if (Gap(u, apex) < Mathf.RoundToInt(200f / ds)) nearU = true;
+                    if (nearU) continue;
+                    int at3 = W(apex - Mathf.RoundToInt(st[2] / ds));
+                    // (a stand that does not fit, e.g. a building in the way, is moved out up to 10 m by Stand itself)
+                    if (Stand(at3, side, st[3], low ? 7 : 10, !low)) { used.Add(apex); placed++; }
+                }
+            }
             foreach (var kv in scored)
             {
                 if (placed >= cornerN) break;
