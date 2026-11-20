@@ -206,12 +206,14 @@ public static class PerfLab
 [DefaultExecutionOrder(-32000)]
 public class PerfLabEarly : MonoBehaviour
 {
+    void Awake() { useGUILayout = false; } // no Layout pass (it allocates two layout groups per frame)
     void Update() { PerfLab.UpdateBegin(); }
     void OnGUI() { PerfLab.GuiFirst(); }
 }
 [DefaultExecutionOrder(32000)]
 public class PerfLabLate : MonoBehaviour
 {
+    void Awake() { useGUILayout = false; }
     void Update() { PerfLab.UpdateEnd(); }
     void LateUpdate() { PerfLab.Frame(); PerfLab.EndFrame(); }
     void OnGUI() { PerfLab.GuiLast(); }

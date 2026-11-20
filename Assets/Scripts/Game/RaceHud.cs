@@ -16,6 +16,10 @@
 //    Above them a small toast (GameManagerProgress.cs): safety-rating drops and rivals' time penalties
 // Sector and gap bookkeeping is in Sectors.cs. Number strings come from tables filled once (HudNum) or are rebuilt only
 // when their value changes (HudSlot); text widths are measured once per value, so drawing allocates nothing per frame.
+// Numbers that change every frame are shown at most 10 times a second (HudHold): Unity 6's IMGUI builds a new TextCore
+// text object and mesh (~1 KB of garbage) for every label text it has not drawn in the last 5 s, so a speed, delta or
+// kW read-out redrawn with a new value every frame was a steady stream of garbage (Docs/PERF-INVESTIGATION.md). The lap
+// clock is drawn as "m:ss" + ".t", so only one new text a second (the ten tenths are always cached).
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
@@ -440,6 +444,7 @@ public partial class GameManager
 
     // ---------------------------------------------------------------- timing tower (top left)
     readonly HudSlot lapTag = new HudSlot();
+    readonly HudHold[] gapHold = HudHold.Make(40);
     void DrawTower()
     {
         if (!hudTower || playground || rivals.Count == 0 || ordN == 0 || quali != null) return; // qualifying draws its own list (Qualifying.cs)
@@ -523,7 +528,7 @@ public partial class GameManager
         Color team = me ? new Color(1f, 0.25f, 0.2f) : new Color(rivals[e - 1].who.r, rivals[e - 1].who.g, rivals[e - 1].who.b);
         UiKit.Rect(new Rect(x + S(19), y + S(3.5f), S(2.2f), rh - S(7)), team, 1f);
         TF(new Rect(x + S(25), y, S(34), rh), me ? "YOU" : Code(rivals[e - 1].who), UiKit.Bold, 8.5f, Color.white);
-        string gap = GapText(r);
+        string gap = gapHold[e].Get(GapText(r), 0.25f);
         if (r == 0) TF(new Rect(x + S(56), y, S(48), rh), gap, UiKit.Semi, 6.2f, me ? Color.white : HudGrey, TextAnchor.MiddleRight);
         else TF(new Rect(x + S(56), y, S(48), rh), gap, UiKit.Semi, 7.8f, Color.white, TextAnchor.MiddleRight);
         TyreIcon(new Rect(x + S(108), y + S(2.5f), rh - S(5), rh - S(5)), SetOf(e));
@@ -604,7 +609,8 @@ public partial class GameManager
         else
         {
             bool invalid = cut && lapStart.HasValue;
-            TF(clock, lapStart.HasValue ? HudNum.Clock(simTime - lapStart.Value) : "--:--.-", UiKit.Bold, 12.5f, invalid ? HudGrey : Color.white);
+            if (lapStart.HasValue) DrawClock(clock, simTime - lapStart.Value, invalid ? HudGrey : Color.white);
+            else TF(clock, "--:--.-", UiKit.Bold, 12.5f, invalid ? HudGrey : Color.white);
             bool deltaShown = false;
             if (hudDelta && deltaTr != null && lapStart.HasValue)
             {
@@ -615,7 +621,7 @@ public partial class GameManager
                     Color dc = dl <= 0 ? HudGreen : HudRed;
                     var dr = new Rect(x + iw - S(46), clock.y + S(2), S(46), clock.height - S(4));
                     UiKit.Rect(dr, new Color(dc.r, dc.g, dc.b, 0.20f), 4f);
-                    TF(dr, HudNum.Delta(dl), UiKit.Bold, 8.5f, dc, TextAnchor.MiddleCenter);
+                    TF(dr, hDelta.Get(HudNum.Delta(dl), 0.1f), UiKit.Bold, 8.5f, dc, TextAnchor.MiddleCenter);
                     deltaShown = true;
                 }
             }
@@ -661,6 +667,23 @@ public partial class GameManager
     }
 
     // ---------------------------------------------------------------- dash (bottom centre)
+    readonly HudHold hSpeed = new HudHold(), hDelta = new HudHold(), hErs = new HudHold(), hKw = new HudHold(), hFuel = new HudHold(), hLaps = new HudHold(),
+        hBoost = new HudHold(), hOt = new HudHold(), hFps = new HudHold();
+    readonly HudHold[] hTyre = HudHold.Make(4), hBrk = HudHold.Make(2);
+
+    // the lap clock as "m:ss" + ".t": the tenths ".0"-".9" are drawn every second, so their text stays cached; only
+    // "m:ss" is a new text, once a second (left-aligned, the same place as one label)
+    object clockKey; float clockW; int clockH;
+    void DrawClock(Rect r, double t, Color c)
+    {
+        int k = (int)System.Math.Floor(t * 10); if (k < 0) k = 0;
+        string head = HudNum.ClockHead(k / 10);
+        if (head == null) { TF(r, "--:--.-", UiKit.Bold, 12.5f, c); return; }
+        if (!ReferenceEquals(clockKey, head) || clockH != Screen.height) { clockKey = head; clockH = Screen.height; clockW = UiKit.Width(head, UiKit.Bold, 12.5f); }
+        TF(r, head, UiKit.Bold, 12.5f, c);
+        TF(new Rect(r.x + clockW, r.y, Mathf.Max(0f, r.width - clockW), r.height), HudNum.Tenth(k % 10), UiKit.Bold, 12.5f, c);
+    }
+
     void DrawWheel(float speed)
     {
         float dw = S(250), dh = S(52);
@@ -678,7 +701,7 @@ public partial class GameManager
         if (boxArmed) Chip(new Rect(cx, chipY, S(30), chipH), "BOX", HudAccent, Color.white);
         if (hudInfo && !wings && !double.IsNaN(car.fuel))
         {
-            TF(new Rect(dx, chipY, dw - S(6), chipH), HudNum.Tenths(car.fuel), UiKit.Bold, 7.5f, Color.white, TextAnchor.MiddleRight);
+            TF(new Rect(dx, chipY, dw - S(6), chipH), hFuel.Get(HudNum.Tenths(car.fuel), 0.5f), UiKit.Bold, 7.5f, Color.white, TextAnchor.MiddleRight);
             TF(new Rect(dx, chipY, dw - S(28), chipH), "FUEL", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
         }
 
@@ -697,7 +720,7 @@ public partial class GameManager
         }
 
         // speed (left)
-        TF(new Rect(dx + S(8), dy + S(11), S(66), S(27)), HudNum.Int(Mathf.RoundToInt(speed * (unitsIdx == 1 ? 2.23694f : 3.6f))), UiKit.Black, 23f, Color.white, TextAnchor.MiddleRight);
+        TF(new Rect(dx + S(8), dy + S(11), S(66), S(27)), hSpeed.Get(HudNum.Int(Mathf.RoundToInt(speed * (unitsIdx == 1 ? 2.23694f : 3.6f))), 0.1f), UiKit.Black, 23f, Color.white, TextAnchor.MiddleRight);
         TF(new Rect(dx + S(8), dy + S(37), S(66), S(9)), unitsIdx == 1 ? "MPH" : "KM/H", UiKit.Semi, 5.8f, HudFaint, TextAnchor.MiddleRight);
         Color off = new Color(1f, 1f, 1f, 0.16f);
         TF(new Rect(dx + S(11), dy + S(37), S(14), S(9)), "TC", UiKit.Bold, 5.8f, car.tcActive ? HudAmber : off);
@@ -723,7 +746,7 @@ public partial class GameManager
         else if (kw < -5) { mode = "HARVEST"; mc = HudGreen; }
         else { mode = ""; mc = HudGrey; }
         TF(new Rect(bx, dy + S(12), bw, S(9)), "ERS", UiKit.Semi, 5.8f, HudFaint);
-        TF(new Rect(bx, dy + S(12), bw, S(9)), HudNum.Pct(Mathf.RoundToInt(soc * 100)), UiKit.Bold, 7.2f, Color.white, TextAnchor.MiddleRight);
+        TF(new Rect(bx, dy + S(12), bw, S(9)), hErs.Get(HudNum.Pct(Mathf.RoundToInt(soc * 100)), 0.25f), UiKit.Bold, 7.2f, Color.white, TextAnchor.MiddleRight);
         var bar = new Rect(bx, dy + S(23), bw, S(5));
         UiKit.Rect(bar, DimSeg, 2.5f);
         Color fill = soc < 0.15f ? HudRed : mode.Length == 0 ? new Color(0.82f, 0.86f, 0.92f) : mc;
@@ -731,7 +754,7 @@ public partial class GameManager
         if (mode.Length > 0)
         {
             TF(new Rect(bx, dy + S(31), bw, S(9)), mode, UiKit.Bold, 6.2f, mc);
-            TF(new Rect(bx, dy + S(31), bw, S(9)), HudNum.Kw(Mathf.RoundToInt((float)System.Math.Abs(kw))), UiKit.Semi, 5.8f, HudGrey, TextAnchor.MiddleRight);
+            TF(new Rect(bx, dy + S(31), bw, S(9)), hKw.Get(HudNum.Kw(Mathf.RoundToInt((float)System.Math.Abs(kw))), 0.2f), UiKit.Semi, 5.8f, HudGrey, TextAnchor.MiddleRight);
         }
 
         // tyre quad (temperature colour, the fill is the tread left) and the compound
@@ -762,7 +785,7 @@ public partial class GameManager
                 double t = front ? car.tyreTF : car.tyreTR, wear = front ? car.wearF : car.wearR;
                 var br = new Rect(left ? lw.x + S(8) : lw.xMax - S(8) - bw2, front ? dy + S(6) : dy + S(28), bw2, bh2);
                 UiKit.Rect(br, TempCol(t, cd.opt, cd.window), 3.5f);
-                TF(br, HudNum.Int(Mathf.RoundToInt((float)t)), UiKit.Bold, 6.2f, new Color(0.04f, 0.04f, 0.05f), TextAnchor.MiddleCenter);
+                TF(br, hTyre[wh].Get(HudNum.Int(Mathf.RoundToInt((float)t)), 0.5f), UiKit.Bold, 6.2f, new Color(0.04f, 0.04f, 0.05f), TextAnchor.MiddleCenter);
                 float tread = Mathf.Clamp01(1 - (float)wear), wx = left ? br.x - S(4) : br.xMax + S(2);
                 UiKit.Rect(new Rect(wx, br.y, S(2), bh2), DimSeg, 1f);
                 UiKit.Rect(new Rect(wx, br.yMax - bh2 * tread, S(2), bh2 * tread), tread < 0.3f ? HudRed : Color.white, 1f);
@@ -771,9 +794,9 @@ public partial class GameManager
             {
                 Color fc = TempCol(car.brakeTF, 650, 380), rc = TempCol(car.brakeTR, 650, 380);
                 UiKit.Rect(new Rect(mx - S(8), dy + S(9), S(16), S(2)), fc, 1f);
-                TF(new Rect(mx - S(12), dy + S(12), S(24), S(9)), HudNum.Int(Mathf.RoundToInt((float)car.brakeTF)), UiKit.Semi, 5.6f, fc, TextAnchor.MiddleCenter);
+                TF(new Rect(mx - S(12), dy + S(12), S(24), S(9)), hBrk[0].Get(HudNum.Int(Mathf.RoundToInt((float)car.brakeTF)), 0.25f), UiKit.Semi, 5.6f, fc, TextAnchor.MiddleCenter);
                 UiKit.Rect(new Rect(mx - S(8), dy + S(42), S(16), S(2)), rc, 1f);
-                TF(new Rect(mx - S(12), dy + S(32), S(24), S(9)), HudNum.Int(Mathf.RoundToInt((float)car.brakeTR)), UiKit.Semi, 5.6f, rc, TextAnchor.MiddleCenter);
+                TF(new Rect(mx - S(12), dy + S(32), S(24), S(9)), hBrk[1].Get(HudNum.Int(Mathf.RoundToInt((float)car.brakeTR)), 0.25f), UiKit.Semi, 5.6f, rc, TextAnchor.MiddleCenter);
                 TF(new Rect(mx - S(12), dy + S(22), S(24), S(8)), "BRK", UiKit.Semi, 4.8f, HudFaint, TextAnchor.MiddleCenter);
             }
         }
@@ -786,7 +809,7 @@ public partial class GameManager
         if (!double.IsNaN(car.fuel))
         {
             TF(new Rect(px0, dy + S(5), pw, S(12)), "FUEL", UiKit.Semi, 5.8f, HudFaint);
-            TF(new Rect(px0, dy + S(4), pw, S(14)), HudNum.Tenths(car.fuel), UiKit.Bold, 10f, Color.white, TextAnchor.MiddleRight);
+            TF(new Rect(px0, dy + S(4), pw, S(14)), hFuel.Get(HudNum.Tenths(car.fuel), 0.5f), UiKit.Bold, 10f, Color.white, TextAnchor.MiddleRight);
             float ff = Mathf.Clamp01((float)(car.fuel / System.Math.Max(1, car.cfg.fuelStart)));
             UiKit.Rect(new Rect(px0, dy + S(19), pw, S(3)), DimSeg, 1.5f);
             if (ff > 0.01f) UiKit.Rect(new Rect(px0, dy + S(19), Mathf.Max(S(3), pw * ff), S(3)), ff < 0.1f ? HudRed : new Color(0.85f, 0.88f, 0.92f), 1.5f);
@@ -794,7 +817,7 @@ public partial class GameManager
             {
                 double laps = car.fuel / car.fuelLastLap; int toGo = raceLaps > 0 ? raceLaps - Mathf.Clamp(pLap, 1, raceLaps) + 1 : 0;
                 TF(new Rect(px0, dy + S(25), pw, S(11)), "LAPS", UiKit.Semi, 5.8f, HudFaint);
-                TF(new Rect(px0, dy + S(25), pw, S(12)), HudNum.Tenths(laps), UiKit.Bold, 8.5f, raceLaps > 0 && laps < toGo ? HudRed : HudGreen, TextAnchor.MiddleRight);
+                TF(new Rect(px0, dy + S(25), pw, S(12)), hLaps.Get(HudNum.Tenths(laps), 0.5f), UiKit.Bold, 8.5f, raceLaps > 0 && laps < toGo ? HudRed : HudGreen, TextAnchor.MiddleRight);
             }
         }
         TF(new Rect(px0, dy + S(38), pw, S(9)), Weather.TyreName(carSet), UiKit.Semi, 5.8f, SetCol[Mathf.Clamp(carSet, 0, SetCol.Length - 1)]);
@@ -904,7 +927,7 @@ public partial class GameManager
         Disc(bb, car.boostActive ? new Color(HudBlue.r * 0.8f, HudBlue.g * 0.8f, HudBlue.b * 0.8f, 0.9f) : bOn ? new Color(0.18f, 0.19f, 0.23f, 0.88f) : glass);
         UiKit.Outline(bb, bOk ? new Color(HudBlue.r, HudBlue.g, HudBlue.b, 0.55f) : edge, 999f, 0.8f);
         TF(new Rect(bb.x, bb.y - S(3), bb.width, bb.height), "BOOST", UiKit.Bold, 7f, bOk ? Color.white : HudFaint, TextAnchor.MiddleCenter);
-        TF(new Rect(bb.x, bb.y + S(7), bb.width, bb.height), HudNum.Pct(Mathf.RoundToInt(soc * 100)), UiKit.Semi, 5.6f, bOk ? HudGrey : HudRed, TextAnchor.MiddleCenter);
+        TF(new Rect(bb.x, bb.y + S(7), bb.width, bb.height), hBoost.Get(HudNum.Pct(Mathf.RoundToInt(soc * 100)), 0.25f), UiKit.Semi, 5.6f, bOk ? HudGrey : HudRed, TextAnchor.MiddleCenter);
 
         // OVERTAKE: grey until armed, then pulsing purple / cyan; solid cyan while it deploys; the ring = energy left
         var o = OvertakeRect;
@@ -917,7 +940,7 @@ public partial class GameManager
         UiKit.Outline(ob, armed ? new Color(1f, 1f, 1f, 0.45f) : edge, 999f, 0.8f);
         Color tc = armed ? (act ? new Color(0.03f, 0.04f, 0.06f) : Color.white) : HudFaint;
         TF(new Rect(ob.x, ob.y - S(3), ob.width, ob.height), "OVERTAKE", UiKit.Bold, 5.6f, tc, TextAnchor.MiddleCenter);
-        TF(new Rect(ob.x, ob.y + S(7), ob.width, ob.height), HudNum.Pct(Mathf.RoundToInt((float)car.OtFrac * 100)), UiKit.Semi, 5.6f, armed ? tc : HudFaint, TextAnchor.MiddleCenter);
+        TF(new Rect(ob.x, ob.y + S(7), ob.width, ob.height), hOt.Get(HudNum.Pct(Mathf.RoundToInt((float)car.OtFrac * 100)), 0.25f), UiKit.Semi, 5.6f, armed ? tc : HudFaint, TextAnchor.MiddleCenter);
         // energy ring (GL, clipped to nothing: the whole screen)
         if (GlBegin(new Rect(0, 0, Screen.width, Screen.height)))
         {
@@ -1110,7 +1133,7 @@ public partial class GameManager
         if (key != fpsTextsKey) { fpsTextsKey = key; System.Array.Clear(fpsTexts, 0, fpsTexts.Length); }
         bool hold = fpsHolding && fpsAvg >= fpsLock * 0.9f;
         int shown = hold ? 241 : Mathf.Clamp(Mathf.RoundToInt(fpsAvg), 0, 240);
-        string s = fpsTexts[shown] ??= (hold ? fpsLock + " FPS LOCK" : shown + " FPS  ·  " + fpsLock + " LOCK") + (res > 0 ? "  ·  " + res + "% RES" : "");
+        string s = hFps.Get(fpsTexts[shown] ??= (hold ? fpsLock + " FPS LOCK" : shown + " FPS  ·  " + fpsLock + " LOCK") + (res > 0 ? "  ·  " + res + "% RES" : ""), 0.5f);
         TF(new Rect(btnRight - S(150), hudT + S(35), S(150), S(10)), s, UiKit.Semi, 6.2f, HudFaint, TextAnchor.MiddleRight);
     }
 }
@@ -1135,6 +1158,10 @@ static class HudNum
         if (k >= clocks.Length) return "--:--.-";
         return clocks[k] ??= (k / 600) + ":" + (k / 10 % 60).ToString("00") + "." + (k % 10);
     }
+    // the lap clock in two parts (RaceHud.DrawClock): "m:ss" per whole second (null past the table) and ".t"
+    static readonly string[] clockHeads = new string[1200], tenthTexts = new string[10];
+    public static string ClockHead(int sec) => sec >= 0 && sec < clockHeads.Length ? clockHeads[sec] ??= (sec / 60) + ":" + (sec % 60).ToString("00") : null;
+    public static string Tenth(int d) { d = d < 0 ? 0 : d > 9 ? 9 : d; return tenthTexts[d] ??= "." + d; }
     public static string Pct(int v) { v = v < 0 ? 0 : v > 100 ? 100 : v; return pcts[v] ??= v + "%"; }
     public static string Kw(int v) { v = v < 0 ? 0 : v > 1000 ? 1000 : v; return kws[v] ??= v + " kW"; }
     public static string Pos(int p) => p >= 0 && p < poss.Length ? poss[p] ??= "P" + p : "P" + p;
@@ -1178,4 +1205,19 @@ class HudSlot
         if (k != key) { key = k; s = "0-100 " + (t100.HasValue ? t100.Value.ToString("0.00") + " s" : "—") + "  (real 2.2-2.6)  ·  top " + top.ToString("0") + " " + unit; }
         return s;
     }
+}
+
+// a read-out that may change every frame, shown at most once per period: a new value appears at once after a quiet
+// spell, then not again until the period has passed (the strings themselves come from HudNum's tables)
+class HudHold
+{
+    string s; float next;
+    public string Get(string v, float period)
+    {
+        if (ReferenceEquals(v, s)) return s;
+        float now = Time.unscaledTime;
+        if (s == null || now >= next) { s = v; next = now + period; }
+        return s;
+    }
+    public static HudHold[] Make(int n) { var a = new HudHold[n]; for (int i = 0; i < n; i++) a[i] = new HudHold(); return a; }
 }

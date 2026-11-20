@@ -3,7 +3,7 @@
 //  * RcPlan: each rival's tyre strategy and start set (dry: the 2-compound rule from 10 laps; wet: inters or wets)
 //  * RcSetup / RcStep: race control (flags, VSC, safety car, blue flags) sees every car, the player included
 //  * RcFrame: the safety car model, rivals' tyre changes (stripe, wet grip), weather changes, track-limits strikes,
-//    penalties (added to pitLoss, like the jump-start penalty)
+//    penalties (served on track: PenaltyServe.cs; added to pitLoss until served, like the jump-start penalty)
 //  * RcHudTick / DrawRcHud: SAFETY CAR / VSC / SC IN THIS LAP / GREEN FLAG banners, the VSC delta, blue flags
 // Settings (GameManagerSettings.cs): "Flags & safety car" Off / On, "Race distance".
 using FormulaSim;
@@ -79,6 +79,7 @@ public partial class GameManager
     void RcFrame(float dt)
     {
         rcBlink += dt;
+        PsFrame(dt); // live penalties: serving, ghost, its look (PenaltyServe.cs)
         // rivals' tyre changes: stripe and the wet grip of the new set
         for (int i = 0; i < rivals.Count && i < rcSetSeen.Length; i++)
         {
@@ -101,12 +102,12 @@ public partial class GameManager
             else if (s == 3) Banner("TRACK LIMITS", "BLACK AND WHITE FLAG", HudYellow);
         }
         rcCutSeen = cut;
-        // penalties (track limits, VSC delta, overtaking under the safety car): added to the race time
+        // penalties (track limits, VSC delta, overtaking under the safety car): served on track (PenaltyServe.cs)
         if (raceCtl.penaltySerial != rcSeenPen)
         {
             rcSeenPen = raceCtl.penaltySerial;
-            pitLoss += 5;
-            Banner("PENALTY", "+5 s  ·  " + raceCtl.penaltyWhy, HudAccent);
+            bool live = PsAward(5);
+            Banner("PENALTY", (live ? "5 s  ·  " : "+5 s  ·  ") + raceCtl.penaltyWhy, HudAccent);
         }
         // the safety car itself
         if (ScRenderPose(out double sx, out double sy, out double sh))
@@ -194,6 +195,8 @@ public partial class GameManager
             T(new Rect(x, y, S(84), h), "BLUE FLAG", 11, TextAnchor.MiddleCenter, Color.white);
             Para(new Rect(x + S(86), y, w - S(86), h), HudPanel, false, true);
             T(new Rect(x + S(92), y, w - S(96), h), "LET THE FASTER CAR BY", 10, TextAnchor.MiddleLeft, Color.white);
+            y += h + S(4);
         }
+        DrawPenaltyServe(y); // PENALTY · SLOW DOWN and the time still to serve (PenaltyServe.cs)
     }
 }

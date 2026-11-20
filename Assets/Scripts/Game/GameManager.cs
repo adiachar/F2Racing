@@ -453,7 +453,7 @@ public partial class GameManager : MonoBehaviour
             marbles = System.Math.Min(1, marbles + dist / (track.length * 400));
             for (int i = 0; i < rivals.Count; i++)
             {
-                rivals[i].Think(4 * H, simTime, rivals, car, idx, playerLat);
+                rivals[i].Think(4 * H, simTime, rivals, PsAiSees(), idx, playerLat); // PsAiSees: the player's car, or null while he is a penalty ghost (PenaltyServe.cs)
                 if (rivals[i].InPit) continue; // driven along the pit lane (PitStep below)
                 var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(rc.x, rc.y, rc.heading) : 0;
                 if (rivals[i].idx >= 0) Traffic.Wall(rivals[i].car, track.pts[rivals[i].idx], rivals[i].lateral, wallAt);
@@ -819,6 +819,7 @@ public partial class GameManager : MonoBehaviour
     {
         if (ui.LoadDue) StartSession();
         Thermal.Tick(); // the phone's thermal state, clocks and refresh rate, read every 2 s (Thermal.cs): Auto frame rate, debug overlay
+        DisplayModeTick(); // a 40 fps lock asks for the panel's 120 Hz mode, else 60 / 30 only (GameManagerPerf.cs)
         FrameLogFeed(); // the frame-time overlay's per-frame inputs (FrameLog.cs; cheap stores, also when it is off)
         PickPlayerModel(); // full car in the cockpit and on High, the lighter one otherwise (GameManagerPerf.cs)
         if (tilt) TiltOrientation(); // the screen turned to the other landscape side: pick the tilt axis again
@@ -850,7 +851,7 @@ public partial class GameManager : MonoBehaviour
                 LineCheck(simTime); // the timing line, every step (idx is before the step here)
                 if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.GradeAlong(car.x, car.y, car.heading);
                 car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
-                car.Step(StartInput(input), H); // the start: revs only on the grid, launch clutch after lights out
+                car.Step(PsInput(StartInput(input)), H); // the start: revs only on the grid, launch clutch after lights out; PsInput: serving a live penalty (PenaltyServe.cs)
                 StartAfterStep();
                 double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one
                 if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt))
@@ -1462,6 +1463,7 @@ public partial class GameManager : MonoBehaviour
         double refLap = RefLap(); // turns lap fractions into seconds
         ProgressFinish(rows); // rival time penalties into the order; the race's XP and safety tally (GameManagerProgress.cs)
         ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (GridStart ? Countdown : 0) + pitLoss, refLap, pitStops, PlayerPenaltyTotal());
+        PsResults(); // penalties served on track: the chip says "served" (PenaltyServe.cs)
         RaceFinished(rows); // places gained, fastest lap, championship points (Qualifying.cs)
     }
 
