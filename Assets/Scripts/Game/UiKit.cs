@@ -125,8 +125,30 @@ public static class UiKit
     public static void Text(Rect r, string s, Font f, float size, Color c, TextAnchor anchor = TextAnchor.MiddleLeft, bool wrap = false)
     {
         if (string.IsNullOrEmpty(s) || c.a <= 0.002f) return;
+        var ev = Event.current; if (ev != null && ev.type != EventType.Repaint) return; // a label draws nothing on other events (GUI.Label returns too)
         var st = Style(f, size, anchor, wrap);
-        var old = GUI.color; GUI.color = c * old; GUI.Label(r, s, st); GUI.color = old;
+        var old = GUI.color; GUI.color = c * old; GUI.Label(r, Content(s), st); GUI.color = old;
+    }
+
+    // One GUIContent per string object. Unity 6's GUI.Label(Rect, string, ...) goes through GUIContent.Temp, whose text
+    // setter makes a new string (text + a zero-width space) on EVERY call: ~40 B per label per OnGUI pass, ~3 KB a frame
+    // for the race HUD (Docs/PERF-INVESTIGATION.md). A GUIContent made once per string keeps that copy. The HUD's
+    // strings come from tables (HudNum, HudSlot), so the same objects come back. Keyed by reference: a string must not
+    // be changed in place after it was shown here (FrameLog's TextLine is drawn by BitText instead).
+    sealed class RefEq : IEqualityComparer<string>
+    {
+        public bool Equals(string a, string b) => ReferenceEquals(a, b);
+        public int GetHashCode(string s) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(s);
+    }
+    static readonly Dictionary<string, GUIContent> contents = new Dictionary<string, GUIContent>(1024, new RefEq());
+    public static GUIContent Content(string s)
+    {
+        if (!contents.TryGetValue(s, out var gcs))
+        {
+            if (contents.Count >= 3000) contents.Clear(); // menus that build a new string per frame (slider values) cycle it
+            gcs = new GUIContent(s); contents[s] = gcs;
+        }
+        return gcs;
     }
 
     // text with a soft dark drop behind it, for text drawn straight over the 3D view (HUD)
@@ -161,10 +183,9 @@ public static class UiKit
         upperCache[s] = c; return c;
     }
 
-    static readonly GUIContent gc = new GUIContent();
-    public static float Width(string s, Font f, float size) { gc.text = s; return Style(f, size).CalcSize(gc).x; }
+    public static float Width(string s, Font f, float size) => string.IsNullOrEmpty(s) ? 0f : Style(f, size).CalcSize(Content(s)).x;
     // the height of s wrapped to width w
-    public static float Height(string s, Font f, float size, float w) { gc.text = s; return Style(f, size, TextAnchor.UpperLeft, true).CalcHeight(gc, w); }
+    public static float Height(string s, Font f, float size, float w) => Style(f, size, TextAnchor.UpperLeft, true).CalcHeight(string.IsNullOrEmpty(s) ? GUIContent.none : Content(s), w);
     // the largest size <= size (down to minSize) at which s fits in maxW
     public static float Fit(string s, Font f, float size, float maxW, float minSize)
     {

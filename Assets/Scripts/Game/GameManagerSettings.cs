@@ -283,7 +283,7 @@ public partial class GameManager
         // ---- GRAPHICS
         var gfx = new SettingsUI.Tab("GRAPHICS");
         gfx.Choice("Graphics level", "Auto starts at Medium and steps down if the phone cannot keep up.", GfxNames, 0, () => gfxIdx, v => { gfxIdx = v; FpsForget(); ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); });
-        gfx.Choice("Frame rate", "Always a steady rate the screen divides evenly. Auto: 60 fps (a steady 40 on mid-range Mali phones with 120 Hz screens), lower if the phone can't hold it or gets hot. 30 saves battery and heat.",
+        gfx.Choice("Frame rate", "Always a steady rate the screen divides evenly. Auto: 60 fps, a steady 30 if the phone can't hold 60 or gets hot (40 only on a screen that really runs at 120 Hz). 40 needs 120 Hz: on a 60 Hz screen it runs at 30. 30 saves battery and heat.",
             FpsNames, 0, () => fpsIdx, v => { fpsIdx = v; FpsForget(); ApplyFrameRate(); });
         // the base 3D render size (RenderScale.cs): Auto picks ~1.3 Mpx on Android; the Resolution scale below is on top of it
         int[] rsVals = { 0, 100, 85, 70 };

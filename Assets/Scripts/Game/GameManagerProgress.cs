@@ -1,13 +1,15 @@
 // GameManagerProgress.cs — driver progression and race rules in a race, another part of GameManager. Rules and
 // numbers: Progression.cs; the profile: MenuProfile (MenuDriver.cs). Everything here READS the game and physics
-// state; no car's input, step or collision response is changed (the two Traffic.Collide calls below are the same
-// calls, in the same order, as before; the cars' state is only read around them).
+// state; no car's step or collision response is changed (the two Traffic.Collide calls below are the same calls, in
+// the same order, as before; the cars' state is only read around them). Exception: while the player serves a live
+// penalty (PenaltyServe.cs) he is a ghost and his pairs are skipped.
 //  * ProgressBegin (end of ResetCar): a new race's tally. A race left unfinished (restart, Leave) keeps its safety
 //    penalties (MenuProfile.CommitLoss), not its clean driving.
 //  * PlayerContact / RivalContact (StepRivals, 60 Hz): who caused a contact (Blame: nose-to-tail = the car behind
 //    closing; alongside = the car moving sideways into the other, both measured against the track direction just
 //    before the contact). The player: safety points (light / contact / ramming; a repeat within 10 s of the same car,
-//    or a third within 30 s, counts one step harder) and, in clear cases, a 5 s / 10 s time penalty. A rival that
+//    or a third within 30 s, counts one step harder) and, in clear cases, a 5 s / 10 s time penalty (served on track,
+//    PenaltyServe.cs). A rival that
 //    causes one gets the same time penalty. Being hit costs nothing.
 //  * ProgressTick (Update, every frame): off-track excursions (all four wheels off; time gained against the racing
 //    line at the player's pace = a corner cut; a place gained that way must be given back within 15 s or +5 s),
@@ -41,7 +43,8 @@ public partial class GameManager
 
     bool PgRules => raceCtl != null;    // Flags & safety car On, a race with rivals
     double RivalPen(int i) => i >= 0 && i < pgAiPen.Length ? pgAiPen[i] : 0;
-    double PlayerPenaltyTotal() => (jumped ? JumpPenalty : 0) + (raceCtl != null ? raceCtl.penalty : 0) + pgPen;
+    // the time penalties added to the result: those not served on track (PenaltyServe.cs)
+    double PlayerPenaltyTotal() => PsUnserved((jumped ? JumpPenalty : 0) + (raceCtl != null ? raceCtl.penalty : 0) + pgPen);
     // the player went off within 2 s of being hit by a car: not his fault (no strike, no safety points)
     bool PgForcedOff => raceTime - pgVictimT < 2.0;
 
@@ -60,6 +63,7 @@ public partial class GameManager
         pgCaused1 = pgCaused2 = pgVictimT = pgTeleT = pgBarrierT = pgCollPenT = -1e9; pgOwedT = 0;
         pgPrevX = double.NaN; pgExc = false; pgSec = -1; pgLap = 0; pgLapClean = true; pgLapPit = false;
         pgPen = 0; pgToastT = 0;
+        PsReset(); // live penalties (PenaltyServe.cs)
         if (raceLaps <= 0 || playground || track == null || shotFreeze) return;
         MenuProfile.Load();
         pgRace = new RaceProgress(MenuProfile.Sr, Progression.OfflineWeight) { fromPole = playerSlot == 0 };
@@ -247,7 +251,7 @@ public partial class GameManager
     void PgOvertakes(double t)
     {
         double me = pLap + (double)idx / track.N;
-        bool ok = pRun == null && !pgExc && t > Countdown + 1 && t - pgTeleT > 1.5 && !(raceCtl != null && raceCtl.Neutral);
+        bool ok = pRun == null && !pgExc && !psGhost && t > Countdown + 1 && t - pgTeleT > 1.5 && !(raceCtl != null && raceCtl.Neutral);
         for (int i = 0; i < rivals.Count && i < pgRel.Length; i++)
         {
             var d = rivals[i];
@@ -306,6 +310,7 @@ public partial class GameManager
     // rival i and the player: Traffic.Collide(rivals[i].car, car) exactly as before, judged when it hit
     void PlayerContact(int i)
     {
+        if (psGhost) return; // serving a penalty: a ghost, no contact with any car (PenaltyServe.cs)
         var rc = rivals[i].car;
         double dx = rc.x - car.x, dy = rc.y - car.y;
         if (pgRace == null || idx < 0 || dx * dx + dy * dy > 49) { Traffic.Collide(rc, car); return; }
@@ -375,11 +380,12 @@ public partial class GameManager
     }
 
     // ---------------------------------------------------------------- penalties
-    // added to the race time like the jump start and race control's (pitLoss): the order, the tower and the results
+    // the player's: served on track at once (PenaltyServe.cs); until served it counts in pitLoss like the jump start
+    // and race control's (the order, the tower and, if the flag comes first, the results)
     void PlayerPenalty(int secs, string why)
     {
-        pitLoss += secs; pgPen += secs; pgPenSerial++; pgPenLast = secs;
-        Banner("PENALTY", "+" + secs + " s  ·  " + why, HudAccent);
+        bool live = PsAward(secs); pgPen += secs; pgPenSerial++; pgPenLast = secs;
+        Banner("PENALTY", (live ? "" : "+") + secs + " s  ·  " + why, HudAccent);
     }
 
     void RivalPenalty(int i, int secs, string why)

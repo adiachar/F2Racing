@@ -12,10 +12,11 @@
 //  * the resolution is never hunted mid-race: at most one step down per session, never back up until the next setting
 //    change. Dynamic resolution only where the API supports it (Vulkan, Metal); on OpenGL ES the screen buffer is
 //    resized instead. Floor 75%; MSAA per level (4x Medium/High, 2x Low)
-//  * frame-time investigation (Docs/PERF-INVESTIGATION.md): Auto steps the rate down early when the phone reports
-//    heat (Thermal.cs), starts at 40 on mid-range Mali GPUs with a 120 Hz panel, and its graphics-level step is held
-//    to the next session start (a level change mid-race switched keywords, shader LODs and MSAA: a lap of first-use
-//    hitches); the physics spiral guard's limits; the overlay's per-frame inputs (FrameLog.cs)
+//  * frame-time investigation (Docs/PERF-INVESTIGATION.md): Auto steps the rate down when the phone reports heat
+//    (Thermal.cs) for two reads in a row, or when two 3 s windows in a row miss the lock; its graphics-level step is
+//    held to the next session start (a level change mid-race switched keywords, shader LODs and MSAA: a lap of
+//    first-use hitches); 40 fps only on a panel that really runs at 120 Hz (asked for while 40 is wanted, read back,
+//    else 60 or 30 only); the physics spiral guard's limits; the overlay's per-frame inputs (FrameLog.cs)
 using FormulaSim;
 using UnityEngine;
 
@@ -195,13 +196,14 @@ public partial class GameManager
     int fpsLock = 60, fpsRung;                       // the rate asked for (Application.targetFrameRate) and its place in FpsRungs
     static int[] fpsMem;                             // Auto: the rung each circuit settled on in this run (0 = none yet)
     float fpsWinT, fpsSettle; int fpsWinN, fpsWinLate; // the 3 s measuring window; seconds to wait before measuring
+    int fpsBad, heatReads, heatSeen, fpsWinShort;                 // failing windows in a row; thermal reads in a row that said "hot"
     bool fpsHolding = true;                          // the last full window held the lock
     bool resStepped;                                 // this session's one resolution step is used
 
     // a session starts or the setting changed: Auto starts at 60 (or where this circuit settled before in this run).
-    // Mid-range Mali GPUs (G5x / G6x: the Redmi Note 12 Pro's G68 MC4) on a 120 Hz panel start at the steady 40: their
-    // GPU needs ~20-28 ms a frame, so a 60 attempt runs the GPU flat out, heats the phone and throttles it, after which
-    // even 30 is lost (Docs/PERF-ARCHITECTURE.md, gfx request #8). "60 fps" in Settings still forces 60.
+    // Adi's Redmi Note 12 Pro (Mali-G68, 20 Nov): at 60 the GPU needs 12.5-14.5 ms at 71% x 75% and holds 56-60 fps;
+    // the old "start Mali at 40" rule ran on a panel MIUI keeps at 60 Hz, where 40 can never be even (late 100%).
+    // "40 fps" in Settings needs the panel at 120 Hz: without it (Thermal.Can120 == No) it runs at a steady 30.
     void FpsStart()
     {
         var r = FpsRungs;
@@ -209,30 +211,45 @@ public partial class GameManager
         {
             int m = fpsMem != null && mapIdx >= 0 && mapIdx < fpsMem.Length ? fpsMem[mapIdx] : 0;
             fpsRung = Mathf.Clamp(m, 0, r.Length - 1);
-            if (m == 0 && MaliMidRange) for (int i = 0; i < r.Length; i++) if (r[i] == 40) { fpsRung = i; break; }
+            if (r[fpsRung] == 40 && Thermal.Can120 == Thermal.No) fpsRung = r.Length - 1;
         }
         else
         {
             int want = fpsIdx == 1 ? 60 : fpsIdx == 2 ? 40 : 30;
             fpsRung = r.Length - 1;
             for (int i = 0; i < r.Length; i++) if (r[i] <= want) { fpsRung = i; break; } // what Unity would round it to anyway
+            if (r[fpsRung] == 40 && Thermal.Can120 == Thermal.No) fpsRung = r.Length - 1; // 40 needs 120 Hz: steady 30
         }
         fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
-        fpsAvg = fpsLock; fpsHolding = true; resStepped = false;
+        fpsAvg = fpsLock; fpsHolding = true; resStepped = false; fpsBad = 0; heatReads = 0;
         FpsWindowReset(3f);
+        FpsNamesFor120();
     }
-    static int maliMid = -1;
-    static bool MaliMidRange
+    // the Frame rate setting's "40" says when this screen cannot show it
+    static void FpsNamesFor120() { FpsNames[2] = Thermal.Can120 == Thermal.No ? "40 (needs 120 Hz)" : "40 fps"; }
+
+    // once a frame (GameManager.Update): the display mode follows the lock. 40 asks Android for the panel's 120 Hz mode
+    // (Thermal.RequestHigh); 60 / 30 and the menus (MenuStudio caps them at 30) give the choice back to the system,
+    // which saves battery. A 40 lock on a panel that stays at 60 Hz (read back after ~2 s, or seen in the frame times)
+    // falls to a steady 30 at once.
+    void DisplayModeTick()
     {
-        get
-        {
-            if (maliMid < 0) { string g = SystemInfo.graphicsDeviceName ?? ""; maliMid = g.Contains("Mali-G5") || g.Contains("Mali-G6") ? 1 : 0; }
-            return maliMid == 1;
-        }
+        Thermal.RequestHigh(Application.targetFrameRate == 40);
+        if (fpsLock == 40 && Thermal.Can120 == Thermal.No) FpsNo120();
+    }
+    void FpsNo120()
+    {
+        var r = FpsRungs;
+        FpsNamesFor120();
+        fpsRung = r.Length - 1; fpsLock = r[fpsRung];
+        if (Application.targetFrameRate == 40) Application.targetFrameRate = fpsLock; // (not in the menus' own 30 cap)
+        if (fpsIdx == 0 && mapIdx >= 0 && mapIdx < MapNames.Length) { if (fpsMem == null) fpsMem = new int[MapNames.Length]; fpsMem[mapIdx] = Mathf.Max(fpsMem[mapIdx], fpsRung); }
+        fpsAvg = fpsLock; fpsHolding = true; fpsBad = 0; FpsWindowReset(1.5f);
+        Flash("Screen stays at 60 Hz: steady 30 fps");
     }
     // a graphics setting changed: every circuit may hold a higher rate now
     void FpsForget() { fpsMem = null; }
-    void FpsWindowReset(float settle) { fpsWinT = 0; fpsWinN = 0; fpsWinLate = 0; fpsSettle = Mathf.Max(fpsSettle, settle); }
+    void FpsWindowReset(float settle) { fpsWinT = 0; fpsWinN = 0; fpsWinLate = 0; fpsWinShort = 0; fpsSettle = Mathf.Max(fpsSettle, settle); }
 
     // once a frame (GameManager.Update, AutoQuality)
     void FramePacing()
@@ -240,23 +257,35 @@ public partial class GameManager
         float dt = Time.unscaledDeltaTime;
         fpsAvg += (1f / Mathf.Max(dt, 0.001f) - fpsAvg) * 0.05f; // the number shown (RaceHud.DrawFps)
         if (Paused || replaying) { FpsWindowReset(2f); return; } // (menus: capped at 30 by MenuStudio.cs)
-        // 0. the phone reports heat (Thermal.cs: Android thermal status MODERATE or more, or headroom near the SEVERE
-        //    level): take the next steady rate now, before the clocks drop and the rate collapses (a 60 that throttles
-        //    ends at 20-30 with judder; a steady 40 heats the phone far less). At most once every 30 s.
-        if (fpsIdx == 0 && Thermal.Hot && fpsRung < FpsRungs.Length - 1 && Time.unscaledTime >= fpsHeatT)
+        // 0. the phone reports heat (Thermal.cs: Android thermal status MODERATE or more, or headroom >= 0.9, near the
+        //    SEVERE level) on two reads in a row (~4 s: the headroom forecast is noisy): take the next steady rate now,
+        //    before the clocks drop and the rate collapses (a 60 that throttles ends at 20-30 with judder). At most
+        //    once every 30 s; one-way for the session.
+        if (Thermal.Reads != heatSeen) { heatSeen = Thermal.Reads; heatReads = Thermal.Hot ? heatReads + 1 : 0; }
+        if (fpsIdx == 0 && heatReads >= 2 && fpsRung < FpsRungs.Length - 1 && Time.unscaledTime >= fpsHeatT)
         {
-            fpsHeatT = Time.unscaledTime + 30f; FpsStepDown(true);
+            fpsHeatT = Time.unscaledTime + 30f; heatReads = 0; FpsStepDown(true);
             return;
         }
         if (fpsSettle > 0) { fpsSettle -= Mathf.Min(dt, 0.1f); return; }       // (the loading frame's long dt does not count)
         fpsWinT += dt; fpsWinN++;
         if (dt > 1.25f / fpsLock) fpsWinLate++; // shown for one refresh too many (60 on 120 Hz: 25 ms instead of 16.7)
+        else if (dt < 0.75f / fpsLock) fpsWinShort++; // shown early: a 40 lock on a 60 Hz panel alternates 16.7 / 33.3 ms
         if (fpsWinT < 3f) return;
         float avg = fpsWinN / fpsWinT, late = fpsWinLate / (float)fpsWinN;
-        // one hitch (a GC, a sound load) is ~1 late frame in 180 and barely moves the average: it never counts
-        fpsHolding = avg >= fpsLock * 0.92f && late <= 0.1f;
         FpsWindowReset(0f);
-        if (fpsHolding) return;
+        // a 40 lock that the panel cannot show: on 60 Hz Unity rounds 40 down to 30 (every frame 33 ms: Adi's "late
+        // 100%") or the frames alternate 16.7 / 33.3 ms. -> steady 30 at once, and no 40 for the rest of the app run.
+        // (A GPU too slow for 40 on a panel that does read 120 Hz is the normal step below.)
+        if (fpsLock == 40 && late >= 0.4f && (fpsWinShort >= fpsWinN * 0.2f || !(Thermal.Hz >= 100f))) { Thermal.MarkNo120(); FpsNo120(); return; }
+        // holding: late <= ~5% (one hitch, a GC or a sound load, is ~1 late frame in 180 and never counts). Failing:
+        // late > 8% or the average under 92% of the lock, in two windows in a row (6 s): only then a step, so a single
+        // bad window (a crash, a pack of cars) does not cost the session its frame rate
+        bool bad = avg < fpsLock * 0.92f || late > 0.08f;
+        fpsHolding = !bad;
+        fpsBad = bad ? fpsBad + 1 : 0;
+        if (fpsBad < 2) return;
+        fpsBad = 0;
         // 1. Auto frame rate: the next steady rate, for the rest of the session
         var r = FpsRungs;
         if (fpsIdx == 0 && fpsRung < r.Length - 1) { FpsStepDown(false); return; }
@@ -280,9 +309,11 @@ public partial class GameManager
     void FpsStepDown(bool hot)
     {
         var r = FpsRungs;
-        fpsRung++; fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
+        fpsRung++;
+        if (r[fpsRung] == 40 && Thermal.Can120 == Thermal.No && fpsRung < r.Length - 1) fpsRung++; // 40 needs 120 Hz
+        fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock; // (a 40 asks for 120 Hz: DisplayModeTick, read back after ~2 s)
         if (mapIdx >= 0 && mapIdx < MapNames.Length) { if (fpsMem == null) fpsMem = new int[MapNames.Length]; fpsMem[mapIdx] = Mathf.Max(fpsMem[mapIdx], fpsRung); }
-        fpsAvg = fpsLock; fpsHolding = true; FpsWindowReset(1.5f);
+        fpsAvg = fpsLock; fpsHolding = true; fpsBad = 0; FpsWindowReset(1.5f);
         Flash(hot ? FpsFlashHot(fpsLock) : FpsFlash(fpsLock));
     }
     static string FpsFlash(int f) => f == 45 ? "Steady 45 fps for smoother play" : f == 40 ? "Steady 40 fps for smoother play" : "Steady 30 fps for smoother play";

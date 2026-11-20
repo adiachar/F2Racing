@@ -4,7 +4,79 @@ Report (Adi, Redmi Note 12 Pro 5G: Dimensity 1080 = 2x Cortex-A78 + 6x A55, Mali
 "While idle the frames drop and are inconsistent. Same road, same spot, same cars in front, different laps give
 significantly different FPS (60 to 20)." His guess: per-frame allocations -> GC spikes.
 
-## Summary
+## Round 2 (20 Nov): Adi's overlay data and what changed
+
+Three 2-minute races with the FrameLog overlay (Redmi Note 12 Pro 5G, Mali-G68, Vulkan). Adi: "better than before".
+
+| Lock | fps | frame ms | late | main / render / GPU ms | GC per 20 s | alloc | headroom, battery | res | display |
+|---|---|---|---|---|---|---|---|---|---|
+| 30 | 30.0 steady | p50 = p95 = 33.1 | 1% | ~10 / ~4.5 / **21-25** | 2-3 | ~200 KB/s | 0.78-0.84, 36.7-37.1 C | 71% x 100% | **60 Hz** |
+| 40 | 26.5-30 | p95 49.6 | **100%** | - / - / ~20 | 2-4 | ~190 KB/s | 0.83-0.92 | 71% x 85% | **60 Hz** |
+| 60 | 48.8-60 (most rows 56-60) | p50 16.6, p95 16.6-33.1, **max 99-115** | 0-18% | 9-14 / - / **12.5-14.5** | 3-4 | **290-366 KB/s** | **0.92-0.97**, 38.8-39.5 C | 71% x 75% | 60 Hz |
+
+Thermal status 0 throughout, CPU 0.65 / 2.60 GHz, ~425 draws, ~354k triangles.
+
+**Findings**
+1. **The panel stays at 60 Hz in the game** (MIUI keeps games it does not list at 60 Hz), so 40 can never be even: Unity
+   rounds a 40 target down to 30 on a 60 Hz panel (every frame 33 ms = "late 100%"). The 40 run was not a GPU problem.
+2. **60 is affordable**: the GPU needs 12.5-14.5 ms at 71% x 75% (Auto's one resolution step). The GPU clocks down at
+   a 30 lock, so its 21-25 ms there is not comparable. The cost of 60 is heat: headroom 0.92-0.97 (close to throttling).
+3. **Garbage: 190-366 KB/s = a collection every 5-7 s, and it was mostly IMGUI text, half of it the overlay itself.**
+   Read in Unity 6000.0's C# reference (Modules/IMGUI): `GUI.Label(Rect, string, style)` calls `GUIContent.Temp`, whose
+   text setter does `text + "​"` = **a new string on every label draw**, every OnGUI pass (~40 B x ~80 HUD labels =
+   ~3 KB a frame, more on touch frames). Then `IMGUITextHandle.GetTextHandle` caches text by a hash of (text, colour,
+   rect size, font, size); any value not drawn in the last 5 s allocates a new handle (a finalizable TextHandle, a list
+   node) and, for the native mesh, `new MeshInfoBindings[]` + `new TextCoreVertex[4 x chars]` (32 B a vertex): ~1-2 KB
+   per new number. Speed, delta, kW and brake temperatures changed nearly every frame. The old overlay's three ~150
+   character lines changed twice a second: ~38 KB of vertex arrays each time (~77 KB/s) plus ~1.3 KB a frame of copies.
+   Script code itself is still 0 B (round 1).
+4. **The 99-115 ms spikes**: no screenshot of the graph markers, so not proven. Candidates, now each marked in the
+   overlay: GC collections (Boehm, 42 MB heap, a collection every 5-7 s at that rate), the TextCore handle clean-up
+   (every 30 s or every 500 new text handles: one native destroy per expired handle; at the old rate it ran every few
+   seconds), a team radio message (1.2 MB `AudioClip.SetData` of the whole 14 s buffer), the 2 s thermal read (binder
+   calls; the battery one is a sticky-broadcast query through the activity manager).
+
+**Fixes**
+- **Display mode** (Thermal.cs, GameManagerPerf.cs): while the lock is 40 the game asks Android for the panel's fastest
+  mode (`WindowManager.LayoutParams.preferredDisplayModeId` + `preferredRefreshRate`, the mode with the highest rate at the
+  current physical size from `Display.getSupportedModes`, set on the UI thread through one `AndroidJavaRunnable` made once);
+  60 / 30 and the menus give the choice back to the system (battery). The refresh rate is read back with
+  `Display.getRefreshRate` (raw JNI; it reflects MIUI's per-app override) ~2 s after asking. Still 60 Hz -> `Can120 = No`
+  for this app run: a 40 lock becomes a steady 30 at once ("Screen stays at 60 Hz: steady 30 fps"), Auto never uses 40,
+  and the Frame rate setting shows "40 (needs 120 Hz)". Belt and braces: a 40 window with >= 40% late frames and either
+  early (16.7 ms) frames or no 120 Hz read-back is treated the same. No 120 Hz mode at all -> No without asking.
+  `Surface.setFrameRate` was not used: Unity's surface is not reachable without a Java plugin.
+- **Auto** (GameManagerPerf.FramePacing): starts at **60** (the "Mali starts at 40" rule is gone). Holds while late <= ~5%;
+  steps only after **two failing 3 s windows in a row** (late > 8% or average < 92% of the lock), or **two thermal reads
+  in a row** that say hot (status >= MODERATE or headroom >= 0.9; at most once per 30 s). The next rate skips 40 unless
+  120 Hz is confirmed (Unknown: 40 is tried once and read back). Still one-way per session, per-circuit memory kept.
+  On Adi's phone: 60 while cool; when headroom stays >= 0.9 -> a steady 30.
+- **HUD garbage** (UiKit.cs, RaceHud.cs): `UiKit.Text` (every HUD and menu label) draws with one cached `GUIContent` per
+  string object (keyed by reference; capped at 3000, then cleared) and returns early on non-Repaint events; `UiKit.Width`
+  / `Height` use the same cache. Read-outs that change every frame are held (`HudHold`): speed and delta 10 Hz, kW 5 Hz,
+  ERS / boost / overtake % and brake temperatures 4 Hz, gaps 4 Hz per car, tyre temperatures, fuel and laps 2 Hz, the fps
+  text 2 Hz. The lap clock is drawn as "m:ss" + ".t" (the ten tenths stay cached): one new text a second instead of ten.
+  RadioCaption and PerfLab's two components no longer ask for an IMGUI Layout pass (two layout groups a frame each).
+- **Overlay** (FrameLog.cs): no IMGUI text at all; the five lines and the Results table are written with a 6 x 11 bitmap
+  font (Pillow's built-in, HPND) into textures (twice a second / once a second) and drawn as images: **0 B** (checked:
+  0 bytes in 10,000 write + upload calls). New: an allocation strip under the graph (KB per frame), KB/s, markers for the
+  thermal read (orange) and radio messages (blue), long frames (> 50 ms) counted per 20 s row with their cause
+  (g GC, r radio, t thermal read, p physics, ? other; a long frame's time is the previous frame's work, so both frames'
+  events count), the thermal read's own time (last / max ms), the radio mix + upload time, and "120:Y/N/?".
+- **Radio** (TeamRadio.cs): uploads only the message plus 0.2 s of silence, in 0.5 s pieces from one reused buffer,
+  instead of the whole 1.2 MB buffer; mix + upload time measured.
+- **Thermal reads**: battery temperature every 10 s instead of 2 s; each read timed.
+
+Expected: HUD garbage from ~3-6 KB a frame to well under 1 KB a frame (estimated 10-20 KB/s in a race at 60, most of it
+new speed / delta values; not measurable here: no device). Note: `GC.GetTotalMemory` on IL2CPP moves in heap-block
+steps, so per-frame values are coarse; the 0.5 s and 20 s averages are the numbers to read.
+
+**What Adi should re-test**: Frame rate = Auto and = 40, Performance graph on, a 2-minute race each; screenshot the
+Results table. Look at: Hz and "120:" (40 should show N and run a steady 30, unless the phone gives 120 Hz), KB/s and GC
+per row (target < 20 KB/s, GC rare), the >50ms column and its letters, and whether Auto stays at 60 until headroom
+reaches 0.9.
+
+## Summary (round 1)
 
 The scene is the same on both laps, so whatever differs has to be **state that changes over time**: the managed heap
 (GC), the simulation's catch-up work, the phone itself (clocks, temperature, display refresh rate, touch boost), the

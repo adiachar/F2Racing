@@ -75,7 +75,10 @@ public class TeamRadio : MonoBehaviour
     // half-band interpolator (8 taps, Hann-windowed sinc) for the 2x upsampling 11025 -> 22050
     const float H0 = 0.6105f, H1 = -0.1461f, H2 = 0.0392f, H3 = -0.0035f;
     const int Pad = 4;
-    float[] dec, mix, noise; int mixUsed;
+    float[] dec, mix, noise, chunk; int mixUsed;
+    // for the frame-time overlay (FrameLog.cs): the frame of the last message and how long mixing + upload took
+    public static int PlayFrame = -1; public static float LastPlayMs;
+    const int Chunk = Rate / 2;                        // SetData piece: MaxLen is a whole number of them
     AudioSource src; AudioClip clip;
 
     bool LoadPack()
@@ -100,7 +103,7 @@ public class TeamRadio : MonoBehaviour
             clipLen[c] = len[name]; if (clipLen[c] > longest) longest = clipLen[c];
         }
         dec = new float[longest + 2 * Pad];
-        mix = new float[MaxLen];
+        mix = new float[MaxLen]; chunk = new float[Chunk];
         // the hiss, upsampled once
         int nn = Decode((int)C.fx_noise);
         noise = new float[System.Math.Max(2, 2 * nn)];
@@ -211,6 +214,7 @@ public class TeamRadio : MonoBehaviour
 
     void Play(Msg m)
     {
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         System.Array.Clear(mix, 0, System.Math.Min(mixUsed + 4, mix.Length));
         int at = Put(C.fx_keyon, 0, 0.5f), gap = Rate / 100;
         for (int i = 0; i < m.n; i++)
@@ -230,11 +234,20 @@ public class TeamRadio : MonoBehaviour
             mix[i] += lvl * e * noise[j];
             if (++j >= nl) j = 0;
         }
+        // upload only what plays: the message and ~0.2 s of the (cleared) tail, in 0.5 s pieces, instead of the whole
+        // 14 s buffer (1.2 MB) per message. The source stops at playEnd, so older samples past that are never heard.
+        int upTo = System.Math.Min(MaxLen, len + Rate / 5); // (mix is zero past len: cleared above, never written there)
         mixUsed = len;
-        clip.SetData(mix, 0);
+        for (int off = 0; off < upTo; off += Chunk)
+        {
+            System.Array.Copy(mix, off, chunk, 0, Chunk);
+            clip.SetData(chunk, off);
+        }
         src.clip = clip; src.time = 0f; src.Play();
         playing = true; cur = m; playEnd = clock + len / (float)Rate + 0.05f;
         capText = m.text; capDriver = m.driver; capStart = clock; capUntil = playEnd + 0.7f;
+        PlayFrame = Time.frameCount;
+        LastPlayMs = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
     }
 
     void StopAll()
@@ -811,6 +824,7 @@ public class TeamRadio : MonoBehaviour
 public class RadioCaption : MonoBehaviour
 {
     internal TeamRadio owner;
+    void Awake() { useGUILayout = false; } // no Layout pass (it allocates two layout groups per frame)
     void OnGUI() { GUI.depth = -5; if (owner != null && Event.current.type == EventType.Repaint) owner.DrawCaption(); }
 }
 

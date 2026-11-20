@@ -8,7 +8,11 @@
 //  * battery temperature (the sticky ACTION_BATTERY_CHANGED intent, "temperature" in 0.1 C)
 //  * SoC temperature (the first readable thermal zone whose type names the CPU / SoC), the fastest CPU core's clock
 //    now and at most, and the GPU clock (vendor paths; many phones hide these from apps: then NaN)
-//  * the display's refresh rate now (some phones drop 120 Hz to 60 Hz when the screen is not touched)
+//  * the display's refresh rate now (Display.getRefreshRate: some phones drop 120 Hz to 60 Hz when the screen is not
+//    touched, and MIUI keeps games it does not list at 60 Hz)
+//  * the 120 Hz request for a 40 fps lock (RequestHigh, below): 40 only divides 120, so on a 60 Hz panel a 40 lock is a
+//    mix of 33 and 17 ms frames (Adi, 20 Nov: "late 100%"). The game asks for the panel's fastest mode while it wants
+//    40 and reads back whether it got it (Can120); without it the game uses only 60 or 30.
 // Cost: set-up once (a few small allocations); every read is raw JNI with cached method ids and argument arrays, and
 // sysfs files kept open and re-read from offset 0: no managed allocation per read. Any failure turns that one reading
 // off for the session. Editor / WebGL / iOS: only the refresh rate.
@@ -22,7 +26,9 @@ public static class Thermal
     public static float Headroom = float.NaN, BatteryC = float.NaN, SocC = float.NaN;
     public static float CpuGHz = float.NaN, CpuMaxGHz = float.NaN, GpuMHz = float.NaN, Hz = float.NaN;
     public static int Reads;                 // completed reads (the overlay shows "-" until the first)
-    public const float Period = 2f;
+    public static int ReadFrame = -1;        // the frame of the last read (FrameLog marks it)
+    public static float LastReadMs, MaxReadMs; // how long the last / the slowest read took on the main thread
+    public const float Period = 2f, BatteryPeriod = 10f;
     // hot enough that Auto should take load off: Android's MODERATE, or headroom close to the SEVERE level
     public static bool Hot => Status >= 2 || Headroom >= 0.9f;
 
@@ -32,11 +38,43 @@ public static class Thermal
     public static void Tick()
     {
         float now = Time.unscaledTime;
+        HighTick(now);
         if (now < nextT) return;
         nextT = now + Period;
-        if (!inited) { inited = true; Init(); }
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        EnsureInit();
         Read();
-        Reads++;
+        Reads++; ReadFrame = Time.frameCount;
+        LastReadMs = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+        if (Reads > 1 && LastReadMs > MaxReadMs) MaxReadMs = LastReadMs; // (the first read includes the set-up)
+    }
+    static void EnsureInit() { if (!inited) { inited = true; Init(); } }
+
+    // ---------------------------------------------------------------- 120 Hz for a 40 fps lock
+    public const int Unknown = 0, Yes = 1, No = 2;
+    public static int Can120 = Unknown;      // this app run: the panel shows 120 Hz when asked (Yes), or stays at 60 (No)
+    static bool wantHigh; static float checkAt = -1f;
+    // every frame (cheap): high = the game wants the fastest display mode now (a 40 fps lock in a race). The request
+    // goes to Android only when it changes; ~2 s after asking, the refresh rate is read back once.
+    public static void RequestHigh(bool high)
+    {
+        if (high == wantHigh) return;
+        wantHigh = high;
+        EnsureInit();
+        if (high && Can120 == No) return;     // known not to work: leave the system's choice alone
+        ApplyMode(high);
+        checkAt = high && Can120 != Yes ? Time.unscaledTime + 2.2f : -1f;
+    }
+    // the frame pacing saw a 40 lock that cannot be even (most frames late): the panel is not at 120 Hz
+    public static void MarkNo120() { if (Can120 != No) { Can120 = No; checkAt = -1f; if (wantHigh) ApplyMode(false); } }
+    static void HighTick(float now)
+    {
+        if (checkAt < 0f || now < checkAt) return;
+        checkAt = -1f;
+        if (!wantHigh) return;
+        ReadHz();
+        if (float.IsNaN(Hz)) return;          // cannot tell here: the frame pacing decides from the frame times
+        if (Hz >= 100f) Can120 = Yes; else MarkNo120();
     }
 
     // ---------------------------------------------------------------- sysfs: one file kept open, re-read from 0
@@ -123,8 +161,10 @@ public static class Thermal
 
     // ---------------------------------------------------------------- Android (raw JNI)
 #if UNITY_ANDROID && !UNITY_EDITOR
-    static AndroidJavaObject activity, power, filter;
-    static IntPtr midStatus, midHeadroom, midRegister, midGetIntExtra, jTemperature;
+    static AndroidJavaObject activity, power, filter, display, window;
+    static IntPtr midStatus, midHeadroom, midRegister, midGetIntExtra, jTemperature, midRefresh;
+    static int sdkInt, highModeId; static float highModeHz, nextBattery;
+    static AndroidJavaRunnable modeRunnable; static volatile bool uiHigh;
     static readonly jvalue[] noArgs = new jvalue[0], headArgs = new jvalue[1], regArgs = new jvalue[2], extraArgs = new jvalue[2];
 
     static void Init()
@@ -133,8 +173,10 @@ public static class Thermal
         {
             int sdk;
             using (var v = new AndroidJavaClass("android.os.Build$VERSION")) sdk = v.GetStatic<int>("SDK_INT");
+            sdkInt = sdk;
             using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer")) activity = player.GetStatic<AndroidJavaObject>("currentActivity");
             if (activity == null) return;
+            InitDisplay();
             if (sdk >= 29)
             {
                 power = activity.Call<AndroidJavaObject>("getSystemService", "power");
@@ -168,6 +210,66 @@ public static class Thermal
     static void Clear(ref IntPtr mid) { if (AndroidJNI.ExceptionOccurred() != IntPtr.Zero) { AndroidJNI.ExceptionClear(); mid = IntPtr.Zero; } }
     static bool Failed() { if (AndroidJNI.ExceptionOccurred() == IntPtr.Zero) return false; AndroidJNI.ExceptionClear(); return true; }
 
+    // the display (refresh rate read-back) and its fastest mode at the current resolution (API 23+: Display.Mode)
+    static void InitDisplay()
+    {
+        try
+        {
+            using (var wm = activity.Call<AndroidJavaObject>("getWindowManager")) display = wm.Call<AndroidJavaObject>("getDefaultDisplay");
+            if (display == null) return;
+            midRefresh = AndroidJNI.GetMethodID(display.GetRawClass(), "getRefreshRate", "()F"); Clear(ref midRefresh);
+            if (sdkInt < 23) { Can120 = No; return; }
+            window = activity.Call<AndroidJavaObject>("getWindow");
+            int w, h;
+            using (var cur = display.Call<AndroidJavaObject>("getMode")) { w = cur.Call<int>("getPhysicalWidth"); h = cur.Call<int>("getPhysicalHeight"); }
+            var modes = display.Call<AndroidJavaObject[]>("getSupportedModes");
+            highModeId = 0; highModeHz = 0f;
+            if (modes != null)
+                for (int i = 0; i < modes.Length; i++)
+                {
+                    var m = modes[i]; if (m == null) continue;
+                    float hz = m.Call<float>("getRefreshRate");
+                    if (m.Call<int>("getPhysicalWidth") == w && m.Call<int>("getPhysicalHeight") == h && hz > highModeHz && hz < 125f) { highModeHz = hz; highModeId = m.Call<int>("getModeId"); }
+                    m.Dispose();
+                }
+            if (highModeHz < 100f) Can120 = No; // no 120 Hz mode at this resolution
+            modeRunnable = new AndroidJavaRunnable(SetModeOnUi); // made once
+        }
+        catch (Exception) { AndroidJNI.ExceptionClear(); }
+    }
+    // the window's preferred display mode (WindowManager.LayoutParams.preferredDisplayModeId, API 23, and
+    // preferredRefreshRate); 0 = the system's choice. Window attributes must be changed on Android's UI thread.
+    static void ApplyMode(bool high)
+    {
+        if (modeRunnable == null || window == null || highModeId == 0) return;
+        uiHigh = high;
+        try { activity.Call("runOnUiThread", modeRunnable); } catch (Exception) { AndroidJNI.ExceptionClear(); }
+    }
+    static void SetModeOnUi()
+    {
+        try
+        {
+            bool high = uiHigh;
+            using (var lp = window.Call<AndroidJavaObject>("getAttributes"))
+            {
+                lp.Set<int>("preferredDisplayModeId", high ? highModeId : 0);
+                lp.Set<float>("preferredRefreshRate", high ? highModeHz : 0f);
+                window.Call("setAttributes", lp);
+            }
+        }
+        catch (Exception) { }
+    }
+
+    static void ReadHz()
+    {
+        if (display != null && midRefresh != IntPtr.Zero)
+        {
+            float hz = AndroidJNI.CallFloatMethod(display.GetRawObject(), midRefresh, noArgs);
+            if (Failed()) midRefresh = IntPtr.Zero; else if (hz > 1f) { Hz = hz; return; }
+        }
+        ReadUnityHz();
+    }
+
     static void Read()
     {
         ReadHz();
@@ -183,8 +285,10 @@ public static class Thermal
                 float h = AndroidJNI.CallFloatMethod(power.GetRawObject(), midHeadroom, headArgs);
                 if (Failed()) { midHeadroom = IntPtr.Zero; Headroom = float.NaN; } else if (!float.IsNaN(h)) Headroom = h; // NaN: asked too soon, keep the last
             }
-            if (midRegister != IntPtr.Zero && midGetIntExtra != IntPtr.Zero)
+            // battery: a sticky-broadcast query through the activity manager (binder), so only every 10 s
+            if (midRegister != IntPtr.Zero && midGetIntExtra != IntPtr.Zero && Time.unscaledTime >= nextBattery)
             {
+                nextBattery = Time.unscaledTime + BatteryPeriod;
                 IntPtr intent = AndroidJNI.CallObjectMethod(activity.GetRawObject(), midRegister, regArgs);
                 if (Failed()) { midRegister = IntPtr.Zero; }
                 else if (intent != IntPtr.Zero)
@@ -201,9 +305,11 @@ public static class Thermal
 #else
     static void Init() { }
     static void Read() { ReadHz(); }
+    static void ReadHz() { ReadUnityHz(); }
+    static void ApplyMode(bool high) { }
 #endif
 
-    static void ReadHz()
+    static void ReadUnityHz()
     {
         try { double hz = Screen.currentResolution.refreshRateRatio.value; Hz = hz > 1 ? (float)hz : float.NaN; } catch (Exception) { }
     }
