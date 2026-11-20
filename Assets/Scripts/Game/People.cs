@@ -11,6 +11,16 @@
 // blended in code (PoseBuf), then the arms can be pulled onto targets with two-bone IK (wheel gun, tyre, jack handle)
 // and the head turned towards a point. Callers pick the LOD (LOD1 beyond ~40 m) and stop animating beyond ~120 m.
 // Blobs: soft contact shadows under a group of people, one dynamic mesh (PeopleShadow.shader).
+// Realistic people (People2, Tools/People2/build.py; 'PPL2' packs, bound to the SAME 22-joint skeleton with the same rest
+// orientations, so every clip, the IK and the pit-stop choreography drive them unchanged): textured from one atlas per
+// pack, team colours through the same palette (People2.shader: texture alpha = how much a texel takes its region's
+// palette colour), 3 LODs (SetLodAt):
+//  * Resources/People2/people2.bytes (public, CC-BY-4.0, CREDITS.txt): "Driver" (race suit, gloves, HANS, helmet: the
+//    player's driver in the menu studio and the pre-race walk) and "Avatar" (polo, chinos, cap: crew / engineers).
+//  * Resources/People2/mixamo/mixamo.bytes (PRIVATE: Mixamo licence, not in the public repo, .gitignore; CI checks it out
+//    from the private assets repo): crew bodies Ch08 / Ch13 (female) / Remy and the mocap clips MIdle, MWalk, MTalk,
+//    MTalk2, MClap, MSitClap, MWave, MBriefcase. Without it those clip ids fall back to the nearest Quaternius clip
+//    (Mocap = false) and the crew use the Avatar; without either pack everything is as before.
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -24,6 +34,17 @@ public static class People
                      RNeck = 11, RFace = 12, RHair = 13, RHelmet = 14, RHelmetTop = 15, RVisor = 16, RHeadset = 17, RCap = 18, RCapBrim = 19, RKnee = 20;
     public const int Idle = 0, Walk = 1, Jog = 2, Carry = 3, Kneel = 4, Crouch = 5, Push = 6, Headset = 7, FoldArms = 8, Talk = 9, Sit = 10, SitTalk = 11,
                      Celebrate = 12, Yes = 13, Interact = 14, Sprint = 15, NClips = 16;
+    // mocap clips (the private Mixamo pack; else the fallback below)
+    public const int MIdle = 16, MWalk = 17, MTalk = 18, MTalk2 = 19, MClap = 20, MSitClap = 21, MWave = 22, MBriefcase = 23, NAllClips = 24;
+    static readonly string[] MNames = { "MIdle", "MWalk", "MTalk", "MTalk2", "MClap", "MSitClap", "MWave", "MBriefcase" };
+    static readonly int[] MFallback = { Idle, Walk, Talk, Headset, Celebrate, SitTalk, Celebrate, Idle };
+    public static bool Mocap { get; private set; }            // the Mixamo clips are there (not their fallbacks)
+    public static int WalkClip => Mocap ? MWalk : Walk;
+    public static float WalkStride { get; private set; } = 1.66f; // m per cycle of WalkClip (feet planted)
+    public static int DriverBody { get; private set; } = -1;   // the race-suited driver (People2), -1 = none
+    // licence credit for the People2 public pack (CC BY 4.0; Resources/People2/CREDITS.txt), for the in-game credits
+    public const string Credit = "Driver based on \"Race Car Driver - Low Poly\" by tomkart, crew avatar based on \"Free Avatar for iClone\" by Asfandyar Hesami (Sketchfab), CC BY 4.0. Modified: rigged, logos removed, recoloured.";
+    static readonly List<int> crewM = new List<int>(), crewF = new List<int>();
     public const int GHelmet = 0, GHeadset = 1, GCap = 2, GBare = 3;
     public const int OCrew = 0, OEngineer = 1, OMechanic = 2, OMarshal = 3;
 
@@ -33,8 +54,10 @@ public static class People
         public float pscale; public Vector3[] t = new Vector3[NJ]; public Quaternion[] q = new Quaternion[NJ];
         public Matrix4x4[] bind = new Matrix4x4[NJ]; public Mesh[,] mesh;
         public Vector3 headFwd, headUp; // the head's forward / up in its own frame (from the rest pose)
+        public Material mat;            // null: the palette material (People.shader); else its pack's textured one
+        public bool real, female; public string name = "";
     }
-    internal sealed class ClipData { public string name; public float fps, len; public int n; public bool loop; public Quaternion[] q; public Vector3[] p; }
+    internal sealed class ClipData { public string name; public float fps, len, stride; public int n; public bool loop; public Quaternion[] q; public Vector3[] p; }
     internal static Body[] bodies; internal static ClipData[] clips;
     static bool tried;
     static Material mat, shadowMat;
@@ -59,9 +82,7 @@ public static class People
                 for (int k = 0; k < 16; k++) m[k / 4, k % 4] = r.ReadSingle();
                 B.bind[j] = m;
             }
-            // the head's axes: world (model) forward / up seen from the head joint at rest
-            Quaternion hw = Quaternion.identity; { int j = JHead; var chain = new List<int>(); while (j >= 0) { chain.Add(j); j = Parent[j]; } for (int k = chain.Count - 1; k >= 0; k--) hw = hw * B.q[chain[k]]; }
-            B.headFwd = Quaternion.Inverse(hw) * Vector3.forward; B.headUp = Quaternion.Inverse(hw) * Vector3.up;
+            HeadAxes(B);
             int nv = r.ReadInt32(); B.mesh = new Mesh[nv, 2];
             for (int v = 0; v < nv; v++)
                 for (int l = 0; l < 2; l++) B.mesh[v, l] = ReadMesh(r, B, $"Person{b}_{v}_{l}");
@@ -79,7 +100,127 @@ public static class People
             cs[c] = C;
         }
         if (nc < NClips) return;
-        bodies = bs; clips = cs;
+        // the realistic packs (each optional; a broken one is skipped, the old people stay)
+        var bl = new List<Body>(bs); var cl = new List<ClipData>(cs);
+        LoadPack("People2/people2", bl, cl);
+        LoadPack("People2/mixamo/mixamo", bl, cl);
+        // the mocap clip ids: the pack's clip, else the fallback (the same data)
+        var all = new ClipData[NAllClips]; bool mocap = true;
+        for (int c = 0; c < NClips; c++) all[c] = cs[c];
+        for (int m = 0; m < MNames.Length; m++)
+        {
+            ClipData f = null;
+            for (int c = NClips; c < cl.Count; c++) if (cl[c].name == MNames[m]) { f = cl[c]; break; }
+            if (f == null) { mocap = false; f = cs[MFallback[m]]; }
+            all[NClips + m] = f;
+        }
+        Mocap = mocap; WalkStride = mocap && all[MWalk].stride > 0.3f ? all[MWalk].stride : 1.66f;
+        crewM.Clear(); crewF.Clear(); DriverBody = -1; int avatar = -1;
+        for (int b = bs.Length; b < bl.Count; b++)
+        {
+            if (bl[b].name == "Driver") DriverBody = b;
+            else if (bl[b].name == "Avatar") avatar = b;
+            else (bl[b].female ? crewF : crewM).Add(b);
+        }
+        if (avatar >= 0) crewM.Add(avatar);
+        bodies = bl.ToArray(); clips = all;
+    }
+
+    static void HeadAxes(Body B)
+    {
+        // the head's axes: world (model) forward / up seen from the head joint at rest
+        Quaternion hw = Quaternion.identity; { int j = JHead; var chain = new List<int>(); while (j >= 0) { chain.Add(j); j = Parent[j]; } for (int k = chain.Count - 1; k >= 0; k--) hw = hw * B.q[chain[k]]; }
+        B.headFwd = Quaternion.Inverse(hw) * Vector3.forward; B.headUp = Quaternion.Inverse(hw) * Vector3.up;
+    }
+
+    // ---------------------------------------------------------------- People2 packs (Tools/People2/build.py, 'PPL2')
+    static void LoadPack(string path, List<Body> bl, List<ClipData> cl)
+    {
+        var ta = Resources.Load<TextAsset>(path); if (ta == null) return;
+        try
+        {
+            var r = new System.IO.BinaryReader(new System.IO.MemoryStream(ta.bytes));
+            if (new string(r.ReadChars(4)) != "PPL2") return;
+            r.ReadInt32(); if (r.ReadInt32() != NJ) return;
+            var jpg = r.ReadBytes((int)r.ReadUInt32()); var png = r.ReadBytes((int)r.ReadUInt32());
+            Material mat = null;
+            var sh = Resources.Load<Shader>("People/People2");
+            if (sh != null && sh.isSupported)
+            {
+                var tex = DecodeAtlas(jpg, png, path);
+                if (tex != null) mat = new Material(sh) { name = "People2", mainTexture = tex, hideFlags = HideFlags.DontUnloadUnusedAsset };
+            }
+            int nb = r.ReadInt32(); var add = new List<Body>();
+            for (int b = 0; b < nb; b++)
+            {
+                int ln = r.ReadByte(); string name = new string(r.ReadChars(ln)); int flags = r.ReadByte();
+                var B = new Body { pscale = r.ReadSingle(), real = true, female = (flags & 1) != 0, name = name, mat = mat };
+                r.ReadSingle(); // (height)
+                for (int j = 0; j < NJ; j++) { B.t[j] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()); B.q[j] = new Quaternion(r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle()); }
+                for (int j = 0; j < NJ; j++)
+                {
+                    var m = new Matrix4x4();
+                    for (int k = 0; k < 16; k++) m[k / 4, k % 4] = r.ReadSingle();
+                    B.bind[j] = m;
+                }
+                HeadAxes(B);
+                int nv = r.ReadInt32(), nl = r.ReadInt32(); B.mesh = new Mesh[nv, nl];
+                for (int v = 0; v < nv; v++)
+                    for (int l = 0; l < nl; l++) B.mesh[v, l] = ReadMesh2(r, B, name + "_" + v + "_" + l);
+                add.Add(B);
+            }
+            int nc = r.ReadInt32(); var ca = new List<ClipData>();
+            for (int c = 0; c < nc; c++)
+            {
+                int ln = r.ReadByte(); var C = new ClipData { name = new string(r.ReadChars(ln)), fps = r.ReadSingle(), n = r.ReadInt32(), loop = r.ReadByte() != 0, stride = r.ReadSingle() };
+                C.q = new Quaternion[C.n * NJ]; C.p = new Vector3[C.n];
+                const float k = 1f / 32767f;
+                for (int i = 0; i < C.q.Length; i++) C.q[i] = new Quaternion(r.ReadInt16() * k, r.ReadInt16() * k, r.ReadInt16() * k, r.ReadInt16() * k);
+                for (int i = 0; i < C.n; i++) C.p[i] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+                C.len = (C.loop ? C.n : C.n - 1) / C.fps;
+                ca.Add(C);
+            }
+            bl.AddRange(add); cl.AddRange(ca);
+        }
+        catch (System.Exception e) { Debug.LogWarning("People2 " + path + ": " + e.Message); }
+        finally { Resources.UnloadAsset(ta); }
+    }
+
+    // colour from the JPEG, tint amount from the PNG (as ModelLib.DecodeAtlas), GPU-compressed with mips
+    static Texture2D DecodeAtlas(byte[] jpg, byte[] png, string name)
+    {
+        var tc = new Texture2D(2, 2, TextureFormat.RGBA32, false, false); var tm = new Texture2D(2, 2, TextureFormat.RGBA32, false, true);
+        if (!ImageConversion.LoadImage(tc, jpg, false) || !ImageConversion.LoadImage(tm, png, false) || tc.width != tm.width || tc.height != tm.height)
+        { Object.Destroy(tc); Object.Destroy(tm); return null; }
+        var pc = tc.GetPixels32(); var pa = tm.GetPixels32(); int w = tc.width, h = tc.height;
+        for (int i = 0; i < pc.Length; i++) pc[i].a = pa[i].r;
+        Object.Destroy(tc); Object.Destroy(tm);
+        var t = new Texture2D(w, h, TextureFormat.RGBA32, true, false) { name = name, wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 1, hideFlags = HideFlags.DontUnloadUnusedAsset };
+        t.SetPixels32(pc); t.Apply(true, false); t.Compress(true); t.Apply(false, true);
+        return t;
+    }
+
+    static Mesh ReadMesh2(System.IO.BinaryReader r, Body B, string name)
+    {
+        int nv = r.ReadInt32(), nt = r.ReadInt32();
+        var pos = new Vector3[nv]; var nrm = new Vector3[nv]; var uv = new Vector2[nv]; var col = new Color32[nv]; var bw = new BoneWeight[nv]; var tri = new int[nt * 3];
+        for (int i = 0; i < nv; i++) pos[i] = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+        for (int i = 0; i < nv; i++) nrm[i] = new Vector3(r.ReadSByte(), r.ReadSByte(), r.ReadSByte()).normalized;
+        for (int i = 0; i < nv; i++) uv[i] = new Vector2(r.ReadUInt16() / 65535f, r.ReadUInt16() / 65535f);
+        for (int i = 0; i < nv; i++) col[i] = new Color32(r.ReadByte(), 0, 0, 255);
+        var bi = r.ReadBytes(nv * 4); var bwt = r.ReadBytes(nv * 4);
+        for (int i = 0; i < nv; i++)
+        {
+            const float k = 1f / 255f;
+            bw[i] = new BoneWeight { boneIndex0 = bi[i * 4], boneIndex1 = bi[i * 4 + 1], boneIndex2 = bi[i * 4 + 2], boneIndex3 = bi[i * 4 + 3],
+                                     weight0 = bwt[i * 4] * k, weight1 = bwt[i * 4 + 1] * k, weight2 = bwt[i * 4 + 2] * k, weight3 = bwt[i * 4 + 3] * k };
+        }
+        for (int i = 0; i < tri.Length; i++) tri[i] = r.ReadUInt16();
+        var m = new Mesh { name = name, hideFlags = HideFlags.DontUnloadUnusedAsset };
+        m.vertices = pos; m.normals = nrm; m.uv = uv; m.colors32 = col; m.boneWeights = bw; m.bindposes = B.bind; m.triangles = tri;
+        m.bounds = new Bounds(new Vector3(0, 0.95f, 0), new Vector3(2.4f, 2.2f, 2.4f));
+        m.UploadMeshData(false);
+        return m;
     }
 
     static Mesh ReadMesh(System.IO.BinaryReader r, Body B, string name)
@@ -244,16 +385,19 @@ public static class People
                 b[j] = t;
             }
             smr = go.AddComponent<SkinnedMeshRenderer>();
-            smr.bones = b; smr.rootBone = b[JPelvis]; smr.sharedMaterial = Mat();
+            smr.bones = b; smr.rootBone = b[JPelvis]; smr.sharedMaterial = body.mat != null ? body.mat : Mat();
             smr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; smr.receiveShadows = false;
             smr.updateWhenOffscreen = false; smr.skinnedMotionVectors = false;
             smr.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off; smr.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
             this.gear = gear; SetLod(0);
         }
         public void SetGear(int g) { if (g == gear) return; gear = g; int l = lod; lod = -1; SetLod(l); }
+        public bool Real => body.real;
+        // the LOD for a camera distance (m): realistic bodies 3 levels (~4k / 1.5k / 0.5k triangles), the old ones 2
+        public void SetLodAt(float dist) { SetLod(body.real ? (dist < LodNear ? 0 : dist < LodMid ? 1 : 2) : dist > 40f ? 1 : 0); }
         public void SetLod(int l)
         {
-            l = Mathf.Clamp(l, 0, 1); if (l == lod) return; lod = l;
+            l = Mathf.Clamp(l, 0, body.mesh.GetLength(1) - 1); if (l == lod) return; lod = l;
             smr.sharedMesh = body.mesh[Mathf.Clamp(gear, 0, body.mesh.GetLength(0) - 1), l];
             smr.quality = l == 0 ? SkinQuality.Bone4 : SkinQuality.Bone2;
             smr.localBounds = new Bounds(Vector3.zero, new Vector3(3f, 3f, 3f)); // (root bone space: around the pelvis, any posture)
@@ -312,9 +456,25 @@ public static class People
         public void Destroy() { if (go != null) Object.Destroy(go); }
     }
 
-    // a random-ish body / height for a person
+    // a random-ish body / height for a person (BodyOf: the old Quaternius bodies, used by the baked far crews)
     public static int BodyOf(int seed, float femaleShare = 0.25f) => Hash(seed, 11) < femaleShare ? 1 : 0;
-    public static float HeightOf(int seed, int body) => body == 1 ? 0.905f + 0.07f * Hash(seed, 12) : 0.94f + 0.09f * Hash(seed, 12); // ~1.60-1.72 m / ~1.70-1.88 m
+    public static float HeightOf(int seed, int body)
+    {
+        if (IsReal(body)) return 0.965f + 0.065f * Hash(seed, 12); // (People2 bodies have their real height)
+        return body == 1 ? 0.905f + 0.07f * Hash(seed, 12) : 0.94f + 0.09f * Hash(seed, 12); // ~1.60-1.72 m / ~1.70-1.88 m
+    }
+    // a realistic body when there is one (People2: the Mixamo crew, the Avatar), else BodyOf; overalls: only bodies in
+    // long trousers (the stop crew: not Remy's shorts)
+    public static int CrewBodyOf(int seed, float femaleShare = 0.25f, bool overalls = false)
+    {
+        if (crewM.Count == 0 && crewF.Count == 0) return BodyOf(seed, femaleShare);
+        var list = Hash(seed, 11) < femaleShare && crewF.Count > 0 ? crewF : crewM.Count > 0 ? crewM : crewF;
+        int n = list.Count, k = (int)(Hash(seed, 13) * n) % n;
+        for (int i = 0; i < n && overalls && bodies[list[k]].name == "Remy"; i++) k = (k + 1) % n;
+        return list[k];
+    }
+    public static bool IsReal(int body) => bodies != null && body >= 0 && body < bodies.Length && bodies[body].real;
+    public const float LodNear = 15f, LodMid = 45f;
 
     // ---------------------------------------------------------------- contact shadows
     public sealed class Blobs

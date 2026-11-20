@@ -117,3 +117,7 @@ Tools/__pycache__/
 # keep the tool projects (Unity ignores *.csproj above)
 !Tools/**/*.csproj
 __pycache__/
+
+# People2 Mixamo-derived data (Adobe Mixamo licence: no public redistribution). Comes from the private assets repo,
+# which CI checks out into this folder; the game runs without it (People.cs falls back). Built by Tools/People2/build.py.
+/Assets/Resources/People2/mixamo/

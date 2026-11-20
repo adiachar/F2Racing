@@ -179,7 +179,7 @@ public partial class GameManager
                     if (People.Ready)
                     {
                         root = new GameObject("PreRace");
-                        rig = new People.Rig(root.transform, 0, People.GHelmet, "PlayerDriver");
+                        rig = new People.Rig(root.transform, People.DriverBody >= 0 ? People.DriverBody : 0, People.GHelmet, "PlayerDriver"); // (People2's race-suited driver when there is one)
                         rig.SetLod(0);
                         Dress(rig, liv);
                         for (int j = 0; j < People.NJ; j++) if (People.Parent[j] == People.JThighR) { calfR = j; break; }
@@ -375,7 +375,7 @@ public partial class GameManager
                 Vector3 pos = a + (b - a) * (d / Mathf.Max(len, 0.01f));
                 ground = GroundAt(pos, bc.y); pos.y = ground;
                 Vector3 dir = b - a;
-                People.Sample(People.Walk, d / Stride(v) * People.Length(People.Walk), pa);
+                People.Sample(People.WalkClip, d / Stride(v) * People.Length(People.WalkClip), pa);
                 rig.Place(pos, Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg); rig.Apply(pa);
                 rig.LookAt(pos + Flat(dir) * 4f + Vector3.up * 1.5f, 0.4f);
                 rigPos = pos;
@@ -397,8 +397,8 @@ public partial class GameManager
                 float walkYaw = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg, faceYaw = Mathf.Atan2(face.x, face.z) * Mathf.Rad2Deg;
                 float stop = Smooth((rt - (WalkTime - 0.35f)) / 0.6f);
                 rig.Place(pos, Mathf.LerpAngle(walkYaw, faceYaw, Smooth((rt - (WalkTime - 0.2f)) / 0.7f)));
-                People.Sample(People.Walk, d / Stride(v0) * People.Length(People.Walk), pa);
-                People.Sample(People.Idle, T, pb);
+                People.Sample(People.WalkClip, d / Stride(v0) * People.Length(People.WalkClip), pa);
+                People.Sample(People.MIdle, T, pb);
                 People.Blend(pa, pb, stop, pa);
                 rig.Apply(pa);
                 Stance(T, stop);
@@ -434,10 +434,12 @@ public partial class GameManager
         }
 
         // the menu driver's standing posture and idle motion (MenuStudio.Animate), weight w (0 while walking): chest a
-        // touch forward, shoulders dropped, a normal stance, breathing, weight from foot to foot, arms hanging relaxed
+        // touch forward, shoulders dropped, a normal stance, breathing, weight from foot to foot, arms hanging relaxed.
+        // Over the mocap idle (People.Mocap) only a little of it: that clip already stands, breathes and shifts naturally.
         void Stance(float t, float w)
         {
             if (w <= 0.001f) return;
+            float wa = w; if (People.Mocap) w *= 0.3f;
             var tr = rig.tr; Vector3 right = tr.right, fwd = tr.forward, up = tr.up;
             var b = rig.b;
             Turn(b[People.JSpine3], 2.5f * w, right);
@@ -450,7 +452,7 @@ public partial class GameManager
             float ws = (Mathf.Sin(t * 0.7f) + 0.35f * Mathf.Sin(t * 1.9f + 1.3f)) * 0.75f * w;
             b[People.JPelvis].position += right * (0.010f * ws);
             Turn(b[People.JPelvis], 1.3f * ws, fwd); Turn(b[People.JSpine1], -1.1f * ws, fwd);
-            Hang(true, w, t, right, fwd, up); Hang(false, w, t, right, fwd, up);
+            Hang(true, People.Mocap ? 0.35f * wa : w, t, right, fwd, up); Hang(false, People.Mocap ? 0.35f * wa : w, t, right, fwd, up);
         }
         static void Turn(Transform b, float deg, Vector3 axis) { b.rotation = Quaternion.AngleAxis(deg, axis) * b.rotation; }
         void Hang(bool left, float w, float t, Vector3 right, Vector3 fwd, Vector3 up)
@@ -462,7 +464,7 @@ public partial class GameManager
             var palm = ua.position - up * ((l1 + l2) * 0.92f + 0.06f) + right * (side * 0.05f) + fwd * (0.04f + sway);
             rig.Arm(left, palm, w, -fwd + right * (side * 0.35f));
         }
-        static float Stride(float v) => 1.66f * Mathf.Max(0.3f, v) / 1.25f; // m per walk cycle at speed v (as PeoplePits)
+        static float Stride(float v) => People.Mocap ? People.WalkStride : 1.66f * Mathf.Max(0.3f, v) / 1.25f; // m per walk cycle at speed v (as PeoplePits; mocap: its own stride, feet planted)
         static float GroundAt(Vector3 p, float fallback) => WorldBuilder.Height != null ? WorldBuilder.H(p.x, p.z) : fallback;
         float StartOf(K k) { for (int i = 0; i < shots.Count; i++) if (shots[i].k == k) return shots[i].t0; return 0f; }
 
