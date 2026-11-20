@@ -216,6 +216,7 @@ public class Sky : MonoBehaviour
 
     // Re-applies the sky, fog, clouds, sun and glare for a new weather without rebuilding the world, and re-renders
     // the cars' sky reflection once (a one-off, like at the build).
+    internal static float lastRebakeWet = 0f; // the wetness the trackside cubes were last baked with (CarEnv sets it at the first bake)
     public static void SetWeather(float w)
     {
         if (!haveLook) return;
@@ -233,7 +234,8 @@ public class Sky : MonoBehaviour
             if (s.dome != null) { s.dome.position = s.probeRef.transform.position; s.dome.localScale = Vector3.one * (s.probeRef.farClipPlane * DomeFill); }
             s.probeId = s.probeRef.RenderProbe();
         }
-        CarEnv.Rebake(); // the trackside cubes hold the old sky: bake them again (one per frame)
+        // the trackside cubes hold the old sky: bake them again (one per frame), but only if the wetness really changed
+        if (Mathf.Abs(w - lastRebakeWet) > 0.01f) { lastRebakeWet = w; CarEnv.Rebake(); }
     }
 
     // ---------------------------------------------------------------- aerial perspective (Grade.cginc F2Haze)

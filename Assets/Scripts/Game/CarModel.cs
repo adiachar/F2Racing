@@ -1065,6 +1065,7 @@ public partial class CarModel : MonoBehaviour
     // A stencil bit stops overlapping triangles (and two cars' overlapping shadows) darkening twice. Its length
     // follows the sun's height by itself. One draw per near car (the player, near rivals); far rivals (car_far) keep
     // only the contact blob. Off at night, in heavy rain, with the sun near the horizon and in baked shade.
+    public static bool PlanarShadows = false;
     static Mesh shadowMesh; static bool shadowMeshTried;
     static Material planarMat; static bool planarTried;
     static Mesh ShadowMesh()
@@ -1162,6 +1163,9 @@ public partial class CarModel : MonoBehaviour
     // res: the car's model (null: the built-from-code fallback car)
     static void AddSunShadow(GameObject root, string res)
     {
+        // Adi: the projected silhouette shadow looked bad. RR3 style: only the soft contact blob under the car
+        // (tyre patches + floor core, ContactShadowMat). Kept as a switch; off for every car. Saves a 12k-tri draw per car too.
+        if (!PlanarShadows) return;
         if (res != null && res.EndsWith("_far")) return; // far rivals: the contact blob only
         var mesh = ShadowMesh(); var mat = PlanarMat();
         if (mesh == null || mat == null) return;

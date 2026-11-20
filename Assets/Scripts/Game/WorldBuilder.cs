@@ -32,7 +32,7 @@ public static class WorldBuilder
             {
                 var af = QualitySettings.anisotropicFiltering;
                 if (af == AnisotropicFiltering.Disable) return 1;
-                if (af == AnisotropicFiltering.ForceEnable) return sd == 90f ? 3 : 2;
+                return sd == 90f ? 3 : 2; // Enable or ForceEnable (SetGraphics now uses Enable on Medium/High)
             }
             int s = PlayerPrefs.GetInt("gfx", 0);
             return s == 0 ? 2 : Mathf.Clamp(s, 1, 3);

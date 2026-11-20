@@ -85,7 +85,7 @@ public class CarEnv : MonoBehaviour
     void LateUpdate()
     {
         if (pos == null) return;
-        if (first) { first = false; Queue(); Bake(pos.Length); Debug.Log("CarEnv: " + pos.Length + " reflection cubes " + Size + " px, " + (Bytes / 1024) + " KB, bake " + BakeMs.ToString("0") + " ms" + (copy ? "" : " (no CopyTexture: direct)")); }
+        if (first) { first = false; Sky.lastRebakeWet = Shader.GetGlobalFloat("_Wet"); Queue(); Bake(pos.Length); Debug.Log("CarEnv: " + pos.Length + " reflection cubes " + Size + " px, " + (Bytes / 1024) + " KB, bake " + BakeMs.ToString("0") + " ms" + (copy ? "" : " (no CopyTexture: direct)")); }
         else if (pending > 0) Bake(1);
         Pick();
     }
