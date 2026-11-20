@@ -60,9 +60,13 @@ Shader "F2/CarPaint"
         _Mirror ("Mirror glass where |x| > 0.45 (metal part)", Float) = 0
         _Rim ("Carbon: halo look (titanium edge sheen, dark inside face)", Float) = 0
         _Cockpit ("Carbon: cockpit surround (padded headrest, shade inside the tub)", Float) = 0
+        _Ghost ("Ghost fade (penalty; per renderer via MaterialPropertyBlock, CarGhost.cs)", Range(0, 1)) = 0
     }
     CGINCLUDE
     #include "UnityCG.cginc"
+    #include "CarGhost.cginc"
+    float _Ghost; // ghost fade 0..1 (CarGhost.cginc; plain uniform, set through a per-renderer MaterialPropertyBlock;
+                  // read only in the F2_GHOST variant, which CarGhost.cs swaps in on a twin material while a car is a ghost)
     #define CARBON_BASE half3(0.022, 0.024, 0.028)
     // 2x2 twill from the object position: (brightness, highlight) multipliers; each tow is a little cylinder (brighter
     // along its crown) and catches the light more in one direction. fade 0 = plain (1, 1).
@@ -148,8 +152,11 @@ Shader "F2/CarPaint"
             UNITY_DEFINE_INSTANCED_PROP(float4, _TyreWD)   // tyre wear front, dirt front, wear rear, dirt rear
             UNITY_DEFINE_INSTANCED_PROP(float4, _HelmA)    // driver's helmet: shell colour
             UNITY_DEFINE_INSTANCED_PROP(float4, _HelmB)    // driver's helmet: design colour (brow band, centre stripe)
+            UNITY_DEFINE_INSTANCED_PROP(float4, _GhostV)   // x = ghost fade for an instanced rival (CarModel.SetGhost); 0 by default
         UNITY_INSTANCING_BUFFER_END(CarProps)
         #define MP(n) UNITY_ACCESS_INSTANCED_PROP(CarProps, n)
+        // the ghost fade: the plain _Ghost (the player's driver, any MPB) or a rival's instanced one
+        #define GHOST_G max(_Ghost, MP(_GhostV).x)
         float4 _TyreRad; float _Far;
         float MIs(float id, float k) { return step(abs(id - k), 0.5); }
         float MId(float a) { return floor(a * 255.0 + 0.5); }
@@ -186,6 +193,8 @@ Shader "F2/CarPaint"
             k = MIs(id, 18); base = lerp(base, half3(0.034, 0.035, 0.038), k); cgm = lerp(cgm, half3(0.05, 0.32, 0.0), k);
             k = MIs(id, 19); base = lerp(base, MP(_Color).rgb * 0.75, k); cgm = lerp(cgm, half3(0.06, 0.3, 0.0), k);
         }
+    #else
+        #define GHOST_G _Ghost
     #endif
     ENDCG
     SubShader
@@ -201,6 +210,7 @@ Shader "F2/CarPaint"
             #pragma target 3.0
             #pragma multi_compile_fog
             #pragma multi_compile_local __ _CARBON _TYRE _WHEEL _HELMET _MERGED
+            #pragma multi_compile_local __ F2_GHOST // ghost twin materials only (CarGhost.cs): the normal variant has no clip()
             #pragma multi_compile_instancing
             #include "UnityCG.cginc"
             #include "Grade.cginc"
@@ -472,6 +482,10 @@ Shader "F2/CarPaint"
                 // halo: a faint sky sheen along its rims and top edge, kept neutral (the blue sky through the grade's
                 // warm-magenta tint drew a violet line along the halo); its coat reflection is mostly neutral too
                 col += (half3)(rimK * x2 * envL * 0.4);
+                // ghost (penalty): screen-door fade + cool tint, after every derivative; only in the ghost variant
+                #if defined(F2_GHOST)
+                { float ghost = GHOST_G; F2GhostClip(i.pos.xy, ghost); col = (half3)F2GhostTint((float3)col, ghost, (float)x2); }
+                #endif
                 fixed4 c = fixed4(col, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)
@@ -498,6 +512,7 @@ Shader "F2/CarPaint"
             #pragma multi_compile_fog
             #pragma multi_compile __ F2_GRADE_LOW
             #pragma multi_compile_local __ _CARBON _TYRE _WHEEL _HELMET _MERGED
+            #pragma multi_compile_local __ F2_GHOST // ghost twin materials only (CarGhost.cs): the normal variant has no clip()
             #pragma multi_compile_instancing
             #include "UnityCG.cginc"
             #include "Grade.cginc"
@@ -610,6 +625,9 @@ Shader "F2/CarPaint"
                 #endif
                 base = lerp(base, half3(0.05, 0.052, 0.056), mirP * step(0.45, abs(i.op.x))); // mirror glass
                 half3 c3 = (half3)PaintRoll((float3)(base * i.diff * ao), 0.0) + (KeepHue(i.add, base, i.envM.w) + i.spec * _LightColor0.rgb + i.envM.rgb * base) * (0.3 + 0.7 * ao) + emis;
+                #if defined(F2_GHOST)
+                { float ghost = GHOST_G; F2GhostClip(i.pos.xy, ghost); c3 = (half3)F2GhostTint((float3)c3, ghost, sqrt((float)i.envM.w)); } // (as the full pass; graze = sqrt((1 - N.V)^4))
+                #endif
                 fixed4 c = fixed4(c3, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb);

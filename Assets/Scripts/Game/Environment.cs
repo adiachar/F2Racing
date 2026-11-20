@@ -112,7 +112,7 @@ public static class Environment
             rings = new[]
             {
                 new EnvRing { dist = 520, depth = 220, hMin = 95, hVar = 120, jag = 0.15f, low = C(0.11f, 0.22f, 0.15f), top = C(0.15f, 0.27f, 0.19f), wood = 1f },
-                new EnvRing { dist = 900, depth = 260, hMin = 190, hVar = 170, jag = 0.15f, low = C(0.20f, 0.30f, 0.28f), top = C(0.27f, 0.36f, 0.36f), wood = 0.8f },
+                new EnvRing { dist = 900, depth = 260, hMin = 190, hVar = 170, jag = 0.15f, low = C(0.12f, 0.21f, 0.17f), top = C(0.16f, 0.25f, 0.22f), wood = 1f }, // spruce to the crest
             },
             groundRefl = C(0.10f, 0.14f, 0.10f),
         },
@@ -156,7 +156,7 @@ public static class Environment
             rings = new[]
             {
                 new EnvRing { dist = 500, depth = 200, hMin = 45, hVar = 60, jag = 0.2f, low = C(0.14f, 0.31f, 0.18f), top = C(0.18f, 0.36f, 0.21f), wood = 1f },
-                new EnvRing { dist = 900, depth = 280, hMin = 70, hVar = 90, jag = 0.35f, low = C(0.26f, 0.38f, 0.37f), top = C(0.34f, 0.44f, 0.46f), peakDir = 290, peakGain = 220, peakWidth = 60, wood = 0.7f },
+                new EnvRing { dist = 900, depth = 280, hMin = 70, hVar = 90, jag = 0.35f, low = C(0.26f, 0.38f, 0.37f), top = C(0.34f, 0.44f, 0.46f), peakDir = 290, peakGain = 220, peakWidth = 60, wood = 0.9f },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Wheel, s = 5560, side = -2, off = 150 } },
         },
@@ -214,7 +214,7 @@ public static class Environment
             leaf = C(0.10f, 0.25f, 0.13f), leaf2 = C(0.18f, 0.38f, 0.16f),
             rings = new[]
             {
-                new EnvRing { dist = 470, depth = 300, hMin = 240, hVar = 230, jag = 0.3f, low = C(0.12f, 0.27f, 0.15f), top = C(0.27f, 0.45f, 0.21f), wood = 0.9f },
+                new EnvRing { dist = 470, depth = 300, hMin = 240, hVar = 230, jag = 0.3f, low = C(0.12f, 0.27f, 0.15f), top = C(0.27f, 0.45f, 0.21f), wood = 1f },
                 new EnvRing { dist = 860, depth = 340, hMin = 480, hVar = 380, jag = 0.75f, low = C(0.22f, 0.34f, 0.30f), top = C(0.60f, 0.62f, 0.64f) },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Sculpture, side = 9 } }, // the big steel sculpture in the infield (generic shape)
@@ -515,7 +515,10 @@ public static class Environment
                 bool wood = g.wood > 0.01f && WorldBuilder.BakeReady;
                 var rb = wood ? bWood : bPlain;
                 float fw = wood ? Mathf.Clamp01((g.wood - 0.4f) / 0.6f) : 0f;
-                if (wood) hz *= 1f - Mathf.Lerp(0.45f, 0.85f, fw) * g.wood;
+                // (far wooded rings keep more of it: the 900 m ring is bluer than the 500 m one, aerial perspective by
+                // distance, now that the material's fog is thinner, _FogKeep below)
+                float farW = Mathf.Clamp01((g.dist - 450f) / 500f);
+                if (wood) hz *= 1f - Mathf.Lerp(0.45f, 0.85f, fw) * g.wood * (1f - 0.35f * farW);
                 Color hazeL = haze.linear / 1.6f;
                 Color gLow = Color.Lerp(g.low, ForestLow, fw), gTop = Color.Lerp(g.top, ForestTop, fw);
                 Color low = Color.Lerp(gLow, hazeL, hz), top = Color.Lerp(gTop, hazeL, Mathf.Min(1f, hz + Mathf.Lerp(0.2f, 0.06f, fw)));
@@ -537,6 +540,9 @@ public static class Environment
                     return h;
                 }
                 float hTop = g.hMin + g.hVar + (float.IsNaN(g.peakDir) ? 0 : g.peakGain);
+                // crest trees: spruce tall and narrow, broad-leaf woods (Suzuka) lower and rounder
+                bool crSpruce = e.tree == TreeKind.Spruce;
+                float crestTree = (crSpruce ? 26f : 20f) * Mathf.Clamp(e.treeSize, 0.8f, 1.2f), crestW = crSpruce ? 0.32f : 0.55f;
                 for (int i = 0; i < Seg; i++)
                 {
                     float a0 = i * Mathf.PI * 2 / Seg, a1 = (i + 1) * Mathf.PI * 2 / Seg;
@@ -559,6 +565,35 @@ public static class Environment
                         Vector2 w0 = new Vector2(a0 * uScale, t0.y * vScale), w1 = new Vector2(a1 * uScale, t1.y * vScale);
                         Band(rb, p0, p1, m1, m0, inward, low, low, cm1, cm0, q0, q1, n1, n0);
                         Band(rb, m0, m1, t1, t0, inward, cm0, cm1, ct1, ct0, n0, n1, w1, w0);
+                        // a broken, tree-like crest (the smooth ridge line read as a bare hill): a row of tree tips stuck
+                        // on the ridge, one triangle each, in groups with gaps; their foot is sunk into the slope so only
+                        // the part above the crest shows. Same mesh and material (no draw call), ~1.3k tris a ring
+                        if (fw > 0.5f)
+                        {
+                            float crLen = Vector3.Distance(t0, t1);
+                            int crN = Mathf.Max(1, Mathf.RoundToInt(crLen / 11f));
+                            Vector3 crAlong = t1 - t0; crAlong.y = 0; crAlong = crAlong.normalized;
+                            for (int ck = 0; ck < crN; ck++)
+                            {
+                                int cid = i * 97 + ck;
+                                float crH = Hash(cid, seed, 21);
+                                if (crH < 0.07f) continue;                                                   // a gap
+                                float crGrp = 0.5f + 0.5f * Mathf.Sin(cid * 0.29f + seed * 1.7f);            // stands of taller trees
+                                float crF = (ck + 0.2f + 0.6f * Hash(cid, seed, 23)) / crN;
+                                Vector3 crBase = Vector3.Lerp(t0, t1, crF);
+                                float crTall = crestTree * (0.45f + 0.4f * crGrp + 0.45f * crH);
+                                Vector3 crSide = crAlong * (crTall * crestW);
+                                Vector3 crA = crBase - crSide + Vector3.down * 4f, crB = crBase + crSide + Vector3.down * 4f, crTip = crBase + Vector3.up * crTall;
+                                Color crCol = Color.Lerp(ct0, ct1, crF) * 0.9f; crCol.a = 1f;
+                                float crU = Mathf.Lerp(a0, a1, crF) * uScale;
+                                if (Vector3.Dot(Vector3.Cross(crB - crA, crTip - crA), inward) < 0) { var crT = crA; crA = crB; crB = crT; }
+                                int cv = rb.v.Count;
+                                rb.v.Add(crA); rb.v.Add(crB); rb.v.Add(crTip);
+                                rb.col.Add(crCol); rb.col.Add(crCol); rb.col.Add(crCol);
+                                rb.uv.Add(new Vector2(crU - 0.05f, crA.y * vScale)); rb.uv.Add(new Vector2(crU + 0.05f, crB.y * vScale)); rb.uv.Add(new Vector2(crU, crTip.y * vScale));
+                                rb.tri.Add(cv); rb.tri.Add(cv + 1); rb.tri.Add(cv + 2);
+                            }
+                        }
                     }
                     else
                     {
@@ -587,7 +622,15 @@ public static class Environment
         var bgo = Emit("EnvBackdrop", b, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : avg, null, 0f), parent);
         SkyNormals(bgo);
         // the wooded rings: one more draw call (only on circuits that have them), same shader, the crowns texture
-        SkyNormals(Emit("EnvBackdropWood", bWood, WorldBuilder.Mat(Color.white, EnvTex.FarWood(), 0f), parent));
+        // its fog is thinner (Baked.shader _FogKeep: keep -> sqrt(keep), vertex only): at 1-2 km the full fog left Spa's
+        // spruce hills a bare grey-green; the tint above already carries the aerial perspective by ring distance
+        var woodMat = WorldBuilder.Mat(Color.white, EnvTex.FarWood(), 0f);
+        // (only where the hills are real forest, wood >= 0.7: Monaco's scrubby rock and Budapest's rim keep the full fog;
+        // the value is kept when LightBake hands the material to F2/Baked, like _WinGlow)
+        float fogKeep = 0f;
+        if (e.rings != null) for (int r = 0; r < e.rings.Length; r++) if (e.rings[r].wood >= 0.7f) fogKeep = 1f;
+        woodMat.SetFloat("_FogKeep", fogKeep);
+        SkyNormals(Emit("EnvBackdropWood", bWood, woodMat, parent));
     }
     // normals turned mostly skywards: distant slopes are lit almost evenly (the haze washes out their shading),
     // so the side of the ring away from the sun is not a dark band

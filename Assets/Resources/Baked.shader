@@ -38,6 +38,7 @@ Shader "F2/Baked"
         _LandRect ("Land map: x0, z0, 1/width, 1/depth (F2_LAND)", Vector) = (0, 0, 0.001, 0.001)
         _DetailScale ("Detail tiles per metre (F2_LAND)", Float) = 0.222
         _WinGlow ("Lit windows at night (plain variant; texture alpha 0 = glass)", Float) = 0
+        _FogKeep ("Thinner fog: 0 off .. 1 keep = sqrt(keep) (the wooded backdrop, Environment.Backdrop)", Float) = 0
     }
     SubShader
     {
@@ -102,6 +103,7 @@ Shader "F2/Baked"
         #endif
             float _F2Night; // 0 day, ~0.45 evening, 1 night (Trackside.Build)
             float _WinGlow; // 1 on the town facades (Scenery.Town, Environment blocks: EnvTex.Facade, alpha 0 = glass)
+            float _FogKeep; // the wooded backdrop rings: they keep more of their own dark green through the fog (vertex only)
 
             // sky, ground and sun mirrored in glass (float maths: see F2_LAND); gm = glass mask 0..1
             half3 Mirror(half3 c, float gm, float3 view, float3 nrm)
@@ -155,6 +157,12 @@ Shader "F2/Baked"
             #endif
                 o.color = v.color * _Color * 2.0; // stored light 0.5 = full brightness, so sunlit areas can go above 1
                 UNITY_TRANSFER_FOG(o, o.pos);
+            #if defined(FOG_LINEAR)
+                // far forest (Spa, Suzuka, Spielberg): at 1-2 km the linear fog left only 20-40 % of the canopy, so the
+                // wooded hills read as bare grey-green. sqrt keeps the order (nearer = clearer, 0 stays 0 in rain fog)
+                // and lifts 0.25 to 0.5. 0 on every other material: lerp(a, ., 0) = a. Per vertex: 3 ops.
+                o.fogCoord.a = lerp(o.fogCoord.a, sqrt(saturate(o.fogCoord.a)), _FogKeep);
+            #endif
                 return o;
             }
 

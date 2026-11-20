@@ -815,6 +815,11 @@ public partial class CarModel : MonoBehaviour
         for (int i = 0; i < blockR.Count; i++) if (blockR[i] != null) blockR[i].SetPropertyBlock(mpb);
     }
     void LateUpdate() { if (mpbDirty) Flush(); }
+    // ghost fade (CarGhost.cs) of a merged rival: an instanced value in the car's own block (a plain _Ghost in a
+    // block would split the rivals' instanced draws, and Flush replaces the block anyway)
+    static readonly int GhostVId = Shader.PropertyToID("_GhostV");
+    public bool IsMerged => merged;
+    public void SetGhost(float g) { if (!merged || mpb == null) return; mpb.SetVector(GhostVId, new Vector4(g, 0f, 0f, 0f)); Flush(); }
     void OnEnable() { if (merged) Flush(); }
     // a wing is damaged: split the wing pieces off the merged body (+5 draw calls, only while it is damaged)
     void MergedSplit(bool want)
@@ -1241,9 +1246,15 @@ public partial class CarModel : MonoBehaviour
     static Material ContactShadowMat()
     {
         if (contactMat != null) return contactMat;
-        var baseMat = Resources.Load<Material>("Shadow");
-        if (baseMat == null) return contactMat = WorldBuilder.ShadowMat();
-        contactMat = new Material(baseMat);
+        // F2/CarBlob: Unlit/Transparent plus the ghost fade (CarGhost.cs); the old material if it is missing
+        var blob = Resources.Load<Shader>("CarBlob");
+        if (blob != null && blob.isSupported) contactMat = new Material(blob) { name = "CarBlob" };
+        else
+        {
+            var baseMat = Resources.Load<Material>("Shadow");
+            if (baseMat == null) return contactMat = WorldBuilder.ShadowMat();
+            contactMat = new Material(baseMat);
+        }
         // texel -> car space (model units): quad 2.4 m x 5.6 m centred at z = 0.3
         contactMat.mainTexture = WorldBuilder.Tex(96, 224, (u, v, px, py) =>
         {
