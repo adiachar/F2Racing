@@ -25,6 +25,7 @@ Shader "F2/Clouds"
         _SunCol ("Sun colour", Color) = (1, 0.95, 0.85, 1)
         _Haze ("Horizon haze", Range(0, 1)) = 0.85
         _HazeHeight ("Haze height", Range(0.01, 0.5)) = 0.12
+        _CloudOn ("Cloud deck on (0 = haze only: photo sky)", Float) = 1
     }
     SubShader
     {
@@ -39,6 +40,7 @@ Shader "F2/Clouds"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #pragma target 3.0
             #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
             #include "UnityCG.cginc"
             #include "Grade.cginc"
@@ -47,6 +49,7 @@ Shader "F2/Clouds"
             float _Scale;
             float4 _Wind;
             half _Cover, _Haze, _HazeHeight;
+            float _CloudOn; // 1 = cloud deck on (procedural sky), 0 = haze band only (photo sky, dry)
             half4 _LitCol, _ShadeCol, _SunCol;
             float4 _SunDir;
 
@@ -70,54 +73,63 @@ Shader "F2/Clouds"
             {
                 float3 d = normalize(i.dir);
                 float h = d.y;
-                // cloud deck: ray / height (offset keeps the horizon finite; clouds have faded out there)
+                // the photo sky (SkyPhoto.shader, Sky.cs) has its own clouds: _CloudOn 0 skips the deck and its reads
+                // (uniform branch), only the haze band below is drawn; the rain deck fades back in over it (_CloudOn > 0)
+                half3 col = (half3)0.0; half3 glow = (half3)0.0; half ca = 0.0;
+                // cloud deck: ray / height (offset keeps the horizon finite; clouds have faded out there); its screen
+                // derivatives outside the branch, so the reads inside are explicit-gradient (no flow-control gradients)
                 float2 p = d.xz / (max(h, 0.0) + 0.1); // (0.06 smeared the low clouds into long wisps)
-                float2 uv1 = p * _Scale + frac(_Time.x * _Wind.xy);
-                float2 uv2 = p * (_Scale * 3.1) + float2(0.3, 0.7) + frac(_Time.x * _Wind.zw);
-                half n2 = tex2D(_MainTex, uv2).a;
-                half4 t1 = tex2D(_MainTex, uv1);
-                half n = t1.a * 0.72 + n2 * 0.28;
-                // a closing (rain) deck: the smooth broad field in R (same read) replaces the puffs: one even deck with
-                // slow darker bands, no swirls
-                half ovc = saturate((_Cover - 0.72) * 5.0);
-                n = lerp(n, t1.r * 0.85 + n2 * 0.15, ovc);
-                half band = smoothstep(0.4, 0.8, t1.r) * ovc;
-                half sd = saturate(dot(d, _SunDir.xyz));
-            #if defined(F2_GRADE_LOW)
-                half thr = 1.0 - _Cover;
-                half a = smoothstep(thr - 0.08, thr + 0.22, n);
-                half thick = saturate((n - thr) * 2.2) * 0.85;
-                half3 col = lerp(_LitCol.rgb, _ShadeCol.rgb, smoothstep(0.15, 0.6, thick)); // flat, even base
-                col = lerp(col, _ShadeCol.rgb * 0.82, band);
-                half rim = sd * sd; rim *= rim; rim *= rim; // ^8
-                col += _SunCol.rgb * (rim * (1.0 - thick) * 0.6);
-                half3 glow = (half3)0.0;
-            #else
-                // regional density: fields of cloud and clear gaps (a quarter-speed drift, ~5x the big shapes)
-                half region = tex2D(_MainTex, p * (_Scale * 0.19) + float2(0.61, 0.27) + frac(_Time.x * _Wind.xy * 0.25)).a;
-                half thr = 1.0 - saturate(_Cover + (region - 0.5) * 0.5);
-                half a = smoothstep(thr - 0.06, thr + 0.16, n); // defined puff edges
-                half thick = saturate((n - thr) * 2.2);
-                // the deck a step towards the sun: thinner there = this side faces the sun
-                float2 sdir = _SunDir.xz / max(length(_SunDir.xz), 0.05);
-                half ns = tex2D(_MainTex, uv1 + sdir * 0.035).a * 0.72 + n2 * 0.28;
-                half lit = lerp(saturate(0.5 + (n - ns) * 5.0), 0.5, ovc);
-                // fair-weather cumulus seen from below: a flat, even grey base over the thick core (a plateau, not a
-                // gradient), bright thin edges, the sun side lit
-                half base = smoothstep(0.15, 0.55, thick);
-                half shade = saturate(base * 0.72 + (0.55 - lit) * 0.8);
-                half3 col = lerp(_LitCol.rgb, _ShadeCol.rgb, shade);
-                col = lerp(col, _ShadeCol.rgb * 0.82, band);
-                // silver lining on thin edges towards the sun (^8), a softer forward-scatter sheen (^2) through thin cloud
-                half s2 = sd * sd; half rim = s2 * s2; rim *= rim;
-                col += _SunCol.rgb * ((rim * 0.7 + s2 * 0.12) * (1.0 - thick));
-                // sky glow round the sun and a pale lift low on the sun's side (added under the clouds)
-                half low = saturate(1.0 - h * 3.0);
-                half3 glow = _SunCol.rgb * (rim * 0.10 + s2 * 0.05 * low);
-            #endif
-                // far clouds take on the haze colour, and fade out before the horizon
-                col = lerp(col, unity_FogColor.rgb, (1.0 - smoothstep(0.0, 0.3, h)) * 0.65);
-                half ca = a * smoothstep(0.0, 0.16, h);
+                float2 dpx = ddx(p), dpy = ddy(p);
+                UNITY_BRANCH
+                if (_CloudOn > 0.001)
+                {
+                    float2 uv1 = p * _Scale + frac(_Time.x * _Wind.xy);
+                    float2 uv2 = p * (_Scale * 3.1) + float2(0.3, 0.7) + frac(_Time.x * _Wind.zw);
+                    half n2 = tex2Dgrad(_MainTex, uv2, dpx * (_Scale * 3.1), dpy * (_Scale * 3.1)).a;
+                    half4 t1 = tex2Dgrad(_MainTex, uv1, dpx * _Scale, dpy * _Scale);
+                    half n = t1.a * 0.72 + n2 * 0.28;
+                    // a closing (rain) deck: the smooth broad field in R (same read) replaces the puffs: one even deck with
+                    // slow darker bands, no swirls
+                    half ovc = saturate((_Cover - 0.72) * 5.0);
+                    n = lerp(n, t1.r * 0.85 + n2 * 0.15, ovc);
+                    half band = smoothstep(0.4, 0.8, t1.r) * ovc;
+                    half sd = saturate(dot(d, _SunDir.xyz));
+                #if defined(F2_GRADE_LOW)
+                    half thr = 1.0 - _Cover;
+                    half a = smoothstep(thr - 0.08, thr + 0.22, n);
+                    half thick = saturate((n - thr) * 2.2) * 0.85;
+                    col = lerp(_LitCol.rgb, _ShadeCol.rgb, smoothstep(0.15, 0.6, thick)); // flat, even base
+                    col = lerp(col, _ShadeCol.rgb * 0.82, band);
+                    half rim = sd * sd; rim *= rim; rim *= rim; // ^8
+                    col += _SunCol.rgb * (rim * (1.0 - thick) * 0.6);
+                    glow = (half3)0.0;
+                #else
+                    // regional density: fields of cloud and clear gaps (a quarter-speed drift, ~5x the big shapes)
+                    half region = tex2Dgrad(_MainTex, p * (_Scale * 0.19) + float2(0.61, 0.27) + frac(_Time.x * _Wind.xy * 0.25), dpx * (_Scale * 0.19), dpy * (_Scale * 0.19)).a;
+                    half thr = 1.0 - saturate(_Cover + (region - 0.5) * 0.5);
+                    half a = smoothstep(thr - 0.06, thr + 0.16, n); // defined puff edges
+                    half thick = saturate((n - thr) * 2.2);
+                    // the deck a step towards the sun: thinner there = this side faces the sun
+                    float2 sdir = _SunDir.xz / max(length(_SunDir.xz), 0.05);
+                    half ns = tex2Dgrad(_MainTex, uv1 + sdir * 0.035, dpx * _Scale, dpy * _Scale).a * 0.72 + n2 * 0.28;
+                    half lit = lerp(saturate(0.5 + (n - ns) * 5.0), 0.5, ovc);
+                    // fair-weather cumulus seen from below: a flat, even grey base over the thick core (a plateau, not a
+                    // gradient), bright thin edges, the sun side lit
+                    half base = smoothstep(0.15, 0.55, thick);
+                    half shade = saturate(base * 0.72 + (0.55 - lit) * 0.8);
+                    col = lerp(_LitCol.rgb, _ShadeCol.rgb, shade);
+                    col = lerp(col, _ShadeCol.rgb * 0.82, band);
+                    // silver lining on thin edges towards the sun (^8), a softer forward-scatter sheen (^2) through thin cloud
+                    half s2 = sd * sd; half rim = s2 * s2; rim *= rim;
+                    col += _SunCol.rgb * ((rim * 0.7 + s2 * 0.12) * (1.0 - thick));
+                    // sky glow round the sun and a pale lift low on the sun's side (added under the clouds)
+                    half low = saturate(1.0 - h * 3.0);
+                    glow = _SunCol.rgb * (rim * 0.10 + s2 * 0.05 * low) * (half)_CloudOn;
+                #endif
+                    // far clouds take on the haze colour, and fade out before the horizon
+                    col = lerp(col, unity_FogColor.rgb, (1.0 - smoothstep(0.0, 0.3, h)) * 0.65);
+                    ca = a * smoothstep(0.0, 0.16, h) * (half)_CloudOn;
+                }
 
                 // horizon haze: fog colour at (and below) the horizon, thinning upwards
                 half hz = saturate(1.0 - h / _HazeHeight);

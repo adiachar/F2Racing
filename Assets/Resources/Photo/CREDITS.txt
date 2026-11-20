@@ -1,0 +1,6 @@
+Photo textures imported by the build (Assets/Editor/F2TextureImport.cs: ASTC on Android), made by Tools/Photo/make_photos.py.
+All CC0 1.0 (public domain). Original pages:
+grass.png      ambientCG Grass001                                https://ambientcg.com/view?id=Grass001
+gravel.png     Poly Haven gravel_floor_02                        https://polyhaven.com/a/gravel_floor_02
+sky_day.png    Poly Haven kloofendal_48d_partly_cloudy_puresky   https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky
+means.txt      linear mean colour of each albedo (EnvTex.PhotoMean)

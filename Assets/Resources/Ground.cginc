@@ -1,6 +1,6 @@
 // Ground.cginc — shared code of Ground.shader (grass, terrain, verges, gravel traps). Lighting is baked into the vertex
 // colours (LightBake.cs) like Baked.shader. Two texture reads per pixel:
-//   _MainTex  detail (photo grass / gravel, CC0, see Textures/CREDITS.txt), world space, a few metres per tile; Medium/High read it a second time at ~3.4x the scale, turned, and average the two
+//   _MainTex  detail (photo grass / gravel, CC0: Resources/Photo, ASTC, x _Gain; or EnvTex's procedural), world space, a few metres per tile; Medium/High read it a second time at ~3.4x the scale, turned, and average the two
 //   _MacroTex linear data at ~100 m per tile, turned 37 degrees: R brightness drift, G dry patches, B clumps
 // Mesh data: uv0 = world (x, z) in metres; uv2 = (distance from the track centreline m, distance along the lap m) on
 // verges and gravel traps, (0, 0) on the open land, where the track-relative terms below are all zero.
@@ -56,6 +56,7 @@ float GBand(float x, float a, float b, float w)
     return saturate((x - a) / w + 0.5) - saturate((x - b) / w + 0.5);
 }
 float _MacroScale, _MipBias;
+float4 _Gain;        // linear rgb gain of a photo albedo to the circuit's mean colour (EnvTex.PhotoAlbedo); 1 = as is
 fixed4 _DryTint;      // rgb multiplier of dry patches, a = how much
 float4 _Stripe;       // from (m), to (m), stripe width (m), strength
 float4 _Wall;         // barrier line (m), darkening, -, -
@@ -94,12 +95,15 @@ fixed4 frag (v2f i) : SV_Target
     // second, larger and turned copy of the same photo detail, averaged in: the 4.5 m tile never shows a repeat
     float2 u2 = float2(i.uv.x * 0.8 - i.uv.y * 0.6, i.uv.x * 0.6 + i.uv.y * 0.8) * 0.29;
     half4 d2 = tex2Dbias(_MainTex, float4(u2, 0, max(_MipBias, 0.0)));
+    // photo albedos (Resources/Photo: grass, gravel) are scaled to the circuit's palette here (1 = procedural texture)
+    d.rgb *= (half3)_Gain.rgb; d2.rgb *= (half3)_Gain.rgb;
     half3 d0 = d.rgb;                                    // the sharp read alone (gravel stones near the camera)
     d.rgb = lerp(d.rgb, d2.rgb, 0.4 - 0.25 * _Turf);    // (turf: keep the fibres)
     // grass: the alpha holds clumps (~0.75 m at this tile, ~2.6 m patches at the larger one); 0.5 = neutral
     half tuft = (half)lerp(0.5, d.a, _Clumps), lush = (half)lerp(0.5, d2.a, _Clumps);
 #else
     half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.3)); // Low: a little blurrier mips, kinder to the texture cache (0.6 -> 0.3: Low has no aniso, and the near verges and run-offs went to smears; Docs/PERFORMANCE.md "Clarity")
+    d.rgb *= (half3)_Gain.rgb; // photo albedo -> the circuit's palette (as HQ)
 #endif
     half4 mac = tex2D(_MacroTex, i.uv.zw);
     half3 col = d.rgb * (0.80 + 0.40 * mac.r);

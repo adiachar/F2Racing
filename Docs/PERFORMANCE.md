@@ -4,6 +4,25 @@
 
 **19 Nov 2026: `Docs/PERF-ARCHITECTURE.md`** — why the Redmi Note 12 Pro ran at 20-23 fps (GPU-bound: native 2.6 Mpx rendering and car triangles), the base render scale (RenderScale.cs), rival LODs (CarLod.cs), on-device timing and A/B switches (PerfLab.cs).
 
+## Photo textures, wave 1 (20 Nov 2026, gfx; Docs/ASSETS.md "Photo textures")
+
+CC0 photo scans replace procedural / low-res surfaces at about the same per-pixel cost. Estimates, untested in a build.
+
+| Surface | Before | After | Reads per pixel | GPU memory |
+|---|---|---|---|---|
+| Grass, verges, terrain (green circuits) | 512² RGBA32 runtime texture from a photo | 1024² ASTC 6x6 photo (ambientCG Grass001) x `_Gain` | same (HQ 2, Low 1) + 1 MUL; ~9x less texel bandwidth | 1.4 -> 0.62 MB |
+| Gravel traps | 512² RGBA32 | 1024² ASTC 6x6 (Poly Haven gravel_floor_02) | same + 1 MUL | 1.4 -> 0.62 MB |
+| Road fine grain (HQ) | 512² R8, 1.6 m tile | 1024² RG8, 3.2 m tile (same texel size, half the repeats); G = kerb concrete | same 2 (G comes free), +2 ALU on kerbs | 0.35 -> 2.8 MB |
+| Sky (afternoon) | Unity procedural skybox + cloud dome (2 reads Low, 4 HQ) | 8192 x 2048 ASTC 6x6 photo panorama, 1 read + atan2; dome draws only its haze band in the dry (cloud reads skipped by a uniform branch) | sky pixels: Low 2 -> 1, HQ 4 -> 1 | +7.5 MB |
+| Tree cards | 1024 x 512 RGBA32, procedural leaves | 2048 x 1024 with real leaf sprays (ambientCG LeafSet), ETC2 / DXT5 at load | same 1; 4x lower bandwidth per texel | 2.8 -> 2.8 MB |
+
+Net: GPU texture memory about +8.5 MB (sky +7.5, road +2.5, grass and gravel -1.6; the old docs' 38-42 MB -> ~47-50
+MB; budget 150 MB on High); APK about +10 MB (ASTC sky 7.5 MB, grass + gravel 1.2 MB, JPEG / PNG bytes +0.9 MB; the
+PNG sources in git are 17 MB). Load time:
+RoadDetail builds 2 x 1 M texels (was 0.26 M), the tree atlas paints 4x the texels plus a runtime ETC2 compress
+(~0.3-0.8 s more on a phone, a guess: measure); transient managed heap +~30 MB while the atlas is painted (float
+arrays, freed after). A/B: shot parameter `photo=0` (procedural textures and sky, EnvTex.NoPhotos / Sky.NoPhotoSky).
+
 ## Clarity (20 Nov 2026, gfx)
 
 What made the picture soft on the Redmi (WebGL shots at the phone's 1700x765 3D size, Monza s=300/850/2500, High and

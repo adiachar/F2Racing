@@ -474,8 +474,14 @@ public static class WorldBuilder
         float wallLat = (float)Traffic.WallOffset(t);
         bool green = EnvTex.IsGreen(env.grass);
         // (a touch brighter and warmer than the palette: lawns in full sun read light and yellow-green, Real Racing style)
-        var grassTex = EnvTex.GroundDetail(green ? new Color(env.grass.r * 1.12f, env.grass.g * 1.08f, env.grass.b * 0.95f).linear : env.grass.linear);
+        var grassMean = green ? new Color(env.grass.r * 1.12f, env.grass.g * 1.08f, env.grass.b * 0.95f).linear : env.grass.linear;
+        // the CC0 photo turf (Resources/Photo/grass, ASTC, 1024) scaled to this palette in the shader (_Gain); without
+        // it (or without Ground.shader) the procedural / runtime-built texture as before
+        Vector4 grassGain = Vector4.one;
+        var grassPhoto = GroundShaded ? EnvTex.GroundPhoto(grassMean, out grassGain) : null;
+        var grassTex = grassPhoto != null ? grassPhoto : EnvTex.GroundDetail(grassMean);
         var grass = GroundShaded ? new Material(groundSh) { mainTexture = grassTex } : Mat(Color.white, grassTex);
+        if (GroundShaded) grass.SetVector("_Gain", grassGain);
         float gsize = Mathf.Max(4400, ext + 3000);
         grass.mainTextureScale = new Vector2(1f / 4.5f, 1f / 4.5f);
         if (GroundShaded)
@@ -791,7 +797,9 @@ public static class WorldBuilder
                 Material gm;
                 if (GroundShaded)
                 {
-                    gm = new Material(groundSh) { mainTexture = EnvTex.Gravel() };
+                    Vector4 gravGain; var gravPhoto = EnvTex.GravelPhoto(out gravGain); // CC0 photo stones (ASTC), else the runtime texture
+                    gm = new Material(groundSh) { mainTexture = gravPhoto != null ? gravPhoto : EnvTex.Gravel() };
+                    gm.SetVector("_Gain", gravGain);
                     gm.SetTexture("_MacroTex", EnvTex.Macro());
                     gm.SetVector("_DryTint", new Vector4(1, 1, 1, 0));
                     gm.SetVector("_Wall", new Vector4(wallLat, 0.1f, 0, 0));

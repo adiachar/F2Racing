@@ -9,7 +9,8 @@
 //     along, plus ~113 m paving sections a shade apart (blended over 12 m) and soft resurfaced patches;
 //   - the rubbered racing line, its streaks and the tyre marks all run along the track (still under forward motion),
 //     with soft edges; darker where the line carries more rubber (corners and the braking zones into them);
-//   - fine grain (HQ only) comes from _F2RoadDetail (EnvTex.RoadDetail, global, 1.6 m per tile, R8), whose hand-made
+//   - fine grain (HQ only) comes from _F2RoadDetail (EnvTex.RoadDetail, global, 3.2 m per tile, RG8: R CC0 asphalt photo,
+//     G the kerbs' CC0 concrete, one fetch), whose hand-made
 //     mips fade it to flat grey once a pixel spans ~5 cm; it is also faded with distance and with the camera's speed
 //     (_F2RoadMotion, RoadSurface.cs), as motion blur would. No per-pixel normals, no glints: the sun sheen is a broad,
 //     smooth lobe off the geometric normal, so nothing sparkles.
@@ -53,7 +54,7 @@ struct v2f
 
 sampler2D _F2RoadMacro;  // global (RoadSurface.cs): R tone drift, G mottle, B resurfaced patches
 #ifdef ROAD_HQ
-sampler2D _F2RoadDetail; // global (RoadSurface.cs): R fine grain, 0.5 = neutral, fades out down the mips
+sampler2D _F2RoadDetail; // global (RoadSurface.cs): R asphalt grain, G kerb concrete grain, 0.5 = neutral, fades out down the mips
 #endif
 fixed4 _Asphalt, _Dust, _Paint, _KerbRed, _KerbYellow, _SunCol;
 sampler2D _F2RoadShadow; // global (RoadShadow.cs)
@@ -143,16 +144,21 @@ fixed4 frag (v2f i) : SV_Target
     half4 mac = tex2D(_F2RoadMacro, i.uv.zw);
     half drift = mac.r, blotch = mac.g, patch = mac.b;
 #ifdef ROAD_HQ
-    // fine aggregate, 1.6 m per tile, turned ~23 degrees against the road so no texel row lines up with it; signed,
-    // mean 0, std ~0.15 at mip 0 and flat beyond ~5 cm per pixel (EnvTex.RoadDetail)
-    float2 fu = i.uv.xy * (1.0 / 1.6);
-    half grain = (tex2D(_F2RoadDetail, float2(fu.x * 0.92 - fu.y * 0.39, fu.x * 0.39 + fu.y * 0.92)).r - 0.502) * (half)i.misc.z;
-    // coarse clusters (same texture, 7 m per tile, other angle): metre-wide lighter/darker aggregate and binder
-    // areas that keep the surface reading as asphalt out to ~150 m; its mips flatten it smoothly, nothing strobes
-    float2 fc = i.uv.xy * (1.0 / 7.0);
+    // fine aggregate, 3.2 m per tile (1024 texels of a CC0 asphalt photo, 3 mm each), turned ~23 degrees against the
+    // road so no texel row lines up with it; signed, mean 0, std ~0.15 at mip 0 and flat beyond ~5 cm per pixel
+    // (EnvTex.RoadDetail). G of the same fetch: the kerbs' concrete grain (CC0 worn concrete), used in the kerb branch.
+    float2 fu = i.uv.xy * (1.0 / 3.2);
+    half2 det = (half2)tex2D(_F2RoadDetail, float2(fu.x * 0.92 - fu.y * 0.39, fu.x * 0.39 + fu.y * 0.92)).rg;
+    half grain = (det.r - 0.502) * (half)i.misc.z;
+    half kgrain = (det.g - 0.502) * (half)i.misc.z;
+    // coarse clusters (same texture, 14 m per tile, other angle: the same stone-to-cluster ratio as before): metre-wide
+    // lighter/darker aggregate and binder areas that keep the surface reading as asphalt out to ~150 m; its mips
+    // flatten it smoothly, nothing strobes
+    float2 fc = i.uv.xy * (1.0 / 14.0);
     half clus = (tex2D(_F2RoadDetail, float2(fc.x * 0.77 + fc.y * 0.64, -fc.x * 0.64 + fc.y * 0.77)).r - 0.502);
 #else
     half grain = 0.0;
+    half kgrain = 0.0;
     half clus = 0.0;
 #endif
 
@@ -308,7 +314,9 @@ fixed4 frag (v2f i) : SV_Target
         // (kerb white 0.62 x the line paint: in the sun the blocks clipped to 251; the red is held down in _KerbRed)
         half3 kc = lerp(_Paint.rgb * 0.62, _KerbRed.rgb, red);
         kc = lerp(kc, _KerbYellow.rgb, (half)isSaus);
-        kc *= 0.96 + 0.2 * grain;
+        // the cast concrete under the paint (pores, trowel marks, hairline cracks; RoadDetail G, std 0.15 near the
+        // camera, flat by ~5 cm per pixel) and a trace of the asphalt grain (stones the tyres dragged on)
+        kc *= 0.96 + 0.42 * kgrain + 0.06 * grain;
         // raised look: a shadowed step against the asphalt, a lit rounded nose just above it, a dark joint between the
         // blocks (all box-filtered, ~2-4 cm wide); stepped: shade at the foot of the step and a lit edge on top of it
         half notS = (half)(1.0 - isSaus);

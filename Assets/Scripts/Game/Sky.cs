@@ -267,7 +267,8 @@ public class Sky : MonoBehaviour
 
     static void SkyAndFog(Look k)
     {
-        if (skyInst != null)
+        if (photoSky) PhotoParams(k, Weather.Wetness);
+        else if (skyInst != null)
         {
             skyInst.SetFloat("_AtmosphereThickness", k.atmosphere); skyInst.SetFloat("_Exposure", k.exposure);
             skyInst.SetColor("_SkyTint", k.tint);
@@ -298,6 +299,43 @@ public class Sky : MonoBehaviour
         cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.74f, 0.78f, 0.86f), new Color(0.44f, 0.47f, 0.52f), c) * cloudShade * (1f - 0.2f * Weather.Wetness));
         cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * cloudSun * (1f - 0.5f * c));
         cloudMat.SetVector("_Wind", new Vector4(0.030f, 0.012f, 0.050f, 0.020f) * ((0.7f + 0.6f * c) * k.wind));
+        // photo sky: its own clouds in the dry (the dome keeps only the haze band, no cloud reads); the rain deck
+        // closes over it from damp on
+        cloudMat.SetFloat("_CloudOn", photoSky ? Mathf.Clamp01((Weather.Wetness - 0.05f) * 2.5f) : 1f);
+    }
+
+    // ---------------------------------------------------------------- photo sky (SkyPhoto.shader; Docs/ASSETS.md)
+    // A real CC0 sky panorama (Poly Haven kloofendal_48d_partly_cloudy_puresky: fair-weather cumulus, the sun 47.9
+    // degrees up) for the afternoon, whose sun stands at 48 degrees: turned so its sun sits where the world's sun is.
+    // Morning / evening / night keep the procedural sky (their sun is elsewhere in the sky). Missing texture or shader,
+    // or NoPhotoSky: the procedural sky as before. The skybox is what the reflection probe and CarEnv's cubes render,
+    // so the cars mirror these clouds too.
+    public static bool NoPhotoSky;                     // A/B and shots (DebugShots / PerfLab may set it before a build)
+    static bool photoSky;
+    public static bool PhotoSky => photoSky;
+    static readonly Color PhotoRefTint = new Color(0.30f, 0.48f, 0.85f); // the default Look tint (the panorama's grading)
+    static Material PhotoSkyMaterial(Light sun)
+    {
+        if (NoPhotoSky || sun == null) return null;
+        var sh = Resources.Load<Shader>("SkyPhoto");
+        var tex = EnvTex.PhotoTex("sky_day");
+        if (sh == null || !sh.isSupported || tex == null) return null;
+        var m = new Material(sh) { mainTexture = tex };
+        var sd = -sun.transform.forward;
+        m.SetFloat("_SunAz", Mathf.Atan2(sd.z, sd.x));
+        return m;
+    }
+    // the circuit's look (tint, exposure) at half strength on top of the photo's own colour; rain greys and darkens it
+    static void PhotoParams(Look k, float w)
+    {
+        if (skyInst == null) return;
+        var t = new Vector4(Mathf.Lerp(1f, k.tint.r / PhotoRefTint.r, 0.5f), Mathf.Lerp(1f, k.tint.g / PhotoRefTint.g, 0.5f), Mathf.Lerp(1f, k.tint.b / PhotoRefTint.b, 0.5f), 1f);
+        float mx = Mathf.Max(t.x, Mathf.Max(t.y, t.z));
+        if (mx > 1.15f) t *= 1.15f / mx;              // (a pale tint must not push the clouds into white)
+        t = Vector4.Lerp(t, Vector4.one, Mathf.Clamp01(w)); t.w = 1f; // rain: neutral, _Grey does the greying
+        skyInst.SetVector("_Tint", t);                  // (a vector: no sRGB conversion of a multiplier)
+        skyInst.SetFloat("_Exposure", Mathf.Lerp(1f, k.exposure / 2f, 0.5f));
+        skyInst.SetFloat("_Grey", Mathf.Clamp01(0.8f * w));
     }
 
     // ---------------------------------------------------------------- setup
@@ -331,8 +369,15 @@ public class Sky : MonoBehaviour
         if (sun != null) hazeSun = -sun.transform.forward;
         var k = Wetted(dryLook, Weather.Wetness);
         sunLight = sun; sunBase = -1f; // dimmed in Create, after the road has read the dry sun colour and the bake is done
-        var skyMat = Resources.Load<Material>("Sky");
-        if (skyMat != null)
+        photoSky = false;
+        var photo = tod == TimeOfDay.Kind.Afternoon ? PhotoSkyMaterial(sun) : null;
+        var skyMat = photo != null ? null : Resources.Load<Material>("Sky");
+        if (photo != null)
+        {
+            photoSky = true; RenderSettings.skybox = photo; skyInst = photo;
+            PhotoParams(k, Weather.Wetness);
+        }
+        else if (skyMat != null)
         {
             skyMat = new Material(skyMat);
             skyMat.SetFloat("_SunSize", tod == TimeOfDay.Kind.Night ? 0.018f : 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f); // night: a small moon
