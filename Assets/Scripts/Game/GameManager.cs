@@ -345,7 +345,9 @@ public partial class GameManager : MonoBehaviour
     {
         if (lineView == null || lineGo == null || !lineGo.activeSelf) return;
         bool on = !playground && pRun == null && (ui == null || !ui.Showing);
-        lineView.Frame(on ? lineMode : RacingLineView.Off, idx, car.x, car.y, System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), Weather.TrackFactor(carSet, 1));
+        int li = idx;
+        if (li < 0 && shotFreeze && track != null) li = track.Nearest(car.x, car.y).idx; // screenshots: no physics step sets idx (colours for the shot's kmh=)
+        lineView.Frame(on ? lineMode : RacingLineView.Off, li, car.x, car.y, System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), Weather.TrackFactor(carSet, 1));
     }
 
     void Save()

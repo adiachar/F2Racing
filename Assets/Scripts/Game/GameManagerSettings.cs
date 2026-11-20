@@ -248,7 +248,7 @@ public partial class GameManager
         asst.Choice("Steering assist", "Steers into a slide for you when the rear steps out.", offLowHigh, 0, () => steerAssist, v => steerAssist = v);
         asst.Choice("Braking assist", "Brakes for corners by the racing line's speed. Low brakes later and softer.", offLowHigh, 0, () => brakeAssist, v => brakeAssist = v)
             .LockedWhen(() => mapIdx == PlaygroundIdx ? "Circuits only: the playground has no racing line." : null);
-        asst.Choice("Racing line", "Chevrons on the ideal line, 250 m ahead: green = go faster, yellow = lift / at the limit, red = brake now.", new[] { "Off", "Braking only", "Full" }, RacingLineView.Full, () => lineMode,
+        asst.Choice("Racing line", "Chevrons on the ideal line, coloured live for your speed: green = no braking needed, yellow = brake soon, red = brake here.", new[] { "Off", "Braking only", "Full" }, RacingLineView.Full, () => lineMode,
             v => { lineMode = Mathf.Clamp(v, 0, 2); if (lineGo != null) lineGo.SetActive(showLine && !playground); });
 
         // ---- CAR SETUP
