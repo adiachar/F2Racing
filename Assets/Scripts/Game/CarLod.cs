@@ -49,6 +49,24 @@ public partial class CarModel
     }
 
     LODGroup lodGroup;
+    // RR3-style: the simplified levels draw with F2/CarPaintFar (CarPaint's per-vertex pass, any graphics level): a far
+    // car is a few hundred pixels, so per-pixel probe reads and pows there bought nothing. One clone per rival set
+    // (same keywords and values, so instancing still batches every rival of a level). PerfLab "car LOD" off = full.
+    public static bool RivalFarLite = true;
+    static Shader farShader; static bool farTried;
+    static readonly Dictionary<Material, Material> farMats = new Dictionary<Material, Material>();
+    static Material FarMat(RivalSet set)
+    {
+        var src = set.mat;
+        if (!RivalFarLite || src == null) return src;
+        if (farMats.TryGetValue(src, out var fm) && fm != null) return fm;
+        if (!farTried) { farTried = true; farShader = Resources.Load<Shader>("CarPaintFar"); }
+        if (farShader == null || !farShader.isSupported) return src;
+        fm = new Material(src) { name = src.name + " far", shader = farShader, enableInstancing = true };
+        fm.EnableKeyword("_MERGED");
+        farMats[src] = fm;
+        return fm;
+    }
     static readonly Dictionary<Mesh, Mesh>[] lodCache = { new Dictionary<Mesh, Mesh>(), new Dictionary<Mesh, Mesh>() };
     const float Tan31 = 0.6009f; // tan(62 degrees / 2): the chase camera's lens, which the distances below are for
 
@@ -74,7 +92,7 @@ public partial class CarModel
                 // a child of the full part: it follows whatever moves or squashes that part (spin, steer, a flat tyre's scale)
                 go.transform.SetParent(r0.transform, false);
                 go.AddComponent<MeshFilter>().sharedMesh = dm;
-                var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = rset.mat;
+                var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = FarMat(rset);
                 r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
                 r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off; r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
                 levels[k + 1].Add(r); blockR.Add(r);

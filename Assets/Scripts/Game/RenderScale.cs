@@ -95,9 +95,28 @@ public static class RenderScale
 
     public static float AutoScale(int w, int h)
     {
-        float px = (float)w * h;
-        return px <= PixelBudget ? 1f : Mathf.Max(MinScale, Mathf.Sqrt(PixelBudget / px));
+        float px = (float)w * h, b = Budget;
+        return px <= b ? 1f : Mathf.Max(MinScale, Mathf.Sqrt(b / px));
     }
+    // RR3-style sustained budget: mid-range Mali (G5x / G6x, e.g. Adi's G68 MC4) ran 60 at 12.5-14.5 ms GPU with the
+    // thermal headroom at 0.92-0.97 (Docs/PERF-INVESTIGATION.md round 2): close to throttling, and a throttled 60 ends
+    // at 20-30. Those GPUs get ~1.1 Mpx (2400x1080 -> 0.65, 1560x702: ~15% less fragment work); the CAS sharpen in the
+    // upscale keeps the edges crisp. Others keep 1.3 Mpx.
+    public const float MidBudget = 1.10e6f;
+    static int budgetKind; // 0 unread, 1 normal, 2 mid-range Mali
+    public static float Budget
+    {
+        get
+        {
+            if (budgetKind == 0)
+            {
+                string g = SystemInfo.graphicsDeviceName ?? "";
+                budgetKind = g.IndexOf("Mali-G5", System.StringComparison.OrdinalIgnoreCase) >= 0 || g.IndexOf("Mali-G6", System.StringComparison.OrdinalIgnoreCase) >= 0 ? 2 : 1;
+            }
+            return budgetKind == 2 ? MidBudget : PixelBudget;
+        }
+    }
+    public static bool MidMali { get { _ = Budget; return budgetKind == 2; } }
 
     public static void Apply()
     {
@@ -139,8 +158,10 @@ public static class RenderScale
         float a = AutoScale(NativeW, NativeH);
         if (a >= 1f) return;
         float was = Adapt, now = was;
+        // mid-range Mali: up only when the GPU stayed under half its budget (heat builds over minutes, not 10 s windows)
+        float upAt = MidMali ? 0.50f : 0.60f;
         if (hot || worstRatio > 0.85f) now = was - AdaptStep;
-        else if (windows >= 3 && worstRatio < 0.60f) now = was + AdaptStep;
+        else if (windows >= 3 && worstRatio < upAt) now = was + AdaptStep;
         now = Mathf.Clamp(now, 0f, Mathf.Max(0f, MaxAdaptScale - a));
         if (Mathf.Abs(now - was) > 0.001f) { Adapt = now; Debug.Log($"RenderScale: adaptive {was:0.00} -> {now:0.00} (worst GPU window {worstRatio * 100f:0}% of the budget, {windows} windows{(hot ? ", hot" : "")})"); }
 #endif
@@ -233,7 +254,7 @@ public class RenderScaleRT : MonoBehaviour
     void Sample()
     {
         if (!FrameLog.Racing || !wasActive) return;
-        if (Thermal.Hot) hot = true;
+        if (Thermal.Hot || Thermal.Headroom >= 0.8f) hot = true; // (NaN compares false) warm already counts: step down before throttling
         FrameTimingManager.CaptureFrameTimings();
         if (FrameTimingManager.GetLatestTimings(1, ft) < 1) return;
         float g = (float)ft[0].gpuFrameTime;
