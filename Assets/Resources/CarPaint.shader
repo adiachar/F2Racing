@@ -282,7 +282,7 @@ Shader "F2/CarPaint"
                 half coatK = _Coat, metal = _Metal, specK = 1.0, glossAdd = 0.0, gloss0 = _Gloss;
                 float3 emis = 0; half3 envTint = 1; // (emis: built from part masks, float)
                 float visorK = 0.0; // (a part mask: float)
-                float fabric = 0.0, rimK = 0.0, inShade = 1.0; // fabric sheen (driver), halo edge sheen, cockpit-tub shade (float masks)
+                float fabric = 0.0, rimK = 0.0, inShade = 1.0, rubber = 0.0; // fabric sheen (driver), halo edge sheen, cockpit-tub shade (float masks)
                 #if defined(_MERGED)
                 {
                     // one mesh, many parts: the part ID picks the material (see MMat)
@@ -305,6 +305,7 @@ Shader "F2/CarPaint"
                     // tyres (LOD wheels are their own objects, so object space is the wheel frame; the far car skips it)
                     float front = step(id, 4.5) + MIs(id, 6);
                     float ty = step(3.5, id) * step(id, 5.5) * (1.0 - _Far);
+                    rubber = ty;
                     if (ty > 0.0)
                     {
                         half4 wd = MP(_TyreWD); half wear = lerp(wd.z, wd.x, front), dirt = lerp(wd.w, wd.y, front);
@@ -368,6 +369,7 @@ Shader "F2/CarPaint"
                 #elif defined(_TYRE)
                 {
                     float r = length(i.op.yz) / _TyreR;
+                    rubber = 1.0;
                     half tread = 1.0 - smoothstep(0.35, 0.8, abs(normalize(i.on).x));
                     // moulded bands on the sidewall (no lettering): two thin rings, a touch lighter and satin
                     half band = (smoothstep(0.655, 0.665, r) - smoothstep(0.69, 0.70, r)) + (smoothstep(0.925, 0.935, r) - smoothstep(0.95, 0.96, r));
@@ -422,6 +424,10 @@ Shader "F2/CarPaint"
                 // of white / light grey paint went into the grade's shoulder and clipped, so sunlit and turned-away
                 // panels came out one flat colour. PaintRoll (hue kept) brings the shading back.
                 diff = (half3)PaintRoll((float3)diff, fabric);
+                // rubber under a low warm sun (evening 1, 0.80, 0.56 x carSun) read brown / rust: keep most of the
+                // light's brightness but only a third of its hue on the tyres (float mask, no compare on a half)
+                float dL = dot((float3)diff, float3(0.2126, 0.7152, 0.0722));
+                diff = (half3)lerp((float3)diff, float3(dL, dL, dL * 1.04), 0.65 * rubber);
                 diff *= inShade;
                 half3 R = reflect(-V, N);
                 // mirror glass (4 cm tall, object y 0.702 .. 0.745): its picture has the horizon across the middle (sky
