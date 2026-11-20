@@ -8,6 +8,9 @@
 //    gloves and full-face helmets with dark visors and a top stripe; engineers team shirts, dark trousers and headsets
 //    with a boom mic; mechanics overalls with caps or bare heads. Male / female bodies, heights, skin tones and hair vary
 //    per person. Colours come from the team's Livery (a palette per person, People.shader).
+//    With the People2 packs (People.cs) the crew are realistic textured people instead (Mixamo Ch08 / Ch13 / Remy when
+//    the private pack is there, else the CC-BY Avatar; overall-wearers only on the stop crew), recoloured in the team's
+//    colours by the same palette, 3 LODs by camera distance (Rig.SetLodAt); after the release some clap (mocap).
 //  * Animation: per role, keys (position on the box floor, facing, a pose) with Hermite paths (no stop-start at
 //    pass-through keys), eased with anticipation (weight back before the dash) and overshoot-and-settle. A pose is a
 //    clip, or two mixed (half-crouched ready = crouch + idle): idle, crouch, kneel-and-work (wheel gun), push / brace
@@ -69,6 +72,7 @@ public class PitCrew : MonoBehaviour
         Signal = P(People.Idle, 0.93f, rl: 1f),
         Point = P(People.Idle, 0.93f, pt: 1f),
         Cheer = P(People.Celebrate, 0.945f, rl: 1f, rr: 1f),
+        Clap = P(People.MClap, 0.94f),
         Fist = P(People.Celebrate, 0.935f, People.Idle, 0.4f, rl: 1f),
         Crossed = P(People.FoldArms, 0.925f),
         Hips = P(People.Talk, 0.93f);
@@ -256,7 +260,7 @@ public class PitCrew : MonoBehaviour
             int kind = i < 18 ? KCrew : i < 20 ? KEng : KMech;
             var p = new Person { kind = kind, seed = i * 13 + 5, delay = 0.09f * Rnd(i, 8) };
             p.cheer = (int)(Rnd(i, 9) * 2.999f);
-            p.body = People.BodyOf(p.seed, kind == KEng ? 0.4f : kind == KMech ? 0.2f : 0.08f);
+            p.body = People.CrewBodyOf(p.seed, kind == KEng ? 0.4f : kind == KMech ? 0.2f : 0.08f, kind == KCrew);
             p.scale = People.HeightOf(p.seed, p.body);
             p.gear = kind == KCrew ? People.GHelmet : kind == KEng ? People.GHeadset : Rnd(i, 4) < 0.6f ? People.GCap : People.GBare;
             p.outfit = kind == KCrew ? People.OCrew : kind == KEng ? People.OEngineer : People.OMechanic;
@@ -414,7 +418,7 @@ public class PitCrew : MonoBehaviour
 
     // ---------------------------------------------------------------- the choreography (keys per role; times in s, 0 = car stopped)
     float KeyYaw(float a) => Mathf.Atan2(gs * Mathf.Sin(a * Mathf.Deg2Rad), Mathf.Cos(a * Mathf.Deg2Rad)) * Mathf.Rad2Deg;
-    static Pose After(Person p) => p.cheer == 2 ? Cheer : p.cheer == 1 ? Fist : Rest; // after the release: some cheer, some pump a fist
+    static Pose After(Person p) => p.cheer == 2 ? (People.Mocap && (p.seed & 2) != 0 ? Clap : Cheer) : p.cheer == 1 ? Fist : Rest; // after the release: some cheer (or clap), some pump a fist
 
     Key[] GunKeys(int c, Person p)
     {
@@ -706,7 +710,7 @@ public class PitCrew : MonoBehaviour
             People.Blend(pa, pb, loco, pa);
         }
         Vector3 wg = F.MultiplyPoint3x4(g);
-        r.SetLod((wg - camPos).sqrMagnitude > 40f * 40f ? 1 : 0);
+        r.SetLodAt((wg - camPos).magnitude);
         r.Place(wg, fYaw + yaw);
         r.Apply(pa);
         // hands (crew space)

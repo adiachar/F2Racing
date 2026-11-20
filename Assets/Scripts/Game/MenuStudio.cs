@@ -7,10 +7,12 @@
 //  * Backdrop: the studio camera clears to the page colour (UiKit.Paper, #F3F1EC), so the 2D paper of the page and the
 //    3D background are the same colour with no seam. There is no floor or wall geometry: the only thing under the
 //    driver is a soft contact shadow (People.Blobs, multiplied onto the paper: about the mockup's 18% ellipse).
-//  * Driver: one of the rigged CC0 people (People.cs: Quaternius, crew helmet with a dark visor) in a race suit in the
-//    livery colours, standing relaxed: idle clip with the arms hanging naturally (IK), chest and shoulders relaxed,
-//    a normal stance; small breathing, weight shift and head movement, and on Home every 6-12 s a calm gesture
-//    (adjust the gloves, a hand to the visor, a glance aside, fold the arms, nod).
+//  * Driver: People.DriverBody (People2: the textured race driver: suit, gloves, HANS, helmet; CC-BY, CREDITS.txt) or,
+//    without that pack, one of the rigged CC0 people (Quaternius, crew helmet with a dark visor), in the livery colours,
+//    standing relaxed: idle clip (the mocap idle when the private Mixamo pack is there) with the arms hanging naturally
+//    (IK), chest and shoulders relaxed, a normal stance; small breathing, weight shift and head movement, and on Home
+//    every 6-12 s a calm gesture (adjust the gloves, a hand to the visor, a glance aside, fold the arms, nod; with mocap
+//    also a wave to the camera and a talking gesture).
 //  * Light: soft daylight. A key light (real directional light, studio layer only, neutral-warm, from high front left)
 //    and custom spherical harmonics given to the driver (People.shader reads ShadeSH9): a bright sky from above, a
 //    soft fill from the camera's right, a warm bounce off the paper from below and a gentle rim. No reflection probe,
@@ -135,7 +137,7 @@ public sealed class MenuStudio
     // ------------------------------------------------------------------ driver
     void BuildDriver(Livery liv)
     {
-        rig = new People.Rig(driverPivot, 0, People.GHelmet, "MenuDriver");
+        rig = new People.Rig(driverPivot, People.DriverBody >= 0 ? People.DriverBody : 0, People.GHelmet, "MenuDriver");
         rig.tr.localPosition = Vector3.zero; rig.tr.localRotation = Quaternion.Euler(0f, 180f, 0f); rig.tr.localScale = Vector3.one;
         rigSmr = rig.go.GetComponent<SkinnedMeshRenderer>();
         if (rigSmr != null) rigSmr.lightProbeUsage = LightProbeUsage.CustomProvided;
@@ -224,16 +226,17 @@ public sealed class MenuStudio
     static void Turn(Transform b, float deg, Vector3 axis) { b.rotation = Quaternion.AngleAxis(deg, axis) * b.rotation; }
 
     // calm gestures only (no shoulder rolls or anything that reads as squaring up): adjust the gloves, a hand to the
-    // visor, a glance aside, arms folded, a nod
-    const int GGloves = 0, GVisor = 1, GGlance = 2, GFold = 3, GNod = 4, GCount = 5;
+    // visor, a glance aside, arms folded, a nod; with mocap (People.Mocap) also a wave and a talking gesture
+    const int GGloves = 0, GVisor = 1, GGlance = 2, GFold = 3, GNod = 4, GWave = 5, GTalk = 6, GCount = 5, GCountMocap = 7;
 
     void Animate(float t, float dt, bool gestures)
     {
         // a new gesture every 6-12 s (Home only); one that has started always plays to its end
         if (gKind < 0 && gestures && t >= nextG)
         {
-            int k = Random.Range(0, GCount); if (k == gLast) k = (k + 1) % GCount;
-            gKind = gLast = k; gT = 0f; gLen = k == GGlance ? 2.6f : k == GFold ? 4f : 3.2f;
+            int n = People.Mocap ? GCountMocap : GCount;
+            int k = Random.Range(0, n); if (k == gLast) k = (k + 1) % n;
+            gKind = gLast = k; gT = 0f; gLen = k == GGlance ? 2.6f : k == GFold ? 4f : k == GWave ? Mathf.Min(3.2f, People.Length(People.MWave)) : k == GTalk ? 3.8f : 3.2f;
         }
         float gw = 0f;
         if (gKind >= 0)
@@ -243,29 +246,32 @@ public sealed class MenuStudio
         }
         if (!gestures && gKind < 0) nextG = Mathf.Max(nextG, t + 3f);
 
-        People.Sample(People.Idle, t, buf);
+        bool mocap = People.Mocap; float pw = mocap ? 0.3f : 1f; // (the mocap idle stands, breathes and shifts by itself)
+        People.Sample(People.MIdle, t, buf);
         if (gKind == GFold) { People.Sample(People.FoldArms, gT + 0.4f, buf2); People.Blend(buf, buf2, gw, buf); }
         else if (gKind == GNod) { People.Sample(People.Yes, gT, buf2); People.Blend(buf, buf2, gw * 0.7f, buf); }
+        else if (gKind == GWave) { People.Sample(People.MWave, gT, buf2); People.Blend(buf, buf2, gw, buf); }
+        else if (gKind == GTalk) { People.Sample(People.MTalk, gT + 0.5f, buf2); People.Blend(buf, buf2, gw * 0.85f, buf); }
         rig.Apply(buf);
 
         var tr = rig.tr; Vector3 right = tr.right, fwd = tr.forward, up = tr.up;
         var b = rig.b;
         // relaxed posture over the clip: chest a touch forward (no puffed chest), shoulders dropped, feet a little
         // closer together (a normal stance, not a wide one)
-        Turn(b[People.JSpine3], 2.5f, right);
-        Turn(b[People.JClavL], 3f, fwd); Turn(b[People.JClavR], -3f, fwd);
-        Turn(b[People.JThighL], 3.5f, fwd); Turn(b[People.JCalfL], -3.5f, fwd);
-        Turn(b[People.JThighR], -3.5f, fwd); if (calfR >= 0) Turn(b[calfR], 3.5f, fwd);
+        Turn(b[People.JSpine3], 2.5f * pw, right);
+        Turn(b[People.JClavL], 3f * pw, fwd); Turn(b[People.JClavR], -3f * pw, fwd);
+        Turn(b[People.JThighL], 3.5f * pw, fwd); Turn(b[People.JCalfL], -3.5f * pw, fwd);
+        Turn(b[People.JThighR], -3.5f * pw, fwd); if (calfR >= 0) Turn(b[calfR], 3.5f * pw, fwd);
         // breathing (~4.2 s): small
-        float br = Mathf.Sin(t * 1.5f);
+        float br = Mathf.Sin(t * 1.5f) * pw;
         Turn(b[People.JSpine3], -0.5f * br, right);
         Turn(b[People.JClavL], -0.5f * br, fwd); Turn(b[People.JClavR], 0.5f * br, fwd);
         // weight from one foot to the other (slow, uneven)
-        float ws = (Mathf.Sin(t * 0.7f) + 0.35f * Mathf.Sin(t * 1.9f + 1.3f)) * 0.75f;
+        float ws = (Mathf.Sin(t * 0.7f) + 0.35f * Mathf.Sin(t * 1.9f + 1.3f)) * 0.75f * pw;
         b[People.JPelvis].position += right * (0.010f * ws);
         Turn(b[People.JPelvis], 1.3f * ws, fwd); Turn(b[People.JSpine1], -1.1f * ws, fwd);
         // arms hang naturally at his sides (two-bone IK; the clip's arms are held wide), except while folded
-        float hang = gKind == GFold ? 1f - gw : 1f;
+        float hang = (gKind == GFold || gKind == GWave || gKind == GTalk ? 1f - gw : 1f) * (mocap ? 0.35f : 1f);
         Hang(true, hang, t, right, fwd, up);
         Hang(false, hang, t, right, fwd, up);
         if (gKind == GGloves && gw > 0.001f)

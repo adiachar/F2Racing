@@ -115,6 +115,7 @@ public sealed partial class MenuUI
 
         // licence credits for the car and steering-wheel models (CC BY): always on the home page, at the very bottom
         float cwid = race.x - U(16) - x0, cy = f.bottom - U(11);
+        UiKit.Text(new Rect(x0, cy - U(16), cwid, U(8)), People.Credit, UiKit.Body, UiKit.Fit(People.Credit, UiKit.Body, 6.5f, cwid, 5f), UiKit.A(UiKit.InkMuted, e0));
         UiKit.Text(new Rect(x0, cy - U(8), cwid, U(8)), CarModel.CarCredit, UiKit.Body, UiKit.Fit(CarModel.CarCredit, UiKit.Body, 6.5f, cwid, 5f), UiKit.A(UiKit.InkMuted, e0));
         UiKit.Text(new Rect(x0, cy, cwid, U(8)), CreditLine, UiKit.Body, UiKit.Fit(CreditLine, UiKit.Body, 6.5f, cwid, 5f), UiKit.A(UiKit.InkMuted, e0));
         return ch;

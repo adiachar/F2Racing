@@ -2,7 +2,8 @@
 // garage desks and on the pit-wall stands (headsets, seated, now and then talking), a mechanic in each detailed garage
 // (arms folded / working at the trolley), and a few team members walking along the garage fronts (they turn back
 // before a box where a stop is on). Placed by PitGarage (Spot) at the player's box and two either side; the other teams'
-// boxes have the same engineers baked into a static mesh (PitGarage.BakeCrews). Rigs from People.cs.
+// boxes have the same engineers baked into a static mesh (PitGarage.BakeCrews). Rigs from People.cs (realistic People2
+// bodies when the packs are there: People.CrewBodyOf; mocap walk / idle / talk when the private Mixamo pack is there).
 // Cost: animated only within ~120 m of the camera (People.AnimDue: every frame within 30 m, every 2nd to 60 m, every 4th beyond; LOD1 mesh beyond 40 m), frozen beyond,
 // hidden beyond ~230 m; one contact-shadow mesh for all of them.
 using System.Collections.Generic;
@@ -32,7 +33,7 @@ public sealed class PeoplePits : MonoBehaviour
     {
         foreach (var s in spots)
         {
-            int body = People.BodyOf(s.seed, s.kind == 1 ? 0.35f : 0.15f);
+            int body = People.CrewBodyOf(s.seed, s.kind == 1 ? 0.35f : 0.15f);
             int gear = s.kind == 1 ? People.GHeadset : Hash(s.seed, 4) < 0.55f ? People.GCap : People.GBare;
             var r = new People.Rig(transform, body, gear, "Person") { scale = People.HeightOf(s.seed, body) };
             r.Dress(s.kind == 1 ? People.OEngineer : People.OMechanic, s.liv, s.seed);
@@ -48,12 +49,12 @@ public sealed class PeoplePits : MonoBehaviour
             // (in front of the idle crews and the tyre sets lined up at the garage fronts, PitGarage.Lane)
             float off = A.garageDist - 2.05f - 0.3f * (i % 2);
             Vector3 pa = A.centre + A.side.normalized * off - A.fwd.normalized * (1.5f * (i % 3)), pb = B.centre + B.side.normalized * (B.garageDist - 2.05f - 0.3f * (i % 2));
-            int seed = 900 + i * 31, body = People.BodyOf(seed, 0.3f);
+            int seed = 900 + i * 31, body = People.CrewBodyOf(seed, 0.3f);
             int outfit = i == 3 ? People.OMarshal : (i & 1) == 0 ? People.OMechanic : People.OEngineer;
             int gear = outfit == People.OEngineer ? People.GHeadset : Hash(seed, 4) < 0.5f ? People.GCap : People.GBare;
             var r = new People.Rig(transform, body, gear, "Walker") { scale = People.HeightOf(seed, body) };
             r.Dress(outfit, liv != null && b0 < liv.Length ? liv[b0] : Livery.Player[0], seed);
-            var ag = new Agent { rig = r, walker = true, a = pa, b = pb, len = Vector3.Distance(pa, pb), sp = 1.15f + 0.25f * Hash(seed, 5) };
+            var ag = new Agent { rig = r, walker = true, a = pa, b = pb, len = Vector3.Distance(pa, pb), sp = (People.Mocap ? 1.3f : 1.15f) + 0.25f * Hash(seed, 5) };
             ag.s.seed = seed; ag.x = ag.len * Hash(seed, 6); ag.dir = (i & 1) == 0 ? 1f : -1f;
             agents.Add(ag);
         }
@@ -78,7 +79,7 @@ public sealed class PeoplePits : MonoBehaviour
             float d = (at - cp).magnitude;
             if (d > 230f) { r.Show(false); continue; }
             r.Show(true);
-            r.SetLod(d > 40f ? 1 : 0);
+            r.SetLodAt(d);
             bool animate = !ag.posed || People.AnimDue(d, frame, i); // rate by distance (People.AnimDue)
             if (animate) { Pose(ag, now); ag.posed = true; }
             if (d < 120f)
@@ -119,8 +120,9 @@ public sealed class PeoplePits : MonoBehaviour
             Vector3 p = Vector3.Lerp(ag.a, ag.b, ag.x / Mathf.Max(ag.len, 0.01f)); p.y = WorldBuilder.H(p.x, p.z);
             Vector3 f = (ag.b - ag.a) * ag.dir; float yaw = Mathf.Atan2(f.x, f.z) * Mathf.Rad2Deg;
             r.Place(p, yaw);
-            if (ag.pause > 0f) People.Sample(People.Idle, t, buf);
-            else People.Sample(People.Walk, ag.dist / (1.66f * ag.sp / 1.25f) * People.Length(People.Walk), buf);
+            int wc = People.WalkClip; float stride = People.Mocap ? People.WalkStride : 1.66f * ag.sp / 1.25f; // (mocap: m per cycle, feet planted)
+            if (ag.pause > 0f) People.Sample(People.MIdle, t, buf);
+            else People.Sample(wc, ag.dist / stride * People.Length(wc), buf);
             r.Apply(buf);
             return;
         }
@@ -138,7 +140,7 @@ public sealed class PeoplePits : MonoBehaviour
                 break;
             }
             case 1: r.Place(pos, yw); People.Sample(People.FoldArms, t, buf); break;
-            case 2: r.Place(pos, yw); People.Sample(s.kind == 1 ? People.Headset : People.Talk, t, buf); break;
+            case 2: r.Place(pos, yw); People.Sample(s.kind == 1 ? ((s.seed & 1) == 0 || !People.Mocap ? People.Headset : People.MTalk2) : People.MTalk, t, buf); break;
             default: r.Place(pos, yw); People.Sample(People.Interact, t, buf); break;
         }
         r.Apply(buf);

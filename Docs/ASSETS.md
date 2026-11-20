@@ -41,3 +41,17 @@ compression). Built offline: `Tools/Models/build_models.py` (Poly Haven set) and
 |---|---|---|---|
 | Archivo (Omnibus-Type, from github.com/google/fonts `ofl/archivo`) | Archivo-Regular / -SemiBold / -ExtraBold / -ExtraBoldItalic.ttf: static instances (wdth 100; wght 400 / 600 / 800 / 800 italic) cut from the variable font with fontTools `varLib.instancer` | SIL OFL 1.1 (OFL-Archivo.txt; no Reserved Font Name) | the front end ("Paper" look) |
 | Titillium Web | TitilliumWeb-*.ttf | SIL OFL 1.1 (OFL-TitilliumWeb.txt) | the in-race HUD; fallback if Archivo fails to load |
+
+## People (Resources/People, Resources/People2; loaded by People.cs)
+
+| Asset | Source | Licence | Used as |
+|---|---|---|---|
+| Universal Base Characters (Superhero male / female), Universal Animation Library | Quaternius (Tools/People/fetch.sh) | CC0 | the old low-poly people (`People/people.bytes`): far baked crews (PitGarage), every clip the pit stop uses; fallback for everything below |
+| "Race Car Driver - Low Poly" | [Sketchfab, tomkart](https://sketchfab.com/3d-models/race-car-driver-low-poly-0fedfae53537473ba2ee3d9b722e0c66) | CC BY 4.0 (credit: `People2/CREDITS.txt`, `People.Credit` in-game) | the player's driver (menu studio, pre-race walk); its helmet on the crew. Rigged by us, brand marks painted out, team-tintable |
+| "Free Avatar for iClone," | [Sketchfab, Asfandyar Hesami](https://sketchfab.com/3d-models/free-avatar-for-iclone-4908979179aa43d5835a0509f1519e3b) | CC BY 4.0 (as above) | crew / engineers when the Mixamo pack is absent; its cap on the crew |
+| Mixamo characters Ch08, Ch13, Remy; animations Idle, Walking, Talking (x2), Clapping, Sitting Clap, Waving, Standing w/ Briefcase Idle | Adobe Mixamo (downloaded by Adi) | Mixamo terms: free use in the game, **no redistribution of the files** | `People2/mixamo/mixamo.bytes`: **not in this repo** (.gitignore); CI copies it from the private assets repo. Crew bodies + mocap clips |
+
+People2 packs are built by `Tools/People2/build.py` (see its header): one 1024² atlas per pack (JPEG colour + PNG tint
+mask, decoded and GPU-compressed at load), 4 head-gear variants x 3 LODs per body (crew ~4k / 1.5k / 0.5k triangles,
+driver 1.35k / 0.76k / 0.4k), <= 4 bone weights on the game's 22-joint skeleton. Sizes: people2.bytes ~1.2 MB,
+mixamo.bytes ~2.5 MB.

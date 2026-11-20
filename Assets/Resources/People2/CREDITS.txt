@@ -1,0 +1,16 @@
+People2 (realistic people) - Assets/Resources/People2/people2.bytes, built by Tools/People2/build.py
+
+1. The player's driver (race suit, gloves, HANS, helmet; also the crew helmet):
+   This work is based on "Race Car Driver - Low Poly" (https://sketchfab.com/3d-models/race-car-driver-low-poly-0fedfae53537473ba2ee3d9b722e0c66)
+   by tomkart (https://sketchfab.com/tomkart) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+   Changes: rigged to the game's skeleton, brand marks painted out of the textures, suit / glove / helmet colours made
+   team-tintable, texture atlas, LODs.
+
+2. Crew / engineer avatar (polo, chinos, cap; also the crew cap):
+   This work is based on "Free Avatar for iClone," (https://sketchfab.com/3d-models/free-avatar-for-iclone-4908979179aa43d5835a0509f1519e3b)
+   by Asfandyar Hesami (https://sketchfab.com/allkhanan1) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+   Changes: retargeted to the game's skeleton, decimated (3 LODs), clothes made team-tintable, texture atlas.
+
+Private, NOT in this repository: Assets/Resources/People2/mixamo/mixamo.bytes (crew bodies and motion-capture clips
+derived from Adobe Mixamo characters / animations; Mixamo's licence allows use in the game but not redistribution of the
+raw or converted files). It is checked out by CI from the private assets repo; the game runs without it.
