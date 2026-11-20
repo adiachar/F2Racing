@@ -41,6 +41,18 @@ jobs:
           path: Library
           key: Library-${{ matrix.targetPlatform }}-${{ hashFiles('Packages/**', 'ProjectSettings/ProjectVersion.txt') }}
           restore-keys: Library-${{ matrix.targetPlatform }}-
+      - name: Private assets (licensed files that may not be public; skipped when the secret is not set)
+        env:
+          ASSETS_TOKEN: ${{ secrets.ASSETS_TOKEN }}
+        run: |
+          if [ -n "$ASSETS_TOKEN" ]; then
+            git clone --depth 1 "https://x-access-token:${ASSETS_TOKEN}@github.com/adiachar/F2Racing-assets.git" /tmp/private-assets
+            if [ -d /tmp/private-assets/People2/mixamo ]; then mkdir -p Assets/Resources/People2 && cp -r /tmp/private-assets/People2/mixamo Assets/Resources/People2/; fi
+            rm -rf /tmp/private-assets
+            echo "private assets: $(ls Assets/Resources/People2/mixamo 2>/dev/null | tr '\n' ' ')"
+          else
+            echo "no ASSETS_TOKEN secret: building without private assets"
+          fi
       - name: Free disk space (the Unity build image is large)
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
