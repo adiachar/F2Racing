@@ -295,6 +295,7 @@ namespace FormulaSim
 
         readonly Track track; readonly RacingLine line; readonly Random rng;
         double[] stopT = new double[0], prevDist = new double[0];
+        readonly List<int> queueOrder = new List<int>(); int sortRef; Comparison<int> byBehind; // Update's queue sort, no garbage
         double lastIncident = -1e9, vscLeft, deltaPenT; bool penalisedThis; int restartPrevIdx = -1, lastCar = -1;
 
         public RaceControl(Track track, RacingLine line, int seed) { this.track = track; this.line = line; rng = new Random(seed * 104729 + 17); }
@@ -394,8 +395,11 @@ namespace FormulaSim
             queueSpread = maxQueueGap = maxQueueGapS = 0;
             if (refIdx >= 0)
             {
-                var order = new List<int>(); for (int k = 0; k < n; k++) if (cars[k].idx >= 0) order.Add(k);
-                order.Sort((a, b) => Behind(refIdx, cars[a].idx).CompareTo(Behind(refIdx, cars[b].idx)));
+                // the list and the comparison are made once (this ran every AI tick under the safety car: a new list, a
+                // closure and a delegate 60 times a second); the same sort of the same list, so the same order
+                var order = queueOrder; order.Clear(); for (int k = 0; k < n; k++) if (cars[k].idx >= 0) order.Add(k);
+                sortRef = refIdx; if (byBehind == null) byBehind = (a, b) => Behind(sortRef, cars[a].idx).CompareTo(Behind(sortRef, cars[b].idx));
+                order.Sort(byBehind);
                 for (int r = 0; r < order.Count; r++)
                 {
                     int k = order[r]; rank[k] = r; double d = Behind(refIdx, cars[k].idx);

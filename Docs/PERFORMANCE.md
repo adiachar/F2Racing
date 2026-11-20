@@ -1,6 +1,8 @@
 # Performance on low-end Android phones
 
-**Newest (19 Nov 2026): `Docs/PERF-ARCHITECTURE.md`** — why the Redmi Note 12 Pro ran at 20-23 fps (GPU-bound: native 2.6 Mpx rendering and car triangles), the base render scale (RenderScale.cs), rival LODs (CarLod.cs), on-device timing and A/B switches (PerfLab.cs).
+**Newest (20 Nov 2026): `Docs/PERF-INVESTIGATION.md`** — "same spot, different laps: 60 to 20 fps": GC, physics, thermal, Auto, first-use hitches; the on-device Performance graph (FrameLog.cs).
+
+**19 Nov 2026: `Docs/PERF-ARCHITECTURE.md`** — why the Redmi Note 12 Pro ran at 20-23 fps (GPU-bound: native 2.6 Mpx rendering and car triangles), the base render scale (RenderScale.cs), rival LODs (CarLod.cs), on-device timing and A/B switches (PerfLab.cs).
 
 This is a static audit. It was done without an editor or a phone, so every number below is an estimate from the code, the asset sizes and the `Tools/PhysicsCheck` timings. Check the numbers on a device with the checklist at the end.
 

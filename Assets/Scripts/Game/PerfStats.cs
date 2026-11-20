@@ -69,6 +69,7 @@ public class PerfStats : MonoBehaviour
     float texMB, texGenMB, meshMB; int texCount, meshCount; float nextT, nextMem; string text = ""; int lines = 12;
     readonly Plane[] planes = new Plane[6];
     readonly HashSet<Material> matSet = new HashSet<Material>(); readonly HashSet<string> varSet = new HashSet<string>();
+    readonly List<Material> matTmp = new List<Material>(8); readonly Dictionary<Material, string> varKey = new Dictionary<Material, string>(); // (lead, frame-time investigation: less garbage per refresh)
     readonly StringBuilder sb = new StringBuilder(768);
     // where the drawn world triangles are: by distance from the camera (box to eye) and outside the corridor (the box
     // is more than CorridorM from every centreline point: never near the racing surface); the biggest drawn groups
@@ -152,11 +153,13 @@ public class PerfStats : MonoBehaviour
                 distTris[dc < 150f ? 0 : dc < 400f ? 1 : dc < 1000f ? 2 : 3] += sv.Tris[i];
                 if (corr[i] > CorridorM) { offCorTris += sv.Tris[i]; offCorDrawn++; }
                 groupTris.TryGetValue(group[i], out long gt); groupTris[group[i]] = gt + sv.Tris[i];
-                var ms = r.sharedMaterials; wDraws += ms.Length;
-                foreach (var m in ms)
+                r.GetSharedMaterials(matTmp); wDraws += matTmp.Count; // (sharedMaterials made an array per renderer)
+                for (int mi = 0; mi < matTmp.Count; mi++)
                 {
+                    var m = matTmp[mi];
                     if (m == null || !matSet.Add(m) || m.shader == null) continue;
-                    varSet.Add(m.shader.name + "|" + string.Join(" ", m.shaderKeywords));
+                    if (!varKey.TryGetValue(m, out var vk)) { vk = m.shader.name + "|" + string.Join(" ", m.shaderKeywords); varKey[m] = vk; } // once per material, not per refresh
+                    varSet.Add(vk);
                 }
             }
             cardNow /= scr; cardBefore /= scr;

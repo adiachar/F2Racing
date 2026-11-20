@@ -62,6 +62,7 @@ public partial class GameManager : MonoBehaviour
         rivalIdx = Mathf.Clamp(PlayerPrefs.GetInt("rivals", 1), 0, RivalCounts.Length - 1); diffIdx = Mathf.Clamp(PlayerPrefs.GetInt("diff", 0), 0, DiffNames.Length - 1);
         ui = new MenuUI(MapNames, PlaygroundIdx, RivalCounts, DiffNames); // the start menu is up (game paused) until a session starts
         ShotsBoot(); // WebGL ?shot=1 only: automatic screenshots (DebugShots.cs); does nothing in normal play
+        FrameLog.Ensure(); // Settings > GRAPHICS > Performance graph (debug): only made when that is on
 
         LoadMap();
         car = new FormulaCar(PlayerConfig());
@@ -815,6 +816,8 @@ public partial class GameManager : MonoBehaviour
     void Update()
     {
         if (ui.LoadDue) StartSession();
+        Thermal.Tick(); // the phone's thermal state, clocks and refresh rate, read every 2 s (Thermal.cs): Auto frame rate, debug overlay
+        FrameLogFeed(); // the frame-time overlay's per-frame inputs (FrameLog.cs; cheap stores, also when it is off)
         PickPlayerModel(); // full car in the cockpit and on High, the lighter one otherwise (GameManagerPerf.cs)
         if (tilt) TiltOrientation(); // the screen turned to the other landscape side: pick the tilt axis again
         if (menuOpen && Input.GetKeyDown(KeyCode.Escape)) CloseSettings(); // Android "back"
@@ -833,6 +836,7 @@ public partial class GameManager : MonoBehaviour
         steerF.BeginFrame(input.steer, (int)(acc / H), H);
         double wallDv = 0; // biggest speed change from a barrier hit this frame (m/s), for the haptics
         PerfLab.PhysBegin();
+        long physT0 = System.Diagnostics.Stopwatch.GetTimestamp(); int physSteps = 0;
         while (acc >= H)
         {
             px = car.x; py = car.y; ph = car.heading; pd = car.delta; psi = car.steerIn;
@@ -860,8 +864,18 @@ public partial class GameManager : MonoBehaviour
             simTime += H; acc -= H;
             frontSpin += car.vx / car.cfg.wheelRadius * H;
             if (playground) TestBench();
+            // spiral guard (Docs/PERF-INVESTIGATION.md): only if the physics of ONE frame has already taken longer than
+            // SpiralMs (never on a healthy phone: 22 cars cost ~0.03-0.3 ms a step), the rest of this frame's whole steps
+            // are dropped (the game slows for that frame) instead of making the next frame longer still. The 240 Hz
+            // step itself is unchanged.
+            if (++physSteps >= SpiralMinSteps && acc >= H && System.Diagnostics.Stopwatch.GetTimestamp() - physT0 > SpiralTicks)
+            {
+                acc -= System.Math.Floor(acc / H) * H; FrameLog.SpiralDrops++;
+                break;
+            }
         }
         PerfLab.PhysEnd(); // timing only
+        FrameLog.Physics(physSteps, System.Diagnostics.Stopwatch.GetTimestamp() - physT0);
         if (!Paused) Rumble(wallDv);
         if (!playground) LapsAndRecover(dt);
         QualiUpdate(); // qualifying clock and flag (Qualifying.cs)
@@ -1418,7 +1432,9 @@ public partial class GameManager : MonoBehaviour
     // called once the menu's "Loading…" frame is on screen: build the chosen circuit and start the session
     void StartSession()
     {
+        AutoGfxAtSessionStart(); // Auto's graphics step held back from the last session (GameManagerPerf.cs), before the world is built
         ui.ReleaseStudio(); ApplyFrameRate(); // the menu's 3D gone, the race frame rate back (MenuStudio.cs caps the menu)
+        FrameLog.SessionStart(); // the debug overlay's 2-minute summary starts again
         raceLaps = ui.practice ? 0 : MenuUI.LapCounts[ui.lapsIdx];
         PrepareSession(); // weekend / championship: qualifying, circuit of the round, grid (Qualifying.cs)
         if (lineFor != classIdx && world != null) { Destroy(world); world = null; } // new class: rebuild with its racing line
