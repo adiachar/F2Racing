@@ -34,3 +34,10 @@ compression). Built offline: `Tools/Models/build_models.py` (Poly Haven set) and
 | Bark001, Bark004, Bark006, Bark014 colour maps | [ambientCG](https://ambientcg.com) via the EZ-Tree repo | CC0 | bark strips: oak (deep furrows), robinia, plane (mottled), Scots pine (orange-grey) |
 | Tree skeletons park_oak / park_plane / park_robinia / park_pine | grown by `build_park.py` (our own generator) | ours | wood mesh + leaf clouds; park_plane reuses island_tree_01's broad-leaf clump tiles |
 | banco_praca.glb, lixeira.glb | [kit-cidade-lowpoly](https://github.com/kayquer/kit-cidade-lowpoly) (kayquer) | CC0 | park_bench (recoloured: cast iron, varnished slats), park_bin (recoloured dark green); flat colours in an 8 px palette, no logos |
+
+## Fonts (Assets/Resources/Fonts, loaded by UiKit.cs)
+
+| Font | Files | Licence | Used for |
+|---|---|---|---|
+| Archivo (Omnibus-Type, from github.com/google/fonts `ofl/archivo`) | Archivo-Regular / -SemiBold / -ExtraBold / -ExtraBoldItalic.ttf: static instances (wdth 100; wght 400 / 600 / 800 / 800 italic) cut from the variable font with fontTools `varLib.instancer` | SIL OFL 1.1 (OFL-Archivo.txt; no Reserved Font Name) | the front end ("Paper" look) |
+| Titillium Web | TitilliumWeb-*.ttf | SIL OFL 1.1 (OFL-TitilliumWeb.txt) | the in-race HUD; fallback if Archivo fails to load |

@@ -1,15 +1,24 @@
 // RacingLineView.cs — the racing-line guide on the road (GRID Autosport style): chevrons along the optimal line
-// (RacingLine, the same line and speed profile the AI drives), shown about 250 m ahead of the player's car and
-// faded at both ends, coloured by the car's speed against the target speed there:
-//   green  = below the target: you can go faster / accelerate
-//   yellow = near the limit: lift, or you are at the cornering limit
-//   red    = too fast: brake now (you need at least the profile's own braking to make the target speed there)
-// The target speeds are RacingLine.speed (RacingLine.SpeedProfile: the car's own tyre / aero / power law, built for
-// the player's car in GameManager.BuildLine); the braking the profile assumes at each speed is read back from the
-// profile itself, so "red" starts where the profile starts to brake. Wet track: speeds scale by sqrt(grip), braking
-// by grip.
+// (RacingLine, the same line and speed profile the AI drives), shown 220-420 m ahead of the player's car (further
+// at speed: about 3.6 s of road) and faded at both ends. The colours are worked out every frame from the PLAYER's
+// speed v and the distance d along the line to each point, so the braking zone shows up well before the corner:
+//   Approach / braking points ("hold v until here, then brake"): the latest brake point for v is
+//     B(p) = min over the points q at or after p of [d_q - Dist(v -> target_q)]
+//   (q: the profile's braking and cornering-limited points, not its power-limited ones), where Dist is the distance
+//   the speed profile's own braking (its tyre / aero law at brakeUse 0.8 of the grip,
+//   read back from the profile per speed; so a_req = (v^2 - v_t^2) / 2d against that braking) needs. The time
+//   left before it, (B(p) - d_p) / v, colours the point: green with more than ~1.1 s, yellow / amber ("lift, brake
+//   soon") inside that, red from ~0.1 s before the brake point and everywhere after it ("brake now / keep
+//   braking"). Slower than that, the red starts later (or not at all); faster, earlier. Braking at the profile's
+//   rate keeps the zone ahead red; braking harder than needed turns it back to yellow / green ahead.
+//   Corner points (the profile at its cornering limit there, the player above its target): green while he can
+//   still get down to the target in time (a_req / profile braking <= 1), yellow to red as a_req passes the profile's
+//   braking towards the tyres' full grip (1.3 x): too fast to hold the line. Near the car, 0-5 % over the target
+//   there shows yellow (at the limit), 6-12 % over it red (past the grip).
+// Each track point's colour is smoothed over 0.1 s (no flicker). Wet track: speeds scale by sqrt(grip), braking by
+// grip. Modes: 0 off, 1 braking only (the yellow / red parts), 2 full.
 // One small dynamic mesh (one draw call, a few hundred vertices rewritten each frame, no allocation), draped on the
-// road from vertex heights worked out once. Modes: 0 off, 1 braking only (yellow / red parts), 2 full.
+// road from vertex heights worked out once.
 // Physics (x, y) maps to Unity (x, height, y), as in WorldBuilder.
 using FormulaSim;
 using UnityEngine;
@@ -18,17 +27,23 @@ public sealed class RacingLineView
 {
     const float HalfWidth = 0.42f;          // 0.84 m wide strip
     const float Lift = 0.03f + 0.025f;      // road surface (WorldBuilder Road strip at 0.03) + 2.5 cm (plus a depth offset in the shader)
-    const double Ahead = 255, FadeFrom = 175, Behind = 5;
+    const double MinAhead = 220, MaxAhead = 420, AheadT = 3.6, FadeShare = 0.3, Behind = 5;
+    const double Scan = 350;                // metres of constraints looked at past the drawn end (braking from top speed)
+    const double Tol = 1.04;                // targets count 4 % over the profile (it corners at 0.82 of the grip)
+    const double TGreen = 1.2, TRed = -0.1; // s before the brake point: green above ~1.1 s, yellow ~0.55 s, full red ~0.1 s
+    const float Tau = 0.1f;                 // s, colour smoothing per point
     public const int Off = 0, BrakingOnly = 1, Full = 2;
 
     public readonly GameObject go;
     readonly Track track; readonly RacingLine line;
-    readonly int N, M, back;
+    readonly int N, M, MS, back;            // M points drawn, MS points scanned (drawn + constraints beyond)
     readonly Vector3[] lp, rp;              // every line point: left and right edge, draped (built once)
     readonly double[] sAt;                  // metres from point 0 to each point along the line
     readonly double lapLen, period;
     readonly Mesh mesh; readonly Material mat; readonly bool custom; readonly MeshRenderer rend;
-    readonly Vector3[] v; readonly Vector2[] uv; readonly Color32[] col; readonly double[] dist;
+    readonly Vector3[] v; readonly Vector2[] uv; readonly Color32[] col;
+    readonly double[] dist, bmin;           // per scanned point: metres from the car; latest brake point (see top)
+    readonly float[] sev; readonly int[] sevAt; int frameNo = 10; // per track point: smoothed severity 0 green .. 1 red, the frame it was set
     static readonly Color GreenL = new Color(0.20f, 0.95f, 0.35f).linear, YellowL = new Color(1f, 0.82f, 0.10f).linear, RedL = new Color(1f, 0.14f, 0.10f).linear;
 
     // the profile's braking (m/s^2) by speed, 2 m/s bins, and the distance it needs to brake from each bin edge to 0
@@ -55,9 +70,11 @@ public sealed class RacingLineView
         period = lapLen / System.Math.Max(1, System.Math.Round(lapLen / 3.2)); // a whole number of chevrons per lap
         double mean = lapLen / N;
         back = Mathf.Max(1, (int)System.Math.Ceiling(Behind / mean));
-        M = Mathf.Min(N - 1, back + (int)System.Math.Ceiling(Ahead / mean) + 2);
+        MS = Mathf.Min(N - 1, back + (int)System.Math.Ceiling((MaxAhead + Scan) / mean) + 2);
+        M = Mathf.Min(MS, back + (int)System.Math.Ceiling(MaxAhead / mean) + 2);
 
-        v = new Vector3[M * 2]; uv = new Vector2[M * 2]; col = new Color32[M * 2]; dist = new double[M];
+        v = new Vector3[M * 2]; uv = new Vector2[M * 2]; col = new Color32[M * 2]; dist = new double[MS]; bmin = new double[MS + 1];
+        sev = new float[N]; sevAt = new int[N];
         var tris = new int[(M - 1) * 6];
         for (int k = 0; k < M - 1; k++)
         {
@@ -115,6 +132,9 @@ public sealed class RacingLineView
             for (int k = prev + 1; k < b; k++) aCap[k] = aCap[prev] + (aCap[b] - aCap[prev]) * (k - prev) / (b - prev);
             prev = b;
         }
+        // a formula car brakes harder the faster it goes (downforce, drag): never less than at a lower speed (the ERS
+        // superclip's gentle slow-down at the end of a long straight is no measure of the brakes)
+        for (int b = 1; b < Bins; b++) if (aCap[b] < aCap[b - 1]) aCap[b] = aCap[b - 1];
         brakeD[0] = 0;
         for (int b = 0; b < Bins; b++) brakeD[b + 1] = brakeD[b] + (b + 0.5) * BinW * BinW / System.Math.Max(4, aCap[b]); // integral of u du / a(u)
         // The bins hold the hardest braking at each speed; a zone braking while turning, or downhill, brakes softer.
@@ -124,7 +144,7 @@ public sealed class RacingLineView
         {
             zoneK[i] = 1;
             int j = i; double len = 0;
-            while (len < 1500) { int pj = (j - 1 + N) % N; if (!(sp[pj] > sp[j])) break; len += line.ds[pj]; j = pj; }
+            while (len < 1500) { int pj = (j - 1 + N) % N; if (!line.braking[pj] || (sp[pj] * sp[pj] - sp[j] * sp[j]) / (2 * System.Math.Max(0.01, line.ds[pj])) < 0.4 * aCap[Mathf.Clamp((int)(sp[pj] / BinW), 0, Bins - 1)]) break; len += line.ds[pj]; j = pj; } // real braking only (not a superclip)
             double model = D(sp[j]) - D(sp[i]);
             if (len > 1 && model > 0.5) zoneK[i] = System.Math.Max(0.7, System.Math.Min(3, len / model));
         }
@@ -142,44 +162,75 @@ public sealed class RacingLineView
     // once a frame: idx = the player's track point, (cx, cy) its position, speed in m/s, grip = wet factor (1 dry)
     public void Frame(int mode, int idx, double cx, double cy, double speed, double grip)
     {
-        if (mode == Off || idx < 0 || idx >= N) { rend.enabled = false; return; }
+        if (mode == Off || idx < 0 || idx >= N) { rend.enabled = false; frameNo += 2; return; } // (+2: no smoothing from stale colours)
         rend.enabled = true;
         if (capFor != line.speed) BuildCap();
+        frameNo++;
+        float dt = Mathf.Clamp(Time.unscaledDeltaTime, 0f, 0.1f), blend = 1f - Mathf.Exp(-dt / Tau);
         grip = System.Math.Max(0.3, System.Math.Min(1.2, grip));
-        double vScale = System.Math.Sqrt(grip), dNow = D(speed);
+        double vScale = System.Math.Sqrt(grip), dNow = D(speed), vs = System.Math.Max(speed, 8);
+        double ahead = System.Math.Max(MinAhead, System.Math.Min(MaxAhead, speed * AheadT)), fadeFrom = ahead * (1 - FadeShare);
 
         // where the car is along the line at its own point
         int o = (idx - 1 + N) % N, q = (idx + 1) % N;
         double tx = line.x[q] - line.x[o], ty = line.y[q] - line.y[o], tl = System.Math.Sqrt(tx * tx + ty * ty);
         double along = tl > 1e-9 ? ((cx - line.x[idx]) * tx + (cy - line.y[idx]) * ty) / tl : 0;
         int i0 = ((idx - back) % N + N) % N;
-        // distances from the car to each point of the window
+        // distances from the car to each point of the scan
         dist[back] = -along;
-        for (int k = back + 1; k < M; k++) dist[k] = dist[k - 1] + line.ds[(i0 + k - 1) % N];
+        for (int k = back + 1; k < MS; k++) dist[k] = dist[k - 1] + line.ds[(i0 + k - 1) % N];
         for (int k = back - 1; k >= 0; k--) dist[k] = dist[k + 1] - line.ds[(i0 + k) % N];
+        // backward: the latest brake point for the car's speed over every target at or after each point
+        bmin[MS] = double.MaxValue;
+        for (int k = MS - 1; k >= 0; k--)
+        {
+            int i = (i0 + k) % N;
+            double vt = System.Math.Max(1, line.speed[i] * vScale * Tol), b = bmin[k + 1];
+            if (speed > vt && line.phase[i] <= 0) { double c = dist[k] - zoneK[i] * (dNow - D(vt)) / grip; if (c < b) b = c; }
+            bmin[k] = b;
+        }
 
         double phase0 = sAt[i0] % period, rel = 0;
-        // already in a braking zone of the profile at (or above) its speed: the rest of that zone is red
-        bool zone = line.braking[idx] && speed >= 0.96 * line.speed[idx] * vScale;
+        int lastK = 0;
         float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
         for (int k = 0; k < M; k++)
         {
             int i = (i0 + k) % N;
-            double d = dist[k], vt = System.Math.Max(1, line.speed[i] * vScale);
-            // red / yellow: the distance the profile's braking needs to slow from this speed to this point's target,
-            // against the distance to it (1 = the profile's own braking point: brake now)
-            double kq = speed > vt ? zoneK[i] * (dNow - D(vt)) / grip / System.Math.Max(d, 10) : 0;
-            if (k > back && zone) { if (line.braking[(i - 1 + N) % N] && speed > vt) kq = System.Math.Max(kq, 1.05); else zone = false; }
-            // at the cornering limit on the profile (phase 0) and about at its speed: yellow
-            double ratio = speed / vt;
-            if (line.phase[i] == 0) kq = System.Math.Max(kq, 0.86 * Smooth(0.88, 0.97, ratio) * (1 - Smooth(1.12, 1.3, ratio)));
-            Color c;
-            if (kq < 0.62) c = GreenL;
-            else if (kq < 0.8) c = Color.Lerp(GreenL, YellowL, Smooth(0.62, 0.8, kq));
-            else if (kq < 0.92) c = YellowL;
-            else c = Color.Lerp(YellowL, RedL, Smooth(0.92, 1.0, kq));
-            float a = 0.9f * Smooth(-Behind, 1.5, d) * (1 - Smooth(FadeFrom, Ahead, d));
-            if (mode == BrakingOnly) a *= Smooth(0.55, 0.75, kq);
+            double d = dist[k];
+            if (d > ahead + 2 && k > back + 1)
+            {
+                // past the drawn end: folded onto the last drawn point, invisible (no fill cost)
+                v[k * 2] = v[lastK * 2]; v[k * 2 + 1] = v[lastK * 2 + 1];
+                col[k * 2] = default; col[k * 2 + 1] = default;
+                uv[k * 2].y = uv[lastK * 2].y; uv[k * 2 + 1].y = uv[lastK * 2 + 1].y;
+                continue;
+            }
+            lastK = k;
+            double vt0 = System.Math.Max(1, line.speed[i] * vScale), vt = vt0 * Tol, s;
+            if (line.phase[i] != 0 || speed <= vt)
+            {
+                // braking / approach point: time left before the brake point if the car held its speed to here
+                double m = bmin[k] - d;
+                s = m >= 1e8 ? 0 : 1 - Smooth(TRed, TGreen, m / vs);
+            }
+            else
+            {
+                // corner point, the car is above its target: the braking it needs to get there in time against the
+                // profile's (1 = the profile's own rate, about 1.25 = the tyres' full grip)
+                double r = zoneK[i] * (dNow - D(vt)) / grip / System.Math.Max(d, 1);
+                s = Smooth(1.0, 1.3, r);
+                // and right in front of the car, 6-12 % over the target (past the tyres' grip: the profile corners
+                // at 0.82 of it) is red whatever the braking
+                if (d < 0.45 * vs) s = System.Math.Max(s, Smooth(1.06, 1.12, speed / vt0) * (1 - Smooth(0.25 * vs, 0.45 * vs, d)));
+            }
+            // near the car, at 0-5 % over the target: at the limit (yellow)
+            if (d < 45 && line.phase[i] == 0) s = System.Math.Max(s, 0.5 * Smooth(1.0, 1.05, speed / vt0) * (1 - Smooth(25, 45, d)));
+            float sv = (float)s;
+            if (sevAt[i] == frameNo - 1) sv = sev[i] + (sv - sev[i]) * blend; // 0.1 s smoothing per point
+            sev[i] = sv; sevAt[i] = frameNo;
+            Color c = sv < 0.5f ? Color.Lerp(GreenL, YellowL, Smooth(0.12, 0.45, sv)) : Color.Lerp(YellowL, RedL, Smooth(0.55, 0.92, sv));
+            float a = 0.88f * Smooth(-Behind, 1.5, d) * (1 - Smooth(fadeFrom, ahead, d));
+            if (mode == BrakingOnly) a *= Smooth(0.18, 0.4, sv);
             var c32 = new Color32((byte)(c.r * 255 + 0.5f), (byte)(c.g * 255 + 0.5f), (byte)(c.b * 255 + 0.5f), (byte)(a * 255 + 0.5f));
             col[k * 2] = c32; col[k * 2 + 1] = c32;
             var L = lp[i]; var R = rp[i];

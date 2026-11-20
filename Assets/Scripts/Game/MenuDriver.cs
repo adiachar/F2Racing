@@ -1,7 +1,10 @@
 // MenuDriver.cs — the Driver page of the front end (MenuUI), and the player's profile (MenuProfile).
-//  * the 3D driver on the left (MenuStudio.cs; drag to turn him), one panel on the right: name (a text field; the
-//    phone's keyboard opens), number 1-99, country, level with its XP bar (cyan), safety rating S A B C D E with the
-//    score (S A B green, C neutral, D E amber) and career stats (races, wins, podiums, poles).
+//  * "Paper" look (UiKit.cs), the masthead with DRIVER underlined. Left: the same driver block as Home (the giant red
+//    italic number, name, country · level · safety, the ink XP line); centre: the 3D driver on paper (MenuStudio.cs;
+//    drag to turn him); right: the editable profile as label / value rows: name (a text field on an ink rule; the
+//    phone's keyboard opens), number 1-99 and country (‹ value ›), level with its XP line, safety rating S A B C D E
+//    with the score (the current grade underlined in red, its letter green for S A B, ink for C, amber for D E). Under
+//    the bottom rule: Back (a link) and the career stats (races, wins, podiums, poles).
 // MenuProfile keeps the profile in PlayerPrefs: drvName, drvNum, drvCountry, drvRaces, drvWins, drvPodiums,
 // drvPoles, drvXp (total), drvSr (safety rating 0-100). Races, XP and the safety rating are recorded when the results
 // page opens (MenuUI.ShowResults, with the race's tally from GameManagerProgress.cs; rules in Progression.cs), poles
@@ -165,122 +168,140 @@ public static class MenuProfile
 public sealed partial class MenuUI
 {
     const string KeyDriver = "driver";
-    static readonly Color sideShade = new Color(0.03f, 0.035f, 0.045f, 0.80f);
     GUIStyle nameStyle; int nameStyleH = -1; string nameTyped;
 
-    // shared page header: back button, caption and title (Bold; no colour)
-    void PageHeader(float x0, float top, string caption, string title, string scr)
+    // "India  ·  Level 14  ·  Safety A": rebuilt when the country, level or grade changes
+    int idKey = int.MinValue; string idLine;
+    string IdLine()
     {
-        if (UiKit.IconButton(new Rect(x0, top, U(44), U(44)), UiKit.IconBack)) Back();
-        float e = UiKit.Enter(scr, 0);
-        UiKit.PushAlpha(e);
-        UiKit.Eyebrow(new Rect(x0 + U(58), top + U(3), U(240), U(14)), caption, UiKit.Faint, 8.5f);
-        UiKit.Text(new Rect(x0 + U(57), top + U(14), U(260), U(30)), title, UiKit.Bold, 22f, UiKit.TextCol);
-        UiKit.PopAlpha();
+        MenuProfile.Load();
+        int key = MenuProfile.Country * 7919 + MenuProfile.Level * 104729 + MenuProfile.Grade * 31;
+        if (key != idKey || idLine == null)
+        {
+            idKey = key;
+            idLine = (MenuProfile.Country > 0 ? MenuProfile.Countries[MenuProfile.Country] + "  ·  " : "") + MenuProfile.LevelStr + "  ·  Safety " + MenuProfile.Safety;
+        }
+        return idLine;
+    }
+
+    // the driver block (Home and Driver): the giant red italic number, the name, the id line, the XP line.
+    // tap: the block is a button (Home -> Driver page). Returns true when tapped.
+    bool DriverBlock(Rect block, float y0, bool tap)
+    {
+        float pd = 0f;
+        bool hit = tap && UiKit.Press(block, true, out pd);
+        float lw = block.width;
+        UiKit.BigNumber(new Rect(block.x - U(3), y0 + U(72), lw + U(40), U(120)), MenuProfile.NumStr, 150f, UiKit.Red);
+        string nm = UiKit.Upper(MenuProfile.Name), il = IdLine();
+        UiKit.Text(new Rect(block.x + U(2), y0 + U(197), lw, U(28)), nm, UiKit.Heavy, UiKit.Fit(nm, UiKit.Heavy, 22f, lw, 13f), Color.Lerp(UiKit.Ink, UiKit.Red, pd));
+        UiKit.Text(new Rect(block.x + U(2), y0 + U(223), lw, U(16)), il, UiKit.Body, UiKit.Fit(il, UiKit.Body, 12f, lw, 8.5f), UiKit.InkSub);
+        UiKit.Meter(new Rect(block.x + U(2), y0 + U(246), Mathf.Min(U(230), lw), Mathf.Max(2f, Mathf.Round(U(3f)))), MenuProfile.XpFrac);
+        return hit;
     }
 
     // ================================================================== driver
     void DrawDriverPage()
     {
         MenuProfile.Load();
-        float sw = Screen.width, sh = Screen.height;
-        var safe = UiKit.Safe;
-        float M = U(24), x0 = safe.x + M, x1 = safe.xMax - M, W = x1 - x0, top = safe.y + U(16), bottom = safe.yMax - U(16);
-        float PW = Mathf.Clamp(W * 0.54f, U(350), U(460));
-        UiKit.Gradient(new Rect(x1 - PW - U(120), 0, sw - (x1 - PW) + U(120), sh), clear0, sideShade, 0f, true);
-        UiKit.Gradient(new Rect(0, 0, sw, sh * 0.25f), shadeTop, clear0);
-        studio.Spin(new Rect(x0, top + U(56), x1 - PW - U(12) - x0, bottom - top - U(56)));
-        PageHeader(x0, top, "Profile", "DRIVER", KeyDriver);
+        // no page fill: the studio camera clears to the paper colour and the driver stands in the middle
+        var f = Masthead(UiKit.NavDriver);
+        float y0 = f.safe.y, x0 = f.x0, x1 = f.x1, W = f.w;
 
-        var panel = new Rect(x1 - PW, top, PW, bottom - top);
+        // ---- left: the driver block (as Home)
+        float lw = Mathf.Min(U(250), W * 0.3f);
+        float e0 = UiKit.Enter(KeyDriver, 0, 0.05f, 0.45f);
+        UiKit.PushAlpha(e0);
+        var block = UiKit.Slide(new Rect(x0, y0 + U(66), lw, U(194)), e0, -10f);
+        DriverBlock(block, y0, false);
+        UiKit.PopAlpha();
+
+        // ---- right: the profile as label / value rows
+        float PW = Mathf.Clamp(W * 0.36f, U(250), U(320));
         float ep = UiKit.Enter(KeyDriver, 1, 0.04f, 0.45f);
         UiKit.PushAlpha(ep);
-        panel = UiKit.Slide(panel, ep, 24f);
-        UiKit.Panel(panel, 16f);
-        float pad = U(18), ix = panel.x + pad, iw = panel.width - 2 * pad, y = panel.y + U(16);
+        var col = UiKit.Slide(new Rect(x1 - PW, f.top, PW, f.foot - U(10) - f.top), ep, 16f);
+        float ix = col.x, iw = col.width, y = col.y;
+        studio.Spin(new Rect(block.xMax + U(8), f.head + U(4), ix - U(16) - block.xMax, f.foot - U(4) - f.head - U(4)));
 
-        // ---- name / number / country
-        float nw = iw * 0.44f, numW = iw * 0.22f, cw = iw - nw - numW - U(16);
-        UiKit.Eyebrow(new Rect(ix, y, nw, U(14)), "Name", UiKit.Faint, 8f);
-        UiKit.Eyebrow(new Rect(ix + nw + U(8), y, numW, U(14)), "Number", UiKit.Faint, 8f);
-        UiKit.Eyebrow(new Rect(ix + nw + numW + U(16), y, cw, U(14)), "Country", UiKit.Faint, 8f);
-        y += U(17);
-        NameField(new Rect(ix, y, nw, U(44)));
-        int num = UiKit.Stepper(new Rect(ix + nw + U(8), y, numW, U(44)), MenuProfile.NumStr, MenuProfile.Num - 1, 99) + 1;
+        // name and number on one row, country under them (every ‹ › is a 44-unit target)
+        float numW = Mathf.Min(U(140), iw * 0.45f), nameW = iw - numW - U(20);
+        UiKit.Kicker(new Rect(ix, y, nameW, U(13)), "Name", 8.5f);
+        UiKit.Kicker(new Rect(ix + nameW + U(20), y, numW, U(13)), "Number", 8.5f);
+        NameField(new Rect(ix, y + U(13), nameW, U(44)));
+        int num = UiKit.Stepper(new Rect(ix + nameW + U(20), y + U(13), numW, U(44)), MenuProfile.NumStr, MenuProfile.Num - 1, 99) + 1;
         if (num != MenuProfile.Num) MenuProfile.SetNum(num);
+        y += U(66);
+        UiKit.Kicker(new Rect(ix, y, iw, U(13)), "Country", 8.5f);
         string cn = MenuProfile.Countries[MenuProfile.Country];
-        int ci = UiKit.Stepper(new Rect(ix + nw + numW + U(16), y, cw, U(44)), cn, MenuProfile.Country, MenuProfile.Countries.Length);
+        int ci = UiKit.Stepper(new Rect(ix, y + U(13), iw, U(44)), cn, MenuProfile.Country, MenuProfile.Countries.Length);
         if (ci != MenuProfile.Country) MenuProfile.SetCountry(ci);
-        y += U(44) + U(22);
+        y += U(68);
 
-        // ---- level and XP (cyan: progress)
-        UiKit.Text(new Rect(ix, y, iw * 0.5f, U(22)), MenuProfile.LevelStr, UiKit.Bold, 15f, UiKit.TextCol);
-        UiKit.Text(new Rect(ix, y, iw, U(22)), MenuProfile.XpStr, UiKit.Regular, 10.5f, UiKit.Sub, TextAnchor.MiddleRight);
-        var bar = new Rect(ix, y + U(26), iw, Mathf.Max(3f, U(4)));
-        UiKit.Rect(bar, new Color(1, 1, 1, 0.08f), 2f);
-        if (MenuProfile.XpFrac > 0.001f) UiKit.Rect(new Rect(bar.x, bar.y, Mathf.Max(bar.height, bar.width * MenuProfile.XpFrac), bar.height), UiKit.Info, 2f);
-        y += U(30) + U(22);
+        // level and XP (an ink line)
+        UiKit.Text(new Rect(ix, y, iw * 0.5f, U(20)), MenuProfile.LevelStr, UiKit.Heavy, 15f, UiKit.Ink);
+        UiKit.Text(new Rect(ix, y, iw, U(20)), MenuProfile.XpStr, UiKit.Body, 11f, UiKit.InkSub, TextAnchor.MiddleRight);
+        UiKit.Meter(new Rect(ix, y + U(24), iw, Mathf.Max(2f, Mathf.Round(U(3f)))), MenuProfile.XpFrac);
+        y += U(40);
 
-        // ---- safety rating (green: good)
-        UiKit.Eyebrow(new Rect(ix, y, iw, U(14)), "Safety rating", UiKit.Faint, 8f);
-        Color gc = Progression.GradeColor(MenuProfile.Grade);
-        UiKit.Text(new Rect(ix, y - U(2), iw, U(18)), MenuProfile.SrStr, UiKit.Bold, 12f, gc, TextAnchor.MiddleRight);
-        y += U(17);
-        float gw = (iw - 5 * U(6)) / 6f;
+        // safety rating: the six grades, the current one underlined in red
+        UiKit.Kicker(new Rect(ix, y, iw, U(14)), "Safety rating", 8.5f);
+        Color gc = UiKit.PaperGrade(MenuProfile.Grade);
+        UiKit.Text(new Rect(ix, y - U(2), iw, U(18)), MenuProfile.SrStr, UiKit.Heavy, 13f, gc, TextAnchor.MiddleRight);
+        y += U(16);
+        float gw = iw / Progression.Grades.Length;
         for (int i = 0; i < Progression.Grades.Length; i++)
         {
-            var g = new Rect(ix + i * (gw + U(6)), y, gw, U(30));
+            var g = new Rect(ix + i * gw, y, gw, U(28));
             bool on = i == MenuProfile.Grade;
-            UiKit.Rect(g, new Color(1, 1, 1, on ? 0.06f : 0.03f), 8f);
-            UiKit.Outline(g, on ? gc : UiKit.Line, 8f, on ? 1f : 0.7f);
-            UiKit.Text(g, Progression.Grades[i], UiKit.Bold, 12.5f, on ? gc : UiKit.Faint, TextAnchor.MiddleCenter);
+            UiKit.Text(g, Progression.Grades[i], on ? UiKit.Heavy : UiKit.Medium, on ? 16f : 13f, on ? gc : UiKit.InkMuted, TextAnchor.MiddleCenter);
+            if (on) UiKit.Rect(new Rect(g.center.x - U(9), g.yMax, U(18), Mathf.Max(2f, Mathf.Round(U(2f)))), UiKit.Red);
         }
-        y += U(30) + U(22);
-
-        // ---- career
-        UiKit.Eyebrow(new Rect(ix, y, iw, U(14)), "Career", UiKit.Faint, 8f);
-        y += U(17);
-        float sw4 = (iw - 3 * U(8)) / 4f, shh = Mathf.Min(U(52), panel.yMax - U(16) - y);
-        StatTile(new Rect(ix, y, sw4, shh), "Races", MenuProfile.RacesStr);
-        StatTile(new Rect(ix + (sw4 + U(8)), y, sw4, shh), "Wins", MenuProfile.WinsStr);
-        StatTile(new Rect(ix + 2 * (sw4 + U(8)), y, sw4, shh), "Podiums", MenuProfile.PodiumsStr);
-        StatTile(new Rect(ix + 3 * (sw4 + U(8)), y, sw4, shh), "Poles", MenuProfile.PolesStr);
+        UiKit.Hair(ix, ix + iw, y + U(34), UiKit.PaperTrack);
         UiKit.PopAlpha();
+
+        // ---- the action row: Back, and the career stats on the right
+        UiKit.Hair(x0, x1, f.foot);
+        if (UiKit.Link(new Rect(x0, f.actY - U(22), U(84), U(44)), "\u2039  Back", "Home")) Back();
+        float sx = x1;
+        sx = StatLeft(sx, f.actY, "Poles", MenuProfile.PolesStr);
+        sx = StatLeft(sx, f.actY, "Podiums", MenuProfile.PodiumsStr);
+        sx = StatLeft(sx, f.actY, "Wins", MenuProfile.WinsStr);
+        StatLeft(sx, f.actY, "Races", MenuProfile.RacesStr);
     }
 
-    static void StatTile(Rect r, string caption, string value)
+    // a career number (caption over a big value) placed to the left of x, centred on y; returns the next x
+    static float StatLeft(float x, float y, string caption, string value)
     {
-        UiKit.Rect(r, new Color(1, 1, 1, 0.035f), 10f);
-        UiKit.Outline(r, UiKit.Line, 10f, 0.7f);
-        UiKit.Text(new Rect(r.x + U(10), r.y + U(4), r.width - U(14), U(28)), value, UiKit.Bold, UiKit.Fit(value, UiKit.Bold, 19f, r.width - U(14), 12f), UiKit.TextCol);
-        UiKit.Text(new Rect(r.x + U(10), r.yMax - U(19), r.width - U(12), U(14)), caption, UiKit.Regular, 9.5f, UiKit.Sub);
+        float w = Mathf.Max(U(48), UiKit.DatumWidth(caption, value, 20f));
+        UiKit.Datum(new Rect(x - w, y - U(20), w, U(40)), caption, value, UiKit.Ink, 20f, TextAnchor.MiddleRight);
+        return x - w - U(28);
     }
 
-    // the name: an IMGUI text field (the on-screen keyboard opens on a phone) styled like the other controls
+    // the name: an IMGUI text field (the on-screen keyboard opens on a phone) on an ink rule (red while typing)
     void NameField(Rect r)
     {
-        int px = Mathf.RoundToInt(U(12));
         if (nameStyle == null || nameStyleH != Screen.height)
         {
             nameStyleH = Screen.height;
             nameStyle = new GUIStyle(GUI.skin.textField)
             {
-                font = UiKit.Bold, fontSize = Mathf.Max(8, Mathf.RoundToInt(U(15))), alignment = TextAnchor.MiddleLeft,
-                padding = new RectOffset(px, px, 0, 0), margin = new RectOffset(0, 0, 0, 0), border = new RectOffset(0, 0, 0, 0),
+                font = UiKit.Heavy, fontSize = Mathf.Max(8, Mathf.RoundToInt(U(16))), alignment = TextAnchor.MiddleLeft,
+                padding = new RectOffset(0, 0, 0, 0), margin = new RectOffset(0, 0, 0, 0), border = new RectOffset(0, 0, 0, 0),
                 clipping = TextClipping.Clip, wordWrap = false,
             };
             nameStyle.normal.background = null; nameStyle.hover.background = null; nameStyle.focused.background = null; nameStyle.active.background = null;
             nameStyle.onNormal.background = null; nameStyle.onHover.background = null; nameStyle.onFocused.background = null; nameStyle.onActive.background = null;
-            nameStyle.normal.textColor = nameStyle.hover.textColor = nameStyle.focused.textColor = nameStyle.active.textColor = UiKit.TextCol;
-            GUI.skin.settings.cursorColor = UiKit.Accent;
-            GUI.skin.settings.selectionColor = UiKit.A(UiKit.Accent, 0.4f);
+            nameStyle.normal.textColor = nameStyle.hover.textColor = nameStyle.focused.textColor = nameStyle.active.textColor = UiKit.Ink;
+            GUI.skin.settings.cursorColor = UiKit.Red;
+            GUI.skin.settings.selectionColor = UiKit.A(UiKit.Red, 0.25f);
         }
         if (nameTyped == null) nameTyped = MenuProfile.Typed;
         bool focused = GUIUtility.keyboardControl != 0; // the only keyboard control on the page (no per-frame string)
-        UiKit.Rect(r, new Color(1, 1, 1, focused ? 0.09f : 0.055f), 10f);
-        UiKit.Outline(r, focused ? UiKit.Accent : UiKit.Line, 10f, focused ? 1.1f : 0.7f);
+        if (focused) UiKit.Rect(r, UiKit.PaperTint);
         string s = GUI.TextField(r, nameTyped, 16, nameStyle);
         if (s != nameTyped) { nameTyped = s; MenuProfile.SetName(s.Trim()); }
-        if (!focused && nameTyped.Length == 0) UiKit.Text(new Rect(r.x + px, r.y, r.width - px, r.height), "Driver", UiKit.Bold, 15f, UiKit.Faint);
+        if (!focused && nameTyped.Length == 0) UiKit.Text(r, "Driver", UiKit.Heavy, 16f, UiKit.InkMuted);
+        float th = focused ? Mathf.Max(2f, Mathf.Round(U(2f))) : UiKit.HairPx;
+        UiKit.Rect(new Rect(r.x, r.yMax - th, r.width, th), focused ? UiKit.Red : UiKit.Ink);
     }
 }

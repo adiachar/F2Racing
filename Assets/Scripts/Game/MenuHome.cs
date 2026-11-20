@@ -1,124 +1,123 @@
-// MenuHome.cs — the Home page of the front end (MenuUI, Page.Start), over the 3D studio (MenuStudio.cs: the driver
-// standing alone in the middle; drag across the middle to turn him). Minimal on purpose:
-//  * top left: the driver card (number, name, level with its XP line, safety grade and score) -> Driver page;
-//    top right: Settings
-//  * left: OFFLINE (-> Play: mode, circuit, setup); right: DRIVER
-//  * bottom centre: one big red RACE = the last mode and circuit, straight to the Setup step; licence credits under it
-// Red is only on RACE; the XP line is the one info accent (cyan). Strings are built when what they show changes.
+// MenuHome.cs — the Home page of the front end (MenuUI, Page.Start) in the "Paper" look (UiKit.cs), over the 3D studio
+// (MenuStudio.cs: the driver standing on paper in the middle; drag across the middle to turn him). Layout (the
+// "Redesign 1 · Paper" mockup, 844 x 390 units):
+//  * masthead: "APEX WORLD SERIES" and the nav (PLAY underlined: Home is where play starts), a rule under it
+//  * left: the driver's number as the giant red italic figure, his name, "country · level · safety" and a thin ink XP
+//    line; the whole block opens the Driver page
+//  * centre: the 3D driver (no 2D drawn over him)
+//  * right: the next race: "NEXT · QUICK RACE", the circuit (or the championship round), length · laps · pole; a tap
+//    changes it (the Circuit step, or the season hub in a championship)
+//  * under the bottom rule: two text links for the other modes (Championship / Race weekend / Quick race, each with a
+//    grey sub-line) and the black RACE = the last mode and circuit, straight to the Setup step; the licence credits.
+// Strings are built when what they show changes, not per frame.
 using FormulaSim;
 using UnityEngine;
 
 public sealed partial class MenuUI
 {
     const string KeyHome = "home";
-    static readonly Color shadeTop = new Color(0f, 0f, 0f, 0.45f), shadeBottom = new Color(0f, 0f, 0f, 0.70f), clear0 = new Color(0f, 0f, 0f, 0f);
-    static readonly Color badgeCol = new Color(1f, 1f, 1f, 0.07f);
-    // the plain page behind every 2D page of the front end: cool charcoal, top to bottom (no glows, no red)
-    static readonly Color pageTop = new Color(0.086f, 0.094f, 0.112f, 0.97f), pageBottom = new Color(0.052f, 0.057f, 0.070f, 0.99f);
-    internal static void Plain(float opacity = 1f)
-    {
-        UiKit.PushAlpha(opacity);
-        UiKit.Gradient(new Rect(0, 0, Screen.width, Screen.height), pageTop, pageBottom);
-        UiKit.PopAlpha();
-    }
 
-    int raceSubKey = -1; string raceSub;
+    int homeKey = int.MinValue; string homeNext, homeName, homeSub; bool homeSeasonTried;
+    readonly int[] homeLinks = new int[2]; readonly string[] homeLinkSub = new string[2];
+
+    // the home page's strings: rebuilt when the mode, circuit, race length, season or profile changes
+    void HomeStrings(int map)
+    {
+        MenuProfile.Load();
+        if (!homeSeasonTried) { homeSeasonTried = true; if (!Season.Active && Season.HasSave) Season.Load(); } // once: not a file check per frame
+        var sd = Season.Data;
+        int key = mode * 1000 + map + lapsIdx * 100000 + (sd != null ? (sd.round + 1) * 1000000 + sd.results.Count * 37 : 0)
+                + cards[Mathf.Clamp(map, 0, cards.Length - 1)].length.Length * 3;
+        if (key == homeKey && homeNext != null) return;
+        homeKey = key;
+
+        homeNext = "Next  ·  " + ModeNames[mode];
+        bool running = Season.Active && !Season.Over;
+        if (mode == ModeChampionship)
+        {
+            if (running)
+            {
+                homeName = Circuits.All[Season.CircuitIndex(sd.round)].name;
+                homeSub = "Round " + (sd.round + 1) + " of " + Season.Rounds + "  ·  " + Season.GpNames[sd.round] + "  ·  " + lapsText[lapsIdx];
+            }
+            else { homeName = Season.Over ? "Season complete" : "New season"; homeSub = Season.Over ? "Start a new one" : "Pick your team"; }
+        }
+        else
+        {
+            var c = cards[Mathf.Clamp(map, 0, cards.Length - 1)];
+            homeName = c.name;
+            homeSub = (c.length != "—" ? c.length + "  ·  " : "") + (map == playgroundIdx ? "Free driving" : lapsText[lapsIdx] + (c.pole != "—" ? "  ·  pole " + c.pole : ""));
+        }
+
+        // the two links: the modes that RACE does not start
+        int k = 0;
+        for (int m = ModeChampionship; m >= ModeQuick && k < 2; m--) if (m != mode) homeLinks[k++] = m;
+        for (int i = 0; i < 2; i++)
+        {
+            int m = homeLinks[i];
+            homeLinkSub[i] = m == ModeChampionship ? (running ? "Round " + (sd.round + 1) + " of " + Season.Rounds + "  ·  P" + Season.Rank(0) : Season.Over ? "Season complete" : "New season")
+                           : m == ModeWeekend ? "Quali + race" : "Straight to the grid";
+        }
+    }
 
     Choice DrawHome(ref int map)
     {
-        float sw = Screen.width, sh = Screen.height;
-        // a little shade top and bottom over the 3D so the UI reads (fixed colours: cached gradients)
-        UiKit.Gradient(new Rect(0, 0, sw, sh * 0.28f), shadeTop, clear0);
-        UiKit.Gradient(new Rect(0, sh * 0.62f, sw, sh * 0.38f), clear0, shadeBottom);
-
-        var safe = UiKit.Safe;
-        float M = U(24), x0 = safe.x + M, x1 = safe.xMax - M, W = x1 - x0, top = safe.y + U(16);
-        float tileW = Mathf.Clamp(W * 0.22f, U(148), U(184)), tileH = U(64);
-        float raceW = Mathf.Clamp(W * 0.34f, U(220), U(270)), raceH = U(60);
-        var race = new Rect(safe.center.x - raceW * 0.5f, safe.yMax - U(34) - raceH, raceW, raceH);
-        float midY = top + U(60) + (race.y - U(16) - (top + U(60))) * 0.5f;
-        var left = new Rect(x0, midY - tileH * 0.5f, tileW, tileH);
-        var right = new Rect(x1 - tileW, left.y, tileW, tileH);
-
-        // drag across the middle: turn the driver
-        studio.Spin(new Rect(left.xMax + U(8), top + U(62), right.x - left.xMax - U(16), race.y - U(8) - (top + U(62))));
-
+        // no page fill: the studio camera clears to the paper colour and the driver stands in the middle
+        var f = Masthead(UiKit.NavPlay);
+        HomeStrings(map);
+        float y0 = f.safe.y, x0 = f.x0, x1 = f.x1;
         var ch = Choice.None;
-        float e0 = UiKit.Enter(KeyHome, 0);
+
+        // ---- left: the driver (giant red italic number, name, id line, XP line) -> Driver page
+        float lw = Mathf.Min(U(250), f.w * 0.3f);
+        float e0 = UiKit.Enter(KeyHome, 0, 0.05f, 0.45f);
         UiKit.PushAlpha(e0);
-        if (DriverCard(UiKit.Slide(new Rect(x0, top, U(220), U(56)), e0, -12f))) GoPage(Page.Driver);
-        if (UiKit.IconButton(new Rect(x1 - U(44), top + U(6), U(44), U(44)), UiKit.IconSettings)) ch = Choice.Settings;
+        var block = UiKit.Slide(new Rect(x0, y0 + U(66), lw, U(194)), e0, -10f);
+        bool hitDriver = DriverBlock(block, y0, true);
+        UiKit.PopAlpha();
+        if (hitDriver) GoPage(Page.Driver);
+
+        // ---- right: the next race
+        float rw = Mathf.Min(U(220), f.w * 0.27f);
+        float e1 = UiKit.Enter(KeyHome, 1, 0.05f, 0.45f);
+        UiKit.PushAlpha(e1);
+        var card = UiKit.Slide(new Rect(x1 - rw, y0 + U(76), rw, U(120)), e1, 10f);
+        bool hitNext = UiKit.Press(card, true, out float pn);
+        UiKit.Kicker(new Rect(card.x, y0 + U(82), rw, U(14)), homeNext, UiKit.Fit(UiKit.Caps(homeNext), UiKit.Body, 10.5f, rw, 7.5f), TextAnchor.MiddleRight);
+        float nameH = UiKit.Height(homeName, UiKit.Heavy, 26f, rw);
+        UiKit.Text(new Rect(card.x, y0 + U(99), rw, nameH), homeName, UiKit.Heavy, 26f, Color.Lerp(UiKit.Ink, UiKit.Red, pn), TextAnchor.UpperRight, true);
+        UiKit.Text(new Rect(card.x, y0 + U(103) + nameH, rw, U(16)), homeSub, UiKit.Body, UiKit.Fit(homeSub, UiKit.Body, 12f, rw, 8.5f), UiKit.InkSub, TextAnchor.MiddleRight);
+        UiKit.PopAlpha();
+        if (hitNext) { if (mode == ModeChampionship) season.Open(); else GoPlay(StepCircuit, 1); }
+
+        // ---- drag across the middle: turn the driver
+        studio.Spin(new Rect(block.xMax + U(8), f.head + U(4), card.x - U(8) - block.xMax - U(8), f.foot - U(4) - f.head - U(4)));
+
+        // ---- the action row: links for the other two modes, the black RACE (the last mode and circuit, straight to Setup)
+        float ea = UiKit.Enter(KeyHome, 3, 0.04f, 0.45f);
+        UiKit.PushAlpha(ea);
+        UiKit.Hair(x0, x1, f.foot);
+        float raceW = UiKit.BlackButtonWidth("Race", 17f), lx = x0;
+        var race = new Rect(x1 - raceW, f.actY - U(25), raceW, U(50));
+        for (int i = 0; i < 2; i++)
+        {
+            int m = homeLinks[i];
+            float w = UiKit.LinkWidth(ModeNames[m], homeLinkSub[i]) + U(8);
+            if (UiKit.Link(new Rect(lx, f.actY - U(22), w, U(44)), ModeNames[m], homeLinkSub[i]))
+            {
+                mode = m; PlayerPrefs.SetInt("gameMode", mode);
+                if (m == ModeChampionship) season.Open(); else GoPlay(StepCircuit, 1);
+            }
+            lx += w + U(20);
+        }
+        if (UiKit.BlackButton(race, "Race", 17f)) GoPlay(StepSetup, 1);
         UiKit.PopAlpha();
 
-        if (HomeTile(left, "Play", "OFFLINE", 1, -1)) GoPlay(StepMode, 1);
-        if (HomeTile(right, "Profile", "DRIVER", 1, 1)) GoPage(Page.Driver);
-
-        // RACE: the last mode and circuit, straight to Setup
-        string sub = RaceSub(map);
-        float er = UiKit.Enter(KeyHome, 3, 0.04f, 0.45f);
-        UiKit.PushAlpha(er);
-        if (UiKit.Button(UiKit.Rise(race, er, 12f), "Race", UiKit.Look.Primary, true, 22f, sub, 14f)) GoPlay(StepSetup, 1);
-        UiKit.PopAlpha();
-
-        // licence credits for the car and steering-wheel models (CC BY): always on the home page
-        UiKit.Text(new Rect(x0, safe.yMax - U(24), W, U(10)), CarModel.CarCredit, UiKit.Regular, 6.8f, UiKit.A(UiKit.Faint, 0.8f * e0));
-        UiKit.Text(new Rect(x0, safe.yMax - U(14), W, U(10)), CarModel.WheelCredit + "  \u00b7  " + RealWorld.Attribution, UiKit.Regular, 6.8f, UiKit.A(UiKit.Faint, 0.8f * e0));
+        // licence credits for the car and steering-wheel models (CC BY): always on the home page, at the very bottom
+        float cwid = race.x - U(16) - x0, cy = f.bottom - U(11);
+        UiKit.Text(new Rect(x0, cy - U(8), cwid, U(8)), CarModel.CarCredit, UiKit.Body, UiKit.Fit(CarModel.CarCredit, UiKit.Body, 6.5f, cwid, 5f), UiKit.A(UiKit.InkMuted, e0));
+        UiKit.Text(new Rect(x0, cy, cwid, U(8)), CreditLine, UiKit.Body, UiKit.Fit(CreditLine, UiKit.Body, 6.5f, cwid, 5f), UiKit.A(UiKit.InkMuted, e0));
         return ch;
     }
-
-    // "Quick race  ·  Monza": the last mode and circuit (RACE, the Play header); rebuilt only when they change
-    string RaceSub(int map)
-    {
-        int key = mode * 1000 + map + (Season.Active ? (Season.Data.round + 1) * 100000 : 0);
-        if (key != raceSubKey)
-        {
-            raceSubKey = key;
-            if (mode == ModeChampionship) raceSub = ModeNames[mode] + "  ·  " + (Season.Active && !Season.Over ? Season.RoundName(Season.Data.round) : "your season");
-            else raceSub = ModeNames[mode] + "  ·  " + cards[Mathf.Clamp(map, 0, cards.Length - 1)].name;
-        }
-        return raceSub;
-    }
-
-    // the driver card: number, name, level + XP line (cyan: progress), safety rating. true = tapped
-    bool DriverCard(Rect r)
-    {
-        MenuProfile.Load();
-        bool hit = UiKit.Press(r, true, out float p);
-        var c = UiKit.Scale(r, 1f - 0.03f * p);
-        UiKit.Panel(c, 14f);
-        var badge = new Rect(c.x + U(8), c.y + U(8), U(40), U(40));
-        UiKit.Rect(badge, badgeCol, 10f); UiKit.Outline(badge, UiKit.Line, 10f, 0.7f);
-        UiKit.Text(badge, MenuProfile.NumStr, UiKit.Bold, 18f, UiKit.TextCol, TextAnchor.MiddleCenter);
-        float tx = badge.xMax + U(12), tw = c.xMax - U(14) - tx;
-        UiKit.Text(new Rect(tx, c.y + U(7), tw, U(22)), MenuProfile.Name, UiKit.Bold, UiKit.Fit(MenuProfile.Name, UiKit.Bold, 15f, tw, 10f), UiKit.TextCol);
-        UiKit.Text(new Rect(tx, c.y + U(27), tw, U(14)), MenuProfile.LevelStr, UiKit.Regular, 10f, UiKit.Sub);
-        // safety rating: grade and score, right of the level (grade colour: S A B green, C neutral, D E amber)
-        var gr = new Rect(c.xMax - U(14) - U(46), c.y + U(26), U(46), U(16));
-        UiKit.Rect(gr, new Color(1, 1, 1, 0.05f), 6f); UiKit.Outline(gr, UiKit.Line, 6f, 0.7f);
-        Color gc = Progression.GradeColor(MenuProfile.Grade);
-        UiKit.Text(new Rect(gr.x + U(7), gr.y, U(12), gr.height), MenuProfile.Safety, UiKit.Bold, 10f, gc);
-        UiKit.Text(new Rect(gr.x, gr.y, gr.width - U(7), gr.height), MenuProfile.SrStr, UiKit.Semi, 9f, UiKit.Sub, TextAnchor.MiddleRight);
-        var bar = new Rect(tx, c.yMax - U(11), tw, Mathf.Max(2f, U(2.5f)));
-        UiKit.Rect(bar, new Color(1, 1, 1, 0.08f), 2f);
-        if (MenuProfile.XpFrac > 0.001f) UiKit.Rect(new Rect(bar.x, bar.y, Mathf.Max(bar.height, bar.width * MenuProfile.XpFrac), bar.height), UiKit.Info, 2f);
-        return hit;
-    }
-
-    // a quiet glass tile: caption, title, chevron. slideDir: -1 enters from the left, 1 from the right
-    bool HomeTile(Rect r, string caption, string title, int n, int slideDir)
-    {
-        float e = UiKit.Enter(KeyHome, n, 0.05f, 0.4f);
-        r = UiKit.Slide(r, e, 16f * slideDir);
-        UiKit.PushAlpha(e);
-        bool hit = UiKit.Press(r, true, out float p);
-        var c = UiKit.Scale(r, 1f - 0.03f * p);
-        UiKit.Panel(c, 14f);
-        if (p > 0.01f) UiKit.Rect(c, new Color(1, 1, 1, 0.06f * p), 14f);
-        float px = c.x + U(16), tw = c.width - U(48);
-        UiKit.Eyebrow(new Rect(px, c.y + U(12), tw, U(14)), caption, UiKit.Faint, 8f);
-        UiKit.Text(new Rect(px, c.y + U(25), tw, U(28)), title, UiKit.Bold, UiKit.Fit(title, UiKit.Bold, 20f, tw, 13f), UiKit.TextCol);
-        UiKit.Icon(new Rect(c.xMax - U(28), c.center.y - U(6), U(12), U(12)), UiKit.IconNext, UiKit.Sub);
-        UiKit.PopAlpha();
-        return hit;
-    }
+    const string CreditLine = CarModel.WheelCredit + "  \u00b7  " + RealWorld.Attribution;
 }

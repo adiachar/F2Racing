@@ -1,13 +1,15 @@
-// MenuPlay.cs — the Play flow of the front end (MenuUI, Page.Play): one screen per step, a step indicator
-// (1 MODE · 2 CIRCUIT · 3 SETUP; done steps can be tapped to go back), Back top-left (and Android back / Escape),
-// Next bottom-right (red: the action). Red is only on the action and the selected state.
-//  * Mode: three cards: Quick race, Race weekend (practice, qualifying, race), Championship (SeasonUI.cs). The
-//    championship skips the Circuit step (its calendar decides).
-//  * Circuit: the circuit hero (type, big name, country), data chips, the large track map and the swipeable carousel.
-//  * Setup: the session options as a 3 x 3 grid of tiles (label, value, - / +): car, livery, rivals, rival level,
-//    grid, race length, qualifying, weather, time of day; then Start (race / weekend / championship hub), Practice
-//    and, in a race weekend, Skip qualifying.
-// The content slides in from the side it was entered from (MenuUI.BeginNav); the header stays.
+// MenuPlay.cs — the Play flow of the front end (MenuUI, Page.Play) in the "Paper" look (UiKit.cs): one screen per
+// step under the masthead (PLAY underlined), a step line (1 MODE · 2 CIRCUIT · 3 SETUP; done steps can be tapped to go
+// back), and the action row under the bottom rule: "Back" as a text link on the left (and Android back / Escape),
+// other actions as links beside it, the black button on the right. Red marks only the selected state.
+//  * Mode: three columns: Quick race, Race weekend (practice, qualifying, race), Championship (SeasonUI.cs); the chosen
+//    one has a red rule over it. The championship skips the Circuit step (its calendar decides).
+//  * Circuit: the circuit (type, big name, country) and its data rows on the left; the track map drawn as an ink line
+//    with a red start mark on the right, ‹ › beside it, a tap / swipe on the map = next / previous; page dots under it.
+//  * Setup: the session options as a clean 3 x 3 grid of label / value rows with − + text buttons: car, livery,
+//    rivals, rival level, grid, race length, qualifying, weather, time of day; then Start (race / weekend /
+//    championship hub), Practice and, in a race weekend, Skip qualifying.
+// The content slides in from the side it was entered from (MenuUI.BeginNav); the masthead and the action row stay.
 using FormulaSim;
 using UnityEngine;
 
@@ -17,7 +19,6 @@ public sealed partial class MenuUI
     public int step;
     const string KeyMode = "mode", KeyCircuit = "circuit", KeySetup = "setup";
     static readonly string[] StepNum = { "1", "2", "3" }, StepName = { "Mode", "Circuit", "Setup" };
-    static readonly string[] ModeTitle = { "QUICK RACE", "RACE WEEKEND", "CHAMPIONSHIP" };
     static readonly string[] ModeDesc =
     {
         "Pick a circuit, set the field and go straight to the grid.",
@@ -25,7 +26,7 @@ public sealed partial class MenuUI
         "A season with a team: every round on the calendar, points and standings.",
     };
     string champStatus = "";
-    int ctaKey = -1; string ctaSub, ctaQualiSub;
+    int ctaKey = -1; string ctaSub;
     int setupKey = -1; string setupSub;
 
     // the championship card's status line (read when the Mode step opens, not per frame: it may load the save)
@@ -39,80 +40,79 @@ public sealed partial class MenuUI
 
     Choice DrawPlay(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
     {
-        Plain();
-        var safe = UiKit.Safe;
-        float M = U(24), x0 = safe.x + M, x1 = safe.xMax - M, top = safe.y + U(14), bottom = safe.yMax - U(16);
+        UiKit.PaperPage();
+        var f = Masthead(UiKit.NavPlay);
         bool champ = mode == ModeChampionship;
+        StepIndicator(f.x0, f.top - U(2), champ);
 
-        // ---- header: back, steps, what is being set up
-        if (UiKit.IconButton(new Rect(x0, top, U(44), U(44)), UiKit.IconBack)) Back();
-        StepIndicator(safe.center.x, top, champ);
-
-        float cTop = top + U(62);
+        float cTop = f.top + U(34), bottom = f.foot - U(12);
         var ch = Choice.None;
         BeginNav();
-        if (step == StepMode) DrawModeStep(x0, x1, cTop, bottom);
-        else if (step == StepCircuit) DrawCircuitStep(ref map, loaded, loadedFor, x0, x1, cTop, bottom);
-        else ch = DrawSetupStep(ref map, ref cls, ref riv, ref diff, x0, x1, cTop, bottom);
+        if (step == StepMode) DrawModeStep(f.x0, f.x1, cTop, bottom);
+        else if (step == StepCircuit) DrawCircuitStep(ref map, loaded, loadedFor, f.x0, f.x1, cTop, bottom);
+        else ch = DrawSetupStep(ref map, ref cls, ref riv, ref diff, f.x0, f.x1, cTop, bottom);
         EndNav();
+
+        // ---- the action row: Back (a link) on the left, the step's own actions
+        UiKit.Hair(f.x0, f.x1, f.foot);
+        string backSub = step == StepMode ? "Home" : step == StepCircuit ? "Mode" : champ ? "Mode" : "Circuit";
+        if (UiKit.Link(new Rect(f.x0, f.actY - U(22), U(84), U(44)), "\u2039  Back", backSub)) Back();
+        if (step == StepSetup) ch = SetupActions(f, map, riv, ch);
+        else if (UiKit.BlackButton(NextRect(f), "Next")) GoPlay(step == StepMode && champ ? StepSetup : step == StepMode ? StepCircuit : StepSetup, 1);
         return ch;
     }
 
-    static Rect NextRect(float x1, float bottom) => new Rect(x1 - U(156), bottom - U(50), U(156), U(50));
+    static Rect NextRect(UiKit.Frame f) { float w = Mathf.Max(U(150), UiKit.BlackButtonWidth("Next")); return new Rect(f.x1 - w, f.actY - U(25), w, U(50)); }
 
-    void StepIndicator(float cx, float y, bool champ)
+    // 1 MODE   2 CIRCUIT   3 SETUP: the current step ExtraBold ink, red underline; done steps grey (tap = back to it)
+    void StepIndicator(float x, float y, bool champ)
     {
-        float itemW = U(104), lineW = U(22), total = 3 * itemW + 2 * lineW, x = cx - total * 0.5f;
+        float gap = U(26);
         for (int i = 0; i < 3; i++)
         {
             bool active = i == step, done = i < step, skipped = champ && i == StepCircuit;
-            var r = new Rect(x, y, itemW, U(44));
-            if (UiKit.Press(r, done && !skipped, out float p) && done && !skipped) GoPlay(i, -1);
-            UiKit.PushAlpha(skipped ? 0.4f : 1f);
-            var c = new Vector2(r.x + U(14), r.center.y);
-            var cr = new Rect(c.x - U(11), c.y - U(11), U(22), U(22));
-            if (active) UiKit.Rect(cr, UiKit.Accent, 999f);
-            else if (done) UiKit.Rect(cr, new Color(0.92f, 0.93f, 0.95f, 0.92f - 0.2f * p), 999f);
-            else UiKit.Outline(cr, new Color(1, 1, 1, 0.22f), 999f, 0.9f);
-            UiKit.Text(cr, StepNum[i], UiKit.Bold, 10.5f, done && !active ? UiKit.Ink : active ? Color.white : UiKit.Faint, TextAnchor.MiddleCenter);
-            UiKit.Text(new Rect(r.x + U(31), r.y, itemW - U(31), r.height), UiKit.Caps(StepName[i]), UiKit.Bold, 9.5f, active ? UiKit.TextCol : done ? UiKit.Sub : UiKit.Faint);
+            string nm = UiKit.Caps(StepName[i]);
+            float nw = UiKit.Width(StepNum[i], UiKit.Heavy, 10.5f), lw = UiKit.Width(nm, active ? UiKit.Heavy : UiKit.Medium, 10.5f), w = nw + U(8) + lw;
+            var r = new Rect(x, y, w, U(20));
+            bool hit = UiKit.Press(new Rect(x - U(8), y - U(12), w + U(16), U(44)), done && !skipped, out float p);
+            if (hit && done && !skipped) GoPlay(i, -1);
+            UiKit.PushAlpha(skipped ? 0.35f : 1f);
+            Color c = Color.Lerp(active ? UiKit.Ink : done ? UiKit.InkSub : UiKit.InkMuted, UiKit.Red, p);
+            UiKit.Text(new Rect(x, y, nw + U(2), r.height), StepNum[i], UiKit.Heavy, 10.5f, c);
+            UiKit.Text(new Rect(x + nw + U(8), y, lw + U(2), r.height), nm, active ? UiKit.Heavy : UiKit.Medium, 10.5f, c);
+            if (active) UiKit.Rect(new Rect(x, r.yMax + U(1), w, Mathf.Max(2f, Mathf.Round(U(2f)))), UiKit.Red);
             UiKit.PopAlpha();
-            if (i < 2) UiKit.Rect(new Rect(r.xMax - U(4), r.center.y - Mathf.Max(0.5f, U(0.5f)), lineW, Mathf.Max(1f, U(1f))), i < step ? new Color(1, 1, 1, 0.35f) : new Color(1, 1, 1, 0.12f));
-            x += itemW + lineW;
+            x += w + gap;
         }
     }
 
     // ================================================================== 1 mode
     void DrawModeStep(float x0, float x1, float cTop, float bottom)
     {
-        float W = x1 - x0, gap = U(14), cw = (W - 2 * gap) / 3f;
-        float cy = cTop, ch = bottom - U(70) - cy;
+        float W = x1 - x0, gap = U(24), cw = (W - 2 * gap) / 3f;
         for (int i = 0; i < 3; i++)
-            if (ModeCard(new Rect(x0 + i * (cw + gap), cy, cw, ch), i) && mode != i) { mode = i; PlayerPrefs.SetInt("gameMode", mode); }
-        float en = UiKit.Enter(KeyMode, 5);
-        UiKit.PushAlpha(en);
-        if (UiKit.Button(NextRect(x1, bottom), "Next", UiKit.Look.Primary, true, 15f)) GoPlay(mode == ModeChampionship ? StepSetup : StepCircuit, 1);
-        UiKit.PopAlpha();
+            if (ModeCard(new Rect(x0 + i * (cw + gap), cTop, cw, bottom - cTop), i) && mode != i) { mode = i; PlayerPrefs.SetInt("gameMode", mode); }
     }
 
-    // a mode card: title, one line of description, the session; selected = a red hairline (the selected state)
+    static readonly string[] ModeNum = { "01", "02", "03" };
+    // a mode column: a rule over it (red and thick when chosen), number, title, description, the session
     bool ModeCard(Rect r, int i)
     {
         float e = UiKit.Enter(KeyMode, 1 + i, 0.05f, 0.4f);
-        r = UiKit.Rise(r, e, 12f);
+        r = UiKit.Rise(r, e, 10f);
         UiKit.PushAlpha(e);
         bool hit = UiKit.Press(r, true, out float p);
-        var c = UiKit.Scale(r, 1f - 0.025f * p);
         float s = UiKit.Smooth(0x6D00 + i, mode == i ? 1f : 0f, 12f);
-        UiKit.Shadow(c, 16f, 6f, 0.18f + 0.14f * s, 2f);
-        UiKit.Rect(c, Color.Lerp(UiKit.Surface, UiKit.SurfaceHi, s), 16f);
-        UiKit.Outline(c, Color.Lerp(UiKit.Line, UiKit.Accent, s), 16f, 0.7f + 0.5f * s);
-        float px = c.x + U(18), w = c.width - U(36);
-        UiKit.Text(new Rect(px, c.y + U(20), w, U(30)), ModeTitle[i], UiKit.Bold, UiKit.Fit(ModeTitle[i], UiKit.Bold, 18f, w, 12f), UiKit.TextCol);
-        UiKit.Text(new Rect(px, c.y + U(56), w, U(80)), ModeDesc[i], UiKit.Regular, 11f, UiKit.Sub, TextAnchor.UpperLeft, true);
-        if (i == ModeChampionship) UiKit.Text(new Rect(px, c.yMax - U(62), w, U(16)), champStatus, UiKit.Regular, UiKit.Fit(champStatus, UiKit.Regular, 10f, w, 7.5f), UiKit.Info);
-        UiKit.Eyebrow(new Rect(px, c.yMax - U(42), w, U(14)), "Session", UiKit.Faint, 8f);
-        UiKit.Text(new Rect(px, c.yMax - U(29), w, U(18)), ModeHint[i], UiKit.Regular, UiKit.Fit(ModeHint[i], UiKit.Regular, 11f, w, 8f), UiKit.TextCol);
+        if (s > 0.01f || p > 0.01f) UiKit.Rect(r, UiKit.A(UiKit.PaperTint, Mathf.Max(s, p)));
+        UiKit.Hair(r.x, r.xMax, r.y, UiKit.Ink);
+        if (s > 0.01f) UiKit.Rect(new Rect(r.x, r.y, r.width * s, Mathf.Max(3f, Mathf.Round(U(3f)))), UiKit.Red);
+        float px = r.x + U(12), w = r.width - U(24);
+        UiKit.Text(new Rect(px, r.y + U(12), w, U(16)), ModeNum[i], UiKit.Medium, 10.5f, UiKit.InkSub);
+        UiKit.Text(new Rect(px, r.y + U(28), w, U(30)), ModeNames[i], UiKit.Heavy, UiKit.Fit(ModeNames[i], UiKit.Heavy, 22f, w, 14f), UiKit.Ink);
+        UiKit.Text(new Rect(px, r.y + U(64), w, U(64)), ModeDesc[i], UiKit.Body, 11.5f, UiKit.InkSub, TextAnchor.UpperLeft, true);
+        if (i == ModeChampionship) UiKit.Text(new Rect(px, r.yMax - U(64), w, U(16)), champStatus, UiKit.Medium, UiKit.Fit(champStatus, UiKit.Medium, 10.5f, w, 7.5f), UiKit.Ink);
+        UiKit.Kicker(new Rect(px, r.yMax - U(42), w, U(14)), "Session", 8.5f);
+        UiKit.Text(new Rect(px, r.yMax - U(28), w, U(18)), ModeHint[i], UiKit.Medium, UiKit.Fit(ModeHint[i], UiKit.Medium, 11f, w, 8f), UiKit.Ink);
         UiKit.PopAlpha();
         return hit;
     }
@@ -141,12 +141,11 @@ public sealed partial class MenuUI
 
     void DrawCircuitStep(ref int map, Track loaded, int loadedFor, float x0, float x1, float cTop, float bottom)
     {
-        float W = x1 - x0, L = W * 0.40f, bodyY = cTop;
+        float W = x1 - x0, L = W * 0.38f, bodyY = cTop;
         if (mapOrder == null) BuildOrder();
         int n = mapOrder.Length;
-        var next = NextRect(x1, bottom);
-        float bw = U(44), mapTop = bodyY - U(4), mapBottom = next.y - U(30);
-        var area = new Rect(x0 + L, mapTop, W - L, mapBottom - mapTop);
+        float bw = U(44), mapTop = bodyY - U(4), mapBottom = bottom - U(16);
+        var area = new Rect(x0 + L + U(12), mapTop, W - L - U(12), mapBottom - mapTop);
         var prevB = new Rect(area.x, area.center.y - bw * 0.5f, bw, bw);
         var nextB = new Rect(area.xMax - bw, prevB.y, bw, bw);
         var mapR = new Rect(prevB.xMax + U(8), area.y, nextB.x - U(8) - prevB.xMax - U(8), area.height);
@@ -154,8 +153,8 @@ public sealed partial class MenuUI
         // ---- input first, so a change shows this frame
         float ea = UiKit.Enter(KeyCircuit, 5);
         UiKit.PushAlpha(ea);
-        if (MapArrow(prevB, false)) { map = MapStep(map, -1); mapStepDir = -1; }
-        if (MapArrow(nextB, true)) { map = MapStep(map, 1); mapStepDir = 1; }
+        if (UiKit.Glyph(prevB, UiKit.Prev, 32f)) { map = MapStep(map, -1); mapStepDir = -1; }
+        if (UiKit.Glyph(nextB, UiKit.Next, 32f)) { map = MapStep(map, 1); mapStepDir = 1; }
         UiKit.PopAlpha();
         int sw = MapSwipe(mapR);
         if (sw != 0) { map = MapStep(map, sw); mapStepDir = sw; }
@@ -170,20 +169,20 @@ public sealed partial class MenuUI
         float mt = UiKit.EaseOut(UiKit.Since(KeyMap) / 0.4f);
         var info = cards[map];
 
-        // ---- the circuit: eyebrow (type, n / total), the name (once), country
+        // ---- the circuit: kicker (type, n / total), the name (once), country
         float e1 = UiKit.Enter(KeyCircuit, 1), e2 = UiKit.Enter(KeyCircuit, 2), e3 = UiKit.Enter(KeyCircuit, 3);
         UiKit.PushAlpha(e1 * mt);
-        UiKit.Eyebrow(UiKit.Slide(new Rect(x0, bodyY, L, U(14)), mt, 10f * mapDir), info.eyebrow, UiKit.Faint, 9f);
+        UiKit.Kicker(UiKit.Slide(new Rect(x0, bodyY, L, U(14)), mt, 10f * mapDir), info.eyebrow, UiKit.Fit(UiKit.Caps(info.eyebrow), UiKit.Body, 10f, L, 7f));
         UiKit.PopAlpha();
-        float ns = UiKit.Fit(info.upper, UiKit.Bold, 40f, L - U(12), 20f);
+        float ns = UiKit.Fit(info.name, UiKit.Heavy, 36f, L - U(8), 20f);
         UiKit.PushAlpha(e2 * mt);
-        UiKit.Text(UiKit.Slide(UiKit.Rise(new Rect(x0, bodyY + U(12), L - U(12), U(52)), e2, 12f), mt, 18f * mapDir), info.upper, UiKit.Bold, ns, UiKit.TextCol);
+        UiKit.Text(UiKit.Slide(UiKit.Rise(new Rect(x0 - U(1), bodyY + U(14), L - U(8), U(48)), e2, 12f), mt, 18f * mapDir), info.name, UiKit.Heavy, ns, UiKit.Ink);
         UiKit.PopAlpha();
         UiKit.PushAlpha(e3 * mt);
-        UiKit.Text(UiKit.Slide(new Rect(x0, bodyY + U(62), L, U(18)), mt, 12f * mapDir), info.country, UiKit.Regular, 13f, UiKit.Sub);
+        UiKit.Text(UiKit.Slide(new Rect(x0, bodyY + U(60), L, U(18)), mt, 12f * mapDir), info.country, UiKit.Body, 13f, UiKit.InkSub);
         UiKit.PopAlpha();
 
-        // ---- the map (built first: it measures the length for the chips)
+        // ---- the map (built first: it measures the length for the data rows)
         var pv = pg ? null : Preview(map, loaded, loadedFor);
         float e5 = UiKit.Enter(KeyCircuit, 4, 0.04f, 0.6f);
         UiKit.PushAlpha(e5 * (0.35f + 0.65f * mt));
@@ -193,53 +192,35 @@ public sealed partial class MenuUI
         UiKit.PopAlpha();
 
         // ---- page dots: one round dot per real circuit, then a small square for the test track / playground
-        float dg = U(11), extra = n - realCount, dw = (n - 1) * dg + (extra > 0 ? U(8) : 0f), dx = mapR.center.x - dw * 0.5f, dy = mapBottom + U(12);
+        float dg = U(11), extra = n - realCount, dw = (n - 1) * dg + (extra > 0 ? U(8) : 0f), dx = mapR.center.x - dw * 0.5f, dy = mapBottom + U(8);
         UiKit.PushAlpha(ea);
         for (int k = 0; k < n; k++)
         {
             bool on = mapOrder[k] == map;
-            var col = on ? UiKit.TextCol : new Color(1, 1, 1, 0.22f);
+            var col = on ? UiKit.Ink : UiKit.PaperTrack;
             float x = dx + k * dg + (k >= realCount ? U(8) : 0f);
-            if (k < realCount) UiKit.Dot(new Vector2(x, dy), on ? 3.2f : 2.4f, col);
-            else { float h = on ? U(2.8f) : U(2.1f); UiKit.Rect(new Rect(x - h, dy - h, 2f * h, 2f * h), col, 1f); }
+            if (k < realCount) UiKit.Dot(new Vector2(x, dy), on ? 3.2f : 2.6f, col);
+            else { float h = on ? U(2.8f) : U(2.3f); UiKit.Rect(new Rect(x - h, dy - h, 2f * h, 2f * h), col); }
         }
         UiKit.PopAlpha();
 
-        // ---- data chips (a column under the name)
-        float cy = bodyY + U(92), chW = U(130), chH = U(40);
+        // ---- data rows under the name: label left, value right, a quiet rule under each
+        float ry = bodyY + U(96), rh = U(32), rw = Mathf.Min(L - U(8), U(260));
         for (int i = 0; i < 3; i++)
         {
             float ec = UiKit.Enter(KeyCircuit, 4 + i);
             UiKit.PushAlpha(ec);
-            var r = UiKit.Rise(new Rect(x0, cy + i * (chH + U(8)), chW, chH), ec, 8f);
-            if (pg)
-            {
-                if (i == 0) UiKit.Chip(r, "Timing", "Off", UiKit.TextCol);
-                else if (i == 1) UiKit.Chip(r, "Drive", "Free", UiKit.TextCol);
-                else UiKit.Chip(r, "Tests", "0-100 · Vmax", UiKit.TextCol, 11.5f);
-            }
-            else if (i == 0) UiKit.Chip(r, "Length", info.length, UiKit.TextCol);
-            else if (i == 1) UiKit.Chip(r, "Turns", info.corners, UiKit.TextCol);
-            else UiKit.Chip(r, "Target pole", info.pole, UiKit.TextCol);
+            var r = UiKit.Rise(new Rect(x0, ry + i * rh, rw, rh), ec, 8f);
+            string cap, val;
+            if (pg) { cap = i == 0 ? "Timing" : i == 1 ? "Drive" : "Tests"; val = i == 0 ? "Off" : i == 1 ? "Free" : "0-100  ·  Vmax"; }
+            else { cap = i == 0 ? "Length" : i == 1 ? "Turns" : "Target pole"; val = i == 0 ? info.length : i == 1 ? info.corners : info.pole; }
+            if (i == 0) UiKit.Hair(r.x, r.xMax, r.y, UiKit.Ink);
+            UiKit.Kicker(new Rect(r.x, r.y, r.width * 0.5f, r.height), cap, 9.5f);
+            UiKit.Text(new Rect(r.x, r.y, r.width, r.height), val, UiKit.Heavy, 14f, UiKit.Ink, TextAnchor.MiddleRight);
+            UiKit.Hair(r.x, r.xMax, r.yMax - UiKit.HairPx, UiKit.PaperTrack);
             UiKit.PopAlpha();
         }
-
-        float en = UiKit.Enter(KeyCircuit, 7);
-        UiKit.PushAlpha(en);
-        if (UiKit.Button(next, "Next", UiKit.Look.Primary, true, 15f)) GoPlay(StepSetup, 1);
-        UiKit.PopAlpha();
         PrefetchNeighbours(map, loaded, loadedFor);
-    }
-
-    // < / > beside the map: a round glass button, red only while pressed
-    static bool MapArrow(Rect r, bool next)
-    {
-        bool hit = UiKit.Press(r, true, out float p);
-        var rr = UiKit.Scale(r, 1f - 0.06f * p);
-        UiKit.Rect(rr, Color.Lerp(new Color(1, 1, 1, 0.06f), UiKit.Accent, p), 999f);
-        UiKit.Outline(rr, Color.Lerp(UiKit.Line, UiKit.Accent, p), 999f, 0.7f);
-        UiKit.Icon(UiKit.Scale(rr, 0.42f), next ? UiKit.IconNext : UiKit.IconBack, UiKit.TextCol);
-        return hit;
     }
 
     // the map itself: a tap = the next circuit, a sideways swipe = next (to the left) / previous (to the right).
@@ -284,19 +265,30 @@ public sealed partial class MenuUI
             setupSub = champ ? "The calendar picks the circuit  ·  full grid  ·  points"
                      : cards[Mathf.Clamp(map, 0, cards.Length - 1)].name + "  ·  " + cards[Mathf.Clamp(map, 0, cards.Length - 1)].country;
         }
+        int key = lapsIdx * 1000 + riv * 10 + qualiIdx * 100000 + (champ ? 7 : 0) + mode * 3;
+        if (key != ctaKey)
+        {
+            ctaKey = key;
+            ctaSub = champ ? "Standings  ·  next round" : mode == ModeWeekend ? qualiText[qualiIdx] + " qualifying, then race" : lapsText[lapsIdx] + "  ·  " + (rivalCounts[riv] == 0 ? "solo" : rivalCounts[riv] + " rivals");
+        }
         float e1 = UiKit.Enter(KeySetup, 0);
         UiKit.PushAlpha(e1);
-        UiKit.Text(UiKit.Rise(new Rect(x0, cTop - U(4), W, U(30)), e1, 10f), ModeTitle[mode], UiKit.Bold, 20f, UiKit.TextCol);
-        UiKit.Text(new Rect(x0, cTop + U(24), W, U(16)), setupSub, UiKit.Regular, UiKit.Fit(setupSub, UiKit.Regular, 11f, W, 8.5f), UiKit.Sub);
+        UiKit.Text(UiKit.Rise(new Rect(x0, cTop - U(6), W * 0.6f, U(28)), e1, 10f), ModeNames[mode], UiKit.Heavy, 22f, UiKit.Ink);
+        UiKit.Text(new Rect(x0, cTop + U(20), W * 0.6f, U(16)), setupSub, UiKit.Body, UiKit.Fit(setupSub, UiKit.Body, 11.5f, W * 0.6f, 8.5f), UiKit.InkSub);
+        string cs = pg ? "Free driving  ·  0-100  ·  top speed" : ctaSub;
+        UiKit.Text(new Rect(x0 + W * 0.4f, cTop - U(6), W * 0.6f, U(28)), cs, UiKit.Medium, UiKit.Fit(cs, UiKit.Medium, 11.5f, W * 0.4f, 8f), UiKit.Ink, TextAnchor.MiddleRight);
         UiKit.PopAlpha();
 
-        // ---- 3 x 3 tiles
-        float bh = U(52), by = bottom - bh, tg = U(10), gy = cTop + U(50);
-        float th = Mathf.Min(U(60), (by - U(16) - gy - 2 * tg) / 3f), tw = (W - 2 * tg) / 3f;
+        // ---- 3 x 3 rows: label / value, − +
+        float gy = cTop + U(46), cg = U(24);
+        float th = Mathf.Max(U(46), (bottom - gy) / 3f), tw = (W - 2 * cg) / 3f;
+        UiKit.PushAlpha(e1);
+        UiKit.Hair(x0, x1, gy, UiKit.Ink);
+        UiKit.PopAlpha();
         for (int i = 0; i < 9; i++)
         {
             int col = i % 3, row = i / 3;
-            var r = new Rect(x0 + col * (tw + tg), gy + row * (th + tg), tw, th);
+            var r = new Rect(x0 + col * (tw + cg), gy + row * th, tw, th);
             float ei = UiKit.Enter(KeySetup, 1 + col + row);
             switch (i)
             {
@@ -325,82 +317,64 @@ public sealed partial class MenuUI
                 }
             }
         }
-
-        // ---- actions (right to left; the main one is red)
-        int key = lapsIdx * 1000 + riv * 10 + qualiIdx * 100000 + (champ ? 7 : 0);
-        if (key != ctaKey)
-        {
-            ctaKey = key;
-            ctaSub = champ ? "Standings  ·  next round" : lapsText[lapsIdx] + "  ·  " + (rivalCounts[riv] == 0 ? "solo" : rivalCounts[riv] + " rivals");
-            ctaQualiSub = qualiText[qualiIdx] + " qualifying, then race";
-        }
-        float pw = Mathf.Min(U(230), W * 0.36f), sw2 = U(124), g = U(10);
-        var prim = new Rect(x1 - pw, by, pw, bh);
-        float eb = UiKit.Enter(KeySetup, 6);
-        UiKit.PushAlpha(eb);
-        if (pg)
-        {
-            if (UiKit.Button(prim, "Drive", UiKit.Look.Primary, true, 18f, "Free driving  ·  0-100  ·  top speed")) BeginLoading(true);
-        }
-        else if (mode == ModeWeekend)
-        {
-            if (UiKit.Button(prim, "Start weekend", UiKit.Look.Primary, true, 16f, ctaQualiSub)) BeginLoading(false, true);
-            if (UiKit.Button(new Rect(prim.x - g - sw2, by, sw2, bh), "Skip quali", UiKit.Look.Ghost, true, 11.5f)) BeginLoading(false);
-            if (UiKit.Button(new Rect(prim.x - 2 * (g + sw2), by, sw2, bh), "Practice", UiKit.Look.Ghost, true, 11.5f)) BeginLoading(true);
-        }
-        else
-        {
-            if (UiKit.Button(prim, champ ? "Championship" : "Start race", UiKit.Look.Primary, true, champ ? 16f : 18f, ctaSub))
-            { if (champ) season.Open(); else BeginLoading(false); }
-            if (UiKit.Button(new Rect(prim.x - g - sw2, by, sw2, bh), "Practice", UiKit.Look.Ghost, true, 11.5f)) BeginLoading(true);
-        }
-        UiKit.PopAlpha();
         return ch;
     }
 
-    // ---- a setup tile, one row: caption over the value on the left, ( - ) ( + ) on the right; tapping the value
-    // steps forward too. key: a stable number per tile (value slide). e: entry animation 0..1. Returns the new index.
+    // the Setup step's action row (right of Back): Practice / Skip qualifying as links, the black Start on the right
+    Choice SetupActions(UiKit.Frame f, int map, int riv, Choice ch)
+    {
+        bool champ = mode == ModeChampionship, pg = map == playgroundIdx && !champ;
+        string prim = pg ? "Drive" : mode == ModeWeekend ? "Start weekend" : champ ? "Championship" : "Start race";
+        float pw = Mathf.Max(U(170), UiKit.BlackButtonWidth(prim));
+        var pr = new Rect(f.x1 - pw, f.actY - U(25), pw, U(50));
+        float lx = f.x0 + U(84) + U(24), ly = f.actY - U(22);
+        if (pg)
+        {
+            if (UiKit.BlackButton(pr, prim)) BeginLoading(true);
+        }
+        else if (mode == ModeWeekend)
+        {
+            if (UiKit.BlackButton(pr, prim)) BeginLoading(false, true);
+            float w1 = UiKit.LinkWidth("Practice", "Free practice") + U(8);
+            if (UiKit.Link(new Rect(lx, ly, w1, U(44)), "Practice", "Free practice")) BeginLoading(true);
+            lx += w1 + U(24);
+            if (UiKit.Link(new Rect(lx, ly, UiKit.LinkWidth("Skip qualifying", "Race from the grid setting") + U(8), U(44)), "Skip qualifying", "Race from the grid setting")) BeginLoading(false);
+        }
+        else
+        {
+            if (UiKit.BlackButton(pr, prim)) { if (champ) season.Open(); else BeginLoading(false); }
+            if (UiKit.Link(new Rect(lx, ly, UiKit.LinkWidth("Practice", "Free practice") + U(8), U(44)), "Practice", "Free practice")) BeginLoading(true);
+        }
+        return ch;
+    }
+
+    // ---- a setup row: caption over the value on the left, − + on the right; tapping the value steps forward too.
+    // key: a stable number per row (value slide). e: entry animation 0..1. Returns the new index.
     static readonly System.Collections.Generic.Dictionary<int, float> tileDir = new System.Collections.Generic.Dictionary<int, float>();
     int SetupTile(Rect r, string caption, string value, int index, int count, bool enabled, int key, float e, bool wrap = true)
     {
         r = UiKit.Rise(r, e, 8f);
-        UiKit.PushAlpha(e * (enabled ? 1f : 0.4f));
-        UiKit.Rect(r, UiKit.Surface, 12f);
-        UiKit.Outline(r, UiKit.Line, 12f, 0.7f);
-        float bw = U(44), bh = Mathf.Max(U(42), r.height - U(8));
-        var plus = new Rect(r.xMax - U(4) - bw, r.center.y - bh * 0.5f, bw, bh);
+        UiKit.PushAlpha(e);
+        float bw = U(44), bh = Mathf.Min(U(44), r.height);
+        var plus = new Rect(r.xMax - bw, r.center.y - bh * 0.5f, bw, bh);
         var minus = new Rect(plus.x - bw, plus.y, bw, bh);
         var body = new Rect(r.x, r.y, minus.x - r.x, r.height);
         int old = index; float dirNow = 0f; int k = 0x5E700 + key;
         if (UiKit.Press(body, enabled && count > 1, out float pb)) { index = wrap ? (index + 1) % count : Mathf.Min(count - 1, index + 1); dirNow = 1f; }
-        if (pb > 0.01f) UiKit.Rect(body, new Color(1, 1, 1, 0.05f * pb), 12f);
-        if (StepBtn(minus, false, enabled && (wrap || index > 0))) { index = wrap ? (index - 1 + count) % count : Mathf.Max(0, index - 1); dirNow = -1f; }
-        if (StepBtn(plus, true, enabled && (wrap || index < count - 1))) { index = wrap ? (index + 1) % count : Mathf.Min(count - 1, index + 1); dirNow = 1f; }
+        if (pb > 0.01f) UiKit.Rect(body, UiKit.A(UiKit.PaperTint, pb));
+        if (UiKit.Glyph(minus, UiKit.Minus, 20f, enabled && (wrap || index > 0))) { index = wrap ? (index - 1 + count) % count : Mathf.Max(0, index - 1); dirNow = -1f; }
+        if (UiKit.Glyph(plus, UiKit.Plus, 20f, enabled && (wrap || index < count - 1))) { index = wrap ? (index + 1) % count : Mathf.Min(count - 1, index + 1); dirNow = 1f; }
         if (index != old) { UiKit.Mark(k); tileDir[k] = dirNow; }
-        float px = r.x + U(14), vw = body.width - U(18);
-        UiKit.Eyebrow(new Rect(px, r.y + r.height * 0.16f, vw, U(13)), caption, UiKit.Faint, 7.8f);
+        UiKit.PushAlpha(enabled ? 1f : 0.4f);
+        float vw = body.width - U(8), cy = r.center.y;
+        UiKit.Kicker(new Rect(r.x, cy - U(17), vw, U(13)), caption, 8.5f);
         float t = UiKit.EaseOut(UiKit.Since(k) / 0.22f), dir = tileDir.TryGetValue(k, out float sd) ? sd : 1f;
         UiKit.PushAlpha(0.25f + 0.75f * t);
-        UiKit.Text(new Rect(px + U(8) * dir * (1f - t), r.y + r.height * 0.40f, vw, r.height * 0.46f), value, UiKit.Bold, UiKit.Fit(value, UiKit.Bold, 13.5f, vw, 9.5f), UiKit.TextCol);
+        UiKit.Text(new Rect(r.x + U(8) * dir * (1f - t), cy - U(4), vw, U(22)), value, UiKit.Heavy, UiKit.Fit(value, UiKit.Heavy, 15f, vw, 10f), UiKit.Ink);
         UiKit.PopAlpha();
+        UiKit.PopAlpha();
+        UiKit.Hair(r.x, r.xMax, r.yMax - UiKit.HairPx, UiKit.PaperTrack);
         UiKit.PopAlpha();
         return index;
-    }
-
-    // a round - / + chip; the whole rect is the touch target
-    static bool StepBtn(Rect r, bool plus, bool enabled)
-    {
-        bool hit = UiKit.Press(r, enabled, out float p);
-        float d = Mathf.Min(r.width, r.height) * 0.72f;
-        var chip = new Rect(r.center.x - d * 0.5f, r.center.y - d * 0.5f, d, d);
-        UiKit.PushAlpha(enabled ? 1f : 0.3f);
-        var cr = UiKit.Scale(chip, 1f - 0.08f * p);
-        UiKit.Rect(cr, new Color(1, 1, 1, 0.07f + 0.16f * p), 999f);
-        UiKit.Outline(cr, new Color(1, 1, 1, 0.10f), 999f, 0.7f);
-        float w = d * 0.38f, t = Mathf.Max(1.5f, d * 0.075f);
-        UiKit.Rect(new Rect(cr.center.x - w * 0.5f, cr.center.y - t * 0.5f, w, t), UiKit.TextCol, 99f);
-        if (plus) UiKit.Rect(new Rect(cr.center.x - t * 0.5f, cr.center.y - w * 0.5f, t, w), UiKit.TextCol, 99f);
-        UiKit.PopAlpha();
-        return hit;
     }
 }
