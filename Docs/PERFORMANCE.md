@@ -4,6 +4,22 @@
 
 **19 Nov 2026: `Docs/PERF-ARCHITECTURE.md`** — why the Redmi Note 12 Pro ran at 20-23 fps (GPU-bound: native 2.6 Mpx rendering and car triangles), the base render scale (RenderScale.cs), rival LODs (CarLod.cs), on-device timing and A/B switches (PerfLab.cs).
 
+## Clarity (20 Nov 2026, gfx)
+
+What made the picture soft on the Redmi (WebGL shots at the phone's 1700x765 3D size, Monza s=300/850/2500, High and
+Low), ranked by visual effect per cost, and what was done. GPU ms are estimates for the Mali-G68 at a 0.71 scale.
+
+| # | Cause | Fix | Cost |
+|---|---|---|---|
+| 1 | The whole screen, HUD included, was drawn at 0.71 and stretched by the compositor: soft text and icons, soft 3D | **HUD native** (RenderScale.cs, default on, PerfLab "HUD res"): the race camera draws into a 0.71 off-screen target (MSAA samples and depth memoryless on Vulkan), one pass (Upscale.shader, 1 read, "sharp bilinear" 0.5) stretches it, IMGUI draws at native | +0.8-1.2 ms GPU |
+| 2 | Spare GPU time under the lock not used for pixels | **Adaptive scale** (Auto only): +0.05 at the next session start when every 10 s GPU window stayed < 60% of the lock's budget (>= 30 s, not hot), -0.05 when one was > 85% or hot; 0.71 .. 0.85 of native | 0 when idle; each step ~+15% fragment work, only where measured headroom |
+| 3 | Boards / barriers went to mush ~30 m out (atlas aniso 2x at grazing angles) | TracksideArt atlas aniso 8, mip bias -0.25 (Medium/High; Low has aniso off) | ~0.1-0.3 ms |
+| 4 | Converging road lines and kerb edges over-blurred: fwidth = |ddx|+|ddy| is ~1.4x the footprint on diagonals | Road.cginc: gradient length instead | ~0.02 ms |
+| 5 | Low: near verges / run-offs smeared (no aniso + mip bias 0.6) | Ground.cginc Low bias 0.3 | ~0.1 ms |
+| - | Not changed: grade contrast and haze (haze is ~1% at 100 m, not a cause near the track); RoadShadow mask 0.27 m/texel (soft shadow edges near the camera; 2x finer = 4x memory and bake time); far ground at aniso 4 (8 on the grass costs ~0.5-1 ms); board text is baked (VectorFont) into 46 px/m ads, sharp enough at race distances | | |
+
+Verify the HUD-native path in WebGL: `shoot.py --param rs=0.71` (and `rsharp=0` for plain bilinear).
+
 This is a static audit. It was done without an editor or a phone, so every number below is an estimate from the code, the asset sizes and the `Tools/PhysicsCheck` timings. Check the numbers on a device with the checklist at the end.
 
 ## Steady frame pacing (Nov 2026)

@@ -130,8 +130,12 @@ half TyrePair(float x, float along, float len, float seed, float spread, float w
 fixed4 frag (v2f i) : SV_Target
 {
     float lat = i.uv.x, along = i.uv.y;
-    // pixel footprints (outside any branch): metres across / along the road, kerb "across" units
-    float wl = max(fwidth(lat), 1e-4), wa = max(fwidth(along), 1e-4), wk = max(fwidth(i.misc.x), 1e-4);
+    // pixel footprints (outside any branch): metres across / along the road, kerb "across" units. The length of the
+    // screen gradient, not fwidth (|ddx| + |ddy|): the same where an edge runs along a screen axis, up to ~30% narrower
+    // on the diagonal edges that converge to the horizon (the white lines, kerb ends), which fwidth over-blurred
+    // (Docs/PERFORMANCE.md "Clarity"; ~6 ALU, no texture read)
+    float wl = max(length(float2(ddx(lat), ddy(lat))), 1e-4), wa = max(length(float2(ddx(along), ddy(along))), 1e-4);
+    float wk = max(length(float2(ddx(i.misc.x), ddy(i.misc.x))), 1e-4);
     bool kerb = i.misc.y < -0.5;
     half kerbF = kerb ? 1.0 : 0.0;
 

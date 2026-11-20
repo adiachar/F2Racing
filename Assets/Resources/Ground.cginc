@@ -99,7 +99,7 @@ fixed4 frag (v2f i) : SV_Target
     // grass: the alpha holds clumps (~0.75 m at this tile, ~2.6 m patches at the larger one); 0.5 = neutral
     half tuft = (half)lerp(0.5, d.a, _Clumps), lush = (half)lerp(0.5, d2.a, _Clumps);
 #else
-    half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.6)); // Low: blurrier mips, kinder to the texture cache
+    half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.3)); // Low: a little blurrier mips, kinder to the texture cache (0.6 -> 0.3: Low has no aniso, and the near verges and run-offs went to smears; Docs/PERFORMANCE.md "Clarity")
 #endif
     half4 mac = tex2D(_MacroTex, i.uv.zw);
     half3 col = d.rgb * (0.80 + 0.40 * mac.r);

@@ -221,7 +221,9 @@ public static class TracksideArt
                 else c = new Color32(128, 128, 128, 255);
                 px[y * AW + x] = c;
             }
-        var t = new Texture2D(AW, AH, TextureFormat.RGBA32, 5, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
+        // aniso 8 + a slight negative mip bias (Docs/PERFORMANCE.md "Clarity"): boards and barriers line the track and are seen at grazing
+        // angles, where 2x went to mush ~30 m out; the global setting is Enable on Medium/High (off on Low: no cost there)
+        var t = new Texture2D(AW, AH, TextureFormat.RGBA32, 5, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 8, mipMapBias = -0.25f };
         t.SetPixels32(px); t.Apply(true, true);
         return t;
     }
