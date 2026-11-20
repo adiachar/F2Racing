@@ -70,7 +70,7 @@ half4 FoliageFragHi(v2f i)
     float lum = saturate(dot((float3)t.rgb, float3(0.3, 0.59, 0.11)) * 4.0);
     float cut = _Cutoff + (0.62 - lum) * 0.34 * mid;
     // alpha sharpened to a one-pixel ramp centred on the cut-off: the coverage of each MSAA sample
-    half a = (half)((t.a - cut) / max(fwidth(t.a), 0.0001) + 0.5);
+    float a = (t.a - cut) / max(fwidth((float)t.a), 0.0001) + 0.5; // (float: clip() is a compare)
     clip(a);
     half4 c = half4(Shade(t, i.color), saturate(a));
     UNITY_APPLY_FOG(i.fogCoord, c);

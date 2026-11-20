@@ -12,7 +12,7 @@
 // Two ways to get the 3D drawn at that scale (PlayerPrefs "renderHud", PerfLab "HUD native / HUD scaled"):
 //  * HUD native (default, Docs/PERFORMANCE.md "Clarity"): the screen stays at the panel's size. The race camera draws into an
 //    off-screen target of the scaled size (4x / 2x MSAA kept on the chip: memoryless samples and depth), and one
-//    full-screen pass (Upscale.shader, one texture read, "sharp bilinear") stretches it to the screen; the HUD and
+//    full-screen pass (Upscale.shader: "sharp bilinear" + a 5-tap contrast-adaptive sharpen, RenderScale.Cas) stretches it to the screen; the HUD and
 //    menus (IMGUI, drawn after every camera) then land at native resolution, so text and icons are crisp. Cost on a
 //    Mali-G68: ~0.8-1.2 ms GPU (a 1.3 Mpx read + a 2.6 Mpx write once a frame); the 3D costs the same as before.
 //  * HUD scaled (the old way): Screen.SetResolution shrinks the window surface and the display compositor stretches
@@ -36,6 +36,7 @@ public static class RenderScale
     public static float Scale = 1f;         // the base scale in use
     public static float Extra = 1f;         // a further factor for the 3D only (HUD native; GLES resolution setting)
     public static float Sharp = 0.5f;       // Upscale.shader's sharp-bilinear amount
+    public static float Cas = 0.6f;         // Upscale.shader's contrast-adaptive sharpen (0 = off: the one-read pass; Low: off)
     public static int Pct                   // the setting: 0 = Auto, else percent of native
     {
         get => PlayerPrefs.GetInt("renderBase", 0);
@@ -69,6 +70,7 @@ public static class RenderScale
         float rs = DebugShots.GetF(q, "rs", 0f);
         if (rs > 0.2f && rs < 1f) testScale = rs;
         Sharp = Mathf.Clamp01(DebugShots.GetF(q, "rsharp", Sharp));
+        Cas = Mathf.Clamp01(DebugShots.GetF(q, "rcas", Cas));
 #endif
         ReadNative();
         Apply();
@@ -151,7 +153,7 @@ public static class RenderScale
 public class RenderScaleRT : MonoBehaviour
 {
     Camera main, blit; RenderTexture rt; Material mat; CommandBuffer cb;
-    int rtAA; bool wasActive; static readonly int SharpId = Shader.PropertyToID("_F2UpSharp");
+    int rtAA; bool wasActive; static readonly int SharpId = Shader.PropertyToID("_F2UpSharp"), CasId = Shader.PropertyToID("_F2UpCas");
     // adaptive scale: the current 10 s window and the session's worst
     readonly FrameTiming[] ft = new FrameTiming[1];
     float winSum, winT, worst; int winN, wins; bool hot;
@@ -182,6 +184,8 @@ public class RenderScaleRT : MonoBehaviour
             if (rt == null || rt.width != w || rt.height != h || rtAA != aa) Make(w, h, aa);
             if (main.targetTexture != rt) main.targetTexture = rt;
             mat.SetFloat(SharpId, RenderScale.Sharp);
+            // the sharpen's 4 reads only on Medium / High (Low = anisotropic filtering off, GameManager.SetGraphics)
+            mat.SetFloat(CasId, QualitySettings.anisotropicFiltering == AnisotropicFiltering.Disable ? 0f : RenderScale.Cas);
             if (!blit.enabled) blit.enabled = true;
         }
         else

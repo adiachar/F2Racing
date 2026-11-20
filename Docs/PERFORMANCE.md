@@ -20,6 +20,19 @@ Low), ranked by visual effect per cost, and what was done. GPU ms are estimates 
 
 Verify the HUD-native path in WebGL: `shoot.py --param rs=0.71` (and `rsharp=0` for plain bilinear).
 
+**Round 2 (20 Nov 2026).** Measured: gfx build b10, `shoot.py --w 2400 --h 1080 --param rs=0.71` (1704x766 3D, 4x
+MSAA), Monza and Spa s=300/2500, chase and cockpit, High and Medium; plus the same spots shot at 1704x767 and
+upscaled offline (numpy copy of Upscale.shader) to compare filters. What read soft, zoomed 2x: the whole 3D a little
+(the 1.4x stretch plus the MSAA resolve: board text 40+ m out, kerb stripes, leaf clumps, the distant road grain),
+the Spa backdrop hill flat and pale. Not soft: HUD (native), car silhouettes (MSAA + the Fresnel sky edge already
+separate them from the road), near road lines and kerbs (round 1).
+
+| # | Change | Cost (Mali-G68, 2400x1080, estimate) |
+|---|---|---|
+| 6 | **Contrast-adaptive sharpen in the upscale pass** (Upscale.shader, `RenderScale.Cas` 0.6, URL `rcas=`; Medium/High only, Low keeps the 1-read pass): 5-tap cross (4 extra bilinear reads inside the same 3x3 texels, L1 hits), negative lobe -0.12 x amp, amp = sqrt(min(min, 1-max)/max) per channel, so flat detail gains contrast and hard edges do not halo. Offline: mean gradient +30% (Monza 6.6 -> 8.5, Spa 5.7 -> 7.4), clipped pixels +0.4%. 1.0 (-0.2 lobe) doubled it and started to crunch aliasing: not used | texture unit ~0.2 -> ~0.8 ms in a pass bound by its 10 MB screen write (~0.8-1 ms), ~30 ALU: **+0.1-0.4 ms**; worst case (texture-bound, no overlap) +0.7 ms. A/B on the phone: `rcas` is shot-only, so compare by the PerfLab "HUD res" toggle (HUD scaled = no pass at all) |
+| 7 | Foliage.cginc: the alpha-to-coverage value fed to clip() was a `half` (rule 3); now float | 0 |
+| - | Already in place, not changed: alpha to coverage on tree cards (Foliage, FoliageInst) and fences (BakedCutout) with a one-pixel alpha ramp; road detail aniso 8; ground aniso 4 (8 on the grass ~0.5-1 ms, not worth it); car paint has no textures (procedural livery, weave by maths), so no mip bias to tune; no car rim added (silhouettes read in every shot, a rim term would only add ALU on ~10% of pixels); no grade fine-contrast lift (the sharpen already lifts flat areas; the pale Spa backdrop is content, the far-hill forest round) | |
+
 This is a static audit. It was done without an editor or a phone, so every number below is an estimate from the code, the asset sizes and the `Tools/PhysicsCheck` timings. Check the numbers on a device with the checklist at the end.
 
 ## Steady frame pacing (Nov 2026)
