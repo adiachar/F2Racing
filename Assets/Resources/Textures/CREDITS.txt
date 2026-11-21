@@ -18,3 +18,30 @@ panels.bytes     512  Poly Haven "concrete_slab_wall"        CC0  (Dimitrios Sav
 cladding.bytes   512  Poly Haven "box_profile_metal_sheet"   CC0  (Amal Kumar)
 corrugated.bytes 512  Poly Haven "corrugated_iron_02"        CC0  (Sergej Majboroda, Jenelle van Heerden)
 shutter.bytes    512  Poly Haven "painted_metal_shutter"     CC0  (Charlotte Baglioni, Rico Cilliers, Dario Barresi)
+
+From Adi's asset pack RacingSim_Assets (made for this game, Nov 2026):
+fac_c00..fac_c14.bytes  building facade cells (Tools/Photo/pack_facades.py), CC0
+crowd_people.bytes      seated crowd sprites (Tools/Photo/pack_crowd.py): renders of Microsoft Rocketbox avatars,
+                        https://github.com/microsoft/Microsoft-Rocketbox, MIT licence:
+
+MIT License
+
+Copyright (c) 2020 Microsoft
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

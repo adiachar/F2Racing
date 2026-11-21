@@ -201,6 +201,9 @@ public static class EnvTex
         return PhotoAlbedo("grass", albedo, out gain);
     }
     // Gravel's photo twin (Resources/Photo/gravel: Poly Haven gravel_floor_02 at 1024), the same mean as MakeGravel
+    // Astroturf's photo twin (Resources/Photo/turf: Adi's asset pack astroturf_green, 1 x 1 m tile; A = the painted
+    // run-off's aggregate as MakeTurf's), scaled to a slightly brighter green than the procedural turf's mean
+    public static Texture2D TurfPhoto(out Vector4 gain) => PhotoAlbedo("turf", new Color(0.034f, 0.118f, 0.043f), out gain);
     public static Texture2D GravelPhoto(out Vector4 gain) => PhotoAlbedo("gravel", new Color(0.50f, 0.45f, 0.36f), out gain);
 
     public static void ForgetPhoto(string name) => photos.Remove(name); // (free a decoded photo once a texture is built)
@@ -630,6 +633,17 @@ public static class EnvTex
         for (int cell = 0; cell < AtlasCols * AtlasRows; cell++)
         {
             int ox0 = (cell % AtlasCols) * C, oy0 = (cell / AtlasCols) * C;
+            // a cell from Adi's asset pack (Resources/Textures/fac_cNN: Tools/Photo/pack_facades.py), drawn as is
+            var pk = PackCell(cell);
+            if (pk != null)
+            {
+                for (int y = 0; y < C; y++) for (int x = 0; x < C; x++)
+                {
+                    float u = ((x - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f, v = ((y - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f;
+                    px[(oy0 + y) * W + ox0 + x] = pk[Mathf.Min(PackN - 1, (int)(v * PackN)) * PackN + Mathf.Min(PackN - 1, (int)(u * PackN))];
+                }
+                continue;
+            }
             for (int y = 0; y < C; y++) for (int x = 0; x < C; x++)
             {
                 // the tile spans pixels Mg .. C - Mg (the shader's margin); the margin repeats the opposite edge
@@ -653,6 +667,20 @@ public static class EnvTex
         { t.Apply(true, false); t.Compress(true); t.Apply(false, true); Bytes += W * H * 4 / 3; return bAtlas = t; }
         t.Apply(true, true);
         return bAtlas = Count(t);
+    }
+    // pack cell: PNG RGBA PackN x PackN (rgb sRGB, a = the atlas alpha: 0 glass, else the tint mask); null if missing
+    const int PackN = 256;
+    public static bool NoPackFacades; // A/B: the painted cells only
+    static Color32[] PackCell(int cell)
+    {
+        if (NoPackFacades) return null;
+        var ta = Resources.Load<TextAsset>("Textures/fac_c" + cell.ToString("00"));
+        if (ta == null) return null;
+        var t = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+        Color32[] px = null;
+        if (ImageConversion.LoadImage(t, ta.bytes, false) && t.width == PackN && t.height == PackN) px = t.GetPixels32();
+        Object.Destroy(t); Resources.UnloadAsset(ta);
+        return px;
     }
     // a photo box-filtered to DN x DN per tile with "rep" repeats, as colour relative to its mean (luminance ~1):
     // chroma 0 = grey detail only, contrast scales the deviation from 1. Null if the photo is missing.

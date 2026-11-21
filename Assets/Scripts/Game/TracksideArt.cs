@@ -602,6 +602,32 @@ public static class TracksideArt
     // (a lit rounded back rim, the shaded seat pan, a dark gap under the back). Only mid-sized contrasts.
     static float Cov(float d, float w) => Mathf.Clamp01(0.5f - d / w); // signed distance (seat units) -> coverage, w wide
     static Color32 Over(Color32 a, Color32 b, float t) { if (t <= 0f) return a; if (t >= 1f) return b; return new Color32(B(a.r + (b.r - a.r) * t), B(a.g + (b.g - a.g) * t), B(a.b + (b.b - a.b) * t), 255); }
+    // Resources/Textures/crowd_people: PNG RGBA 1024 x 128, two rows of 32 x 64 cells (top: arms down, bottom: arms up);
+    // null (painted people) if missing or NoPackCrowd
+    const int PCW = 32, PCH = 64, PPW = 1024;
+    public static bool NoPackCrowd;
+    static Color32[] CrowdPeople(out int nDown, out int nUp)
+    {
+        nDown = nUp = 0;
+        if (NoPackCrowd) return null;
+        var ta = Resources.Load<TextAsset>("Textures/crowd_people");
+        if (ta == null) return null;
+        var t = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+        Color32[] px = null;
+        if (ImageConversion.LoadImage(t, ta.bytes, false) && t.width == PPW && t.height == 2 * PCH) px = t.GetPixels32();
+        Object.Destroy(t); Resources.UnloadAsset(ta);
+        if (px == null) return null;
+        // count the filled cells per row (a cell with any opaque texel)
+        for (int r = 0; r < 2; r++)
+            for (int k = 0; k < PPW / PCW; k++)
+            {
+                bool any = false; int y0 = (r == 0 ? PCH : 0);
+                for (int y = y0; y < y0 + PCH && !any; y += 2) for (int x = k * PCW; x < (k + 1) * PCW; x += 2) if (px[y * PPW + x].a > 128) { any = true; break; }
+                if (!any) break;
+                if (r == 0) nDown++; else nUp++;
+            }
+        return nDown > 0 ? px : null;
+    }
     public static Texture2D Crowd()
     {
         const int S = 2, W = 512 * S, H = 128 * S, CW = 16 * S, CH = 32 * S;
@@ -615,6 +641,7 @@ public static class TracksideArt
         Color32[] hair = { new Color32(30, 24, 20, 255), new Color32(70, 46, 28, 255), new Color32(150, 110, 60, 255), new Color32(210, 190, 140, 255), new Color32(120, 120, 120, 255) };
         float[] fill = { 0.9f, 0.9f, 0.82f, 0.55f };
         var px = new Color32[W * H];
+        int nDown, nUp; var ppl = CrowdPeople(out nDown, out nUp);
         FormulaSim.Par.For(0, H, y =>
         {
             for (int x = 0; x < W; x++)
@@ -632,7 +659,21 @@ public static class TracksideArt
                 Color32 c = Mul(seatCol, Mathf.Lerp(0.8f, shell, edge));
                 c = Over(c, Mul(seatCol, 0.45f), Cov(ly - 4f, px1));                      // dark gap at the foot
                 bool person = false;
-                if (Hash(seat, band, 21) < fill[band])
+                if (ppl != null && Hash(seat, band, 21) < fill[band])
+                {
+                    // photo people (Adi's asset pack: Rocketbox renders, Tools/Photo/pack_crowd.py): one 32 x 64 sprite per
+                    // seat, arms up now and then (more in the red band); the seat shows around it
+                    bool up = nUp > 0 && Hash(seat, band, 30) < (band == 1 ? 0.22f : 0.12f);
+                    int n = up ? nUp : nDown, k = (int)(Hash(seat, band, 22) * n) % n;
+                    int sx = k * PCW + x % CW, sy = (up ? 0 : PCH) + y % CH; // PNG rows bottom-up: the top row (arms down) is y 64..127
+                    if (CW == PCW && CH == PCH)
+                    {
+                        var sp = ppl[sy * PPW + sx];
+                        float al = sp.a / 255f;
+                        if (al > 0f) { c = Over(c, new Color32(sp.r, sp.g, sp.b, 255), al); person |= al > 0.5f; }
+                    }
+                }
+                else if (Hash(seat, band, 21) < fill[band])
                 {
                     bool redBand = band == 1;
                     Color32 sh = (redBand ? Hash(seat, band, 40) < 0.7f : Hash(seat, band, 40) < 0.16f)

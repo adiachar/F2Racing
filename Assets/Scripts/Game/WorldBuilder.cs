@@ -767,11 +767,13 @@ public static class WorldBuilder
                 });
                 if (GroundShaded)
                 {
-                    var tm = new Material(groundSh) { mainTexture = EnvTex.Turf() };
+                    Vector4 tgain; var tph = EnvTex.TurfPhoto(out tgain); // photo turf (1 x 1 m tile) or the procedural one
+                    var tm = new Material(groundSh) { mainTexture = tph != null ? tph : EnvTex.Turf() };
                     tm.SetTexture("_MacroTex", EnvTex.Macro());
                     tm.SetVector("_DryTint", new Vector4(1, 1, 1, 0));
                     tm.SetFloat("_Turf", 1f);
-                    tm.mainTextureScale = new Vector2(1f / 2f, 1f / 4f); // one tile = 2 m across x 4 m along (EnvTex.Turf)
+                    if (tph != null) tm.SetVector("_Gain", tgain);
+                    tm.mainTextureScale = tph != null ? Vector2.one : new Vector2(1f / 2f, 1f / 4f); // one tile = 1 x 1 m (photo) / 2 m across x 4 m along (EnvTex.Turf)
                     var tgo = MeshObj("Astroturf", v, uv, tri, tm, true, uv2t); tgo.transform.SetParent(root);
                     tgo.GetComponent<MeshFilter>().sharedMesh.SetUVs(3, uv3t);
                 }
