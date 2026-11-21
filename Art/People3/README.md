@@ -17,4 +17,4 @@ its text must ship in the game's credits), converted by the pack's maker:
 | photographer_01 | trackside photographer (camera in the right hand) |
 | tv_presenter_01 | TV presenter (microphone in the right hand) |
 
-The pack's own crew_* / driver_* (MakeHuman, plain) were left out: the game's People2 driver and crew look better.
+driver_01, driver_02: the pack's race drivers (CC0, MakeHuman base; Mixamo rig, 52 bones, A-pose; suit, gloves, boots, closed helmet with dark visor; `_tint.png`: white = team colour, grey 128 = accent; 2048 textures; ~18.5k tris). **Adi wants these as the game's driver (21 Nov).** The pack's crew_* were left out.
