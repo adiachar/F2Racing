@@ -4,6 +4,7 @@
 //   "Add ..." drops a marker at the middle of the Scene view, on the ground; move / turn / scale it with the usual tools
 //   (W E R). Remove area = red box: nothing is built inside it. Tree = green post (scale Y = height / 2).
 //   Building = grey box (scale = width, height, depth; type / roof / colour in the Inspector).
+//   Model = one of the asset pack's 37 real models (Landmarks.cs), shown as it is.
 //   "Save my edits" writes Assets/Resources/MapEdits/<circuit>.json (send that file to Claude, or keep it in the project).
 //   Stop and Play again to see the circuit rebuilt with the edits.
 // Markers are play-mode objects: they vanish on Stop, the saved file stays.
@@ -15,6 +16,7 @@ public class F2MapEditor : EditorWindow
 {
     const string RootName = "MapEdits (your changes)";
     Vector2 scroll;
+    int modelPick;
 
     [MenuItem("F2Racing/Map Editor")]
     static void Open() { GetWindow<F2MapEditor>("F2 Map Editor"); }
@@ -50,6 +52,13 @@ public class F2MapEditor : EditorWindow
         if (GUILayout.Button("Add remove area (red box)", GUILayout.Height(26))) Select(Make(MapEditMarker.Kind.RemoveArea, Pivot(), 0f, new Vector3(20f, 30f, 20f)));
         if (GUILayout.Button("Add tree (green post)", GUILayout.Height(26))) Select(Make(MapEditMarker.Kind.Tree, Pivot(), 0f, new Vector3(1.5f, 6f, 1.5f)));
         if (GUILayout.Button("Add building (grey box)", GUILayout.Height(26))) Select(Make(MapEditMarker.Kind.Building, Pivot(), 0f, new Vector3(12f, 9f, 10f)));
+        if (Landmarks.Load() && Landmarks.Names.Count > 0)
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Real models (asset pack)", EditorStyles.boldLabel);
+            modelPick = EditorGUILayout.Popup("Model", Mathf.Clamp(modelPick, 0, Landmarks.Names.Count - 1), Landmarks.Names.ToArray());
+            if (GUILayout.Button("Add this model", GUILayout.Height(26))) Select(MakeModel(Landmarks.Names[modelPick], Pivot(), 0f, 1f, 0f));
+        }
         EditorGUILayout.Space();
         GUI.backgroundColor = new Color(0.6f, 1f, 0.6f);
         if (GUILayout.Button("Save my edits", GUILayout.Height(32))) Save(id);
@@ -60,6 +69,7 @@ public class F2MapEditor : EditorWindow
             "Remove area: nothing (buildings, trees, bushes, lamps) is built inside the red box.\n" +
             "Tree: the post's height x 2 = the tree height.\n" +
             "Building: the box size = the building; pick its type, roof and colour in the Inspector.\n" +
+            "Model: shown as it will look and saved exactly where it stands: move it so its base sits on the ground (W), turn it (E), scale it evenly (R, the centre cube).\n" +
             "After saving: Stop, then Play again to see the circuit with your edits.\n" +
             "File: Assets/Resources/MapEdits/" + id + ".json", MessageType.None);
         EditorGUILayout.EndScrollView();
@@ -110,6 +120,45 @@ public class F2MapEditor : EditorWindow
         return go;
     }
 
+    static readonly System.Collections.Generic.Dictionary<string, Mesh> previewMesh = new System.Collections.Generic.Dictionary<string, Mesh>();
+    static Material[] previewMats;
+    static GameObject MakeModel(string name, Vector3 foot, float yaw, float scale, float lift)
+    {
+        var m = Landmarks.Get(name);
+        if (m == null) return null;
+        if (!previewMesh.TryGetValue(name, out var mesh) || mesh == null)
+        {
+            mesh = new Mesh { name = name, subMeshCount = m.subs.Length };
+            var V = new System.Collections.Generic.List<Vector3>(); var N = new System.Collections.Generic.List<Vector3>(); var UV = new System.Collections.Generic.List<Vector2>();
+            foreach (var sb in m.subs) { V.AddRange(sb.v); N.AddRange(sb.n); UV.AddRange(sb.uv); }
+            mesh.SetVertices(V); mesh.SetNormals(N); mesh.SetUVs(0, UV);
+            int b = 0;
+            for (int i = 0; i < m.subs.Length; i++)
+            {
+                var t = (int[])m.subs[i].tri.Clone(); for (int j = 0; j < t.Length; j++) t[j] += b;
+                mesh.SetTriangles(t, i); b += m.subs[i].v.Length;
+            }
+            mesh.RecalculateBounds();
+            previewMesh[name] = mesh;
+        }
+        if (previewMats == null || previewMats.Length != Landmarks.MaterialCount)
+        {
+            previewMats = new Material[Landmarks.MaterialCount];
+            var sh = Shader.Find("Standard");
+            for (int i = 0; i < previewMats.Length; i++) { previewMats[i] = new Material(sh) { mainTexture = Landmarks.Texture(i) }; previewMats[i].SetFloat("_Glossiness", 0.1f); }
+        }
+        var go = new GameObject("Model " + name);
+        go.transform.SetParent(Root(), true);
+        go.transform.SetPositionAndRotation(new Vector3(foot.x, foot.y + lift, foot.z), Quaternion.Euler(0f, yaw, 0f));
+        go.transform.localScale = Vector3.one * scale;
+        go.AddComponent<MeshFilter>().sharedMesh = mesh;
+        var mats = new Material[m.subs.Length]; for (int i = 0; i < mats.Length; i++) mats[i] = previewMats[Mathf.Clamp(m.subs[i].mat, 0, previewMats.Length - 1)];
+        go.AddComponent<MeshRenderer>().sharedMaterials = mats;
+        var mk = go.AddComponent<MapEditMarker>(); mk.kind = MapEditMarker.Kind.Model; mk.modelName = name;
+        Undo.RegisterCreatedObjectUndo(go, "Add model " + name);
+        return go;
+    }
+
     static void ShowSaved(string id)
     {
         var old = GameObject.Find(RootName); if (old != null) Object.DestroyImmediate(old);
@@ -122,6 +171,7 @@ public class F2MapEditor : EditorWindow
         if (f == null) { EditorUtility.DisplayDialog("F2 Map Editor", "No saved edits for " + id + " yet.", "OK"); return; }
         if (f.remove != null) foreach (var b in f.remove) Make(MapEditMarker.Kind.RemoveArea, new Vector3(b.x, Ground(b.x, b.z), b.z), b.yaw, new Vector3(b.w, 30f, b.d));
         if (f.trees != null) foreach (var t in f.trees) Make(MapEditMarker.Kind.Tree, new Vector3(t.x, Ground(t.x, t.z), t.z), 0f, new Vector3(1.5f, t.h * 0.5f, 1.5f));
+        if (f.models != null) foreach (var md in f.models) MakeModel(md.name, new Vector3(md.x, md.y, md.z), md.yaw, md.scale, 0f);
         if (f.buildings != null)
             foreach (var b in f.buildings)
             {
@@ -145,6 +195,7 @@ public class F2MapEditor : EditorWindow
                 {
                     case MapEditMarker.Kind.RemoveArea: f.remove.Add(new MapEdits.Box { x = p.x, z = p.z, w = Mathf.Abs(s.x), d = Mathf.Abs(s.z), yaw = yaw }); break;
                     case MapEditMarker.Kind.Tree: f.trees.Add(new MapEdits.Tree { x = p.x, z = p.z, h = Mathf.Abs(s.y) * 2f }); break;
+                    case MapEditMarker.Kind.Model: f.models.Add(new MapEdits.Mdl { name = m.modelName, x = p.x, z = p.z, y = p.y, yaw = yaw, scale = Mathf.Abs(s.x) }); break;
                     default:
                         f.buildings.Add(new MapEdits.Bld { x = p.x, z = p.z, w = Mathf.Abs(s.x), h = Mathf.Abs(s.y), d = Mathf.Abs(s.z), yaw = yaw, kind = (int)m.buildingType, roof = (int)m.roof, colour = m.wallColour });
                         break;
@@ -154,7 +205,7 @@ public class F2MapEditor : EditorWindow
         Directory.CreateDirectory(Path.GetDirectoryName(path));
         File.WriteAllText(path, JsonUtility.ToJson(f, true));
         AssetDatabase.ImportAsset(path);
-        EditorUtility.DisplayDialog("F2 Map Editor", "Saved " + f.remove.Count + " remove areas, " + f.trees.Count + " trees, " + f.buildings.Count + " buildings to\n" + path + "\n\nStop and Play again to see them in the game. Send this file to Claude to put it in the game for everyone.", "OK");
+        EditorUtility.DisplayDialog("F2 Map Editor", "Saved " + f.remove.Count + " remove areas, " + f.trees.Count + " trees, " + f.buildings.Count + " buildings, " + f.models.Count + " models to\n" + path + "\n\nStop and Play again to see them in the game. Send this file to Claude to put it in the game for everyone.", "OK");
         EditorUtility.RevealInFinder(path);
     }
 }

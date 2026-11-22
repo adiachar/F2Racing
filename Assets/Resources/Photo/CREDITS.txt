@@ -8,3 +8,4 @@ sky_evening_hq.png  Poly Haven kloppenheim_06_puresky  https://polyhaven.com/a/k
 sky_morning_hq.png  Poly Haven autumn_field_puresky    https://polyhaven.com/a/autumn_field_puresky
 sky_overcast.png    Poly Haven overcast_soil_puresky   https://polyhaven.com/a/overcast_soil_puresky
 means.txt      linear mean colour of each albedo (EnvTex.PhotoMean)
+lm_*.png       Adi's asset pack (RacingSim_Assets, CC0): shared materials of the landmark models (Tools/Models/pack_landmarks.py)

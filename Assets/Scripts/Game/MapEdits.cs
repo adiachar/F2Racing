@@ -4,6 +4,7 @@
 //                 Y rotation) in which no building (by its footprint centre), real tree, model tree, shrub, bush,
 //                 undergrowth card or street prop is placed;
 //   trees:        extra real trees (x, z, height), drawn like the map's own trees (RealWorld, the TREE list);
+//   models:       landmark models from the asset pack (Landmarks.cs): name, x, base height y, z, yaw, scale (placed exactly where the editor shows it);
 //   buildings:    extra buildings: a w x d rectangle turned by yaw, h tall, OSM kind / roof shape / colour, drawn with
 //                 the same walls, roofs and lighting as the map's buildings (RealWorld, the BLDG list).
 // No file = no change. Cost: a list check per placed object at build time; nothing per frame.
@@ -22,6 +23,7 @@ public static class MapEdits
         public int kind = 1, roof; // kind / roof as WorldData's BLDG section (1 residential; 0 flat roof)
         public Color colour = new Color(0f, 0f, 0f, 0f); // alpha 0 = the town's usual wall colours
     }
+    [Serializable] public class Mdl { public string name = ""; public float x, z, y, yaw, scale = 1f; } // a landmark model (Landmarks.cs); y = the height of its base (world metres, as placed in the editor)
     [Serializable]
     public class File
     {
@@ -30,6 +32,7 @@ public static class MapEdits
         public List<Box> remove = new List<Box>();
         public List<Tree> trees = new List<Tree>();
         public List<Bld> buildings = new List<Bld>();
+        public List<Mdl> models = new List<Mdl>();
     }
 
     public static File Cur;              // the edits of the circuit being built (null = none)
@@ -49,7 +52,8 @@ public static class MapEdits
         if (Cur.remove == null) Cur.remove = new List<Box>();
         if (Cur.trees == null) Cur.trees = new List<Tree>();
         if (Cur.buildings == null) Cur.buildings = new List<Bld>();
-        Debug.Log("MapEdits: " + id + ": " + Cur.remove.Count + " remove areas, " + Cur.trees.Count + " trees, " + Cur.buildings.Count + " buildings");
+        if (Cur.models == null) Cur.models = new List<Mdl>();
+        Debug.Log("MapEdits: " + id + ": " + Cur.remove.Count + " remove areas, " + Cur.trees.Count + " trees, " + Cur.buildings.Count + " buildings, " + Cur.models.Count + " models");
     }
 
     // inside any remove box (x, z in world metres)

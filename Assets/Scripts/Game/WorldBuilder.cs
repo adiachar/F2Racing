@@ -885,6 +885,7 @@ public static class WorldBuilder
         if (late != null) Drape(late);
         // the real surroundings' meshes, at their final heights (after Drape), lit by the bake below like the rest
         RealWorld.Build(t, root);
+        Landmarks.Build(root); // Adi's hand-placed models (MapEdits.models), merged per material, lit by the bake below
         // lighting baked into the vertices (LightBake.cs); if the phone can't run that shader, the sun and
         // real-time shadows are used as before
         if (LightBake.Begin(t, -sunGo.transform.forward))
