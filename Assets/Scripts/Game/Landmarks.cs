@@ -5,6 +5,7 @@
 // (LightBake.Apply) lights them like every other building: sun, sky, contact shade, night lamps.
 // Load: the model file is parsed once per session (~1 MB); textures load only for the materials a circuit uses.
 using System.Collections.Generic;
+using FormulaSim;
 using UnityEngine;
 
 public static class Landmarks
@@ -74,7 +75,7 @@ public static class Landmarks
     public static int MaterialCount => matKeys != null ? matKeys.Length : 0;
 
     // every model of the circuit's edits, merged per material, under root (call before the light bake)
-    public static void Build(Transform root)
+    public static void Build(Transform root, Track t)
     {
         var f = MapEdits.Cur;
         if (f == null || f.models == null || f.models.Count == 0 || !Load()) return;
@@ -85,9 +86,16 @@ public static class Landmarks
         {
             var e = f.models[i];
             var m = Get(e.name); if (m == null) { Debug.LogWarning("Landmarks: no model " + e.name); continue; }
-            float y = e.y; // the base height as placed in the editor (what Adi saw there)
-            var rot = Quaternion.Euler(0f, e.yaw, 0f); float sc = e.scale > 0.01f ? e.scale : 1f;
-            var org = new Vector3(e.x, y, e.z);
+            float px = e.x, pz = e.z, y = e.y, yaw = e.yaw; // world: as placed in the editor (what Adi saw there)
+            if (e.alongTrack && t != null && t.N > 0)
+            {
+                int ti = ((int)System.Math.Round(e.x / t.ds) % t.N + t.N) % t.N; var tp = t.pts[ti];
+                px = (float)(tp.x + tp.nx * e.z); pz = (float)(tp.y + tp.ny * e.z);
+                y = Environment.GroundY(px, pz) + e.y;
+                yaw += Mathf.Atan2((float)tp.tx, (float)tp.ty) * Mathf.Rad2Deg;
+            }
+            var rot = Quaternion.Euler(0f, yaw, 0f); float sc = e.scale > 0.01f ? e.scale : 1f;
+            var org = new Vector3(px, y, pz);
             foreach (var sb in m.subs)
             {
                 int k = sb.mat; if (k < 0 || k >= nMat) continue;

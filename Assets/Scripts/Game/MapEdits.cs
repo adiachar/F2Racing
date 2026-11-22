@@ -23,7 +23,10 @@ public static class MapEdits
         public int kind = 1, roof; // kind / roof as WorldData's BLDG section (1 residential; 0 flat roof)
         public Color colour = new Color(0f, 0f, 0f, 0f); // alpha 0 = the town's usual wall colours
     }
-    [Serializable] public class Mdl { public string name = ""; public float x, z, y, yaw, scale = 1f; } // a landmark model (Landmarks.cs); y = the height of its base (world metres, as placed in the editor)
+    // a landmark model (Landmarks.cs); y = the height of its base (world metres, as placed in the editor).
+    // alongTrack (for placements written by hand, not by the editor): x = metres along the lap from the line, z = metres
+    // to the side (+ = the track normal's side), y = lift above the ground, yaw relative to the direction of travel
+    [Serializable] public class Mdl { public string name = ""; public float x, z, y, yaw, scale = 1f; public bool alongTrack; }
     [Serializable]
     public class File
     {
