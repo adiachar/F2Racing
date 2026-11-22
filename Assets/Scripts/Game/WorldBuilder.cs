@@ -442,6 +442,7 @@ public static class WorldBuilder
     {
         var root = new GameObject("World").transform;
         Gfx = LiveGfx; // the level actually chosen now, not the last saved one
+        MapEdits.Load(t.def != null ? t.def.id : null); // Adi's hand edits for this circuit, if any (MapEdits.cs)
         Debug.Log("WorldBuilder: building " + (t.def != null ? t.def.id : "?") + " for graphics level " + Gfx); // (once per build; the shooter's console.log shows it)
         { var bs = Resources.Load<Shader>("Baked"); BakeReady = bs != null && bs.isSupported; }
         BakeTint.Clear();

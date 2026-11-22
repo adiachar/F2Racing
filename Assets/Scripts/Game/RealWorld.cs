@@ -139,6 +139,7 @@ public static class RealWorld
         var sw = System.Diagnostics.Stopwatch.StartNew();
         WorldData w = null;
         try { w = WorldData.Load(t.def.id); } catch (System.Exception e) { Debug.LogWarning("RealWorld: " + e.Message); }
+        MapEdits.Apply(w); // Adi's hand edits (Resources/MapEdits/<id>.json): remove areas, extra trees and buildings
         if (w == null || !(w.HasTerrain || w.bN > 0 || w.aN > 0 || w.lN > 0 || w.tN > 0)) return;
         D = w; env = Environment.Cur; sty = StyleFor(t.def.id, env); gfx = WorldBuilder.Gfx;
         var bb = t.Bounds(); bbX0 = (float)bb.minX; bbZ0 = (float)bb.minY; bbX1 = (float)bb.maxX; bbZ1 = (float)bb.maxY;
