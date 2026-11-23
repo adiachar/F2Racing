@@ -1,8 +1,10 @@
-// People2 (People.cs, Tools/People2): the realistic people (race driver, crew, engineers): textured from one atlas per
-// pack (_MainTex: rgb colour, a = tint amount). Where a > 0 the rgb holds a detail grey (0.5 linear = the garment's own
-// average brightness) and the colour comes per person from _Pal[region] (vertex colour R = region index, the same
-// 24-entry palette as People.shader, MaterialPropertyBlock), so a team's overalls / suit / cap recolour for free; where
-// a = 0 the texture shows as it is (faces, hands, hair, shoes, visor). Lit per vertex as People.shader: the cars' sun
+// People2 (People.cs, Tools/People2): the realistic people (race drivers, crew, engineers, fans, officials): textured
+// from one atlas per pack (_MainTex: rgb colour, a = tint, People2 pack v2 encoding: amount = saturate(2a), accent share
+// = saturate(2a - 1); 0.5 = fully the main colour, 1 = fully the accent). Where tinted the rgb holds a detail grey (0.5
+// linear = the garment's own average brightness) and the colour comes per person from _Pal[region] (vertex colour R =
+// region index, the same 24-entry palette as People.shader, MaterialPropertyBlock) and, for the accent, _Pal[vertex
+// colour G] (suit stripes / belt / cuffs, the helmet's second colour), so a team's suit / shirt / helmet recolour for
+// free; where a = 0 the texture shows as it is (faces, hands, hair, shoes, visor). Hair cards: People2Hair.shader. Lit per vertex as People.shader: the cars' sun
 // with a little wrap, the sky's SH (ShadeSH9; the menu studio gives its own), a soft highlight on glossy regions
 // (_Pal.a: helmet shell, visor) and a sky reflection on them. Fog and the colour grade as every world shader.
 // Precision: no comparisons, no step() (GLES3 / Vulkan rule); the fragment maths in float.
@@ -32,8 +34,8 @@ Shader "F2/People2"
             struct v2f
             {
                 float4 pos : SV_POSITION; float2 uv : TEXCOORD0;
-                float3 pal : TEXCOORD1; float3 lit : TEXCOORD2; float3 add : TEXCOORD3;
-                UNITY_FOG_COORDS(4)
+                float3 pal : TEXCOORD1; float3 lit : TEXCOORD2; float3 add : TEXCOORD3; float3 acc : TEXCOORD4;
+                UNITY_FOG_COORDS(5)
             };
 
             v2f vert (appdata v)
@@ -42,6 +44,7 @@ Shader "F2/People2"
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.uv = v.uv;
                 float4 pal = _Pal[(int)(v.color.r * 255.0 + 0.5)];
+                o.acc = _Pal[(int)(v.color.g * 255.0 + 0.5)].rgb;
                 float3 n = normalize(UnityObjectToWorldNormal(v.normal));
                 float3 wp = mul(unity_ObjectToWorld, v.vertex).xyz;
                 float3 L = normalize(_WorldSpaceLightPos0.xyz);
@@ -64,7 +67,8 @@ Shader "F2/People2"
             fixed4 frag (v2f i) : SV_Target
             {
                 float4 t = tex2D(_MainTex, i.uv);
-                float3 alb = lerp(t.rgb, i.pal * t.rgb * 2.0, t.a);
+                float amt = saturate(t.a * 2.0), share = saturate(t.a * 2.0 - 1.0);
+                float3 alb = lerp(t.rgb, lerp(i.pal, i.acc, share) * t.rgb * 2.0, amt);
                 fixed4 c = fixed4(alb * i.lit + i.add, 1);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb);

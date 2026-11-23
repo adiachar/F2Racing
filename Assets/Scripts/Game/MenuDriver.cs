@@ -30,6 +30,7 @@ public static class MenuProfile
     public static RaceProgress Pending;  // GameManager (FinishRace): the race just finished, applied by RecordRace
     public static RaceOutcome Last;      // the last race's XP and safety change (results page)
     public static bool PolePending;      // pole in the qualifying just run: its XP comes with the race from pole
+    public static float XpMult = 1f;     // the difficulty's XP multiplier (CareerDifficulty.cs; GameManager sets it at session start)
 
     public static void Load()
     {
@@ -85,6 +86,7 @@ public static class MenuProfile
         var vals = new[] { Progression.XpFinish, xPos, laps * Progression.XpPerLap, ot * Progression.XpOvertake, cl * Progression.XpCleanLap,
                            pole ? Progression.XpPole : 0, field && fastest ? Progression.XpFastest : 0 };
         int gain = 0; foreach (int v in vals) gain += v;
+        int raw = gain; gain = Progression.WithDifficulty(gain, XpMult); // harder difficulty = more XP
         Xp += gain;
         o.xpGain = gain; o.xpAfter = Xp; o.xpGainStr = "+" + gain + " XP";
         var sb = new System.Text.StringBuilder();
@@ -97,6 +99,7 @@ public static class MenuProfile
             if (sb.Length > 0) sb.Append("  \u00b7  ");
             sb.Append(names[best]).Append(" +").Append(vals[best]);
         }
+        if (gain != raw) { if (sb.Length > 0) sb.Append("  \u00b7  "); sb.Append(Difficulty.XpLabel(XpMult)); }
         o.xpDetail = sb.ToString();
 
         // ---- safety rating: the race's own tally (a clean-race pull at the flag is in it already)
@@ -137,6 +140,15 @@ public static class MenuProfile
         Load();
         if (loss <= 0f) return;
         Sr = Mathf.Clamp(Sr - loss, 0f, 100f);
+        Save();
+    }
+
+    // bonus XP outside a race result (career goals, Season.Record)
+    public static void AddXp(int xp)
+    {
+        Load();
+        if (xp <= 0) return;
+        Xp += xp;
         Save();
     }
 

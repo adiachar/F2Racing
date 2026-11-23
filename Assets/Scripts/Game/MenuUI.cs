@@ -176,7 +176,7 @@ public sealed partial class MenuUI
         resPenStr = resPenalty > 0 ? $"+{resPenalty:0} s" : null;
         noteParsed = null; noteLine = notePts = noteChamp = null;
         MenuProfile.RecordRace(resPos, results.Length, resPlayerFastest); // career stats, XP and safety rating (MenuDriver.cs)
-        page = Page.Results;
+        page = Page.Results; reveal = false; // (the post-race sequence, PostRace.cs, hides this page and reopens it with the progress reveal: OpenResults)
     }
 
     // ------------------------------------------------------------------ drawing
@@ -237,7 +237,7 @@ public sealed partial class MenuUI
                 else GoHome();
                 break;
             case Page.Driver: case Page.Results: GoHome(); break;
-            case Page.Season: GoPlay(StepSetup, -1); break;
+            case Page.Season: season.Back(); break; // story cards, contract, full tables, then Home (SeasonUI.cs)
         }
     }
 
@@ -474,6 +474,7 @@ public sealed partial class MenuUI
 
     Choice DrawResults()
     {
+        if (reveal) return DrawReveal(); // the progress reveal first (MenuProgress.cs)
         if (!ReferenceEquals(noteParsed, resultNote)) ParseNote();
         UiKit.PaperPage();
         var f = UiKit.PaperFrame(72f);

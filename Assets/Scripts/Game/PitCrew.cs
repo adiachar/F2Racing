@@ -8,9 +8,10 @@
 //    gloves and full-face helmets with dark visors and a top stripe; engineers team shirts, dark trousers and headsets
 //    with a boom mic; mechanics overalls with caps or bare heads. Male / female bodies, heights, skin tones and hair vary
 //    per person. Colours come from the team's Livery (a palette per person, People.shader).
-//    With the People2 packs (People.cs) the crew are realistic textured people instead (Mixamo Ch08 / Ch13 / Remy when
-//    the private pack is there, else the CC-BY Avatar; overall-wearers only on the stop crew), recoloured in the team's
-//    colours by the same palette, 3 LODs by camera distance (Rig.SetLodAt); after the release some clap (mocap).
+//    With the People2 packs (People.cs) the crew are realistic textured people instead: the Rocketbox engineers (team
+//    shirts; the stop crew in the crew helmet, men in trousers only), engineers / mechanics mixed with the Mixamo Ch08 /
+//    Ch13 / Remy when the private pack is there, recoloured in the team's colours by the same palette, 3 LODs by camera
+//    distance (Rig.SetLodAt); after the release some clap (mocap).
 //  * Animation: per role, keys (position on the box floor, facing, a pose) with Hermite paths (no stop-start at
 //    pass-through keys), eased with anticipation (weight back before the dash) and overshoot-and-settle. A pose is a
 //    clip, or two mixed (half-crouched ready = crouch + idle): idle, crouch, kneel-and-work (wheel gun), push / brace

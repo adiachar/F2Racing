@@ -1,7 +1,8 @@
 // GameManagerSettings.cs — the settings half of GameManager (a partial class; the component itself is GameManager.cs):
 //  * the settings the tabbed settings screen added, with their PlayerPrefs keys, loading and saving
-//  * the rows of the settings screen (SettingsUI.cs draws them): CONTROLS, ASSISTS, CAR SETUP, CAMERA, GRAPHICS,
-//    AUDIO, GAME
+//  * the rows of the settings screen (SettingsUI.cs draws them): CONTROLS, ASSISTS (the Difficulty preset first:
+//    CareerDifficulty.cs; changing an aid, the rival level or damage by hand makes it Custom), CAR SETUP, CAMERA,
+//    GRAPHICS, AUDIO, GAME (rows that would restart a career round are locked during one: CareerSession.cs)
 //  * what the settings do: steering and brake curves, steering assist, braking assist, car set-up values written
 //    into the car's CarConfig, frame rate, resolution and volumes
 // Old settings keep their PlayerPrefs keys. Four of them were a position in a short list ("bal", "brakeBias",
@@ -134,7 +135,7 @@ public partial class GameManager
     void ApplySetup(CarConfig c)
     {
         var b = BaseCfg(cfgClass);
-        c.damage = damageMode == 2; CarModel.damageVisuals = damageMode > 0;
+        int dm = DamageNow; c.damage = dm == 2; CarModel.damageVisuals = dm > 0; // a career round always has damage (CareerSession.cs)
         c.steerSpeed = steerRate; c.steerReturn = steerRet; c.maxLockDeg = b.maxLockDeg * steerLockPct * 0.01;
         if (cfgClass == 0) c.aeroFront = aeroBal / 100.0; // the F1 car only, as before
         c.brakeBias = brakeBiasPct / 100.0; c.brakeMigration = brakeMigPct / 100.0; c.engineBrake = engBrakePct / 100.0;
@@ -202,6 +203,7 @@ public partial class GameManager
 
     void DrawSettings()
     {
+        SyncDifficulty(); // a preset chosen on the career hub / menu shows here at once
         if (settingsUi == null) settingsUi = new SettingsUI(BuildSettings(), Save);
         if (settingsUi.Draw(InRace ? "game paused" : "")) CloseSettings();
     }
@@ -243,17 +245,23 @@ public partial class GameManager
 
         // ---- ASSISTS
         var asst = new SettingsUI.Tab("ASSISTS");
-        asst.Choice("Traction control", "Cuts power when the rear wheels spin. Not allowed in top-tier racing.", offLowHigh, (int)TcMode.Low, () => (int)tc, v => { tc = (TcMode)v; if (car != null) car.cfg.tc = tc; });
-        asst.Toggle("ABS brakes", "Stops the wheels locking under braking. Not allowed in top-tier racing.", true, () => absOn, v => { absOn = v; if (car != null) car.cfg.abs = absOn; });
-        asst.Choice("Steering assist", "Steers into a slide for you when the rear steps out.", offLowHigh, 0, () => steerAssist, v => steerAssist = v);
-        asst.Choice("Braking assist", "Brakes for corners by the racing line's speed. Low brakes later and softer.", offLowHigh, 0, () => brakeAssist, v => brakeAssist = v)
+        asst.Choice("Difficulty", "Like GRID: Easy, Medium, Hard, Pro and Master set the rival level, damage, these assists and the racing line, and whether a career race can be restarted (Easy and Medium only; qualifying never). Harder = more XP: Easy \u00d70.8, Medium \u00d71, Hard \u00d71.25, Pro \u00d71.5, Master \u00d72. Change any of them yourself and it becomes Custom.",
+            Difficulty.Names, Difficulty.Custom, () => Difficulty.Current, v => { Difficulty.Set(v); SyncDifficulty(); }).NoReset()
+            .LockedWhen(() => InRace && InSeasonRound ? "Change it on the career hub between sessions." : null);
+        asst.Choice("Career restarts", "Custom difficulty: may a career race be restarted (never qualifying)? The presets decide it themselves.", new[] { "Off", "On" }, 1,
+            () => Difficulty.RestartsAllowed ? 1 : 0, v => Difficulty.CustomRestarts = v == 1).NoReset()
+            .LockedWhen(() => Difficulty.Current != Difficulty.Custom ? "Set by the difficulty preset." : InRace && InSeasonRound ? "Change it between sessions." : null);
+        asst.Choice("Traction control", "Cuts power when the rear wheels spin. Not allowed in top-tier racing.", offLowHigh, (int)TcMode.Low, () => (int)tc, v => { tc = (TcMode)v; if (car != null) car.cfg.tc = tc; Tweaked(); });
+        asst.Toggle("ABS brakes", "Stops the wheels locking under braking. Not allowed in top-tier racing.", true, () => absOn, v => { absOn = v; if (car != null) car.cfg.abs = absOn; Tweaked(); });
+        asst.Choice("Steering assist", "Steers into a slide for you when the rear steps out.", offLowHigh, 0, () => steerAssist, v => { steerAssist = v; Tweaked(); });
+        asst.Choice("Braking assist", "Brakes for corners by the racing line's speed. Low brakes later and softer.", offLowHigh, 0, () => brakeAssist, v => { brakeAssist = v; Tweaked(); })
             .LockedWhen(() => mapIdx == PlaygroundIdx ? "Circuits only: the playground has no racing line." : null);
         asst.Choice("Racing line", "Chevrons on the ideal line, coloured live for your speed: green = no braking needed, yellow = brake soon, red = brake here.", new[] { "Off", "Braking only", "Full" }, RacingLineView.Full, () => lineMode,
-            v => { lineMode = Mathf.Clamp(v, 0, 2); if (lineGo != null) lineGo.SetActive(showLine && !playground); });
+            v => { lineMode = Mathf.Clamp(v, 0, 2); if (lineGo != null) lineGo.SetActive(showLine && !playground); Tweaked(); });
 
         // ---- CAR SETUP
         var setup = new SettingsUI.Tab("CAR SETUP");
-        setup.Choice("Car", "In a session this restarts it with the new car.", CarConfig.ClassNames, 0, () => classIdx, v => { classIdx = v; if (InRace) { BuildLine(); ResetCar(); } }).NoReset();
+        setup.Choice("Car", "In a session this restarts it with the new car.", CarConfig.ClassNames, 0, () => classIdx, v => { classIdx = v; if (InRace) { BuildLine(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
         setup.Choice("Tyre compound", "Soft grips most, wears fastest. Inters for damp, Wets for rain. Fitted at the next restart.", Weather.TyreNames(), 0,
             () => tyreSet, v => { tyreSet = v; compIdx = (int)Weather.PhysicsCompound(v); });
         setup.Slider("Aero balance", "Downforce on the front. More = sharper turn-in, looser rear.", 44, 54, 0.5f, 45, () => aeroBal, v => { aeroBal = v; SetupChanged(); }, v => $"{v:0.0}% F")
@@ -309,15 +317,15 @@ public partial class GameManager
 
         // ---- GAME
         var game = new SettingsUI.Tab("GAME");
-        game.Choice("Track", "In a session this loads the circuit and restarts.", MapNames, 0, () => mapIdx, v => { mapIdx = v; if (InRace) { LoadMap(); ResetCar(); } }).NoReset();
+        game.Choice("Track", "In a session this loads the circuit and restarts.", MapNames, 0, () => mapIdx, v => { mapIdx = v; if (InRace) { LoadMap(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
         var rivalNames = new string[RivalCounts.Length]; for (int i = 0; i < rivalNames.Length; i++) rivalNames[i] = RivalCounts[i] == 0 ? "None" : RivalCounts[i].ToString();
-        game.Choice("Rivals", "Cars to race against. In a race this restarts it.", rivalNames, 1, () => rivalIdx, v => { rivalIdx = v; if (InRace) ResetCar(); }).NoReset();
-        game.Choice("Rival level", "How fast the rivals drive. In a race this restarts it.", DiffNames, 0, () => diffIdx, v => { diffIdx = v; if (InRace) ResetCar(); }).NoReset();
-        game.Choice("Grid position", "Where you start a race: last, random, pole or a set place. In a race this restarts it.", MenuUI.GridNames, 0, () => ui.gridIdx, v => { ui.SetGrid(v); if (InRace) ResetCar(); }).NoReset();
+        game.Choice("Rivals", "Cars to race against. In a race this restarts it.", rivalNames, 1, () => rivalIdx, v => { rivalIdx = v; if (InRace) ResetCar(); }).NoReset().LockedWhen(CareerLock);
+        game.Choice("Rival level", "How fast the rivals drive. In a race this restarts it.", DiffNames, 0, () => diffIdx, v => { diffIdx = v; Tweaked(); if (InRace) ResetCar(); }).NoReset().LockedWhen(CareerLock);
+        game.Choice("Grid position", "Where you start a race: last, random, pole or a set place. In a race this restarts it.", MenuUI.GridNames, 0, () => ui.gridIdx, v => { ui.SetGrid(v); if (InRace) ResetCar(); }).NoReset().LockedWhen(CareerLock);
         game.Choice("Weather", "Damp: a drying line, less grip off it. Wet: rain, spray, much less grip. Rivals fit the right tyres at the next restart.", Weather.Names, 0,
             () => Weather.Index, v => { Weather.Index = v; ApplyWeather(); });
         game.Choice("Time of day", "Sun height and colour, sky and shadows. Night is for street circuits (floodlit); elsewhere it is evening. In a session this reloads the circuit.", TimeOfDay.Names, TimeOfDay.Default,
-            () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset();
+            () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
         game.Choice("Driver read-out", "Tyres, brakes and fuel beside the steering-wheel display.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
         game.Choice("Mini-map", "Local: the track round your car (300 m ahead), turned to your heading, with the cars near you. Top right.", new[] { "Local", "Off" }, 0,
@@ -325,16 +333,19 @@ public partial class GameManager
         game.Toggle("Timing tower", "Order, gaps and tyres on the left in a race. Tap it for gap / interval, the arrow for all cars.", true, () => hudTower, v => hudTower = v);
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
-        game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => damageMode, v => { damageMode = v; SetupChanged(); });
+        game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => InRace && InSeasonRound ? DamageNow : damageMode, v => { damageMode = v; SetupChanged(); Tweaked(); })
+            .LockedWhen(() => InRace && InSeasonRound ? "A career round always has damage: Visual on Easy and Medium, Full from Hard." : null);
         game.Choice("Flags & safety car", "On: yellow flags, Virtual Safety Car and Safety Car after crashes, blue flags and penalties: track limits (3 warnings, then +5 s), +5 / +10 s for causing a collision, +5 s for a place gained off track and not given back. Fitted at the next restart.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
         game.Choice("Race start", "Full: like F1. You walk to your car in the garage, leave the pit lane, then a formation lap to warm your tyres (keep your place; SKIP TO START ends it), then the lights. Short: engine start on the grid, then the lights. Off: straight to the lights. A tap skips the film. From the next race.",
             PreRaceNames, 0, () => preRaceIdx, v => preRaceIdx = v);
+        game.Choice("Post-race", "Full: after the flag a slow-motion finish, a cool-down lap (the car drives itself, TV cameras, the classification), the podium with the cup and champagne, then your XP, level and safety rating. Short: the finish, the podium and your progress. Off: straight to the results. A tap skips ahead.",
+            PostRaceNames, 0, () => PostRaceMode, v => PostRaceMode = v);
         game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();
-        game.Button("Restart", "Start this session again from the grid.", () => "Restart session", () => { ResetCar(); CloseSettings(); }).HiddenWhen(() => !InRace);
-        game.Button("Leave", "End this session and go to the start menu.", () => "Back to menu", () => { CloseSettings(); ui.page = MenuUI.Page.Start; }).HiddenWhen(() => !InRace);
+        game.Button("Restart", "Start this session again from the grid.", () => "Restart session", () => { ResetCar(); CloseSettings(); }).HiddenWhen(() => !InRace || !RestartOk);
+        game.Button("Leave", "End this session and go to the start menu. Career: leaving qualifying = no time (back of the grid); leaving a race on Hard or above = retired.", () => "Back to menu", () => { CloseSettings(); ui.page = MenuUI.Page.Start; }).HiddenWhen(() => !InRace);
         game.Button("Reset progress (debug)", "Level, XP, safety rating and career stats back to a new driver. Tap twice. For testing only.", ProgressResetLabel, ProgressResetTap).HiddenWhen(() => InRace);
 
         return new List<SettingsUI.Tab> { con, asst, setup, camTab, gfx, aud, game };

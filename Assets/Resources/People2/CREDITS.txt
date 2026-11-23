@@ -1,15 +1,45 @@
-People2 (realistic people) - Assets/Resources/People2/people2.bytes, built by Tools/People2/build.py
+People2 (realistic people) - Assets/Resources/People2/*.bytes + *_atlas.png, built by Tools/People2/build.py + people3.py
 
-1. The player's driver (race suit, gloves, HANS, helmet; also the crew helmet):
+1. Race drivers (people2.bytes: "Driver" = driver_01, "Driver2" = driver_02): from Adi's asset pack (Art/People3), made for
+   this project from the MakeHuman / MPFB2 base mesh, targets and Mixamo-named rig (CC0 1.0 assets,
+   https://github.com/makehumancommunity/mpfb2). CC0. Changes: bound to the game's skeleton, team-tintable, atlas, LODs.
+
+2. Engineers, marshals (people3.bytes), officials, photographer, TV presenter, fans (people3p.bytes): Microsoft Rocketbox
+   avatars (https://github.com/microsoft/Microsoft-Rocketbox), converted and edited for this project (Art/People3/README.md:
+   bones renamed, atlased, marshals recoloured, engineers' shirts made team-tintable with a headset, camera / microphone
+   props; here: bound to the game's skeleton, decimated LODs, atlas, the crew helmet on the engineers). Licence:
+
+   MIT License
+
+   Copyright (c) 2020 Microsoft
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+3. The crew helmet (people3 engineers' helmet variant, the Mixamo crew):
    This work is based on "Race Car Driver - Low Poly" (https://sketchfab.com/3d-models/race-car-driver-low-poly-0fedfae53537473ba2ee3d9b722e0c66)
    by tomkart (https://sketchfab.com/tomkart) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
-   Changes: rigged to the game's skeleton, brand marks painted out of the textures, suit / glove / helmet colours made
-   team-tintable, texture atlas, LODs.
+   Changes: brand marks painted out of the textures, colours made team-tintable, fitted to other heads, LODs.
 
-2. Crew / engineer avatar (polo, chinos, cap; also the crew cap):
+4. The crew cap (the Mixamo crew's cap variant):
    This work is based on "Free Avatar for iClone," (https://sketchfab.com/3d-models/free-avatar-for-iclone-4908979179aa43d5835a0509f1519e3b)
    by Asfandyar Hesami (https://sketchfab.com/allkhanan1) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
-   Changes: retargeted to the game's skeleton, decimated (3 LODs), clothes made team-tintable, texture atlas.
+   Changes: fitted to other heads, decimated, team-tintable.
 
 Private, NOT in this repository: Assets/Resources/People2/mixamo/mixamo.bytes (crew bodies and motion-capture clips
 derived from Adobe Mixamo characters / animations; Mixamo's licence allows use in the game but not redistribution of the

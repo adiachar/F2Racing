@@ -91,11 +91,17 @@ compression). Built offline: `Tools/Models/build_models.py` (Poly Haven set) and
 | Asset | Source | Licence | Used as |
 |---|---|---|---|
 | Universal Base Characters (Superhero male / female), Universal Animation Library | Quaternius (Tools/People/fetch.sh) | CC0 | the old low-poly people (`People/people.bytes`): far baked crews (PitGarage), every clip the pit stop uses; fallback for everything below |
-| "Race Car Driver - Low Poly" | [Sketchfab, tomkart](https://sketchfab.com/3d-models/race-car-driver-low-poly-0fedfae53537473ba2ee3d9b722e0c66) | CC BY 4.0 (credit: `People2/CREDITS.txt`, `People.Credit` in-game) | the player's driver (menu studio, pre-race walk); its helmet on the crew. Rigged by us, brand marks painted out, team-tintable |
-| "Free Avatar for iClone," | [Sketchfab, Asfandyar Hesami](https://sketchfab.com/3d-models/free-avatar-for-iclone-4908979179aa43d5835a0509f1519e3b) | CC BY 4.0 (as above) | crew / engineers when the Mixamo pack is absent; its cap on the crew |
-| Mixamo characters Ch08, Ch13, Remy; animations Idle, Walking, Talking (x2), Clapping, Sitting Clap, Waving, Standing w/ Briefcase Idle | Adobe Mixamo (downloaded by Adi) | Mixamo terms: free use in the game, **no redistribution of the files** | `People2/mixamo/mixamo.bytes`: **not in this repo** (.gitignore); CI copies it from the private assets repo. Crew bodies + mocap clips |
+| Race drivers driver_01, driver_02 (Adi's asset pack, `Art/People3`, MakeHuman base data) | made for the project from the MakeHuman / MPFB2 CC0 assets | CC0 | `People2/people2.bytes` + `people2_atlas.png`: "Driver" (driver_01) = the player's driver (menu studio, pre-race walk, podium), "Driver2" (driver_02) = rivals on the podium. Suit / gloves / boots / helmet team-tinted (pack tint mask: white = team, 128 = accent) |
+| Microsoft Rocketbox avatars (27, converted in Adi's pack: `Art/People3`, README / MANIFEST_drivers.md there) | [github.com/microsoft/Microsoft-Rocketbox](https://github.com/microsoft/Microsoft-Rocketbox) | **MIT** (notice `Art/People3/LICENSE_rocketbox.md`; ships as `People2/CREDITS.txt`, `People.Credit` / `People.RocketboxLicence` for the in-game credits) | `People2/people3.bytes` + atlas: engineers 1-4 (team-tinted shirts; pit-stop crew in the crew helmet, garage / pit-wall crew), marshals 1-3 (pit-lane walker); `People2/people3p.bytes` + atlas (loaded only for the podium): officials 1-2, photographer, TV presenter, fans 1-16 |
+| "Race Car Driver - Low Poly" | [Sketchfab, tomkart](https://sketchfab.com/3d-models/race-car-driver-low-poly-0fedfae53537473ba2ee3d9b722e0c66) | CC BY 4.0 (credit: `People2/CREDITS.txt`, `People.Credit` in-game) | only its helmet now: the stop crew's helmet (people3 engineers' helmet variant, the Mixamo crew). Brand marks painted out, team-tintable |
+| "Free Avatar for iClone," | [Sketchfab, Asfandyar Hesami](https://sketchfab.com/3d-models/free-avatar-for-iclone-4908979179aa43d5835a0509f1519e3b) | CC BY 4.0 (as above) | only its cap now (the Mixamo crew's cap variant) |
+| Mixamo characters Ch08, Ch13, Remy; animations Idle, Walking, Talking (x2), Clapping, Sitting Clap, Waving, Standing w/ Briefcase Idle | Adobe Mixamo (downloaded by Adi) | Mixamo terms: free use in the game, **no redistribution of the files** | `People2/mixamo/mixamo.bytes`: **not in this repo** (.gitignore); CI copies it from the private assets repo. Crew bodies (mixed with the engineers off the stop crew) + mocap clips (drive every People2 body). No "Cheer" clip in the uploads (the podium cheer = Quaternius Celebrate) |
 
-People2 packs are built by `Tools/People2/build.py` (see its header): one 1024² atlas per pack (JPEG colour + PNG tint
-mask, decoded and GPU-compressed at load), 4 head-gear variants x 3 LODs per body (crew ~4k / 1.5k / 0.5k triangles,
-driver 1.35k / 0.76k / 0.4k), <= 4 bone weights on the game's 22-joint skeleton. Sizes: people2.bytes ~1.2 MB,
-mixamo.bytes ~2.5 MB.
+People2 packs are built by `Tools/People2/build.py` + `people3.py` (see their headers), pack format v2 (People.cs still reads
+v1, e.g. an older private mixamo.bytes). The public packs' atlases are PNGs next to the packs, imported by Unity (ASTC,
+mips: no runtime decode): people2 2048x1024 (1024² per driver), people3 2048x1024 (512² per person + the crew helmet),
+people3p 2048x1024 (512² staff, 256² fans); mixamo keeps its 1024² JPEG + PNG atlas in the pack. Alpha = tint (0.5 =
+team colour, 1 = accent) or, in hair-card islands, the hair's coverage (People2Hair.shader, alpha clip, second sub-mesh).
+Triangles per LOD: drivers 19k (hero, within 9 m) / 4k / 1.5k / 0.5k; engineers / marshals ~4k / 1.5k / 0.55k (the stop
+crew ~3.1k under the helmet); podium people ~5-6k / 1.5-1.8k / 0.55k (with hair cards). Sizes: people2.bytes 1.1 MB +
+0.9 MB atlas, people3.bytes 1.8 MB + 2.0 MB, people3p.bytes 4.3 MB + 2.6 MB, mixamo.bytes 2.6 MB.

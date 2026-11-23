@@ -8,7 +8,8 @@
 //  * right: the next race: "NEXT · QUICK RACE", the circuit (or the championship round), length · laps · pole; a tap
 //    changes it (the Circuit step, or the season hub in a championship)
 //  * under the bottom rule: two text links for the other modes (Championship / Race weekend / Quick race, each with a
-//    grey sub-line) and the black RACE = the last mode and circuit, straight to the Setup step; the licence credits.
+//    grey sub-line) and the black RACE = the last mode and circuit, straight to the Setup step; in the career mode it
+//    is "Continue career" / "Start career" and opens the career hub (SeasonUI.cs); the licence credits.
 // Strings are built when what they show changes, not per frame.
 using FormulaSim;
 using UnityEngine;
@@ -17,7 +18,7 @@ public sealed partial class MenuUI
 {
     const string KeyHome = "home";
 
-    int homeKey = int.MinValue; string homeNext, homeName, homeSub; bool homeSeasonTried;
+    int homeKey = int.MinValue; string homeNext, homeName, homeSub, homeRace = "Race"; bool homeSeasonTried;
     readonly int[] homeLinks = new int[2]; readonly string[] homeLinkSub = new string[2];
 
     // the home page's strings: rebuilt when the mode, circuit, race length, season or profile changes
@@ -26,21 +27,22 @@ public sealed partial class MenuUI
         MenuProfile.Load();
         if (!homeSeasonTried) { homeSeasonTried = true; if (!Season.Active && Season.HasSave) Season.Load(); } // once: not a file check per frame
         var sd = Season.Data;
-        int key = mode * 1000 + map + lapsIdx * 100000 + (sd != null ? (sd.round + 1) * 1000000 + sd.results.Count * 37 : 0)
+        int key = mode * 1000 + map + lapsIdx * 100000 + (sd != null ? (sd.round + 1) * 1000000 + sd.results.Count * 37 + sd.seasonNo * 7919 + 13 : 0)
                 + cards[Mathf.Clamp(map, 0, cards.Length - 1)].length.Length * 3;
         if (key == homeKey && homeNext != null) return;
         homeKey = key;
 
-        homeNext = "Next  ·  " + ModeNames[mode];
+        homeNext = "Next  ·  " + (mode == ModeChampionship ? "Career" : ModeNames[mode]);
+        homeRace = mode == ModeChampionship ? (Season.Active ? "Continue career" : "Start career") : "Race";
         bool running = Season.Active && !Season.Over;
         if (mode == ModeChampionship)
         {
             if (running)
             {
                 homeName = Circuits.All[Season.CircuitIndex(sd.round)].name;
-                homeSub = "Round " + (sd.round + 1) + " of " + Season.Rounds + "  ·  " + Season.GpNames[sd.round] + "  ·  " + lapsText[lapsIdx];
+                homeSub = "Round " + (sd.round + 1) + " of " + Season.Rounds + "  ·  " + Season.GpNames[sd.round] + "  ·  " + Season.TierNames[Season.Tier] + " tier";
             }
-            else { homeName = Season.Over ? "Season complete" : "New season"; homeSub = Season.Over ? "Start a new one" : "Pick your team"; }
+            else { homeName = Season.Over ? "Season complete" : "New career"; homeSub = Season.Over ? "Season " + sd.seasonNo + "  ·  next season" : "A rookie, a promise, a nemesis"; }
         }
         else
         {
@@ -55,7 +57,7 @@ public sealed partial class MenuUI
         for (int i = 0; i < 2; i++)
         {
             int m = homeLinks[i];
-            homeLinkSub[i] = m == ModeChampionship ? (running ? "Round " + (sd.round + 1) + " of " + Season.Rounds + "  ·  P" + Season.Rank(0) : Season.Over ? "Season complete" : "New season")
+            homeLinkSub[i] = m == ModeChampionship ? (running ? "Career  ·  round " + (sd.round + 1) + " of " + Season.Rounds + (sd.results.Count > 0 ? "  ·  P" + Season.Rank(0) : "") : Season.Over ? "Season complete" : "New career")
                            : m == ModeWeekend ? "Quali + race" : "Straight to the grid";
         }
     }
@@ -97,7 +99,7 @@ public sealed partial class MenuUI
         float ea = UiKit.Enter(KeyHome, 3, 0.04f, 0.45f);
         UiKit.PushAlpha(ea);
         UiKit.Hair(x0, x1, f.foot);
-        float raceW = UiKit.BlackButtonWidth("Race", 17f), lx = x0;
+        float raceW = UiKit.BlackButtonWidth(homeRace, 17f), lx = x0;
         var race = new Rect(x1 - raceW, f.actY - U(25), raceW, U(50));
         for (int i = 0; i < 2; i++)
         {
@@ -110,7 +112,7 @@ public sealed partial class MenuUI
             }
             lx += w + U(20);
         }
-        if (UiKit.BlackButton(race, "Race", 17f)) GoPlay(StepSetup, 1);
+        if (UiKit.BlackButton(race, homeRace, 17f)) { if (mode == ModeChampionship) season.Open(); else GoPlay(StepSetup, 1); } // the career: straight to its hub
         UiKit.PopAlpha();
 
         // licence credits for the car and steering-wheel models (CC BY): always on the home page, at the very bottom

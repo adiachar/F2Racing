@@ -1,34 +1,38 @@
 # build.py — People2: realistic people for the game, converted offline into the runtime format People.cs reads ('PPL2').
 #
 #   python3 -I build.py <work dir with the Mixamo GLBs (fbx2glb.py output) or ''> <assets-in dir> <repo root> [--preview DIR]
+#                       [--only public,people3,mixamo]
 #   1. Mixamo FBX -> GLB (Blender 4, apt `blender` + `python3-numpy`), one per file, named as SPECS / CLIPS expect
 #      (Remy.glb, Ch08_nonPBR.glb, Ch13_nonPBR.glb, Idle.glb, Walking.glb, Talking.glb, Talking_1.glb, Clapping.glb,
 #      Sitting_Clap.glb, Waving.glb, Standing_W_Briefcase_Idle.glb):
 #        blender -b --factory-startup -P fbx2glb.py -- in.fbx WORK/name.glb
-#   2. <assets-in dir> holds the two Sketchfab downloads (DRIVER / AVATAR folders below: scene.gltf, textures/).
+#   2. <assets-in dir> holds the two Sketchfab downloads (DRIVER / AVATAR folders below: scene.gltf, textures/): only
+#      their helmet and cap are used now (the crew's head gear).
 #   3. pip: pygltflib numpy pillow opencv-python-headless scipy trimesh pymeshlab (apt libopengl0); then this script;
 #      verify.py renders the packs back (as People.cs reads them) posed by the game's clips.
 #
-# Two packs:
-#  * PUBLIC  Assets/Resources/People2/people2.bytes  (CC-BY-4.0 sources, credited in CREDITS.txt / Docs/ASSETS.md):
-#      - "Driver": "Race Car Driver - Low Poly" by tomkart (Sketchfab): race suit, gloves, HANS, helmet; not rigged in
-#        the source, so rigged here (rigid parts bound to the game skeleton, blended at the joints); the brand marks are
-#        painted out of its textures (texfix.py); suit / gloves / helmet stripes tinted per team (texture alpha).
-#      - "Avatar": "Free Avatar for iClone" by Asfandyar Hesami (Sketchfab, Wolf3D rig): polo, chinos, cap.
+# Packs:
+#  * PUBLIC  Assets/Resources/People2/people2.bytes + people2_atlas.png (CC0): the pack drivers from Art/People3
+#      (people3.py): "Driver" = driver_01 (the player), "Driver2" = driver_02; 4 LODs (19k hero / 4k / 1.5k / 0.5k).
+#  * PUBLIC  people3.bytes / people3p.bytes + _atlas.png (MIT, Microsoft Rocketbox, Art/People3; people3.py): the race
+#      crew (engineers + crew-helmet variant, marshals) and the podium people (officials, photographer, presenter, fans).
 #  * PRIVATE Assets/Resources/People2/mixamo/mixamo.bytes (Mixamo: Adobe licence, NOT for the public repo; .gitignore):
 #      - crew bodies Ch08 (hoodie, joggers), Ch13 (top, trousers), Remy (t-shirt, shorts), clothes tinted per team;
 #      - mocap clips Idle, Walk, Talk, Talk2, Clap, SitClap, Wave, Briefcase retargeted to the game skeleton.
+#      After a rebuild copy it to the private assets repo (staging: /home/claude/private-assets-staging/People2/mixamo/).
 # Every body is bound to the game's 22-joint skeleton with its rest ORIENTATIONS (retarget.py), so all the old clips,
-# the IK and the pit-stop choreography drive it unchanged. Gear variants per body: helmet / headset / cap / bare
-# (People.G*). Three LODs (crew ~4k / ~1.5k / ~0.5k tris). Textures: one 1024^2 atlas per pack (JPEG colour + PNG tint mask).
+# the IK and the pit-stop choreography drive it unchanged. Gear variants per body (People.G*; a body may have fewer:
+# the game clamps the index). Textures: one atlas per pack: PNG next to the pack (imported by Unity) or JPEG colour +
+# PNG alpha inside it. Alpha (v2): 0.5 * tint + 0.5 * accent (People2.shader), hair-card coverage in card islands.
 #
 # PPL2 format (little endian):
-#   'PPL2', version i32 (1), nj i32 (22)
-#   atlas: jpgLen u32, jpg, pngLen u32, png (8-bit grey: tint amount; rgb under it = a detail grey, see People2.shader)
+#   'PPL2', version i32 (2; v1 = no nth / accent arrays, alpha = tint amount), nj i32 (22)
+#   atlas: jpgLen u32, jpg, pngLen u32, png (8-bit grey alpha, see above; rgb under the tint = a detail grey);
+#          both 0: the atlas is <pack>_atlas.png next to the pack (RGBA)
 #   nBody; per body: name (u8 len + ascii), flags u8 (1 female, 2 driver), pscale f32, height f32,
 #          rest local T (3 f32) + Q (4 f32) per joint, bindpose 16 f32 per joint (row-major), nVar i32 (4: People.G*),
-#          nLod i32 (3); per variant per LOD: nv, nt i32, pos 3 f32, normal 3 i8, uv 2 u16, region u8, bone idx 4 u8, weight 4 u8,
-#          indices 3 u16 per tri
+#          nLod i32 (3 or 4); per variant per LOD: nv, nt, nth i32 (hair-card tris, the 2nd sub-mesh), pos 3 f32, normal 3 i8,
+#          uv 2 u16, region u8, accent region u8, bone idx 4 u8, weight 4 u8, indices 3 u16 per tri (nt, then nth)
 #   nClip; per clip: name (u8 len + ascii), fps f32, frames i32, loop u8, stride f32 (m per cycle, 0 = none),
 #          quats (frames x nj x 4 i16), pelvis (frames x 3 f32)
 import os, sys, struct, io
@@ -44,8 +48,9 @@ import texfix
 # regions (People.cs R*)
 RSuit, RSide, RYoke, RSleeve, RForearm, RGlove, RThigh, RStripe, RShin, RBoot, RBelt, RNeck, RFace, RHair, \
     RHelmet, RHelmetTop, RVisor, RHeadset, RCap, RCapBrim, RKnee = range(21)
-KIND_REG = {'skin': RFace, 'top': RSuit, 'bottom': RThigh, 'shoes': RBoot, 'hair': RHair, 'eyes': RFace, 'cap': RCap,
+KIND_REG = {'body': RSuit, 'cards': RHair, 'dsuit': RSuit, 'dhelmet': RHelmet, 'dvisor': RVisor, 'skin': RFace, 'top': RSuit, 'bottom': RThigh, 'shoes': RBoot, 'hair': RHair, 'eyes': RFace, 'cap': RCap,
             'helmet': RHelmet, 'visor': RVisor, 'headset': RHeadset, 'suit': RSuit, 'gloves': RGlove, 'hans': RBelt, 'shell': RHair}
+ACC_REG = {'dsuit': RStripe, 'body': RStripe, 'dhelmet': RHelmetTop}  # accent region (People2 v2: tint mask 128) per kind
 TINT_KINDS = {'top', 'bottom', 'cap', 'headset'}          # tinted wherever they cover
 RED_KINDS = {'suit', 'gloves', 'helmet'}                  # tinted where the texture is red (the source's livery colour)
 GEARS = ['helmet', 'headset', 'cap', 'bare']
@@ -59,9 +64,13 @@ def srgb_dec(x): return np.where(x <= 0.04045, x / 12.92, np.power((x + 0.055) /
 
 # ---------------------------------------------------------------- atlas
 class Atlas:
-    def __init__(self, size=ATLAS):
-        self.n = size; self.rgb = np.zeros((size, size, 3), np.float32); self.cov = np.zeros((size, size), np.uint8)
-        self.tint = np.zeros((size, size), np.float32); self.tiles = {}
+    """one texture atlas (w x h): colour, tint amount (0..1), accent share of the tint (0..1, People2 v2), alpha-clip
+    coverage of hair cards (cutm: texels of card islands, cut: their coverage)"""
+    def __init__(self, size=ATLAS, h=None):
+        self.w = size; self.h = h or size; self.n = size
+        self.rgb = np.zeros((self.h, self.w, 3), np.float32); self.cov = np.zeros((self.h, self.w), np.uint8)
+        self.tint = np.zeros((self.h, self.w), np.float32); self.acc = np.zeros((self.h, self.w), np.float32)
+        self.cutm = np.zeros((self.h, self.w), np.uint8); self.cut = np.zeros((self.h, self.w), np.float32); self.tiles = {}
 
     def place(self, key, img, rect, uvs=None, solid=None):
         """img (PIL) -> rect (x, y, w, h) in atlas pixels; crops the image to the UVs used (uvs: list of (n,2) arrays)"""
@@ -83,19 +92,25 @@ class Atlas:
         self.rgb[y + PAD:y + PAD + th, x + PAD:x + PAD + tw] = r; self.cov[y + PAD:y + PAD + th, x + PAD:x + PAD + tw] = 1
         self.tiles[key] = (x + PAD, y + PAD, tw, th, u0, v0, u1, v1)
 
+    def tile_img(self, key, arr, interp=cv2.INTER_AREA):
+        """a per-texel map of a whole source image (H x W, float) resized to the tile (uncropped tiles only)"""
+        x, y, w, h, *_ = self.tiles[key]
+        return cv2.resize(arr.astype(np.float32), (w, h), interpolation=interp), (x, y, w, h)
+
     def map(self, key, uv):
         """source uv (glTF, v down) -> atlas uv (glTF orientation, 0..1)"""
         x, y, w, h, u0, v0, u1, v1 = self.tiles[key]
         uv = np.clip(uv, 0, 1)
         px = x + (uv[:, 0] - u0) / max(u1 - u0, 1e-6) * w; py = y + (uv[:, 1] - v0) / max(v1 - v0, 1e-6) * h
-        return np.c_[px / self.n, py / self.n]
+        return np.c_[px / self.w, py / self.h]
 
     def paint_tint(self, uv_tris, kinds, red=None):
         """tint mask from the faces of tinted kinds (rasterised in atlas pixels); red: per face bool, tint only red texels"""
-        m = np.zeros((self.n, self.n), np.uint8); mr = np.zeros((self.n, self.n), np.uint8)
+        m = np.zeros((self.h, self.w), np.uint8); mr = np.zeros((self.h, self.w), np.uint8)
+        sc = np.array([self.w, self.h]) * 4
         for t, k in zip(uv_tris, kinds):
             if k in TINT_KINDS or k in RED_KINDS:
-                pts = np.round(t * self.n * 4).astype(np.int32)
+                pts = np.round(t * sc).astype(np.int32)
                 cv2.fillPoly(mr if k in RED_KINDS else m, [pts], 255, lineType=cv2.LINE_8, shift=2)
         m = cv2.dilate(m, np.ones((3, 3), np.uint8)); mr = cv2.dilate(mr, np.ones((3, 3), np.uint8))
         self.tint = np.maximum(self.tint, m / 255.0)
@@ -107,7 +122,9 @@ class Atlas:
             self.tint = np.maximum(self.tint, redness * (mr / 255.0))
 
     def finish(self):
-        """detail grey under the tint (normalised per connected tinted area), padding by dilation; -> (jpg, png) bytes"""
+        """detail grey under the tint (normalised per connected tinted area), padding by dilation; -> (jpg, png) bytes.
+        Alpha (People2 v2): 0.5 * tint + 0.5 * accent (People2.shader: amount = saturate(2a), accent = saturate(2a - 1));
+        in hair-card islands the cards' coverage (alpha clip at 0.5, People2Hair.shader)."""
         lin = srgb_dec(self.rgb); lum = 0.2126 * lin[..., 0] + 0.7152 * lin[..., 1] + 0.0722 * lin[..., 2]
         msk = (self.tint > 0.5).astype(np.uint8)
         n, lab = cv2.connectedComponents(msk, connectivity=4)
@@ -134,9 +151,21 @@ class Atlas:
             new = (cov == 0) & (c > 0)
             img[new] = s[new] / c[new][:, None]; cov[new] = 1
         img[cov == 0] = 0.5
+        alpha = 0.5 * self.tint + 0.5 * np.minimum(self.acc, self.tint)
+        if self.cutm.any():
+            # hair cards: colour under the transparent texels = the coverage-weighted hair colour around them (no fringe
+            # when the mips blur the clip edge), alpha = coverage
+            cm = self.cutm > 0; a = self.cut * cm
+            num = cv2.GaussianBlur(img * a[..., None], (0, 0), 6); den = cv2.GaussianBlur(a, (0, 0), 6)[..., None]
+            fill = num / np.maximum(den, 1e-4)
+            w_ = np.clip(a * 1.6, 0, 1)[..., None]
+            img = np.where(cm[..., None], img * w_ + fill * (1 - w_), img)
+            alpha = np.where(cm, self.cut, alpha)
         b = io.BytesIO(); Image.fromarray(np.clip(img * 255 + 0.5, 0, 255).astype(np.uint8)).save(b, 'JPEG', quality=88, optimize=True)
-        pb = io.BytesIO(); Image.fromarray(np.clip(self.tint * 255 + 0.5, 0, 255).astype(np.uint8), 'L').save(pb, 'PNG', optimize=True)
-        self.final = img
+        pa = np.clip(alpha * 255 + 0.5, 0, 255).astype(np.uint8)
+        pb = io.BytesIO(); Image.fromarray(pa, 'L').save(pb, 'PNG', optimize=True)
+        self.final = img; self.alpha = alpha
+        self.rgba = np.dstack([np.clip(img * 255 + 0.5, 0, 255).astype(np.uint8), pa])
         return b.getvalue(), pb.getvalue()
 
 
@@ -153,7 +182,7 @@ def vnormals(P, I):
     return n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-12)
 
 
-def decimate(P, I, UVw, target, tmp='/tmp/p2_dec', keep_border=True):
+def decimate(P, I, UVw, target, tmp='/tmp/p2_dec', keep_border=True, optimal=True):
     """quadric edge collapse keeping UV seams (pymeshlab, via OBJ); P/I position-welded, UVw per corner (F,3,2)"""
     import pymeshlab
     os.makedirs(tmp, exist_ok=True)
@@ -168,7 +197,7 @@ def decimate(P, I, UVw, target, tmp='/tmp/p2_dec', keep_border=True):
         f.write(''.join('f %d/%d %d/%d %d/%d\n' % (I[k, 0] + 1, 3 * k + 1, I[k, 1] + 1, 3 * k + 2, I[k, 2] + 1, 3 * k + 3) for k in range(len(I))))
     ms = pymeshlab.MeshSet(); ms.load_new_mesh(f'{tmp}/m.obj')
     ms.meshing_decimation_quadric_edge_collapse_with_texture(targetfacenum=int(target), qualitythr=0.4, extratcoordw=1.0, preserveboundary=keep_border,
-                                                            boundaryweight=1.5, optimalplacement=True, preservenormal=True, planarquadric=True)
+                                                            boundaryweight=1.5, optimalplacement=optimal, preservenormal=True, planarquadric=True)
     m = ms.current_mesh()
     P2 = m.vertex_matrix().copy(); I2 = m.face_matrix().astype(int).copy(); W2 = m.wedge_tex_coord_matrix().reshape(-1, 3, 2).copy()
     W2[..., 1] = 1 - W2[..., 1]
@@ -444,7 +473,9 @@ def finalize(P, I, UV, KW, kind):
     reg = np.zeros(len(first), np.uint8)
     fk_ = np.repeat(kind, 3)[first]
     for k, r in KIND_REG.items(): reg[fk_ == k] = r
-    return dict(P=P[pv], N=N[pv], UV=UV.reshape(-1, 2)[first], KW=KW[pv], R=reg, I=inv.reshape(-1, 3), FK=np.asarray(kind))
+    acc = reg.copy()
+    for k, r in ACC_REG.items(): acc[fk_ == k] = r
+    return dict(P=P[pv], N=N[pv], UV=UV.reshape(-1, 2)[first], KW=KW[pv], R=reg, A=acc, I=inv.reshape(-1, 3), FK=np.asarray(kind), IH=np.zeros((0, 3), int))
 
 
 def quant_weights(W):
@@ -604,9 +635,14 @@ def body_variants(base_lods, gears, B):
     return out
 
 
-def write_pack(path, atlas_bytes, bodies, clips):
-    o = bytearray(b'PPL2'); o += struct.pack('<ii', 1, 22)
-    jpg, png = atlas_bytes
+def write_pack(path, atlas_bytes, bodies, clips, external=None):
+    """PPL2 version 2. external: an RGBA atlas (uint8 array) written next to the pack as <name>_atlas.png (Unity imports
+    it, ASTC on Android: no runtime decode / compression); the pack then holds empty jpg / png blocks"""
+    o = bytearray(b'PPL2'); o += struct.pack('<ii', 2, 22)
+    if external is not None:
+        jpg, png = b'', b''
+        Image.fromarray(external, 'RGBA').save(path[:-len('.bytes')] + '_atlas.png', optimize=True)
+    else: jpg, png = atlas_bytes
     o += struct.pack('<I', len(jpg)) + jpg + struct.pack('<I', len(png)) + png
     o += struct.pack('<i', len(bodies))
     for b in bodies:
@@ -618,13 +654,15 @@ def write_pack(path, atlas_bytes, bodies, clips):
             for m in var:
                 bi, bw = quant_weights(m['KW'])
                 assert len(m['P']) < 65535
-                o += struct.pack('<ii', len(m['P']), len(m['I']))
+                IH = m.get('IH', np.zeros((0, 3), int))
+                o += struct.pack('<iii', len(m['P']), len(m['I']), len(IH))
                 o += m['P'].astype('<f4').tobytes()
                 o += np.clip(np.round(m['N'] * 127), -127, 127).astype(np.int8).tobytes()
                 uv = m['UV'].copy(); uv[:, 1] = 1 - uv[:, 1]  # (Unity: v up)
                 o += np.clip(np.round(uv * 65535), 0, 65535).astype('<u2').tobytes()
-                o += m['R'].astype(np.uint8).tobytes(); o += bi.tobytes(); o += bw.tobytes()
-                o += m['I'].astype('<u2').tobytes()
+                o += m['R'].astype(np.uint8).tobytes(); o += m.get('A', m['R']).astype(np.uint8).tobytes()
+                o += bi.tobytes(); o += bw.tobytes()
+                o += m['I'].astype('<u2').tobytes(); o += IH.astype('<u2').tobytes()
     o += struct.pack('<i', len(clips))
     for c in clips:
         o += struct.pack('<B', len(c['name'])) + c['name'].encode(); o += struct.pack('<fiBf', c['fps'], len(c['q']), c['loop'], c['stride'])
@@ -704,7 +742,7 @@ def gear_sources(ain, atlas, rects):
     cap = [gear_parts('cap', d['P'] * s, d['I'], uv[d['I']], np.array(['cap'] * len(d['I'])), hcw, hsw, t) for t in (420, 140, 140)]
     atlas.place(('gear', 'dark'), None, rects['dark'], solid=np.array([0.09, 0.09, 0.1]))
     x, y, w, h, *_ = atlas.tiles[('gear', 'dark')]
-    return {'helmet': helmet, 'cap': cap}, np.array([(x + w / 2) / atlas.n, (y + h / 2) / atlas.n])
+    return {'helmet': helmet, 'cap': cap}, np.array([(x + w / 2) / atlas.w, (y + h / 2) / atlas.h])
 
 
 def build_rigged(spec, M, src, atlas, Q, gears, uv_dark, lod_tris=LOD_TRIS):
@@ -806,11 +844,21 @@ def build_private(work, ain, repo, Q, prev):
 def main():
     work, ain, repo = sys.argv[1], sys.argv[2], sys.argv[3]
     prev = sys.argv[sys.argv.index('--preview') + 1] if '--preview' in sys.argv else None
+    only = sys.argv[sys.argv.index('--only') + 1].split(',') if '--only' in sys.argv else ['public', 'people3', 'mixamo']
     Q = QSkel(f'{repo}/Assets/Resources/People/people.bytes')
-    print('public pack')
-    A, bodies = build_public(ain, repo, Q, prev)
-    if prev: Image.fromarray((A.final * 255).astype(np.uint8)).save(f'{prev}/atlas_public.jpg')
-    if work and os.path.exists(f'{work}/Remy.glb'):
+    import people3
+    if 'public' in only:
+        print('public pack (Art/People3 drivers, CC0)')
+        A, bodies = people3.build_drivers(repo, Q)
+        write_pack(f'{repo}/Assets/Resources/People2/people2.bytes', None, bodies, [], external=A.rgba)
+        if prev: Image.fromarray(A.rgba[..., :3]).save(f'{prev}/atlas_public.jpg')
+    if 'people3' in only:
+        for group, fn in (('crew', 'people3'), ('podium', 'people3p')):
+            print(fn, 'pack (Rocketbox, MIT):', group)
+            A, bodies = people3.build_rocketbox(repo, ain, Q, group)
+            write_pack(f'{repo}/Assets/Resources/People2/{fn}.bytes', None, bodies, [], external=A.rgba)
+            if prev: Image.fromarray(A.rgba[..., :3]).save(f'{prev}/atlas_{fn}.jpg')
+    if 'mixamo' in only and work and os.path.exists(f'{work}/Remy.glb'):
         print('private (Mixamo) pack')
         A2, b2, clips = build_private(work, ain, repo, Q, prev)
         if prev: Image.fromarray((A2.final * 255).astype(np.uint8)).save(f'{prev}/atlas_mixamo.jpg')

@@ -10,6 +10,7 @@
 //  * XP per race: a finish, laps, places beaten, win / podium, overtakes, clean laps, pole, fastest lap. Level curve:
 //    level L -> L + 1 needs 250 + 70 (L - 1)^1.15 XP (rounded to 10): 250, 320, 410 ... level 2 after one or two
 //    races (~400 XP each), ~1100 XP per level at 10, ~3000 at 25; capped at level 100 (~650k XP in all).
+//    The race's XP is multiplied by the difficulty (CareerDifficulty.cs: Easy x0.8 ... Master x2; WithDifficulty).
 // RaceProgress: one race's live tally (GameManagerProgress.cs). RaceOutcome: what the results page shows (strings
 // built once). Nothing here allocates per frame.
 using UnityEngine;
@@ -37,6 +38,9 @@ public static class Progression
     // ---- XP
     public const int XpFinish = 100, XpPerLap = 20, XpPerPlace = 15, XpWin = 150, XpPodium = 60;
     public const int XpOvertake = 25, MaxOvertakes = 10, XpCleanLap = 15, XpPole = 80, XpFastest = 50;
+
+    // XP scaled by the difficulty's multiplier (harder = more XP)
+    public static int WithDifficulty(int xp, float mult) => Mathf.RoundToInt(xp * Mathf.Clamp(mult, 0.5f, 3f));
 
     public static readonly string[] Grades = { "S", "A", "B", "C", "D", "E" };
     public static int GradeOf(float sr) => sr >= 90f ? 0 : sr >= 75f ? 1 : sr >= 60f ? 2 : sr >= 45f ? 3 : sr >= 30f ? 4 : 5;

@@ -19,7 +19,11 @@ def read_pack(path):
         nonlocal o; v = struct.unpack_from('<' + fmt, d, o); o += struct.calcsize('<' + fmt); return v
     assert d[:4] == b'PPL2'; o = 4; ver, nj = rd('ii')
     n, = rd('I'); jpg = d[o:o + n]; o += n; n, = rd('I'); png = d[o:o + n]; o += n
-    col = Image.open(io.BytesIO(jpg)).convert('RGB'); tint = Image.open(io.BytesIO(png)).convert('L')
+    if len(jpg) == 0:  # (v2: the atlas is <pack>_atlas.png next to it, alpha = v2 tint / card coverage)
+        im = Image.open(path[:-len('.bytes')] + '_atlas.png').convert('RGBA'); col = im.convert('RGB'); tint = im.split()[3]
+    else:
+        col = Image.open(io.BytesIO(jpg)).convert('RGB'); tint = Image.open(io.BytesIO(png)).convert('L')
+    if ver < 2: tint = tint.point(lambda v: v // 2)  # (v1: alpha = tint amount -> the v2 encoding, as People.cs)
     nb, = rd('i'); bodies = []
     for b in range(nb):
         ln, = rd('B'); name = d[o:o + ln].decode(); o += ln
@@ -31,15 +35,18 @@ def read_pack(path):
         for vi in range(nv_):
             row = []
             for l in range(nl):
-                nv, nt = rd('ii')
+                nv, nt = rd('ii'); nth = rd('i')[0] if ver >= 2 else 0
                 P = np.frombuffer(d, '<f4', nv * 3, o).reshape(nv, 3).astype(float); o += nv * 12
                 N = np.frombuffer(d, 'i1', nv * 3, o).reshape(nv, 3) / 127.0; o += nv * 3
                 UV = np.frombuffer(d, '<u2', nv * 2, o).reshape(nv, 2) / 65535.0; o += nv * 4
                 R = np.frombuffer(d, 'u1', nv, o); o += nv
+                if ver >= 2: Ac = np.frombuffer(d, 'u1', nv, o); o += nv
+                else: Ac = R
                 BI = np.frombuffer(d, 'u1', nv * 4, o).reshape(nv, 4); o += nv * 4
                 BW = np.frombuffer(d, 'u1', nv * 4, o).reshape(nv, 4) / 255.0; o += nv * 4
                 I = np.frombuffer(d, '<u2', nt * 3, o).reshape(nt, 3).astype(int); o += nt * 6
-                row.append(dict(P=P, N=N, UV=UV, R=R, BI=BI, BW=BW, I=I))
+                IH = np.frombuffer(d, '<u2', nth * 3, o).reshape(nth, 3).astype(int); o += nth * 6
+                row.append(dict(P=P, N=N, UV=UV, R=R, A=Ac, BI=BI, BW=BW, I=I, IH=IH))
             var.append(row)
         bodies.append(dict(name=name, flags=flags, pscale=ps, height=h, t=t, q=q, bind=bind, var=var))
     nc, = rd('i'); clips = []
@@ -64,28 +71,31 @@ def pose_mesh(Q, body, m, clip, frame):
     return P, W
 
 
-PAL = {0: (0.05, 0.25, 0.75), 6: (0.05, 0.25, 0.75), 18: (0.05, 0.25, 0.75), 17: (0.05, 0.05, 0.06), 14: (0.95, 0.8, 0.15), 5: (0.15, 0.15, 0.18)}
+PAL = {0: (0.05, 0.25, 0.75), 6: (0.05, 0.25, 0.75), 18: (0.05, 0.25, 0.75), 17: (0.05, 0.05, 0.06), 14: (0.95, 0.8, 0.15), 5: (0.15, 0.15, 0.18),
+       7: (0.92, 0.92, 0.93), 15: (0.05, 0.25, 0.75)}
 
 
 def textured(col, tint, m, P, team=(0.05, 0.25, 0.75)):
-    tex = np.asarray(col, float) / 255.0; tt = np.asarray(tint, float) / 255.0; H, Wd = tt.shape
+    """as People2.shader: amount = saturate(2a), accent share = saturate(2a - 1), colour = lerp(pal[R], pal[A], share);
+    hair cards (IH) alpha-clipped at 0.5 with the texture as it is"""
+    tex = np.asarray(col, float) / 255.0; tt = np.asarray(tint, float) / 255.0
     UV = m['UV']
-    def tf(c, face):
-        return c
-    # bake the tint into a per-mesh texture copy (preview only): albedo = lerp(tex, pal * lin(tex) * 2, tint)
     pal = np.zeros((32, 3)); pal[:] = 1
     for r, c in PAL.items(): pal[r] = c
     pal[0] = pal[6] = pal[18] = team
+    amt = np.clip(tt * 2, 0, 1)[..., None]; acc = np.clip(tt * 2 - 1, 0, 1)[..., None]
+    lin = srgb_dec(tex)
     out = []
-    # split faces by region so each region gets its own tinted texture
-    for r in np.unique(m['R']):
-        fsel = m['R'][m['I'][:, 0]] == r
-        if not fsel.any(): continue
-        lin = srgb_dec(tex); a = tt[..., None]
-        al = lin * (1 - a) + np.asarray(pal[r])[None, None, :] * lin * 2 * a
+    uvp = UV.copy(); uvp[:, 1] = 1 - uvp[:, 1]
+    pairs = sorted(set(zip(m['R'][m['I'][:, 0]].tolist(), m['A'][m['I'][:, 0]].tolist())))
+    for r, a in pairs:
+        fsel = (m['R'][m['I'][:, 0]] == r) & (m['A'][m['I'][:, 0]] == a)
+        pc = np.asarray(pal[r])[None, None, :] * (1 - acc) + np.asarray(pal[a])[None, None, :] * acc
+        al = lin * (1 - amt) + pc * lin * 2 * amt
         img = Image.fromarray((np.clip(srgb_enc(al), 0, 1) * 255).astype(np.uint8))
-        uvp = UV.copy(); uvp[:, 1] = 1 - uvp[:, 1]
         out.append(dict(P=P, I=m['I'][fsel], uv=uvp, img=img))
+    if len(m['IH']):
+        out.append(dict(P=P, I=m['IH'], uv=uvp, img=col, cut=tint, both=True))
     return out
 
 
@@ -105,7 +115,7 @@ def main():
         print(b['name'], 'pscale', round(b['pscale'], 3), 'height', b['height'], [[(len(m['P']), len(m['I'])) for m in row] for row in b['var']])
         for vi, cn in enumerate(want):
             gear = vi % 4
-            m = b['var'][gear][int(os.environ.get('LOD', '0'))]
+            m = b['var'][min(gear, len(b['var']) - 1) if 'GEAR' not in os.environ else int(os.environ['GEAR'])][min(int(os.environ.get('LOD', '0')), len(b['var'][0]) - 1)]
             cl = None if cn == 'rest' else allc[cn]
             P, W = pose_mesh(Q, b, m, cl, 7)
             c = np.array([0, 0.9, 0])

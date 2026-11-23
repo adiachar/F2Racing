@@ -22,12 +22,13 @@ def render(tris_list, cam, size=(400, 600), ortho=None, fov=30.0, bg=(0.93, 0.93
         else:
             k = (H / 2) / np.tan(np.radians(fov) / 2); zz = np.maximum(z, 1e-3)
             sx = W / 2 + x / zz * k; sy = H / 2 - y / zz * k
-        tex = None
+        tex = None; cut = None
         if m.get('img') is not None and m.get('uv') is not None:
             tex = np.asarray(m['img'].convert('RGB'), float) / 255.0; th, tw = tex.shape[:2]; UV = m['uv']
+            if m.get('cut') is not None: cut = np.asarray(m['cut'], float) / 255.0
         fn = np.cross(P[I[:, 1]] - P[I[:, 0]], P[I[:, 2]] - P[I[:, 0]]); fn /= np.linalg.norm(fn, axis=1, keepdims=True) + 1e-12
         # Unity winding is clockwise when seen from the front: the face normal by left-handed cross is -fn
-        shade = 0.45 + 0.55 * np.clip(fn @ L, 0, 1)
+        shade = 0.45 + 0.55 * np.clip((np.abs(fn @ L) if m.get('both') else fn @ L), 0, 1)
         for t in range(len(I)):
             a, b, c = I[t]
             xs = np.array([sx[a], sx[b], sx[c]]); ys = np.array([sy[a], sy[b], sy[c]])
@@ -50,6 +51,9 @@ def render(tris_list, cam, size=(400, 600), ortho=None, fov=30.0, bg=(0.93, 0.93
                 uu = w0 * UV[a, 0] + w1 * UV[b, 0] + w2 * UV[c, 0]; vv = w0 * UV[a, 1] + w1 * UV[b, 1] + w2 * UV[c, 1]
                 px = np.clip((uu % 1.0) * tw, 0, tw - 1).astype(int); py = np.clip((vv % 1.0) * th, 0, th - 1).astype(int)
                 col = tex[py, px]
+                if cut is not None:
+                    ok = ok & (cut[py, px] >= 0.5)
+                    if not ok.any(): continue
                 if m.get('tint') is not None: col = m['tint'](col, t)
             else:
                 col = np.broadcast_to(np.asarray(m['col'][t] if m.get('col') is not None else (0.7, 0.7, 0.7)), gx.shape + (3,))

@@ -3,7 +3,8 @@
 // (arms folded / working at the trolley), and a few team members walking along the garage fronts (they turn back
 // before a box where a stop is on). Placed by PitGarage (Spot) at the player's box and two either side; the other teams'
 // boxes have the same engineers baked into a static mesh (PitGarage.BakeCrews). Rigs from People.cs (realistic People2
-// bodies when the packs are there: People.CrewBodyOf; mocap walk / idle / talk when the private Mixamo pack is there).
+// bodies when the packs are there: People.CrewBodyOf = the Rocketbox engineers (team shirts, headsets) mixed with the Mixamo
+// crew, a Rocketbox marshal among the walkers; mocap walk / idle / talk when the private Mixamo pack is there).
 // Cost: animated only within ~120 m of the camera (People.AnimDue: every frame within 30 m, every 2nd to 60 m, every 4th beyond; LOD1 mesh beyond 40 m), frozen beyond,
 // hidden beyond ~230 m; one contact-shadow mesh for all of them.
 using System.Collections.Generic;
@@ -49,7 +50,7 @@ public sealed class PeoplePits : MonoBehaviour
             // (in front of the idle crews and the tyre sets lined up at the garage fronts, PitGarage.Lane)
             float off = A.garageDist - 2.05f - 0.3f * (i % 2);
             Vector3 pa = A.centre + A.side.normalized * off - A.fwd.normalized * (1.5f * (i % 3)), pb = B.centre + B.side.normalized * (B.garageDist - 2.05f - 0.3f * (i % 2));
-            int seed = 900 + i * 31, body = People.CrewBodyOf(seed, 0.3f);
+            int seed = 900 + i * 31, body = i == 3 ? People.MarshalBodyOf(seed) : People.CrewBodyOf(seed, 0.3f); // (a pit-lane marshal: Rocketbox orange overalls)
             int outfit = i == 3 ? People.OMarshal : (i & 1) == 0 ? People.OMechanic : People.OEngineer;
             int gear = outfit == People.OEngineer ? People.GHeadset : Hash(seed, 4) < 0.5f ? People.GCap : People.GBare;
             var r = new People.Rig(transform, body, gear, "Walker") { scale = People.HeightOf(seed, body) };

@@ -60,6 +60,7 @@ public partial class GameManager : MonoBehaviour
         Haptics.enabled = PlayerPrefs.GetInt("haptics", 1) == 1;
         liveryIdx = Livery.PlayerIndex;
         rivalIdx = Mathf.Clamp(PlayerPrefs.GetInt("rivals", 1), 0, RivalCounts.Length - 1); diffIdx = Mathf.Clamp(PlayerPrefs.GetInt("diff", 0), 0, DiffNames.Length - 1);
+        SyncDifficulty(); // a difficulty preset onto the settings, the XP multiplier (CareerSession.cs)
         ui = new MenuUI(MapNames, PlaygroundIdx, RivalCounts, DiffNames); // the start menu is up (game paused) until a session starts
         ShotsBoot(); // WebGL ?shot=1 only: automatic screenshots (DebugShots.cs); does nothing in normal play
         FrameLog.Ensure(); // Settings > GRAPHICS > Performance graph (debug): only made when that is on
@@ -406,7 +407,7 @@ public partial class GameManager : MonoBehaviour
             // spread the picks over the whole field: stars, midfield and backmarkers
             var who = field != null ? field[k] : grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
             var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel();
-            rc.compound = Weather.PhysicsCompound(rivalSet); rc.damage = damageMode == 2;
+            rc.compound = Weather.PhysicsCompound(rivalSet); rc.damage = DamageNow == 2; // a career round always has damage (CareerSession.cs)
             // the speed profile's grip share multiplies the tyre mu directly (RacingLine.SpeedProfile), so the wet
             // factor of their tyres on the racing line slows corners and braking just as the grip loss does
             var tune = AiTuning.For(builtFor); tune.grip *= Weather.TrackFactor(rivalSet, 1);
@@ -827,7 +828,7 @@ public partial class GameManager : MonoBehaviour
         if (menuOpen && Input.GetKeyDown(KeyCode.Escape)) CloseSettings(); // Android "back"
         float dt = Mathf.Min(Time.deltaTime, 0.1f);
         if (replaying) { ReplayStep(dt); if (flashT > 0) flashT -= dt; return; } // the race is over: only the recording moves
-        if (Paused) dt = 0; // the settings menu and the front end pause the game
+        if (Paused || PostFreeze) dt = 0; // the settings menu and the front end pause the game; PostFreeze: the post-race film holds the race (PostRace.cs)
         if (hitT > 0) hitT -= dt;
         var input = ReadInput(dt);
         ErsButtonsInput(); // BOOST and OVERTAKE buttons into the car (RaceHud.cs)
@@ -853,7 +854,7 @@ public partial class GameManager : MonoBehaviour
                 LineCheck(simTime); // the timing line, every step (idx is before the step here)
                 if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.GradeAlong(car.x, car.y, car.heading);
                 car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
-                car.Step(PsInput(StartInput(input)), H); // the start: revs only on the grid, launch clutch after lights out; PsInput: serving a live penalty (PenaltyServe.cs)
+                car.Step(PostInput(PsInput(StartInput(input))), H); // the start: revs only on the grid, launch clutch after lights out; PsInput: serving a live penalty (PenaltyServe.cs); PostInput: the cool-down lap's autopilot (PostRace.cs)
                 StartAfterStep();
                 double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one
                 if (!playground && idx >= 0 && Traffic.Wall(car, track.pts[idx], playerLat, wallAt))
@@ -884,7 +885,7 @@ public partial class GameManager : MonoBehaviour
         if (!Paused) Rumble(wallDv);
         if (!playground) LapsAndRecover(dt);
         QualiUpdate(); // qualifying clock and flag (Qualifying.cs)
-        if (raceLaps > 0 && !playground && pLap > raceLaps && !ui.Showing) FinishRace(); // pLap 1 = crossing the line from the grid
+        if (raceLaps > 0 && !playground && pLap > raceLaps && !ui.Showing && post == null) FinishRace(); // pLap 1 = crossing the line from the grid (post: the post-race film is on, PostRace.cs)
         // g-forces for body pitch/roll and camera are low-passed, so tiny physics wobble never shakes the picture
         float kg = Mathf.Min(1, dt * 6);
         gLon += ((float)car.axLong - gLon) * kg; gLat += ((float)car.ay - gLat) * kg;
@@ -930,7 +931,7 @@ public partial class GameManager : MonoBehaviour
         }
         RcFrame(dt); // safety car model, flags, penalties, rival tyre changes (GameManagerRaceControl.cs)
         ProgressTick(dt); // safety rating events, clean laps, overtakes, race rules (GameManagerProgress.cs)
-        if (!Paused && raceLaps > 0 && !playground) Record(dt, rx, ry, rh, rd);
+        if (!Paused && raceLaps > 0 && !playground && PostRecord) Record(dt, rx, ry, rh, rd); // (PostRecord: the replay ends just past the line)
         UpdateSkids();
         LineFrame(); // the racing-line guide (RacingLineView.cs)
         if (weatherFx != null)
@@ -1113,6 +1114,7 @@ public partial class GameManager : MonoBehaviour
     {
         if (PreRaceCamera()) return; // the pre-race intro has the camera (PreRace.cs)
         if (FormCamera()) return; // a TV shot of the formation lap (GameManagerFormation.cs)
+        if (PostCamera()) return; // the post-race film: flag, cool-down lap, podium (PostRace.cs)
         var tr = model.transform;
         if (camMode == TvMode || replaying)
         {
@@ -1456,6 +1458,7 @@ public partial class GameManager : MonoBehaviour
     // the player has done raceLaps: freeze the race and rank every car by distance covered
     void FinishRace()
     {
+        PostCapture(); // the player's look for the podium, before the championship is recorded (PostRace.cs)
         var rows = new MenuUI.Row[rivals.Count + 1];
         rows[0] = new MenuUI.Row { name = "You", colour = new Color(1f, 0.25f, 0.2f), player = true, progress = pLap + (double)System.Math.Max(idx, 0) / track.N - pitLoss / RefLap(), best = bestLap ?? double.NaN };
         for (int i = 0; i < rivals.Count; i++)
@@ -1468,6 +1471,7 @@ public partial class GameManager : MonoBehaviour
         ui.ShowResults(rows, MapNames[mapIdx], raceLaps, raceTime - (GridStart ? Countdown : 0) + pitLoss, refLap, pitStops, PlayerPenaltyTotal());
         PsResults(); // penalties served on track: the chip says "served" (PenaltyServe.cs)
         RaceFinished(rows); // places gained, fastest lap, championship points (Qualifying.cs)
+        PostBegin(rows); // Settings > Post-race: the flag, cool-down lap and podium film before this page (PostRace.cs)
     }
 
     // ---------------------------------------------------------------- HUD
@@ -1498,6 +1502,7 @@ public partial class GameManager : MonoBehaviour
         }
         if (PreRaceGui()) return; // the pre-race intro: captions instead of the HUD (PreRace.cs)
         if (FormGui()) return; // the formation lap's TV shots: captions instead of the HUD (GameManagerFormation.cs)
+        if (PostGui()) return; // the post-race film's overlays instead of the HUD (PostRace.cs)
         if (ShotsHideHud) return; // screenshot mode: clean frames (DebugShots.cs)
         HudInit(); HudLayout();
         if (replaying)
@@ -1542,7 +1547,7 @@ public partial class GameManager : MonoBehaviour
     void DrawTopButtons()
     {
         float b = S(30), g = S(7), y = hudT + S(1), x = btnRight - b;
-        if (RoundBtn(new Rect(x, y, b, b), icoBack)) { ResetCar(); menuOpen = false; }
+        if (RestartOk && RoundBtn(new Rect(x, y, b, b), icoBack)) { ResetCar(); menuOpen = false; } // none in career qualifying / Hard+ races (CareerSession.cs)
         x -= b + g;
         if (RoundBtn(new Rect(x, y, b, b), icoCam)) { camMode = (camMode + 1) % CamNames.Length; Flash(CamNames[camMode]); Save(); }
         x -= b + g;

@@ -7,7 +7,8 @@
 //  * Backdrop: the studio camera clears to the page colour (UiKit.Paper, #F3F1EC), so the 2D paper of the page and the
 //    3D background are the same colour with no seam. There is no floor or wall geometry: the only thing under the
 //    driver is a soft contact shadow (People.Blobs, multiplied onto the paper: about the mockup's 18% ellipse).
-//  * Driver: People.DriverBody (People2: the textured race driver: suit, gloves, HANS, helmet; CC-BY, CREDITS.txt) or,
+//  * Driver: People.DriverBody (People2: the pack driver driver_01, CC0: seamed suit, gloves, racing boots, closed
+//    helmet; the full 19k-tri hero LOD) or,
 //    without that pack, one of the rigged CC0 people (Quaternius, crew helmet with a dark visor), in the livery colours,
 //    standing relaxed: idle clip (the mocap idle when the private Mixamo pack is there) with the arms hanging naturally
 //    (IK), chest and shoulders relaxed, a normal stance; small breathing, weight shift and head movement, and on Home
@@ -149,21 +150,11 @@ public sealed class MenuStudio
         blob = new People.Blobs(root.transform, 1, "MenuDriverShadow");
     }
 
-    static float Lum(Color c) => 0.3f * c.r + 0.59f * c.g + 0.11f * c.b;
-    void Pal(int reg, Color c, float gloss) { var l = c.linear; pal[reg] = new Vector4(l.r, l.g, l.b, gloss); }
-
     // a race suit in the livery colours, gloves and boots dark, the player's yellow helmet with a top in the team colour
     void Dress(Livery l)
     {
         if (rigSmr == null) return;
-        Color prim = l.primary, sec = l.secondary, dark = new Color(0.05f, 0.05f, 0.06f);
-        Color trim = Mathf.Abs(Lum(sec) - Lum(prim)) < 0.12f ? (Lum(prim) > 0.5f ? dark : new Color(0.9f, 0.9f, 0.91f)) : sec;
-        for (int i = 0; i < People.NReg; i++) Pal(i, prim, 0.15f);
-        Pal(People.RSide, trim, 0.15f); Pal(People.RYoke, trim, 0.15f); Pal(People.RStripe, trim, 0.15f);
-        Pal(People.RGlove, Color.Lerp(trim, dark, 0.35f), 0.2f); Pal(People.RShin, prim * 0.85f, 0.15f); Pal(People.RKnee, prim, 0.15f);
-        Pal(People.RBoot, dark, 0.35f); Pal(People.RBelt, dark, 0.3f); Pal(People.RNeck, new Color(0.08f, 0.08f, 0.09f), 0.1f);
-        Pal(People.RFace, new Color(0.86f, 0.68f, 0.56f), 0.18f); Pal(People.RHair, new Color(0.20f, 0.13f, 0.08f), 0.1f);
-        Pal(People.RHelmet, HelmetCol, 0.8f); Pal(People.RHelmetTop, prim, 0.8f); Pal(People.RVisor, new Color(0.02f, 0.025f, 0.04f), 1f);
+        People.DriverPalette(pal, l, HelmetCol); // (suit in the team colour, trim on the stripes / belt / cuffs, yellow helmet)
         rigBlock.Clear();
         rigBlock.SetVectorArray("_Pal", pal);
         rigBlock.CopySHCoefficientArraysFrom(sh);

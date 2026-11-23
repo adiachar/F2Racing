@@ -23,6 +23,12 @@
 //            behind the player, +6.8-30 the player's camera mid-lap (its banner / hint / skip need hud=1), +30-36 back
 //            to the grid (TV), +36 every car in its slot.
 //            e.g. intro=1.5,4,6.5,9.5,11.5,14,17,21,24,26.5,30,40,57,62. Captions are drawn (hud does not apply to them)
+//   post     list of times (s) from the chequered flag of a made-up finish (PostRace.cs), frozen at each time (replaces
+//            s; Full: slow motion 0-3.6, cool-down lap 3.6-22 (heli, tracking, onboard wave, TV; classification from 4.6),
+//            podium 22-34.6 (crane, handover 25.2, lift 26.4, confetti 27, champagne 29.2, high wide 32.6), then the progress
+//            reveal (34.6 + its time, done ~4.6 s in) and from 30 s into the reveal the results table)
+//   pos      the player's finishing place for post= (default 1; > 3: a short podium seen from a TV angle)
+//   postmode full | short (default full; short: slow motion 0-3.6, podium 3.6-16.2 / 3.6-10 out of the top 3)
 //   settle   seconds to wait after each placement (real time)             default 1.0 (first shot + warm)
 //   warm     extra seconds before the first shot (shaders, textures)      default 3
 //   ack      1 = after SHOT_READY wait until the page sets window.__shotAck = i (the harness does this after its
@@ -146,6 +152,7 @@ public class DebugShots : MonoBehaviour
     internal readonly List<string> cams = new List<string>();
     readonly List<double> spots = new List<double>();
     readonly List<double> introTimes = new List<double>(); // intro=...: pre-race intro frames instead of spots x cams
+    readonly List<double> postTimes = new List<double>();  // post=...: post-race film frames (PostRace.cs)
     string error;
 
     // the page URL's query (WebGL player only; null everywhere else, so shot mode cannot start)
@@ -185,6 +192,8 @@ public class DebugShots : MonoBehaviour
         if (spots.Count == 0) spots.Add(300);
         foreach (var s in Get(q, "intro", "").Split(ListSep, System.StringSplitOptions.RemoveEmptyEntries))
             if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)) introTimes.Add(v);
+        foreach (var s in Get(q, "post", "").Split(ListSep, System.StringSplitOptions.RemoveEmptyEntries))
+            if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)) postTimes.Add(v);
         Title("SHOT_BOOT");
         PerfStats.FromQuery(q); // stats=1: render stats overlay + a PERF_STATS console line per shot (PerfStats.cs)
         ModelInstancing.FromQuery(q); // inst=0: model trees merged as before (A/B against the GPU-instanced ones)
@@ -211,6 +220,26 @@ public class DebugShots : MonoBehaviour
         float settle = Mathf.Max(0f, GetF(q, "settle", 1f)), warm = Mathf.Max(0f, GetF(q, "warm", 3f)), hold = Mathf.Max(0f, GetF(q, "hold", 1.5f));
         float ackTimeout = Mathf.Max(1f, GetF(q, "acktimeout", 300f)), kmh = Mathf.Max(0f, GetF(q, "kmh", 0f));
         bool ack = Get(q, "ack", "0") == "1";
+        if (postTimes.Count > 0)
+        {
+            // the post-race film of a made-up finish (PostRace.cs), frozen at each time
+            int pos = Mathf.Max(1, GetInt(q, "pos", 1)); bool full = Get(q, "postmode", "full").ToLowerInvariant() != "short";
+            for (int k = 0; k < postTimes.Count; k++)
+            {
+                gm.ShotPost((float)postTimes[k], pos, full);
+                float wait = settle + (k == 0 ? warm : 0f), ts = Time.realtimeSinceStartup;
+                int f0 = Time.frameCount;
+                while (Time.frameCount - f0 < 8 || Time.realtimeSinceStartup - ts < wait) yield return null;
+                string sl = postTimes[k].ToString("0.0##", CultureInfo.InvariantCulture);
+                PerfStats.ShotLog($"post={sl}");
+                Title($"SHOT_READY {k} {postTimes.Count} s={sl} cam=post");
+                float tr = Time.realtimeSinceStartup;
+                if (ack) { while (ShotsAck() < k && Time.realtimeSinceStartup - tr < ackTimeout) yield return null; }
+                else { while (Time.realtimeSinceStartup - tr < hold) yield return null; }
+            }
+            Title("SHOT_DONE " + postTimes.Count);
+            yield break;
+        }
         if (introTimes.Count > 0)
         {
             // the pre-race intro (PreRace.cs), frozen at each time; the car stays in its grid slot

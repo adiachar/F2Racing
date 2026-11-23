@@ -2,8 +2,9 @@
 // step under the masthead (PLAY underlined), a step line (1 MODE · 2 CIRCUIT · 3 SETUP; done steps can be tapped to go
 // back), and the action row under the bottom rule: "Back" as a text link on the left (and Android back / Escape),
 // other actions as links beside it, the black button on the right. Red marks only the selected state.
-//  * Mode: three columns: Quick race, Race weekend (practice, qualifying, race), Championship (SeasonUI.cs); the chosen
-//    one has a red rule over it. The championship skips the Circuit step (its calendar decides).
+//  * Mode: three columns: Quick race, Race weekend (practice, qualifying, race), Championship = the career (SeasonUI.cs);
+//    the chosen one has a red rule over it. The career skips the Circuit step (its calendar decides); its Setup shows the
+//    tier's car and the difficulty (CareerDifficulty.cs) instead of the rival level, and no grid choice (qualifying).
 //  * Circuit: the circuit (type, big name, country) and its data rows on the left; the track map drawn as an ink line
 //    with a red start mark on the right, ‹ › beside it, a tap / swipe on the map = next / previous; page dots under it.
 //  * Setup: the session options as a clean 3 x 3 grid of label / value rows with − + text buttons: car, livery,
@@ -23,7 +24,7 @@ public sealed partial class MenuUI
     {
         "Pick a circuit, set the field and go straight to the grid.",
         "Practice, then a timed qualifying session that sets the grid, then the race.",
-        "A season with a team: every round on the calendar, points and standings.",
+        "Your career: a rookie, a promise, a nemesis. Ten rounds a season, from the Rookie tier to the world title.",
     };
     string champStatus = "";
     int ctaKey = -1; string ctaSub;
@@ -33,9 +34,9 @@ public sealed partial class MenuUI
     void ModeStatus()
     {
         if (!Season.Active && Season.HasSave) Season.Load();
-        champStatus = !Season.Active ? "New season  ·  pick your team"
-                    : Season.Over ? "Season complete  ·  start a new one"
-                    : "Next  ·  " + Season.RoundName(Season.Data.round) + "  ·  " + Season.Teams[Season.Data.team];
+        champStatus = !Season.Active ? "New career  ·  contract offers"
+                    : Season.Over ? "Season " + Season.Data.seasonNo + " complete  ·  next season"
+                    : "Round " + (Season.Data.round + 1) + " of " + Season.Rounds + "  ·  " + Season.GpNames[Season.Data.round] + "  ·  " + Season.TierNames[Season.Tier] + " tier";
     }
 
     Choice DrawPlay(ref int map, ref int cls, ref int riv, ref int diff, Track loaded, int loadedFor)
@@ -262,14 +263,14 @@ public sealed partial class MenuUI
         if (hk != setupKey)
         {
             setupKey = hk;
-            setupSub = champ ? "The calendar picks the circuit  ·  full grid  ·  points"
+            setupSub = champ ? "The calendar picks the circuit, the tier the car  ·  full grid  ·  points"
                      : cards[Mathf.Clamp(map, 0, cards.Length - 1)].name + "  ·  " + cards[Mathf.Clamp(map, 0, cards.Length - 1)].country;
         }
         int key = lapsIdx * 1000 + riv * 10 + qualiIdx * 100000 + (champ ? 7 : 0) + mode * 3;
         if (key != ctaKey)
         {
             ctaKey = key;
-            ctaSub = champ ? "Standings  ·  next round" : mode == ModeWeekend ? qualiText[qualiIdx] + " qualifying, then race" : lapsText[lapsIdx] + "  ·  " + (rivalCounts[riv] == 0 ? "solo" : rivalCounts[riv] + " rivals");
+            ctaSub = champ ? "Career hub  ·  next round" : mode == ModeWeekend ? qualiText[qualiIdx] + " qualifying, then race" : lapsText[lapsIdx] + "  ·  " + (rivalCounts[riv] == 0 ? "solo" : rivalCounts[riv] + " rivals");
         }
         float e1 = UiKit.Enter(KeySetup, 0);
         UiKit.PushAlpha(e1);
@@ -292,7 +293,10 @@ public sealed partial class MenuUI
             float ei = UiKit.Enter(KeySetup, 1 + col + row);
             switch (i)
             {
-                case 0: cls = SetupTile(r, "Car", CarConfig.ClassNames[cls], cls, CarConfig.ClassNames.Length, true, 0, ei); break;
+                case 0:
+                    if (champ) SetupTile(r, "Car  ·  tier", CarConfig.ClassNames[Season.Active ? Season.TierClass : CarConfig.ClassNames.Length - 1], 0, 1, false, 0, ei); // the career's tier decides
+                    else cls = SetupTile(r, "Car", CarConfig.ClassNames[cls], cls, CarConfig.ClassNames.Length, true, 0, ei);
+                    break;
                 case 1:
                 {
                     // the player's colours (a championship round uses the team's)
@@ -302,8 +306,19 @@ public sealed partial class MenuUI
                     break;
                 }
                 case 2: riv = SetupTile(r, "Rivals", champ ? "Full grid" : rivText[riv], riv, rivalCounts.Length, !pg && !champ, 1, ei); break;
-                case 3: diff = SetupTile(r, "Rival level", diffNames[diff], diff, diffNames.Length, !pg, 2, ei); break;
-                case 4: { int n = SetupTile(r, "Grid", GridNames[gridIdx], gridIdx, GridNames.Length, !pg, 3, ei); if (n != gridIdx) SetGrid(n); break; }
+                case 3:
+                    if (champ)
+                    {
+                        // the career's difficulty (a preset or Custom; GameManager applies it at the session start)
+                        int dn = SetupTile(r, "Difficulty", Difficulty.Name, Difficulty.Current, Difficulty.Names.Length, true, 2, ei);
+                        if (dn != Difficulty.Current) Difficulty.Set(dn);
+                    }
+                    else { int n = SetupTile(r, "Rival level", diffNames[diff], diff, diffNames.Length, !pg, 2, ei); if (n != diff) { diff = n; Difficulty.RivalLevelChanged(n); } }
+                    break;
+                case 4:
+                    if (champ) SetupTile(r, "Grid", "Qualifying", 0, 1, false, 3, ei); // a career's grid comes from qualifying
+                    else { int n = SetupTile(r, "Grid", GridNames[gridIdx], gridIdx, GridNames.Length, !pg, 3, ei); if (n != gridIdx) SetGrid(n); }
+                    break;
                 case 5: { int n = SetupTile(r, "Race length", lapsText[lapsIdx], lapsIdx, LapCounts.Length, !pg, 4, ei); if (n != lapsIdx) { lapsIdx = n; PlayerPrefs.SetInt("laps", lapsIdx); } break; }
                 case 6: { int n = SetupTile(r, "Qualifying", qualiText[qualiIdx], qualiIdx, QualiMinutes.Length, !pg && mode != ModeQuick, 5, ei); if (n != qualiIdx) { qualiIdx = n; PlayerPrefs.SetInt("qualiLen", qualiIdx); } break; }
                 case 7: Weather.Index = SetupTile(r, "Weather", Weather.Names[Weather.Index], Weather.Index, Weather.Names.Length, true, 6, ei); break; // applied and saved at the start of the session
@@ -324,7 +339,7 @@ public sealed partial class MenuUI
     Choice SetupActions(UiKit.Frame f, int map, int riv, Choice ch)
     {
         bool champ = mode == ModeChampionship, pg = map == playgroundIdx && !champ;
-        string prim = pg ? "Drive" : mode == ModeWeekend ? "Start weekend" : champ ? "Championship" : "Start race";
+        string prim = pg ? "Drive" : mode == ModeWeekend ? "Start weekend" : champ ? "Career hub" : "Start race";
         float pw = Mathf.Max(U(170), UiKit.BlackButtonWidth(prim));
         var pr = new Rect(f.x1 - pw, f.actY - U(25), pw, U(50));
         float lx = f.x0 + U(84) + U(24), ly = f.actY - U(22);
@@ -343,7 +358,7 @@ public sealed partial class MenuUI
         else
         {
             if (UiKit.BlackButton(pr, prim)) { if (champ) season.Open(); else BeginLoading(false); }
-            if (UiKit.Link(new Rect(lx, ly, UiKit.LinkWidth("Practice", "Free practice") + U(8), U(44)), "Practice", "Free practice")) BeginLoading(true);
+            if (!champ && UiKit.Link(new Rect(lx, ly, UiKit.LinkWidth("Practice", "Free practice") + U(8), U(44)), "Practice", "Free practice")) BeginLoading(true);
         }
         return ch;
     }

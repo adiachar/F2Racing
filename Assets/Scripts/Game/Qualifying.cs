@@ -6,7 +6,8 @@
 //    with a spread from his consistency, a rare mistake (slow or deleted lap) and track evolution through the session.
 //  * Chequered flag: a lap started before it still counts (the player's too). "END" fast-forwards the session.
 //  * Weekend flow: Qualifying -> results -> race from that grid; or skip qualifying and start from the menu's grid
-//    position (rivals ordered by pace). Championship rounds use the whole season field (Season.cs).
+//    position (rivals ordered by pace). Championship rounds use the whole season field (Season.cs); a career race
+//    starts from the saved grid (CareerSession.cs: qualifying cannot be retried, skipping it = from the back).
 using System.Collections.Generic;
 using FormulaSim;
 using UnityEngine;
@@ -147,13 +148,14 @@ public partial class GameManager
     void PrepareSession()
     {
         sessionMode = ui.mode;
+        if (sessionMode == MenuUI.ModeChampionship && Season.Active && !Season.Over) { mapIdx = Season.CircuitIndex(Season.Data.round); playground = false; } // (LoadMap sets it again)
         qualiSession = ui.quali && !playground;
         quali = null;
-        if (sessionMode == MenuUI.ModeChampionship && Season.Active && !Season.Over) mapIdx = Season.CircuitIndex(Season.Data.round);
         if (qualiSession) raceLaps = 0;
-        else if (raceLaps > 0)
+        CareerSession(); // the tier's car, difficulty, no-retry rules, the round's progress saved (CareerSession.cs)
+        if (!qualiSession && raceLaps > 0)
         {
-            if (!pendingGrid) { raceField = sessionMode == MenuUI.ModeQuick ? null : PaceOrder(WeekendField()); gridSlotOverride = -1; }
+            if (!pendingGrid) { raceField = sessionMode == MenuUI.ModeQuick ? null : PaceOrder(WeekendField()); gridSlotOverride = -1; if (InSeasonRound) CareerGrid(); }
             pendingGrid = false;
         }
         ui.quali = false;

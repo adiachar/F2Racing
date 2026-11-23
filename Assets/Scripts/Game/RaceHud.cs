@@ -439,7 +439,7 @@ public partial class GameManager
                 used.Add(c); codes[g.name] = c;
             }
         }
-        return who != null && codes.TryGetValue(who.name, out var s) ? s : "???";
+        return who != null && codes.TryGetValue(who.name, out var s) ? s : Season.CodeOf(who); // the career's renamed nemesis (Season.cs)
     }
 
     // ---------------------------------------------------------------- timing tower (top left)

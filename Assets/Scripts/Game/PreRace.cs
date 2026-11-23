@@ -484,20 +484,13 @@ public partial class GameManager
         static void Dress(People.Rig r, Livery l)
         {
             var pal = new Vector4[People.NReg];
-            Color prim = l.primary, trim = Trim(l), dark = new Color(0.05f, 0.05f, 0.06f);
-            for (int i = 0; i < People.NReg; i++) P(pal, i, prim, 0.15f);
-            P(pal, People.RSide, trim, 0.15f); P(pal, People.RYoke, trim, 0.15f); P(pal, People.RStripe, trim, 0.15f);
-            P(pal, People.RGlove, Color.Lerp(trim, dark, 0.35f), 0.2f); P(pal, People.RShin, prim * 0.85f, 0.15f); P(pal, People.RKnee, prim, 0.15f);
-            P(pal, People.RBoot, dark, 0.35f); P(pal, People.RBelt, dark, 0.3f); P(pal, People.RNeck, new Color(0.08f, 0.08f, 0.09f), 0.1f);
-            P(pal, People.RFace, new Color(0.86f, 0.68f, 0.56f), 0.18f); P(pal, People.RHair, new Color(0.20f, 0.13f, 0.08f), 0.1f);
-            P(pal, People.RHelmet, HelmetCol, 0.8f); P(pal, People.RHelmetTop, prim, 0.8f); P(pal, People.RVisor, new Color(0.02f, 0.025f, 0.04f), 1f);
+            People.DriverPalette(pal, l, HelmetCol); // (as MenuStudio: team suit, trim on the accent, yellow helmet)
             var smr = r.go.GetComponent<SkinnedMeshRenderer>();
             if (smr == null) return;
             var mpb = new MaterialPropertyBlock();
             mpb.SetVectorArray("_Pal", pal);
             smr.SetPropertyBlock(mpb);
         }
-        static void P(Vector4[] pal, int i, Color c, float gloss) { var lc = c.linear; pal[i] = new Vector4(lc.r, lc.g, lc.b, gloss); }
 
         void Rig(K k)
         {
