@@ -1023,9 +1023,9 @@ if (args.Length > 0 && args[0] == "traffic")
                 var d = new AiDriver(t, line, new CarConfig { damage = dmgFull }, DriverProfile.Grid[slot], AiTuning.For(ti), 1, slot + 1); d.Place(gi, lat); ais.Add(d); slot++;
             }
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var r = Run(t, line, ais, pl, 6 * 130, 5); races++;
+            int rl = int.Parse(Environment.GetEnvironmentVariable("RACELAPS") ?? "5"); var r = Run(t, line, ais, pl, (rl + 1) * 130, rl); races++; // RACELAPS: race length (default 5)
             int plPos = 1 + ais.Count(d => d.progress > pl.progress);
-            Console.WriteLine($"  {defs[ti].name,-28} {r.time,4:F0} s ({sw.Elapsed.TotalSeconds,4:F1} s): contacts {r.events,3} (AI-caused {r.aiFault,3}, of them rear-ends {r.aiRear,2}; with the player {r.plEvents,2}: AI-caused {r.aiOnPlFault}, player-caused {r.plFault}); overtakes {r.overtakes,3}, on the player {r.aiOnPl,2} (he re-passed {r.plOnAi}); player P{plPos}; defensive moves {r.defMoves}; resets {r.resets} (player {r.plResets}); impacts {r.impacts}; AI 4-wheels-off {r.aiOffT:F1} s ({r.offEvents} times)");
+            Console.WriteLine($"  {defs[ti].name,-28} {r.time,4:F0} s ({sw.Elapsed.TotalSeconds,4:F1} s): contacts {r.events,3} (AI-caused {r.aiFault,3}, of them rear-ends {r.aiRear,2}; with the player {r.plEvents,2}: AI-caused {r.aiOnPlFault}, player-caused {r.plFault}); overtakes {r.overtakes,3}, on the player {r.aiOnPl,2} (he re-passed {r.plOnAi}); player P{plPos}; defensive moves {r.defMoves}; resets {r.resets} (player {r.plResets}); impacts {r.impacts}; AI 4-wheels-off {r.aiOffT:F1} s ({r.offEvents} times); wings damaged at the flag {ais.Count(d => d.car.damage.WingsDamaged)}/{ais.Count} (any damage {ais.Count(d => d.car.damage.Any)})");
             if (Environment.GetEnvironmentVariable("LAPS") == "1") Console.WriteLine($"      best laps: player {pl.bestLap:F2}; " + string.Join(" ", ais.OrderByDescending(d => d.progress).Select(d => $"{d.who.name.Split(' ')[1]} {d.bestLap:F2}")));
             foreach (var s in r.log.Take(4)) Console.WriteLine("        " + s);
             sum.Add(r);

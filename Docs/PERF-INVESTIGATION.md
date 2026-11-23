@@ -4,6 +4,69 @@ Report (Adi, Redmi Note 12 Pro 5G: Dimensity 1080 = 2x Cortex-A78 + 6x A55, Mali
 "While idle the frames drop and are inconsistent. Same road, same spot, same cars in front, different laps give
 significantly different FPS (60 to 20)." His guess: per-frame allocations -> GC spikes.
 
+## Round 3 (23 Nov): "the fps sinks during a race; opening and closing Settings brings it back"
+
+Adi: the fps sinks as the race goes on; changing the graphics level (any direction) gives a smooth 60 at once; then
+(21 Nov test) just OPENING and CLOSING Settings, changing nothing, does the same. So the cause is state that the
+pause / menu resets, not a build-up in the game and not heat (seconds in a menu cannot cool a phone).
+
+**What the pause -> resume path does** (read in GameManager / GameManagerSettings / GameManagerPerf / TeamRadio):
+the game is paused (dt = 0, no physics steps), the settings page replaces the HUD, Auto's measuring window restarts
+(2 s settle), the radio pauses; on close `ApplyScreenLock` (gyro on/off at 200 Hz for tilt, auto-rotate flags, tilt
+axis re-picked) and `Save` (PlayerPrefs to disk). It does NOT touch `Application.targetFrameRate` (the menus' 30 cap
+is MenuStudio's, not the in-race settings page), vSync, the display mode request, RenderScale, Auto's rung or
+QualitySettings. A graphics change adds `SetGraphics` (MSAA, shadows, aniso limits, mip limit, far clip, car cull,
+keyword / shader LODs): no world rebuild (LoadMap is not called), no Auto reset (`FpsForget` only clears the per-circuit
+memory). What the page does bring that the race lacks: **touches**. With tilt steering there is no finger on the screen
+for minutes; MIUI then lowers the panel's refresh (120 -> 60 Hz or its idle rate) and the CPU / GPU touch boost ends.
+Android's frame pacing does not follow a refresh switch under a running game (Unity forum: Optimized Frame Pacing "does
+not consider switching the display refresh rate"; rates "drift over time"), and the governors clock down. The menu's
+taps bring both back for a while. This matches every detail (sinks, instant fix by any pause, sinks again).
+
+**What grows in a race** (checked anyway): nothing that a pause could reset. Skid marks (fixed 700-quad ring), replay
+(fixed 60 s ring), particles (fixed maxima), spray systems (bounded by the cars within 70 m), audio sources (2, fixed),
+radio queue (<= 8), HUD text caches (bounded), IMGUI text handles (Unity 6000.0 source: 5 s expiry, cleanup every 30 s
+or 500 new handles). Released build, shot mode, frozen race, 15 rivals, HUD on, 20 samples over ~12 min: draws 218,
+other renderers 80, textures 71 / 66.9 MB, meshes 168 / 96.6 MB, flat. One real step: **rivals with a damaged wing draw
+their full meshes at every distance** (CarLod `RivalLodsFull`, ForceLOD(0), +5 split-piece draws each). Damage is always
+recorded ("Visual only" is the default) and the AI only pits for it with Full damage, so it stays all race:
+Tools/PhysicsCheck `traffic race` (Monza, 21 rivals): 6/21 rivals with a damaged wing at the flag after 5 and after 10
+laps (mostly lap-1 contacts). A far rival is ~25k triangles full vs ~4-8k at its LODs: ~+100k triangles for 6 cars
+(Adi's frames: ~354k). A step after lap 1, not a slow climb, and not reset by a pause: request to gfx (COORDINATION).
+
+**Fixes (GameManagerPerf.cs, Thermal.cs, FrameLog.cs, SkidMarks.cs)**
+- **Display mode held for the whole session** (`Thermal.WantLock`): the window asks for the slowest panel mode the lock
+  divides (60 / 30 fps -> 60 Hz, 40 -> 120 Hz, 45 -> 90 Hz) while racing or paused in a session (menu pages: the
+  system's choice), so MIUI's idle drop has nothing to switch. Read back every 2 s: two reads at a rate the lock does not
+  divide -> asked again (`Reassert`, at most every 5 s; every 60 s after 3 futile tries), and again on every resume.
+- **CPU performance hint** (Android 12+, `PerformanceHintManager` session on the UnityMain and UnityGfx threads): every
+  frame reports max(main, render) CPU ms against the lock's frame time (raw JNI, cached ids, no allocation), so the
+  governor keeps the clocks the frame needs without a touch. Not available -> nothing ("hint N" in the overlay).
+  `Window.setSustainedPerformanceMode` support is only shown ("sus"), not used (it caps peak clocks).
+- **Pacing vs load** (FramePacing): a 3 s window that misses the lock while max(main, render, GPU) ms averaged < 75% of
+  the frame time is a pacing / refresh problem: the display mode is re-asserted and Auto does NOT step down. Before, two
+  such windows cost Auto its 60 for the rest of the session (one-way) and for the circuit in this app run.
+- **Auto steps back up**: after 45 s of holding windows with the phone not warm (not Hot, headroom < 0.8), Auto tries the
+  next higher rate for 30 s (quietly); holds -> it stays (circuit memory lowered); fails -> the normal step down, and the
+  next wait doubles (up to 8 min).
+- **Resolution**: Auto's one resolution step per session is undone at the next session start (it ratcheted down race
+  after race to the 75% floor until the Resolution slider was touched).
+- **Skid marks**: the ring's vertex buffer is made once (dynamic) and only the quads written since the last frame are
+  uploaded (`SetVertexBufferData` range) instead of all 2800 positions (33.6 KB) every frame a tyre slid.
+- **Overlay**: a sixth line (display mode wanted / read back, re-asserts, pacing fixes, up-probes, hint session,
+  skid ring, replay poses, damaged rivals, this row's events); the Results table now covers **10 minutes in 30 s rows**
+  with new columns wait (present wait), draws, ktris, dmg and ev (S settings opened, G graphics change, F fps set,
+  D / U Auto down / up, P pacing fix, R resolution step).
+
+Not done: a WebGL "soak" race mode. The cause is a phone display / governor state that SwiftShader cannot reproduce,
+and new code can only be measured after the next cloud build. Physics untouched: PhysicsCheck calibration identical.
+Tool change: `traffic race` prints damaged wings at the flag; `RACELAPS=n` sets its length.
+
+**What Adi should check** (Performance graph on, tilt steering as usual, a 10-lap race, Results screenshot): the Hz
+column should stay 60 (or 120) in every row; "disp want/got" equal; P / U events where it used to sink; fps holding
+without opening Settings. If it still sinks: does gpu ms rise with gpuMHz / cpu clocks falling (governor, no boost) or
+does wait rise with gpu and main low (pacing)? And does one tap on the screen fix it (touch boost)?
+
 ## Round 2 (20 Nov): Adi's overlay data and what changed
 
 Three 2-minute races with the FrameLog overlay (Redmi Note 12 Pro 5G, Mali-G68, Vulkan). Adi: "better than before".

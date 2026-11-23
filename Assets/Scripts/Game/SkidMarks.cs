@@ -1,6 +1,11 @@
 // SkidMarks.cs — dark rubber streaks left on the asphalt when a tyre slides, spins or locks.
 // One mesh with a fixed ring buffer of quads (oldest marks are reused), one draw call, no allocations per frame.
+// The vertex buffer is made once at its full size (positions in stream 0, the fixed UVs in stream 1) and only the quads
+// written since the last frame are uploaded (Mesh.SetVertexBufferData on that range; a dynamic buffer). Before
+// (Docs/PERF-INVESTIGATION.md, round 3) every frame with a new quad re-sent all 2800 positions (33.6 KB a frame while a
+// tyre slid) through mesh.vertices, which also re-checks the indices and the bounds.
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class SkidMarks
 {
@@ -12,7 +17,13 @@ public class SkidMarks
     int next;
     readonly Vector3[] lastL = new Vector3[4], lastR = new Vector3[4], lastP = new Vector3[4];
     readonly bool[] active = new bool[4];
-    bool dirty;
+    int dirtyLo = int.MaxValue, dirtyHi = -1; bool dirtyAll; // quads written since the last upload (ring indices)
+
+    // for the frame-time overlay / soak test (FrameLog.cs, SoakTest.cs): quads in use, bytes uploaded so far
+    public static int QuadsUsed; public static long UploadBytes; public static int Quads => MaxQuads;
+    int used;
+
+    const MeshUpdateFlags Quiet = MeshUpdateFlags.DontValidateIndices | MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontNotifyMeshUsers | MeshUpdateFlags.DontResetBoneBounds;
 
     static Material mat;
     static Material Mat()
@@ -35,17 +46,26 @@ public class SkidMarks
     public SkidMarks()
     {
         mesh = new Mesh { name = "SkidMarks" };
+        mesh.MarkDynamic(); // rewritten piece by piece while racing
         var uv = new Vector2[MaxQuads * 4];
-        var tri = new int[MaxQuads * 6];
+        var tri = new ushort[MaxQuads * 6];
         for (int q = 0; q < MaxQuads; q++)
         {
             int b = q * 4;
             uv[b] = new Vector2(0, 0); uv[b + 1] = new Vector2(1, 0); uv[b + 2] = new Vector2(0, 1); uv[b + 3] = new Vector2(1, 1);
             int i = q * 6;
-            tri[i] = b; tri[i + 1] = b + 2; tri[i + 2] = b + 1;
-            tri[i + 3] = b + 1; tri[i + 4] = b + 2; tri[i + 5] = b + 3;
+            tri[i] = (ushort)b; tri[i + 1] = (ushort)(b + 2); tri[i + 2] = (ushort)(b + 1);
+            tri[i + 3] = (ushort)(b + 1); tri[i + 4] = (ushort)(b + 2); tri[i + 5] = (ushort)(b + 3);
         }
-        mesh.vertices = verts; mesh.uv = uv; mesh.triangles = tri;
+        mesh.SetVertexBufferParams(MaxQuads * 4,
+            new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3, 0),
+            new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2, 1));
+        mesh.SetVertexBufferData(verts, 0, 0, verts.Length, 0, Quiet);
+        mesh.SetVertexBufferData(uv, 0, 0, uv.Length, 1, Quiet);
+        mesh.SetIndexBufferParams(tri.Length, IndexFormat.UInt16);
+        mesh.SetIndexBufferData(tri, 0, 0, tri.Length, Quiet);
+        mesh.subMeshCount = 1;
+        mesh.SetSubMesh(0, new SubMeshDescriptor(0, tri.Length), Quiet);
         mesh.bounds = new Bounds(Vector3.zero, new Vector3(100000, 100, 100000));
         go = new GameObject("SkidMarks");
         go.AddComponent<MeshFilter>().sharedMesh = mesh;
@@ -59,7 +79,7 @@ public class SkidMarks
     {
         for (int i = 0; i < verts.Length; i++) verts[i] = Vector3.zero;
         for (int w = 0; w < 4; w++) active[w] = false;
-        next = 0; dirty = true;
+        next = 0; used = 0; QuadsUsed = 0; dirtyAll = true;
     }
 
     // wheel: 0..3; pos: contact point on the ground; side: the car's right vector; on: is this tyre sliding now
@@ -75,17 +95,25 @@ public class SkidMarks
             return;
         }
         if ((pos - lastP[wheel]).sqrMagnitude < MinStep * MinStep) return;
-        int b = next * 4;
+        int q = next, b = q * 4;
         verts[b] = lastL[wheel]; verts[b + 1] = lastR[wheel]; verts[b + 2] = l; verts[b + 3] = r;
         next = (next + 1) % MaxQuads;
+        if (used < MaxQuads) { used++; QuadsUsed = used; }
         lastL[wheel] = l; lastR[wheel] = r; lastP[wheel] = pos;
-        dirty = true;
+        // the dirty range: one span of ring indices (a wrap past the end in one frame: everything, rare)
+        if (dirtyHi < 0) { dirtyLo = q; dirtyHi = q + 1; }
+        else if (q == dirtyHi) dirtyHi = q + 1;
+        else if (q < dirtyLo || q > dirtyHi) dirtyAll = true;
     }
 
+    // once a frame: only the quads written since the last call go to the GPU
     public void Upload()
     {
-        if (!dirty) return;
-        mesh.vertices = verts;
-        dirty = false;
+        if (dirtyAll) { dirtyAll = false; dirtyLo = 0; dirtyHi = MaxQuads; }
+        if (dirtyHi < 0) return;
+        int v0 = dirtyLo * 4, n = (dirtyHi - dirtyLo) * 4;
+        mesh.SetVertexBufferData(verts, v0, v0, n, 0, Quiet);
+        UploadBytes += n * 12L;
+        dirtyLo = int.MaxValue; dirtyHi = -1;
     }
 }

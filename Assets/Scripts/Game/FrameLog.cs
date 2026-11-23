@@ -13,9 +13,14 @@
 //    wait for present; physics ms and steps per frame; GC collections, allocation per frame and per second, heap size,
 //    long frames (> 50 ms) and what was going on in them; the phone's thermal status, headroom, battery and SoC
 //    temperature, CPU and GPU clocks (Thermal.cs); render scale; draw calls and triangles.
-// On the race Results screen: the last 2 minutes of racing (menus, pauses, the intro and replays left out) in rows of
-// 20 s, oldest first, one column per number above plus "idle" (share of frames with no finger on the screen), for a
-// screenshot. Rows restart with each session.
+// On the race Results screen: the last 10 minutes of racing (menus, pauses, the intro and replays left out) in rows of
+// 30 s, oldest first, one column per number above plus "idle" (share of frames with no finger on the screen), the
+// present wait, draws / triangles, rivals with a damaged wing, and the events of the row ("ev": S settings opened,
+// G graphics level changed, F frame rate set, D Auto stepped down, U Auto tried the higher rate again, P a missed
+// window with time to spare (pacing / refresh rate: the display mode asked for again), R Auto's resolution step), for a
+// screenshot. Rows restart with each session. Round 3 (Docs/PERF-INVESTIGATION.md): the sixth live line shows the
+// display mode asked for and read back, its re-asserts, the pacing fixes, Auto's up-probes, the performance hint
+// session, the skid-mark ring, the replay buffer and the damaged rivals.
 // Cost: nothing when off (no component exists). When on: NO managed allocation at all. The text is NOT drawn with
 // IMGUI labels (Unity 6's IMGUI copies every label's string on every draw and builds new TextCore meshes, ~1-2 KB,
 // whenever a label's text changes: the old overlay's own text was ~100 KB/s of the garbage it measured). It is written
@@ -50,6 +55,12 @@ public class FrameLog : MonoBehaviour
     // ---------------------------------------------------------------- fed by GameManager every frame (cheap stores)
     public static int Steps; public static float PhysMs; public static int SpiralDrops;
     public static bool Racing, ResultsUp; public static int Lock = 60, Gfx = 2; public static float Res = 1f;
+    // Unity's frame timing, read once a frame by GameManagerPerf.FrameTimesTick (also used by the frame pacing)
+    public static bool FtValid; public static float FtMain, FtRend, FtGpu, FtWait;
+    // round 3 counters (GameManagerPerf): replay poses held, rivals with a damaged wing, pacing fixes, Auto's up-probes
+    public static int Replay, Damaged, PacingFixes, UpProbes;
+    // an event for the results table's "ev" column (see the top of this file)
+    public static void Mark(char c) { if (inst != null) inst.cur.Ev(c); }
     static readonly double TickMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
     public static void Physics(int steps, long ticks) { Steps = steps; PhysMs = (float)(ticks * TickMs); }
     public static void SessionStart() { if (inst != null) inst.ResetRows(); }
@@ -68,18 +79,20 @@ public class FrameLog : MonoBehaviour
     // 0.5 s window sums
     int aN, aTimN, aStepsMax, aDraws; double aMs, aMain, aRend, aGpu, aWait, aPhys, aSteps; long aAlloc, aTris;
     float nextText; int lastGc = -1, gcTotal, dropsSeen; long lastUsed = -1, heapUsed;
-    static readonly FrameTiming[] ft = new FrameTiming[1]; bool ftmOn;
+    bool ftmOn;
     ProfilerRecorder rDraw, rTris, rReserved;
 
-    // ---------------------------------------------------------------- 2-minute summary: 6 rows of 20 s + the current one
-    const float RowSec = 20f; const int Rows = 6;
+    // ---------------------------------------------------------------- 10-minute summary: 20 rows of 30 s + the current one
+    const float RowSec = 30f; const int Rows = 20;
     sealed class Row
     {
-        public int frames, late, gc, maxSteps, timN, touchless, therm = -1, lockMin, gfx;
+        public int frames, late, gc, maxSteps, timN, touchless, therm = -1, lockMin, gfx, draws, dmg; public long tris;
         public int spk, sG, sR, sT, sP, sU;              // frames > SpikeMs and what was going on in them
-        public double ms, main, rend, gpu, phys, t0; public long alloc; public float maxMs, head = float.NaN, bat = float.NaN, soc = float.NaN, cpu = float.NaN, gpuMhz = float.NaN, hz = float.NaN, res;
+        public double ms, main, rend, gpu, wait, phys, t0; public long alloc; public float maxMs, head = float.NaN, bat = float.NaN, soc = float.NaN, cpu = float.NaN, gpuMhz = float.NaN, hz = float.NaN, res;
         public readonly int[] hist = new int[Bins + 1];
-        public void Clear() { frames = late = gc = maxSteps = timN = touchless = 0; spk = sG = sR = sT = sP = sU = 0; therm = -1; lockMin = 0; ms = main = rend = gpu = phys = 0; alloc = 0; maxMs = 0; head = bat = soc = cpu = gpuMhz = hz = float.NaN; Array.Clear(hist, 0, hist.Length); }
+        public readonly char[] ev = new char[6]; public int evN;
+        public void Ev(char c) { if (evN > 0 && ev[evN - 1] == c) return; if (evN < ev.Length) ev[evN++] = c; else ev[ev.Length - 1] = '+'; }
+        public void Clear() { frames = late = gc = maxSteps = timN = touchless = draws = dmg = evN = 0; tris = 0; spk = sG = sR = sT = sP = sU = 0; therm = -1; lockMin = 0; ms = main = rend = gpu = wait = phys = 0; alloc = 0; maxMs = 0; head = bat = soc = cpu = gpuMhz = hz = float.NaN; Array.Clear(hist, 0, hist.Length); }
     }
     readonly Row[] rows = new Row[Rows + 1]; int rowHead, rowCount; Row cur; double raceClock;
 
@@ -131,17 +144,9 @@ public class FrameLog : MonoBehaviour
         wMs[wHead] = ms; wHead = (wHead + 1) % W; wCount++; wSum += ms; wHist[Bin(ms)]++;
         while (wCount > 1 && wSum > 10000.0) Pop();
 
-        // Unity's frame timing (a few frames late; 0 where the driver gives no GPU timer)
+        // Unity's frame timing (a few frames late; 0 where the driver gives no GPU timer), captured by GameManagerPerf
         float main = 0, rend = 0, gpu = 0, wait = 0; bool tim = false;
-        if (ftmOn)
-        {
-            FrameTimingManager.CaptureFrameTimings();
-            if (FrameTimingManager.GetLatestTimings(1, ft) > 0)
-            {
-                main = (float)ft[0].cpuMainThreadFrameTime; rend = (float)ft[0].cpuRenderThreadFrameTime; gpu = (float)ft[0].gpuFrameTime; wait = (float)ft[0].cpuMainThreadPresentWaitTime;
-                tim = main > 0f;
-            }
-        }
+        if (FtValid) { main = FtMain; rend = FtRend; gpu = FtGpu; wait = FtWait; tim = true; }
         aN++; aMs += ms; aAlloc += alloc; aPhys += PhysMs; aSteps += Steps; if (Steps > aStepsMax) aStepsMax = Steps;
         if (tim) { aTimN++; aMain += main; aRend += rend; aGpu += gpu; aWait += wait; }
         if (rDraw.Valid) aDraws = (int)rDraw.LastValue;
@@ -149,7 +154,7 @@ public class FrameLog : MonoBehaviour
 
         // a long frame's time (unscaledDeltaTime) is mostly the previous frame's work: look at both frames' events
         byte why = (byte)(flags | prevFlags); prevFlags = flags;
-        if (Racing) RowAdd(ms, tim, main, rend, gpu, alloc, gcHit ? 1 : 0, why);
+        if (Racing) RowAdd(ms, tim, main, rend, gpu, wait, alloc, gcHit ? 1 : 0, why);
 
         float now = Time.unscaledTime;
         if (now >= nextText) { nextText = now + 0.5f; Text(); aN = aTimN = aStepsMax = 0; aMs = aMain = aRend = aGpu = aWait = aPhys = aSteps = 0; aAlloc = 0; }
@@ -162,7 +167,7 @@ public class FrameLog : MonoBehaviour
         wSum -= o; wHist[Bin(o)]--; wCount--;
     }
 
-    void RowAdd(float ms, bool tim, float main, float rend, float gpu, long alloc, int gc, byte why)
+    void RowAdd(float ms, bool tim, float main, float rend, float gpu, float wait, long alloc, int gc, byte why)
     {
         var r = cur;
         if (r.frames == 0) { r.t0 = raceClock; r.lockMin = Lock; }
@@ -175,8 +180,9 @@ public class FrameLog : MonoBehaviour
             else if ((why & (FlagSteps | FlagDrop)) != 0) r.sP++; else r.sU++;
         }
         r.gc += gc; r.alloc += alloc; r.phys += PhysMs; if (Steps > r.maxSteps) r.maxSteps = Steps;
-        if (tim) { r.timN++; r.main += main; r.rend += rend; r.gpu += gpu; }
+        if (tim) { r.timN++; r.main += main; r.rend += rend; r.gpu += gpu; r.wait += wait; }
         if (Input.touchCount == 0) r.touchless++;
+        if (aDraws > r.draws) r.draws = aDraws; if (aTris > r.tris) r.tris = aTris; if (Damaged > r.dmg) r.dmg = Damaged;
         if (Lock < r.lockMin) r.lockMin = Lock;
         if (Thermal.Status > r.therm) r.therm = Thermal.Status;
         r.head = Max(r.head, Thermal.Headroom); r.bat = Max(r.bat, Thermal.BatteryC); r.soc = Max(r.soc, Thermal.SocC);
@@ -191,13 +197,13 @@ public class FrameLog : MonoBehaviour
     {
         // swap the finished row into the ring; the ring's oldest row object becomes the new current one
         var done = cur;
-        cur = rows[rowHead]; rows[rowHead] = done; cur.Clear();
+        cur = rows[rowHead]; rows[rowHead] = done; cur.Clear(); cur.t0 = raceClock;
         rowHead = (rowHead + 1) % rows.Length; if (rowCount < rows.Length) rowCount++;
     }
 
     // ---------------------------------------------------------------- text, written in place into bitmap textures
-    const int LineCols = 120, SumCols = 180, CW = 7; // summary: CW characters per column
-    readonly TextLine[] line = new TextLine[5];
+    const int LineCols = 120, SumCols = 222, CW = 7; // summary: CW characters per column
+    readonly TextLine[] line = new TextLine[6];
     readonly TextLine[] sumLine = new TextLine[3 + Rows + 1];
     BitText lineTex, sumTex; float nextSum; bool sumDirty = true;
     string device; static Material glMat;
@@ -238,6 +244,14 @@ public class FrameLog : MonoBehaviour
         e.T("res ").F(RenderScale.Scale * 100f, 0).T("% x ").F(Res * 100f, 0).T("%  |  draws ").I(aDraws).T("  tris ").I(aTris / 1000).T("k  |  gfx ").I(Gfx);
         if (PerfStats.Show) e.T("  |  STATS ON");
         e.End();
+        var f = line[5].Clear();
+        f.T("disp want ").F(Thermal.WantHz, 0).T(" got ").F(Thermal.Hz, 0).T(" Hz  reassert ").I(Thermal.Reasserts).T("  pacing ").I(PacingFixes)
+         .T("  up ").I(UpProbes).T("  |  hint ").C(Thermal.HintOn ? 'Y' : 'N');
+        if (Thermal.HintOn) f.T("(").I(Thermal.HintThreads).T(")");
+        f.T(" sus ").C(YesNo(Thermal.SustainedOk)).T("  |  skid ").I(SkidMarks.QuadsUsed).T("/").I(SkidMarks.Quads).T("  replay ").I(Replay).T("  dmg ").I(Damaged)
+         .T("  |  ev ");
+        for (int i = 0; i < cur.evN; i++) f.C(cur.ev[i]);
+        f.End();
         for (int i = 0; i < line.Length; i++) lineTex.Write(i, line[i]);
         lineTex.Upload();
     }
@@ -329,21 +343,22 @@ public class FrameLog : MonoBehaviour
     static void HLine(Rect r, float y) => Quad(r.xMin, y - 0.5f, r.xMax, y + 0.5f);
 
     // ---------------------------------------------------------------- the results-screen summary
-    static readonly string[] Head = { "t", "fps", "p50", "p95", "max", "late%", "main", "rend", "gpu", "phys", "st", "GC", "KB/s", "lock", "Hz", "therm", "head", "bat C", "soc C", "cpu", "gpuMHz", "idle%", "res%", ">50ms" };
+    static readonly string[] Head = { "t", "fps", "p50", "p95", "max", "late%", "main", "rend", "gpu", "wait", "phys", "st", "GC", "KB/s", "lock", "Hz", "therm", "head", "bat C", "soc C", "cpu", "gpuMHz", "idle%", "res%", "draws", "ktris", "dmg", "ev", ">50ms" };
     void Summary(float h, float sw)
     {
         int n = 3 + rowCount + (cur.frames > 0 ? 1 : 0);
         float k = TextScale(h, sw * 0.96f, sumTex.PixelWidth);
+        if (sumTex.PixelHeight * k > h * 0.9f) k = h * 0.9f / sumTex.PixelHeight; // 23 lines: fit the height too
         float w = sumTex.PixelWidth * k, lh = BitText.LH * k;
-        float x0 = Mathf.Round((sw - w) * 0.5f), y0 = Mathf.Round(h * 0.30f);
+        float x0 = Mathf.Round((sw - w) * 0.5f), y0 = Mathf.Round(Mathf.Max(h * 0.02f, Mathf.Min(h * 0.30f, h - lh * n - 12f)));
         Box(new Rect(x0 - 8, y0 - 6, w + 16, lh * n + 12), 0.82f);
         sumTex.Draw(new Rect(x0, y0, w, sumTex.PixelHeight * k), k);
     }
     void SummaryText()
     {
         var t0 = sumLine[0].Clear();
-        t0.T("Last 2 min of racing, rows of 20 s (oldest first; * = still running). 120 Hz: ").C(YesNo(Thermal.Can120))
-          .T(". >50ms = long frames (g gc, r radio, t thermal read, p physics, ? other). Screenshot this.").End();
+        t0.T("Last 10 min of racing, rows of 30 s (oldest first; * = still running). 120 Hz: ").C(YesNo(Thermal.Can120))
+          .T(". >50ms = long frames (g gc, r radio, t thermal read, p physics, ? other). ev: S settings, G gfx level, F fps set, D/U Auto down/up, P pacing fix, R res step. Screenshot this.").End();
         sumLine[1].Clear().T(device).End();
         var hd = sumLine[2].Clear();
         for (int c = 0; c < Head.Length; c++) { hd.Pad(c * CW); hd.T(Head[c]); }
@@ -371,6 +386,7 @@ public class FrameLog : MonoBehaviour
         L.Pad(c++ * CW).F(r.timN > 0 ? (float)(r.main / tn) : float.NaN, 1);
         L.Pad(c++ * CW).F(r.timN > 0 ? (float)(r.rend / tn) : float.NaN, 1);
         L.Pad(c++ * CW).F(r.timN > 0 && r.gpu > 0 ? (float)(r.gpu / tn) : float.NaN, 1);
+        L.Pad(c++ * CW).F(r.timN > 0 ? (float)(r.wait / tn) : float.NaN, 1);
         L.Pad(c++ * CW).F((float)(r.phys / fr), 2);
         L.Pad(c++ * CW).I(r.maxSteps);
         L.Pad(c++ * CW).I(r.gc);
@@ -385,6 +401,10 @@ public class FrameLog : MonoBehaviour
         L.Pad(c++ * CW).F(r.gpuMhz, 0);
         L.Pad(c++ * CW).F(100f * r.touchless / fr, 0);
         L.Pad(c++ * CW).F(r.res * 100f, 0).C(r.gfx == 1 ? 'L' : r.gfx == 2 ? 'M' : 'H');
+        L.Pad(c++ * CW).I(r.draws);
+        L.Pad(c++ * CW).I(r.tris / 1000);
+        L.Pad(c++ * CW).I(r.dmg);
+        L.Pad(c++ * CW); if (r.evN == 0) L.C('-'); else for (int i = 0; i < r.evN; i++) L.C(r.ev[i]);
         L.Pad(c++ * CW).I(r.spk);
         if (r.spk > 0)
         {

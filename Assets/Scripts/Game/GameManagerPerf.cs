@@ -17,6 +17,12 @@
 //    held to the next session start (a level change mid-race switched keywords, shader LODs and MSAA: a lap of
 //    first-use hitches); 40 fps only on a panel that really runs at 120 Hz (asked for while 40 is wanted, read back,
 //    else 60 or 30 only); the physics spiral guard's limits; the overlay's per-frame inputs (FrameLog.cs)
+//  * round 3 (Adi: the fps sinks during a race; opening and closing Settings, changing nothing, brings it back): the race
+//    keeps the state a pause re-applied, continuously. The panel is held at a mode the lock divides (Thermal.WantLock;
+//    re-asserted when it drifts and on every resume), the CPU governor gets a performance hint every frame (Thermal.Hint,
+//    no touch boost needed), a 3 s window that misses the lock while the CPU and GPU had time to spare is a pacing /
+//    refresh-rate problem, not load (re-assert, no step down), and Auto steps back UP after a calm spell (a probe, with
+//    a doubling wait when it fails). Auto's resolution step is undone at the next session start (it used to ratchet).
 using FormulaSim;
 using UnityEngine;
 
@@ -196,6 +202,9 @@ public partial class GameManager
     int fpsLock = 60, fpsRung;                       // the rate asked for (Application.targetFrameRate) and its place in FpsRungs
     static int[] fpsMem;                             // Auto: the rung each circuit settled on in this run (0 = none yet)
     float fpsWinT, fpsSettle; int fpsWinN, fpsWinLate; // the 3 s measuring window; seconds to wait before measuring
+    double fpsWinBusy; int fpsWinFt; bool fpsWinGpu;  // the window's frame timing: sum of max(main, render, GPU) ms, frames with it, a GPU timer seen
+    float fpsCalm, fpsUpWait = UpWait0, fpsProbeHeld; bool fpsProbe, fpsWasPaused; // Auto's step back up (below)
+    const float UpWait0 = 45f, UpWaitMax = 480f, ProbeHold = 30f;
     int fpsBad, heatReads, heatSeen, fpsWinShort;                 // failing windows in a row; thermal reads in a row that said "hot"
     bool fpsHolding = true;                          // the last full window held the lock
     bool resStepped;                                 // this session's one resolution step is used
@@ -222,20 +231,43 @@ public partial class GameManager
         }
         fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
         fpsAvg = fpsLock; fpsHolding = true; resStepped = false; fpsBad = 0; heatReads = 0;
+        fpsCalm = 0f; fpsProbe = false; fpsUpWait = UpWait0;
+        if (renderScale < ResMax - 0.001f) SetRenderScale(ResMax); // Auto's resolution step held for one session only (it ratcheted down race after race)
         FpsWindowReset(3f);
         FpsNamesFor120();
+        FrameLog.Mark('F');
     }
     // the Frame rate setting's "40" says when this screen cannot show it
     static void FpsNamesFor120() { FpsNames[2] = Thermal.Can120 == Thermal.No ? "40 (needs 120 Hz)" : "40 fps"; }
 
-    // once a frame (GameManager.Update): the display mode follows the lock. 40 asks Android for the panel's 120 Hz mode
-    // (Thermal.RequestHigh); 60 / 30 and the menus (MenuStudio caps them at 30) give the choice back to the system,
-    // which saves battery. A 40 lock on a panel that stays at 60 Hz (read back after ~2 s, or seen in the frame times)
-    // falls to a steady 30 at once.
+    // once a frame (GameManager.Update): the display mode follows the lock. In a session (racing or paused in it) the
+    // panel is held at the slowest mode the lock divides (Thermal.WantLock: 60 / 30 fps -> 60 Hz, 40 -> 120 Hz), so
+    // MIUI's idle refresh drop (no touches with tilt steering) cannot switch it under the game; the menu pages
+    // (MenuStudio caps them at 30) give the choice back to the system, which saves battery. A 40 lock on a panel that
+    // stays at 60 Hz (read back after ~2 s, or seen in the frame times) falls to a steady 30 at once.
     void DisplayModeTick()
     {
-        Thermal.RequestHigh(Application.targetFrameRate == 40);
+        Thermal.WantLock(ui != null && ui.Showing && !replaying ? 0 : fpsLock);
         if (fpsLock == 40 && Thermal.Can120 == Thermal.No) FpsNo120();
+        FrameTimesTick();
+    }
+
+    // Unity's frame timing (FrameTimingManager, a few frames late), read once a frame for the frame pacing, the
+    // performance hint and the overlay (FrameLog.Ft*). 0 / invalid where the phone gives no timer.
+    static readonly FrameTiming[] ftBuf = new FrameTiming[1]; static int ftOn = -1;
+    void FrameTimesTick()
+    {
+        if (ftOn < 0) ftOn = FrameTimingManager.IsFeatureEnabled() ? 1 : 0;
+        FrameLog.FtValid = false;
+        if (ftOn == 0) return;
+        FrameTimingManager.CaptureFrameTimings();
+        if (FrameTimingManager.GetLatestTimings(1, ftBuf) <= 0) return;
+        float main = (float)ftBuf[0].cpuMainThreadFrameTime, rend = (float)ftBuf[0].cpuRenderThreadFrameTime;
+        if (!(main > 0f)) return;
+        FrameLog.FtValid = true; FrameLog.FtMain = main; FrameLog.FtRend = rend;
+        FrameLog.FtGpu = (float)ftBuf[0].gpuFrameTime; FrameLog.FtWait = (float)ftBuf[0].cpuMainThreadPresentWaitTime;
+        // the CPU governor's hint: this frame's CPU work against the lock's frame time (racing only; menus idle)
+        if (!Paused && !replaying) Thermal.Hint((long)(Mathf.Max(main, rend) * 1e6f), (long)(1e9f / Mathf.Max(1, fpsLock)));
     }
     void FpsNo120()
     {
@@ -249,14 +281,17 @@ public partial class GameManager
     }
     // a graphics setting changed: every circuit may hold a higher rate now
     void FpsForget() { fpsMem = null; }
-    void FpsWindowReset(float settle) { fpsWinT = 0; fpsWinN = 0; fpsWinLate = 0; fpsWinShort = 0; fpsSettle = Mathf.Max(fpsSettle, settle); }
+    void FpsWindowReset(float settle) { fpsWinT = 0; fpsWinN = 0; fpsWinLate = 0; fpsWinShort = 0; fpsWinBusy = 0; fpsWinFt = 0; fpsWinGpu = false; fpsSettle = Mathf.Max(fpsSettle, settle); }
 
     // once a frame (GameManager.Update, AutoQuality)
     void FramePacing()
     {
         float dt = Time.unscaledDeltaTime;
         fpsAvg += (1f / Mathf.Max(dt, 0.001f) - fpsAvg) * 0.05f; // the number shown (RaceHud.DrawFps)
-        if (Paused || replaying) { FpsWindowReset(2f); return; } // (menus: capped at 30 by MenuStudio.cs)
+        bool paused = Paused || replaying;
+        if (fpsWasPaused && !paused) Thermal.Reassert(); // back from a pause: the display mode asked for again
+        fpsWasPaused = paused;
+        if (paused) { FpsWindowReset(2f); return; } // (menus: capped at 30 by MenuStudio.cs)
         // 0. the phone reports heat (Thermal.cs: Android thermal status MODERATE or more, or headroom >= 0.9, near the
         //    SEVERE level) on two reads in a row (~4 s: the headroom forecast is noisy): take the next steady rate now,
         //    before the clocks drop and the rate collapses (a 60 that throttles ends at 20-30 with judder). At most
@@ -271,8 +306,10 @@ public partial class GameManager
         fpsWinT += dt; fpsWinN++;
         if (dt > 1.25f / fpsLock) fpsWinLate++; // shown for one refresh too many (60 on 120 Hz: 25 ms instead of 16.7)
         else if (dt < 0.75f / fpsLock) fpsWinShort++; // shown early: a 40 lock on a 60 Hz panel alternates 16.7 / 33.3 ms
+        if (FrameLog.FtValid) { fpsWinBusy += Mathf.Max(FrameLog.FtMain, Mathf.Max(FrameLog.FtRend, FrameLog.FtGpu)); fpsWinFt++; if (FrameLog.FtGpu > 0f) fpsWinGpu = true; }
         if (fpsWinT < 3f) return;
         float avg = fpsWinN / fpsWinT, late = fpsWinLate / (float)fpsWinN;
+        float busy = fpsWinFt > 0 && fpsWinGpu ? (float)(fpsWinBusy / fpsWinFt) : -1f; // ms of real work per frame (-1: unknown)
         FpsWindowReset(0f);
         // a 40 lock that the panel cannot show: on 60 Hz Unity rounds 40 down to 30 (every frame 33 ms: Adi's "late
         // 100%") or the frames alternate 16.7 / 33.3 ms. -> steady 30 at once, and no 40 for the rest of the app run.
@@ -283,10 +320,20 @@ public partial class GameManager
         // bad window (a crash, a pack of cars) does not cost the session its frame rate
         bool bad = avg < fpsLock * 0.92f || late > 0.08f;
         fpsHolding = !bad;
+        // a missed window while the CPU threads and the GPU had a quarter of the frame to spare is not load: the frames
+        // were held back (the panel's refresh changed under the game, the frame pacing). Ask for the display mode again
+        // and keep the rate: before, two such windows cost Auto its 60 for the rest of the session (one-way)
+        if (bad && busy >= 0f && busy < 0.75f * 1000f / fpsLock)
+        {
+            FrameLog.PacingFixes++; FrameLog.Mark('P'); Thermal.Reassert();
+            fpsBad = 0; fpsCalm = 0f; return;
+        }
         fpsBad = bad ? fpsBad + 1 : 0;
+        if (!bad) FpsUpTick();
+        else fpsCalm = 0f;
         if (fpsBad < 2) return;
         fpsBad = 0;
-        // 1. Auto frame rate: the next steady rate, for the rest of the session
+        // 1. Auto frame rate: the next steady rate (until a calm spell lets it try the higher one again: FpsUpTick)
         var r = FpsRungs;
         if (fpsIdx == 0 && fpsRung < r.Length - 1) { FpsStepDown(false); return; }
         // 2. Auto graphics: the live shadows, then a level (each one-way), from the NEXT session start
@@ -302,19 +349,53 @@ public partial class GameManager
         // 3. last: one resolution step per session (never back up mid-race, so the picture never shimmers between sizes)
         if (DynResWorks && !resStepped && renderScale > DynResMin + 0.01f)
         {
-            resStepped = true; SetRenderScale(Mathf.Max(DynResMin, renderScale - 0.15f)); FpsWindowReset(1.5f);
+            resStepped = true; SetRenderScale(Mathf.Max(DynResMin, renderScale - 0.15f)); FpsWindowReset(1.5f); FrameLog.Mark('R');
         }
     }
+    // Auto's step back UP: after a calm spell at a lower rate (UpWait0 s of holding windows, the phone not warm), try the
+    // next rate again for ProbeHold s. If it holds, it stays (and this circuit's memory is lowered); if it fails, the
+    // normal step down brings the rate back and the next wait doubles (up to 8 min). So one bad patch (a pacing glitch, a
+    // lost touch boost, a warm minute) no longer costs a whole race its frame rate.
+    void FpsUpTick()
+    {
+        if (fpsIdx != 0) return;
+        bool cool = !Thermal.Hot && !(Thermal.Headroom >= 0.8f);
+        if (fpsProbe)
+        {
+            fpsProbeHeld += 3f;
+            if (fpsProbeHeld >= ProbeHold)
+            {
+                fpsProbe = false; fpsUpWait = UpWait0; fpsCalm = 0f;
+                if (fpsMem != null && mapIdx >= 0 && mapIdx < fpsMem.Length) fpsMem[mapIdx] = fpsRung;
+            }
+            return;
+        }
+        if (fpsRung == 0 || !cool) { fpsCalm = 0f; return; }
+        fpsCalm += 3f;
+        if (fpsCalm < fpsUpWait) return;
+        var r = FpsRungs; int up = fpsRung - 1;
+        if (r[up] == 40 && Thermal.Can120 == Thermal.No && up > 0) up--; // 40 needs 120 Hz
+        if (r[up] == 40 && Thermal.Can120 == Thermal.No) { fpsCalm = 0f; return; }
+        fpsRung = up; fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock;
+        fpsProbe = true; fpsProbeHeld = 0f; fpsCalm = 0f; fpsBad = 0; fpsAvg = fpsLock; fpsHolding = true;
+        FrameLog.UpProbes++; FrameLog.Mark('U');
+        FpsWindowReset(1.5f);
+    }
+
     float fpsHeatT;                                  // Auto's next allowed step for heat (Time.unscaledTime)
     void FpsStepDown(bool hot)
     {
         var r = FpsRungs;
+        bool probeFailed = fpsProbe;
+        if (fpsProbe) { fpsProbe = false; fpsUpWait = Mathf.Min(UpWaitMax, fpsUpWait * 2f); }
+        fpsCalm = 0f;
+        FrameLog.Mark('D');
         fpsRung++;
         if (r[fpsRung] == 40 && Thermal.Can120 == Thermal.No && fpsRung < r.Length - 1) fpsRung++; // 40 needs 120 Hz
         fpsLock = r[fpsRung]; Application.targetFrameRate = fpsLock; // (a 40 asks for 120 Hz: DisplayModeTick, read back after ~2 s)
         if (mapIdx >= 0 && mapIdx < MapNames.Length) { if (fpsMem == null) fpsMem = new int[MapNames.Length]; fpsMem[mapIdx] = Mathf.Max(fpsMem[mapIdx], fpsRung); }
         fpsAvg = fpsLock; fpsHolding = true; fpsBad = 0; FpsWindowReset(1.5f);
-        Flash(hot ? FpsFlashHot(fpsLock) : FpsFlash(fpsLock));
+        if (!probeFailed) Flash(hot ? FpsFlashHot(fpsLock) : FpsFlash(fpsLock)); // (a failed try at the higher rate goes back quietly)
     }
     static string FpsFlash(int f) => f == 45 ? "Steady 45 fps for smoother play" : f == 40 ? "Steady 40 fps for smoother play" : "Steady 30 fps for smoother play";
     static string FpsFlashHot(int f) => f == 45 ? "Phone is warm: steady 45 fps" : f == 40 ? "Phone is warm: steady 40 fps" : "Phone is warm: steady 30 fps";
@@ -336,12 +417,20 @@ public partial class GameManager
     static readonly long SpiralTicks = (long)(System.Diagnostics.Stopwatch.Frequency * SpiralMs / 1000.0);
 
     // ---------------------------------------------------------------- the frame-time overlay's inputs (FrameLog.cs)
+    int flGfxSeen = -1; bool flMenuSeen;
     void FrameLogFeed()
     {
         FrameLog.Physics(0, 0); // (set again after the step loop when it runs this frame)
         FrameLog.Racing = !Paused && !replaying && intro == null;
         FrameLog.ResultsUp = ui != null && ui.page == MenuUI.Page.Results && !replaying && !menuOpen;
         FrameLog.Lock = fpsLock; FrameLog.Res = renderScale; FrameLog.Gfx = gfxLevel;
+        // events for the results table: S = the settings were opened in a session, G = the graphics level changed
+        if (menuOpen != flMenuSeen) { flMenuSeen = menuOpen; if (menuOpen && (ui == null || !ui.Showing)) FrameLog.Mark('S'); }
+        if (gfxLevel != flGfxSeen) { if (flGfxSeen >= 0) FrameLog.Mark('G'); flGfxSeen = gfxLevel; }
+        // what grows in a race (round 3): replay poses, rivals with a damaged wing (their LODs are off: CarLod.cs)
+        FrameLog.Replay = recCount;
+        int dmg = 0; for (int i = 0; i < rivals.Count; i++) if (rivals[i].car.damage.WingsDamaged) dmg++;
+        FrameLog.Damaged = dmg;
     }
 
     // ---------------------------------------------------------------- small no-garbage strings
