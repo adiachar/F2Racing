@@ -22,6 +22,8 @@
 //           (Fresnel, sun glint) and a share of the windows (a hash of the bay) is lit at dusk / night. The tint mask is
 //           alpha remapped from 0.06..1 (frames carry 0.055 so they are not glass). Cell 22 (map-stand crowd): every
 //           spectator bobs and sways by a texel or two (per-person phase, _Time), a cheap shimmer of movement.
+//  plain    (no keyword) with _WinGlow 1: the town facades (EnvTex.Facade, alpha 0 = glass) get the same lit windows
+//           at dusk / night (_F2Night) as F2_ATLAS, a share of the bays by hash.
 //  F2_CROWD the trackside crowd (TracksideArt.Crowd): uv1.rgb = the seat block's colour, applied where the crowd
 //           texture's alpha is 1 (empty seats, seat backs); people keep their colours. The same per-person shimmer
 //           (32 people per tile across, 4 bands), sampled with the unshifted gradients so no mip seams show.
@@ -35,6 +37,8 @@ Shader "F2/Baked"
         _LandMacro ("Land macro (F2_LAND)", 2D) = "gray" {}
         _LandRect ("Land map: x0, z0, 1/width, 1/depth (F2_LAND)", Vector) = (0, 0, 0.001, 0.001)
         _DetailScale ("Detail tiles per metre (F2_LAND)", Float) = 0.222
+        _WinGlow ("Lit windows at night (plain variant; texture alpha 0 = glass)", Float) = 0
+        _FogKeep ("Thinner fog: 0 off .. 1 keep = sqrt(keep) (the wooded backdrop, Environment.Backdrop)", Float) = 0
     }
     SubShader
     {
@@ -98,6 +102,8 @@ Shader "F2/Baked"
             float _DetailScale;
         #endif
             float _F2Night; // 0 day, ~0.45 evening, 1 night (Trackside.Build)
+            float _WinGlow; // 1 on the town facades (Scenery.Town, Environment blocks: EnvTex.Facade, alpha 0 = glass)
+            float _FogKeep; // the wooded backdrop rings: they keep more of their own dark green through the fog (vertex only)
 
             // sky, ground and sun mirrored in glass (float maths: see F2_LAND); gm = glass mask 0..1
             half3 Mirror(half3 c, float gm, float3 view, float3 nrm)
@@ -151,6 +157,12 @@ Shader "F2/Baked"
             #endif
                 o.color = v.color * _Color * 2.0; // stored light 0.5 = full brightness, so sunlit areas can go above 1
                 UNITY_TRANSFER_FOG(o, o.pos);
+            #if defined(FOG_LINEAR)
+                // far forest (Spa, Suzuka, Spielberg): at 1-2 km the linear fog left only 20-40 % of the canopy, so the
+                // wooded hills read as bare grey-green. sqrt keeps the order (nearer = clearer, 0 stays 0 in rain fog)
+                // and lifts 0.25 to 0.5. 0 on every other material: lerp(a, ., 0) = a. Per vertex: 3 ops.
+                o.fogCoord.a = lerp(o.fogCoord.a, sqrt(saturate(o.fogCoord.a)), _FogKeep);
+            #endif
                 return o;
             }
 
@@ -168,9 +180,9 @@ Shader "F2/Baked"
                 half crown = saturate(a - 2.0);
                 fixed4 c = fixed4(L.rgb * (0.55 + 0.9 * k) * lerp(0.88 + 0.24 * m.r, 0.38 + 1.05 * m.g, crown), 1);
             #elif defined(F2_ATLAS)
-                float2 g = i.uv * 128.0;                       // texels of one 128 px cell
+                float2 g = i.uv * 256.0;                       // texels of one 256 px cell (EnvTex.AtlasCell)
                 float2 dx = ddx(g), dy = ddy(g);
-                float lod = clamp(0.5 * log2(max(dot(dx, dx), dot(dy, dy))), 0.0, 4.0);
+                float lod = clamp(0.5 * log2(max(dot(dx, dx), dot(dy, dy))), 0.0, 5.0);
                 float h = frac(sin(dot(floor(i.uv), float2(12.9898, 78.233))) * 43758.5453);
                 float alt = frac(i.cell.y);
                 float idx = h < (alt - 0.05) * 1.1111 ? floor(i.cell.y) : floor(i.cell.x + 0.5);
@@ -179,7 +191,7 @@ Shader "F2/Baked"
                 // map-stand crowd (cell 22, 16 people x 4 rows per tile): each spectator moves a little
                 float crowd = abs(idx - 22.0) < 0.5 ? 1.0 : 0.0;
                 fu = frac(fu + crowd * Shimmer(floor(fu * float2(16.0, 4.0)) + floor(i.uv) * 17.0, float2(1.0 / 124.0, 1.0 / 124.0)));
-                float2 a = (float2(idx - cy * 8.0, cy) + (2.0 + fu * 124.0) / 128.0) * float2(0.125, 0.25);
+                float2 a = (float2(idx - cy * 8.0, cy) + (4.0 + fu * 248.0) / 256.0) * float2(0.125, 0.25); // 4 px margin
                 fixed4 c = tex2Dlod(_MainTex, float4(a, 0, lod));
                 half3 tc = i.tint.rgb;
                 float tw = i.tint.w, e = min(i.uv.x, tw - i.uv.x); // (float compares, see F2_LAND)
@@ -209,6 +221,12 @@ Shader "F2/Baked"
                 c.rgb = Mirror(c.rgb, gmA * 0.85, i.view, (float3)i.n); // (Low: the painted sky in the texture only)
             #endif
                 c.rgb += Lit(floor(i.uv) + i.cell.x * 31.0, gmA);
+            #elif !defined(F2_LAND) && !defined(F2_CROWD)
+                // town facades at dusk / night: a share of the windows glows warm (uv0 counts bays, so floor(uv) is one
+                // window). A uniform branch: by day and on every other plain material it costs one compare. The glass
+                // mask stays soft, so a far mip glows by its glass share instead of switching off
+                if (_WinGlow * _F2Night > 0.001)
+                    c.rgb += Lit(floor(i.uv), saturate(1.0 - (float)c.a) * _WinGlow);
             #endif
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)

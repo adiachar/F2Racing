@@ -105,7 +105,9 @@ public static class EnvTex
         }
     }
     static readonly System.Collections.Generic.Dictionary<string, Photo> photos = new System.Collections.Generic.Dictionary<string, Photo>();
-    public static Photo LoadPhoto(string name)
+    // lumOnly: only the relative luminance (rel) is kept, no colour array (4 bytes a texel instead of 20: the 1024 road
+    // photos would otherwise add ~40 MB of managed heap at load); At / Rel must not be used on such a photo
+    public static Photo LoadPhoto(string name, bool lumOnly = false)
     {
         Photo p;
         if (photos.TryGetValue(name, out p)) return p;
@@ -118,20 +120,93 @@ public static class EnvTex
             if (!ImageConversion.LoadImage(t, ta.bytes, false)) { Object.Destroy(t); return null; }
             var px = t.GetPixels32(); p = new Photo { W = t.width, H = t.height };
             Object.Destroy(t);
-            p.lin = new Color[px.Length]; p.rel = new float[px.Length];
+            var lut = new float[256]; for (int i = 0; i < 256; i++) lut[i] = Mathf.Pow(i / 255f, 2.2f);
+            if (!lumOnly) p.lin = new Color[px.Length];
+            p.rel = new float[px.Length];
             double sr = 0, sg = 0, sb = 0;
             for (int i = 0; i < px.Length; i++)
             {
-                var c = new Color(Mathf.Pow(px[i].r / 255f, 2.2f), Mathf.Pow(px[i].g / 255f, 2.2f), Mathf.Pow(px[i].b / 255f, 2.2f));
-                p.lin[i] = c; sr += c.r; sg += c.g; sb += c.b;
+                float r = lut[px[i].r], g = lut[px[i].g], b = lut[px[i].b];
+                if (!lumOnly) p.lin[i] = new Color(r, g, b);
+                p.rel[i] = 0.299f * r + 0.587f * g + 0.114f * b;
+                sr += r; sg += g; sb += b;
             }
             float n = px.Length; p.mean = new Color((float)(sr / n), (float)(sg / n), (float)(sb / n));
             float ml = Mathf.Max(1e-4f, 0.299f * p.mean.r + 0.587f * p.mean.g + 0.114f * p.mean.b);
-            for (int i = 0; i < px.Length; i++) p.rel[i] = Mathf.Clamp((0.299f * p.lin[i].r + 0.587f * p.lin[i].g + 0.114f * p.lin[i].b) / ml, 0.05f, 4f);
+            for (int i = 0; i < px.Length; i++) p.rel[i] = Mathf.Clamp(p.rel[i] / ml, 0.05f, 4f);
             return photos[name] = p;
         }
         catch (System.Exception) { return null; }
     }
+
+    // ---------------------------------------------------------------- imported photo textures (Resources/Photo)
+    // GPU textures imported by the build (Editor/F2TextureImport.cs: ASTC 6x6 / 4x4 on Android, mips, aniso), made
+    // offline by Tools/Photo/make_photos.py from CC0 scans (Docs/ASSETS.md). Not CPU-readable: their linear mean colour
+    // comes from Resources/Photo/means.txt, so a shader can scale them to a circuit's palette (gain = palette / mean).
+    // Missing file or mean = null / false: the caller keeps its procedural texture (EnvTex below), nothing else changes.
+    static readonly System.Collections.Generic.Dictionary<string, Texture2D> photoTex = new System.Collections.Generic.Dictionary<string, Texture2D>();
+    static System.Collections.Generic.Dictionary<string, Color> photoMeans;
+    public static bool NoPhotos; // shot / A-B switch: true = the procedural textures only (as before the photo round)
+    public static Texture2D PhotoTex(string name)
+    {
+        if (NoPhotos) return null;
+        Texture2D t;
+        if (photoTex.TryGetValue(name, out t)) return t;
+        try { t = Resources.Load<Texture2D>("Photo/" + name); } catch (System.Exception) { t = null; }
+        photoTex[name] = t;
+        return t;
+    }
+    // drop an imported photo from memory (the next PhotoTex loads it again): skies the session does not use
+    public static void UnloadPhotoTex(string name)
+    {
+        Texture2D t;
+        if (photoTex.TryGetValue(name, out t) && t != null) Resources.UnloadAsset(t);
+        photoTex.Remove(name);
+    }
+    public static bool PhotoMean(string name, out Color mean)
+    {
+        mean = Color.gray;
+        if (photoMeans == null)
+        {
+            photoMeans = new System.Collections.Generic.Dictionary<string, Color>();
+            var ta = Resources.Load<TextAsset>("Photo/means");
+            if (ta != null)
+                foreach (var line in ta.text.Split('\n'))
+                {
+                    var p = line.Trim().Split(' ');
+                    if (p.Length != 4 || p[0].StartsWith("#")) continue;
+                    float r, g, b; var ci = System.Globalization.CultureInfo.InvariantCulture;
+                    if (float.TryParse(p[1], System.Globalization.NumberStyles.Float, ci, out r) && float.TryParse(p[2], System.Globalization.NumberStyles.Float, ci, out g) && float.TryParse(p[3], System.Globalization.NumberStyles.Float, ci, out b))
+                        photoMeans[p[0]] = new Color(r, g, b);
+                }
+        }
+        return photoMeans.TryGetValue(name, out mean) && mean.r > 1e-4f && mean.g > 1e-4f && mean.b > 1e-4f;
+    }
+    // a photo albedo and the per-channel linear gain that gives it the mean "target" (Ground.shader _Gain); null if missing
+    public static Texture2D PhotoAlbedo(string name, Color target, out Vector4 gain)
+    {
+        gain = Vector4.one;
+        var t = PhotoTex(name); Color m;
+        if (t == null || !PhotoMean(name, out m)) return null;
+        gain = new Vector4(target.r / m.r, target.g / m.g, target.b / m.b, 1f);
+        return t;
+    }
+    // GroundDetail's photo twin for green circuits (Resources/Photo/grass: ambientCG Grass001 at 1024, clumps in alpha):
+    // same tint, same palette mean, same alpha meaning; null on sandy / paved circuits or without the file
+    public static Texture2D GroundPhoto(Color albedo, out Vector4 gain)
+    {
+        gain = Vector4.one;
+        if (!IsGreen(albedo)) return null;
+        albedo = new Color(albedo.r * GrassTint.x, albedo.g * GrassTint.y, albedo.b * GrassTint.z, albedo.a);
+        return PhotoAlbedo("grass", albedo, out gain);
+    }
+    // Gravel's photo twin (Resources/Photo/gravel: Poly Haven gravel_floor_02 at 1024), the same mean as MakeGravel
+    // Astroturf's photo twin (Resources/Photo/turf: Adi's asset pack astroturf_green, 1 x 1 m tile; A = the painted
+    // run-off's aggregate as MakeTurf's), scaled to a slightly brighter green than the procedural turf's mean
+    public static Texture2D TurfPhoto(out Vector4 gain) => PhotoAlbedo("turf", new Color(0.034f, 0.118f, 0.043f), out gain);
+    public static Texture2D GravelPhoto(out Vector4 gain) => PhotoAlbedo("gravel", new Color(0.50f, 0.45f, 0.36f), out gain);
+
+    public static void ForgetPhoto(string name) => photos.Remove(name); // (free a decoded photo once a texture is built)
 
     public static int Bytes; // texture memory made here (RGBA32 + mips), for the performance notes
     static Texture2D Count(Texture2D t) { Bytes += t.width * t.height * 4 * 4 / 3; return t; }
@@ -299,31 +374,35 @@ public static class EnvTex
     // ~2.5 m per frame, so anything between ~5 cm and ~5 m wide strobes ("the road crawls"). Fine grain is either far
     // below that (and faded with distance, speed and mip) or the variation is tens of metres long.
 
-    // RoadDetail: fine aggregate grain, 512 x 512 R8 (linear), 1.6 m per tile (3 mm texels), HQ only. 0.5 = neutral.
+    // RoadDetail: fine grain, 1024 x 1024 RG8 (linear), 3.2 m per tile (3 mm texels), HQ only. 0.5 = neutral.
+    //   R  asphalt aggregate (CC0 Poly Haven asphalt_track at 1024: twice the unique area of the old 512 / 1.6 m tile,
+    //      the same texel size, so the repeat is half as visible and the mip fade below is unchanged)
+    //   G  kerb concrete (CC0 Poly Haven concrete_floor_worn_001: pores, trowel marks, fine cracks under the paint);
+    //      Road.cginc reads it from the same fetch as R (no extra read), on kerb pixels only
     // Mean exactly 0.5 on every mip, and the mip chain is made by hand: each level is the box-filtered (energy-preserving)
     // average of the one above, then its contrast is scaled down (RoadDetailMipFade), so the grain melts to flat grey by
     // the time a pixel covers ~5 cm, whatever the distance or the viewing angle. The shader never has to guess when to
-    // fade it out, and nothing is left to sparkle or crawl.
+    // fade it out, and nothing is left to sparkle or crawl. 1024^2 x 2 bytes + mips = 2.8 MB (was 0.35 MB).
     public static readonly float[] RoadDetailMipFade = { 1f, 1f, 0.9f, 0.6f, 0.3f, 0.1f, 0f };
     public const float RoadDetailStd = 0.15f; // standard deviation of mip 0 around 0.5 (the shader scales it)
+    public const float RoadDetailTile = 3.2f; // metres per tile (Road.cginc: fine grain 1 / 3.2, clusters 1 / 14)
     static Texture2D cRoadDetail;
     public static Texture2D RoadDetail() => cRoadDetail != null ? cRoadDetail : (cRoadDetail = MakeRoadDetail());
-    static Texture2D MakeRoadDetail()
+    // one grain channel, N x N, zero mean and RoadDetailStd: a photo's log luminance, or the procedural fallback
+    static float[] GrainChannel(int N, Photo ph, int seed)
     {
-        const int N = 512;
         var l0 = new float[N * N];
-        var ap = LoadPhoto("asphalt"); // CC0 racing asphalt (Poly Haven asphalt_track): real stone and binder structure
         FormulaSim.Par.For(0, N, y =>
         {
             for (int x = 0; x < N; x++)
             {
                 float u = (x + 0.5f) / N, v = (y + 0.5f) / N, l;
-                if (ap != null) l = ap.L(u, v); // one photo tile per texture tile
+                if (ph != null) l = ph.L(u, v); // one photo tile per texture tile
                 else
                 {
                     // procedural fallback: soft, band-limited stones (value noise, 2.5 cm and finer), a little sand
-                    float s = Fbm(u, v, 64, 3, 401), p = Fbm(u, v, 160, 2, 409);
-                    l = 1f + 0.9f * (s - 0.5f) + 0.5f * (p - 0.5f) + 0.12f * (Hash(x, y, 417) - 0.5f);
+                    float s = Fbm(u, v, 128, 3, seed), p = Fbm(u, v, 320, 2, seed + 8);
+                    l = 1f + 0.9f * (s - 0.5f) + 0.5f * (p - 0.5f) + 0.12f * (Hash(x, y, seed + 16) - 0.5f);
                 }
                 // log response: the photo's few very bright stone tops would otherwise dominate (and sparkle)
                 l0[y * N + x] = Mathf.Log(Mathf.Clamp(l, 0.25f, 3f));
@@ -342,39 +421,54 @@ public static class EnvTex
         for (int k = 0; k < l0.Length; k++) { s1 += l0[k]; s2 += l0[k] * l0[k]; }
         mean = (float)(s1 / l0.Length); sd = Mathf.Sqrt(Mathf.Max(1e-8f, (float)(s2 / l0.Length) - mean * mean));
         for (int k = 0; k < l0.Length; k++) l0[k] = (l0[k] - mean) / sd * RoadDetailStd; // zero mean, exact std
+        return l0;
+    }
+    static float[] HalfBox(float[] cur, int w)
+    {
+        int nw = w / 2; var nx = new float[nw * nw];
+        for (int y = 0; y < nw; y++)
+            for (int x = 0; x < nw; x++)
+            {
+                int i0 = 2 * y * w + 2 * x;
+                nx[y * nw + x] = 0.25f * (cur[i0] + cur[i0 + 1] + cur[i0 + w] + cur[i0 + w + 1]);
+            }
+        return nx;
+    }
+    static Texture2D MakeRoadDetail()
+    {
+        const int N = 1024;
+        // photos smaller than the tile (the old 512 asphalt) are read stretched: 1 photo tile per texture tile
+        var ap = LoadPhoto("asphalt", true);   // CC0 racing asphalt: real stone and binder structure
+        var kp = LoadPhoto("kerbconc", true);  // CC0 worn concrete: the kerbs' cast surface under the paint
+        var ra = GrainChannel(N, ap, 401);
+        var ka = GrainChannel(N, kp, 431);
+        photos.Remove("asphalt"); photos.Remove("kerbconc"); // (decoded photos are not needed again)
 
-        bool r8 = SystemInfo.SupportsTextureFormat(TextureFormat.R8);
-        var t = new Texture2D(N, N, r8 ? TextureFormat.R8 : TextureFormat.RGBA32, true, true)
+        bool rg = SystemInfo.SupportsTextureFormat(TextureFormat.RG16);
+        var t = new Texture2D(N, N, rg ? TextureFormat.RG16 : TextureFormat.RGBA32, true, true)
         { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 8, name = "RoadDetail" };
-        int mips = t.mipmapCount, w = N; var cur = l0;
+        int mips = t.mipmapCount, w = N; var cr0 = ra; var ck0 = ka;
         for (int m = 0; m < mips; m++)
         {
             float f = m < RoadDetailMipFade.Length ? RoadDetailMipFade[m] : 0f;
-            if (r8)
+            if (rg)
             {
-                var b = new byte[w * w];
-                for (int k = 0; k < b.Length; k++) b[k] = B(0.5f + cur[k] * f);
+                var b = new byte[w * w * 2];
+                for (int k = 0; k < w * w; k++) { b[2 * k] = B(0.5f + cr0[k] * f); b[2 * k + 1] = B(0.5f + ck0[k] * f); }
                 t.SetPixelData(b, m);
             }
             else
             {
                 var c = new Color32[w * w];
-                for (int k = 0; k < c.Length; k++) { byte g = B(0.5f + cur[k] * f); c[k] = new Color32(g, g, g, 255); }
+                for (int k = 0; k < c.Length; k++) c[k] = new Color32(B(0.5f + cr0[k] * f), B(0.5f + ck0[k] * f), 128, 255);
                 t.SetPixels32(c, m);
             }
             if (w == 1) break;
             // next level: 2 x 2 box average of the unfaded data (the fade is applied per level, never compounded)
-            int nw = w / 2; var nx = new float[nw * nw];
-            for (int y = 0; y < nw; y++)
-                for (int x = 0; x < nw; x++)
-                {
-                    int i0 = 2 * y * w + 2 * x;
-                    nx[y * nw + x] = 0.25f * (cur[i0] + cur[i0 + 1] + cur[i0 + w] + cur[i0 + w + 1]);
-                }
-            cur = nx; w = nw;
+            cr0 = HalfBox(cr0, w); ck0 = HalfBox(ck0, w); w /= 2;
         }
         t.Apply(false, true);
-        Bytes += N * N * (r8 ? 1 : 4) * 4 / 3;
+        Bytes += N * N * (rg ? 2 : 4) * 4 / 3;
         return t;
     }
 
@@ -410,6 +504,46 @@ public static class EnvTex
     // a sill with its shadow, a lintel shadow and a faint string course at floor level. Texel (0, 0) is plain plaster,
     // so faces mapped to uv (0, 0) (cornices, parapets) come out as plaster.
     static Texture2D facade;
+    // Far woods (Environment.Backdrop, gap list item 18): forest canopy seen from the side at 0.5-3 km, one tile = ~96 m
+    // (Environment.FarWoodTile), 0.75 m per texel. Grey, multiplied with the ring's baked vertex colour. Soft and LOW
+    // contrast on purpose: ~720 small round crowns (1.5-3 m radius) at random places (no grid: the old 8 x 8 grid of big
+    // crowns, 0.34-1.0 in value, read as a pale brick wall at 1-2 km), lit a little on top, over a darker understorey,
+    // on gentle stand-sized patches (fbm, 3 per tile). The mips average it to an even tone with distance. Backdrop
+    // divides the tint by its linear mean (FarWoodMean). 128 px RGBA32 + mips: 85 KB, load time only.
+    static Texture2D farWood;
+    public static float FarWoodMean = 0.17f; // the texture's mean in linear (sRGB texture), set when it is made
+    public static Texture2D FarWood()
+    {
+        if (farWood != null) return farWood;
+        const int N = 128, Crowns = 720;
+        var bas = new float[N * N]; var val = new float[N * N];
+        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
+        {
+            int i = y * N + x;
+            bas[i] = 0.52f + 0.12f * (Fbm((x + 0.5f) / N, (y + 0.5f) / N, 3, 3, 251) - 0.5f); // stands: gentle patches
+            val[i] = bas[i] * (0.80f + 0.06f * Hash(x, y, 211));                                 // the shaded understorey
+        }
+        // crowns from the top of the tile down: the lower ones (nearer on the slope) overlap the ones above them
+        for (int k = 0; k < Crowns; k++)
+        {
+            float cy = (1f - (k + Hash(k, 1, 257)) / Crowns) * N, cx = Hash(k, 2, 257) * N;
+            float r = 2.0f + 1.8f * Hash(k, 3, 257), tone = 0.93f + 0.14f * Hash(k, 4, 257);
+            int ri = (int)r + 1, icx = (int)cx, icy = (int)cy;
+            for (int dy = -ri; dy <= ri; dy++) for (int dx = -ri; dx <= ri; dx++)
+            {
+                float ux = dx / r, uy = dy / r, d2 = ux * ux + uy * uy;
+                if (d2 > 1f) continue;
+                int x = ((icx + dx) % N + N) % N, y = ((icy + dy) % N + N) % N, i = y * N + x;
+                float lit = 0.90f + 0.16f * uy - 0.07f * d2;                    // a lighter top, a soft darker rim
+                val[i] = Mathf.Clamp01(bas[i] * lit * tone * (0.96f + 0.08f * Hash(x, y, 241)));
+            }
+        }
+        var px = new Color32[N * N]; double sum = 0; bool lin = QualitySettings.activeColorSpace == ColorSpace.Linear;
+        for (int i = 0; i < px.Length; i++) { byte b = B(val[i]); px[i] = new Color32(b, b, b, 255); sum += lin ? Mathf.GammaToLinearSpace(b / 255f) : b / 255f; }
+        FarWoodMean = (float)(sum / px.Length);
+        return farWood = Count(Make(N, N, px, false, 1));
+    }
+
     public static Texture2D Facade()
     {
         if (facade != null) return facade;
@@ -418,7 +552,7 @@ public static class EnvTex
         {
             float u = (x + 0.5f) / N, v = (y + 0.5f) / N;
             float pl = 0.86f + 0.08f * Fbm(u, v, 8, 3, 101) + 0.04f * Hash(x, y, 103);
-            Color c = new Color(pl, pl, pl * 0.98f);
+            Color c = new Color(pl, pl, pl * 0.98f); byte ga = 255;
             if (v < 0.035f) c *= 0.86f;                                          // string course
             bool inF = u > 0.27f && u < 0.73f && v > 0.24f && v < 0.84f, inG = u > 0.31f && u < 0.69f && v > 0.28f && v < 0.80f;
             if (u > 0.25f && u < 0.75f && v > 0.19f && v < 0.24f) c = new Color(0.95f, 0.95f, 0.93f); // sill
@@ -427,17 +561,39 @@ public static class EnvTex
             if (inF) c = new Color(0.93f, 0.93f, 0.91f);
             if (inG)
             {
-                float t = (v - 0.28f) / 0.52f;
-                c = Color.Lerp(new Color(0.20f, 0.27f, 0.34f), new Color(0.55f, 0.66f, 0.76f), t * t);  // sky in the glass
-                if (Mathf.Abs(u - 0.5f) < 0.012f || Mathf.Abs(v - 0.60f) < 0.012f) c = new Color(0.9f, 0.9f, 0.88f); // glazing bars
+                float tg = (v - 0.28f) / 0.52f;
+                c = Color.Lerp(new Color(0.20f, 0.27f, 0.34f), new Color(0.55f, 0.66f, 0.76f), tg * tg);  // sky in the glass
+                ga = 0; // alpha 0 = window glass: Baked.shader (_WinGlow) lights a share of the windows at dusk / night
+                if (Mathf.Abs(u - 0.5f) < 0.012f || Mathf.Abs(v - 0.60f) < 0.012f) { c = new Color(0.9f, 0.9f, 0.88f); ga = 255; } // glazing bars
                 if (u + v * 0.6f > 0.85f && u + v * 0.6f < 0.9f) c += new Color(0.12f, 0.12f, 0.12f);  // a streak of reflection
             }
             // side shutters
             if ((u > 0.13f && u < 0.26f || u > 0.74f && u < 0.87f) && v > 0.25f && v < 0.83f)
                 c = new Color(0.5f, 0.5f, 0.48f) * ((y / 3) % 2 == 0 ? 0.85f : 1f);
-            px[y * N + x] = new Color32(B(c.r), B(c.g), B(c.b), 255);
+            px[y * N + x] = new Color32(B(c.r), B(c.g), B(c.b), ga);
         }
-        return facade = Count(Make(N, N, px));
+        // sharpened mips (gap list item 18, Monaco's blank far blocks): a box-filtered bay melts into one pale tone by
+        // mip 4-5 (a block 300 m away), so the far towers read as white boxes. From mip 2 on, each level's contrast
+        // around its mean is raised (x1.25 per level, at most x2.2): the window grid stays a darker stipple at a distance.
+        // Same size and format, load time only.
+        var t = new Texture2D(N, N, TextureFormat.RGBA32, true, false) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
+        t.SetPixels32(px); t.Apply(true, false);
+        for (int m = 2; m < t.mipmapCount; m++)
+        {
+            var mp = t.GetPixels32(m); if (mp.Length < 4) break;
+            float mr = 0, mg = 0, mb = 0;
+            for (int i = 0; i < mp.Length; i++) { mr += mp[i].r; mg += mp[i].g; mb += mp[i].b; }
+            mr /= mp.Length; mg /= mp.Length; mb /= mp.Length;
+            float k = Mathf.Min(2.2f, Mathf.Pow(1.25f, m - 1));
+            for (int i = 0; i < mp.Length; i++)
+            {
+                var q = mp[i];
+                mp[i] = new Color32((byte)Mathf.Clamp(mr + (q.r - mr) * k, 0, 255), (byte)Mathf.Clamp(mg + (q.g - mg) * k, 0, 255), (byte)Mathf.Clamp(mb + (q.b - mb) * k, 0, 255), q.a);
+            }
+            t.SetPixels32(mp, m);
+        }
+        t.Apply(false, true);
+        return facade = Count(t);
     }
 
     // ---------------------------------------------------------------- real-world buildings (RealWorld.cs)
@@ -458,24 +614,43 @@ public static class EnvTex
     //                       27 concrete panel with a window  28 plaster  29, 30 shutters closed  31 blind down
     public const int AtlasCols = 8, AtlasRows = 4;
     static Texture2D bAtlas;
-    static Color[] dPl, dBr, dTi, dPa, dCl, dCo, dSh, dGr; // photo detail per tile (128 x 128, linear, relative to the photo's mean)
+    static Color[] dPl, dBr, dTi, dPa, dCl, dCo, dSh, dGr; // photo detail per tile (DN x DN, linear, relative to the photo's mean)
+    // Cells are 256 px (atlas 2048 x 1024, GPU-compressed at load: 2.8 MB, as the old 1024 x 512 RGBA32). The bay drawing
+    // (BCell) still works in 128-unit cell coordinates; the photo detail (CC0 Poly Haven scans, 512 px now) is looked up
+    // per real texel (hx, hy), so plaster, brick, tiles and cladding are twice as sharp. Baked.shader F2_ATLAS knows the
+    // 256 px cell and its 4 px margin.
+    public const int AtlasCell = 256;
+    const int DN = 256;
+    static int hx, hy; // the texel being painted, in the cell (0 .. AtlasCell - 1)
     static float mk; // tint mask of the pixel being painted
     public static Texture2D BuildingAtlas()
     {
         if (bAtlas != null) return bAtlas;
-        const int C = 128, W = C * AtlasCols, H = C * AtlasRows; var px = new Color32[W * H];
+        const int C = AtlasCell, W = C * AtlasCols, H = C * AtlasRows, Mg = C / 64; var px = new Color32[W * H];
         dPl = Det("plaster", 1, 0.3f, 3f); dBr = Det("brick", 2, 1f, 1f); dTi = Det("rooftiles", 1, 0.55f, 0.75f);
         dPa = Det("panels", 2, 0.3f, 1f); dCl = Det("cladding", 3, 0f, 2.5f); dCo = Det("corrugated", 1, 0.2f, 1.6f);
         dSh = Det("shutter", 1, 0f, 1.3f); dGr = Det("gravel", 2, 0.2f, 0.6f);
         for (int cell = 0; cell < AtlasCols * AtlasRows; cell++)
         {
             int ox0 = (cell % AtlasCols) * C, oy0 = (cell / AtlasCols) * C;
+            // a cell from Adi's asset pack (Resources/Textures/fac_cNN: Tools/Photo/pack_facades.py), drawn as is
+            var pk = PackCell(cell);
+            if (pk != null)
+            {
+                for (int y = 0; y < C; y++) for (int x = 0; x < C; x++)
+                {
+                    float u = ((x - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f, v = ((y - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f;
+                    px[(oy0 + y) * W + ox0 + x] = pk[Mathf.Min(PackN - 1, (int)(v * PackN)) * PackN + Mathf.Min(PackN - 1, (int)(u * PackN))];
+                }
+                continue;
+            }
             for (int y = 0; y < C; y++) for (int x = 0; x < C; x++)
             {
-                // the tile spans pixels 2 .. 126 (the shader's margin); the margin repeats the opposite edge
-                float u = ((x - 2 + 0.5f) / 124f + 1f) % 1f, v = ((y - 2 + 0.5f) / 124f + 1f) % 1f;
+                // the tile spans pixels Mg .. C - Mg (the shader's margin); the margin repeats the opposite edge
+                float u = ((x - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f, v = ((y - Mg + 0.5f) / (C - 2 * Mg) + 1f) % 1f;
                 mk = 1f; glassPx = false;
-                var c = BCell(cell, u, v, Mathf.Min(127, (int)(u * C)), Mathf.Min(127, (int)(v * C)));
+                hx = Mathf.Min(C - 1, (int)(u * C)); hy = Mathf.Min(C - 1, (int)(v * C));
+                var c = BCell(cell, u, v, Mathf.Min(127, (int)(u * 128)), Mathf.Min(127, (int)(v * 128)));
                 // ground-floor bays: splash grime and shade towards the pavement (darker bases)
                 if (cell >= 8 && cell <= 15) { float g = Mathf.Clamp01(v / 0.3f); c *= 0.7f + 0.3f * g * (2f - g); }
                 // alpha: 0 = window glass (Baked F2_ATLAS mirrors the sky there and lights some windows at night);
@@ -486,15 +661,33 @@ public static class EnvTex
         }
         dPl = dBr = dTi = dPa = dCl = dCo = dSh = dGr = null;
         var t = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 2 };
-        t.SetPixels32(px); t.Apply(true, true);
+        t.SetPixels32(px);
+        // GPU-compressed (ETC2 on phones, DXT5 on desktop / WebGL): 2.8 MB instead of 11 MB RGBA32
+        if (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))
+        { t.Apply(true, false); t.Compress(true); t.Apply(false, true); Bytes += W * H * 4 / 3; return bAtlas = t; }
+        t.Apply(true, true);
         return bAtlas = Count(t);
     }
-    // a photo box-filtered to 128 x 128 per tile with "rep" repeats, as colour relative to its mean (luminance ~1):
+    // pack cell: PNG RGBA PackN x PackN (rgb sRGB, a = the atlas alpha: 0 glass, else the tint mask); null if missing
+    const int PackN = 256;
+    public static bool NoPackFacades; // A/B: the painted cells only
+    static Color32[] PackCell(int cell)
+    {
+        if (NoPackFacades) return null;
+        var ta = Resources.Load<TextAsset>("Textures/fac_c" + cell.ToString("00"));
+        if (ta == null) return null;
+        var t = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+        Color32[] px = null;
+        if (ImageConversion.LoadImage(t, ta.bytes, false) && t.width == PackN && t.height == PackN) px = t.GetPixels32();
+        Object.Destroy(t); Resources.UnloadAsset(ta);
+        return px;
+    }
+    // a photo box-filtered to DN x DN per tile with "rep" repeats, as colour relative to its mean (luminance ~1):
     // chroma 0 = grey detail only, contrast scales the deviation from 1. Null if the photo is missing.
     static Color[] Det(string name, int rep, float chroma, float contrast)
     {
         var p = LoadPhoto(name); if (p == null) return null;
-        const int N = 128; var d = new Color[N * N];
+        const int N = DN; var d = new Color[N * N];
         float step = (float)p.W * rep / N; int k = Mathf.Max(1, Mathf.RoundToInt(step));
         for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
         {
@@ -507,7 +700,8 @@ public static class EnvTex
         return d;
     }
     static Color32 Col(Color c) => new Color32(B(c.r), B(c.g), B(c.b), 255);
-    static Color Dt(Color[] d, int x, int y) => d == null ? Color.white : d[(y & 127) * 128 + (x & 127)];
+    // (x, y: the 128-unit coordinates BCell passes; the detail is read at the real texel hx, hy of the 256 px cell)
+    static Color Dt(Color[] d, int x, int y) => d == null ? Color.white : d[(hy & (DN - 1)) * DN + (hx & (DN - 1))];
     // linear albedo x photo detail -> sRGB colour
     static Color Lin(Color[] d, int x, int y, Color lin)
     {
@@ -912,7 +1106,10 @@ public static class EnvTex
     }
 
     // ---------------------------------------------------------------- tree cards
-    // 4 x 2 cells of 256 px (1024 x 512). The first four values are the ones the road shadows know (RoadShadow: 0 spruce,
+    // 4 x 2 cells of 512 px (2048 x 1024; GPU-compressed at load: ~2.8 MB with mips, as the old 1024 x 512 RGBA32). The
+    // painting below works in 256-unit cell coordinates (as before) scaled by SC into the 512 px cells. Broad-leaf
+    // clusters are real leaf sprays (CC0 ambientCG LeafSet002 / LeafSet005 cut-outs, Resources/Textures/leafspray.bytes,
+    // Tools/Photo/make_photos.py): real leaf silhouettes and gaps at the crown edge; procedural leaves without the file. The first four values are the ones the road shadows know (RoadShadow: 0 spruce,
     // 2 pine, 3 palm, the rest broad-leaf); SlotOf places each card in the atlas. The bottom row holds the cards whose
     // foliage reaches the foot of the cell (the groves) and the poplar, so mip bleeding only ever meets other foliage.
     //   Broadleaf  round park tree (lime, maple): many lobes, crown from a fifth of the height, thin dark trunk
@@ -923,7 +1120,8 @@ public static class EnvTex
     public enum Card { Spruce = 0, Broadleaf = 1, Pine = 2, Palm = 3, Oak = 4, Poplar = 5, Grove = 6, Grove2 = 7 }
     public const int CardCount = 8;
     static readonly int[] SlotOf = { 4, 5, 6, 7, 2, 3, 0, 1 };
-    const int AW = 1024, AH = 512, CN = 256;
+    const int AW = 2048, AH = 1024, CN = 512;
+    const float SC = CN / 256f; // painting units (256 per cell) -> texels
     // uv rect of each card in the atlas (u0, v0, u1, v1), a half-texel in so neighbours never bleed
     public static Vector4 CardRect(Card c)
     {
@@ -951,6 +1149,7 @@ public static class EnvTex
     // a leaf cluster: a disc with a ragged rim and holes, lit from above (lighter top, darker underside) (conifers, palm)
     static void Leaves(float cx, float cy, float r, Color col, float holes = 0.12f)
     {
+        cx *= SC; cy *= SC; r *= SC;
         int x0 = Mathf.FloorToInt(cx - r - 1), x1 = Mathf.CeilToInt(cx + r + 1), y0 = Mathf.FloorToInt(cy - r - 1), y1 = Mathf.CeilToInt(cy + r + 1);
         int seed = rnd.Next(1000);
         for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++)
@@ -959,16 +1158,17 @@ public static class EnvTex
             float ang = Mathf.Atan2(dy, dx);
             float rim = 0.78f + 0.22f * Hash(Mathf.FloorToInt((ang + 3.2f) * 4f), seed, 111);
             if (d > rim) continue;
-            if (d > 0.45f && Hash(x, y, seed) < holes) continue;
+            if (d > 0.45f && Hash((int)(x / SC), (int)(y / SC), seed) < holes) continue;
             float lit = 0.72f + 0.42f * (dy / r * 0.5f + 0.5f) - 0.18f * d * d;
             lit *= 0.85f + 0.3f * Hash(x >> 1, y >> 1, seed + 3);
-            if (leafPh != null) lit *= Mathf.Clamp(1f + 0.6f * (leafPh.L((ox + x) / 128f, (oy + y) / 128f) - 1f), 0.55f, 1.5f); // real leaf structure
+            if (leafPh != null) lit *= Mathf.Clamp(1f + 0.6f * (leafPh.L((ox + x) / (128f * SC), (oy + y) / (128f * SC)) - 1f), 0.55f, 1.5f); // real leaf structure
             Put(x, y, col * lit, 1f);
         }
     }
     // a tapering limb from (x0, y0) to (x1, y1)
     static void Limb(float x0, float y0, float x1, float y1, float w0, float w1, Color col)
     {
+        x0 *= SC; y0 *= SC; x1 *= SC; y1 *= SC; w0 *= SC; w1 *= SC;
         float len = Mathf.Sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)); int n = Mathf.Max(2, Mathf.CeilToInt(len * 2));
         for (int s = 0; s <= n; s++)
         {
@@ -978,7 +1178,7 @@ public static class EnvTex
                 float dx = xx - x; if (Mathf.Abs(dx) > w || Mathf.Abs(yy - y) > w) continue;
                 float lit = 0.75f + 0.45f * (dx / Mathf.Max(w, 0.5f) * 0.5f + 0.5f); // round: one side catches the light
                 float bark = 0.85f + 0.3f * Hash(xx, yy >> 1, 131);
-                if (barkPh != null) bark = Mathf.Clamp(1f + 0.9f * (barkPh.L((ox + xx) / 64f, (oy + yy) / 128f) - 1f), 0.5f, 1.6f); // real bark grooves
+                if (barkPh != null) bark = Mathf.Clamp(1f + 0.9f * (barkPh.L((ox + xx) / (64f * SC), (oy + yy) / (128f * SC)) - 1f), 0.5f, 1.6f); // real bark grooves
                 Put(xx, yy, col * lit * bark, 1f);
             }
         }
@@ -987,6 +1187,7 @@ public static class EnvTex
     // one leaf: a small pointed ellipse, anti-aliased, its upper half a little lighter
     static void Leaf(float cx, float cy, float len, float wid, float ang, Color c)
     {
+        cx *= SC; cy *= SC; len *= SC; wid *= SC;
         float co = Mathf.Cos(ang), si = Mathf.Sin(ang), r = len + 1f, edge = Mathf.Max(wid, 0.9f);
         float bx = Mathf.Abs(co) * len + Mathf.Abs(si) * wid + 1f, by = Mathf.Abs(si) * len + Mathf.Abs(co) * wid + 1f; // the leaf's box
         int x0 = Mathf.FloorToInt(cx - bx), x1 = Mathf.CeilToInt(cx + bx), y0 = Mathf.FloorToInt(cy - by), y1 = Mathf.CeilToInt(cy + by);
@@ -1004,6 +1205,19 @@ public static class EnvTex
     // shade, each leaf's shade and hue jittered (the "many small leaves" look, not a smooth blob)
     static void Cluster(float cx, float cy, float rad, Color col, float leaf, float fill)
     {
+        if (spN > 0)
+        {
+            // one or two real leaf sprays fanned out from the cluster's centre, each its own shade and hue
+            int ns = rad > 7.5f ? 2 : 1 + (R01() < 0.5f ? 1 : 0);
+            for (int k = 0; k < ns; k++)
+            {
+                float a = R01() * 6.2832f, off = rad * (0.2f + 0.25f * R01());
+                float sh = 0.84f + 0.24f * R01(), hue = (R01() - 0.5f) * 0.16f;
+                var c = new Color(col.r * sh * (1f + hue), col.g * sh, col.b * sh * (1f - hue * 1.5f));
+                Spray(cx + Mathf.Cos(a) * off, cy + Mathf.Sin(a) * off * 0.9f, rad * (1.7f + 0.5f * R01()), a + (R01() - 0.5f) * 1.2f, c);
+            }
+            return;
+        }
         int n = Mathf.Max(3, (int)(rad * rad / (leaf * leaf) * fill));
         for (int k = 0; k < n; k++)
         {
@@ -1013,6 +1227,73 @@ public static class EnvTex
             var c = new Color(col.r * sh * (1f + hue), col.g * sh, col.b * sh * (1f - hue * 1.5f));
             float l = leaf * (0.7f + 0.6f * R01());
             Leaf(x, y, l, l * (0.42f + 0.2f * R01()), R01() * 3.1416f, c);
+        }
+    }
+
+    // leaf-spray sprites (Resources/Textures/leafspray.bytes: 1024 x 512 PNG, 4 x 2 cells of 256, one spray each), box-
+    // filtered to SpS px per cell at load: alpha and the photo's own leaf shading (luminance / its mean), linear
+    const int SpS = 64;
+    static float[] spA, spL; static int spN;
+    static void LoadSprays()
+    {
+        spN = 0; spA = spL = null;
+        try
+        {
+            var ta = Resources.Load<TextAsset>("Textures/leafspray");
+            if (ta == null) return;
+            var t = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+            if (!ImageConversion.LoadImage(t, ta.bytes, false) || t.width != 1024 || t.height != 512) { Object.Destroy(t); return; }
+            var px = t.GetPixels32(); Object.Destroy(t);
+            const int Src = 256, F = Src / SpS;
+            spA = new float[8 * SpS * SpS]; spL = new float[8 * SpS * SpS];
+            for (int k = 0; k < 8; k++)
+            {
+                int cx0 = (k % 4) * Src, cy0 = 512 - Src - (k / 4) * Src; // (image row 0 is the bottom)
+                double ls = 0, an = 0; int o = k * SpS * SpS;
+                for (int y = 0; y < SpS; y++) for (int x = 0; x < SpS; x++)
+                {
+                    float a = 0, l = 0;
+                    for (int j = 0; j < F; j++) for (int i = 0; i < F; i++)
+                    {
+                        var c = px[(cy0 + y * F + j) * 1024 + cx0 + x * F + i];
+                        float al = c.a / 255f; a += al;
+                        l += al * (0.299f * c.r + 0.587f * c.g + 0.114f * c.b) / 255f;
+                    }
+                    a /= F * F; spA[o + y * SpS + x] = a;
+                    spL[o + y * SpS + x] = a > 1e-3f ? l / (F * F) / a : 0f;
+                    ls += l / (F * F); an += a;
+                }
+                float ml = an > 0 ? (float)(ls / an) : 1f;
+                for (int q = o; q < o + SpS * SpS; q++) spL[q] = spA[q] > 1e-3f ? Mathf.Clamp(Mathf.Pow(spL[q] / Mathf.Max(ml, 1e-3f), 2.2f), 0.45f, 1.7f) : 1f;
+            }
+            spN = 8;
+        }
+        catch (System.Exception) { spN = 0; }
+    }
+    static float SpBil(float[] a, int o, float x, float y)
+    {
+        x = Mathf.Clamp(x, 0f, SpS - 1.001f); y = Mathf.Clamp(y, 0f, SpS - 1.001f);
+        int ix = (int)x, iy = (int)y; float fx = x - ix, fy = y - iy; int i = o + iy * SpS + ix;
+        return Mathf.Lerp(Mathf.Lerp(a[i], a[i + 1], fx), Mathf.Lerp(a[i + SpS], a[i + SpS + 1], fx), fy);
+    }
+    // one spray, centre (cx, cy), "len" long (painting units), turned by ang; tinted c x the photo's leaf shading, a
+    // little lighter on its upper side; soft (filtered) alpha, so the mips and alpha-to-coverage keep a clean edge
+    static void Spray(float cx, float cy, float len, float ang, Color c)
+    {
+        cx *= SC; cy *= SC; len *= SC;
+        int o = rnd.Next(spN) * SpS * SpS;
+        float co = Mathf.Cos(ang), si = Mathf.Sin(ang), h = len * 0.5f, inv = SpS / len;
+        float ext = h * (Mathf.Abs(co) + Mathf.Abs(si)) + 1f;
+        int x0 = Mathf.FloorToInt(cx - ext), x1 = Mathf.CeilToInt(cx + ext), y0 = Mathf.FloorToInt(cy - ext), y1 = Mathf.CeilToInt(cy + ext);
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++)
+        {
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+            float u = (dx * co + dy * si) * inv + SpS * 0.5f - 0.5f, v = (-dx * si + dy * co) * inv + SpS * 0.5f - 0.5f;
+            if (u < -0.5f || v < -0.5f || u > SpS - 0.5f || v > SpS - 0.5f) continue;
+            float a = SpBil(spA, o, u, v);
+            if (a < 0.02f) continue;
+            float lit = SpBil(spL, o, u, v) * (1f + 0.18f * dy / h);
+            Put(x, y, c * lit, Mathf.Clamp01(a * 1.15f));
         }
     }
 
@@ -1071,7 +1352,7 @@ public static class EnvTex
     public static Texture2D Foliage()
     {
         if (foliage != null) return foliage;
-        leafPh = LoadPhoto("grass"); barkPh = LoadPhoto("bark");
+        leafPh = LoadPhoto("grass"); barkPh = LoadPhoto("bark"); LoadSprays();
         cr = new float[AW * AH]; cg = new float[AW * AH]; cb = new float[AW * AH]; ca = new float[AW * AH];
         rnd = new System.Random(5);
         Color bark = new Color(0.20f, 0.14f, 0.10f), palmBark = new Color(0.36f, 0.30f, 0.22f);
@@ -1212,7 +1493,7 @@ public static class EnvTex
         // colour, so filtering across the silhouette never blends in a foreign colour
         for (int i = 0; i < done.Length; i++) done[i] = ca[i] > 0.004f;
         var grow = new System.Collections.Generic.List<int>();
-        for (int pass = 0; pass < 6; pass++)
+        for (int pass = 0; pass < 6 * (int)SC; pass++)
         {
             grow.Clear();
             for (int y = 0; y < AH; y++) for (int x = 0; x < AW; x++)
@@ -1290,9 +1571,13 @@ public static class EnvTex
             }
             R = nR; G = nG; Bb = nB; A = nA; w = nw; h = nh; cs /= 2; mip++;
         }
+        // GPU-compressed (ETC2 on phones, DXT5 on desktop / WebGL; the hand-made mips are kept): 2.8 MB instead of 11 MB
+        if (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))
+        { tex.Apply(false, false); tex.Compress(true); }
         tex.Apply(false, true);
-        cr = cg = cb = ca = null;
-        return foliage = Count(tex);
+        cr = cg = cb = ca = null; spA = spL = null; spN = 0;
+        Bytes += AW * AH * 4 / 3; // (compressed: 1 byte per texel)
+        return foliage = tex;
     }
 
     // ---------------------------------------------------------------- undergrowth tiles (ModelLib's model atlas)

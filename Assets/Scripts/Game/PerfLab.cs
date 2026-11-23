@@ -22,7 +22,7 @@ public static class PerfLab
 {
     // ---------------------------------------------------------------- switches
     public static bool TreesOff, FencesOff, GradeLow, HudOff, ParticlesOff, RivalsOff, RivalLodOff, ShadowsOff, WorldOff, SkyOff;
-    public static readonly string[] Names = { "Trees", "Fences", "Grade", "HUD", "Particles", "Rivals", "Car LOD", "Shadows", "World", "Sky", "MSAA", "Res" };
+    public static readonly string[] Names = { "Trees", "Fences", "Grade", "HUD", "Particles", "Rivals", "Car LOD", "Shadows", "World", "Sky", "MSAA", "Res", "HUD res" };
 
     public static bool Get(int i)
     {
@@ -39,6 +39,7 @@ public static class PerfLab
     public static string Caption(int i)
     {
         if (i == 10) { int a = QualitySettings.antiAliasing; return msaaCaps[a >= 8 ? 3 : a >= 4 ? 2 : a >= 2 ? 1 : 0]; }
+        if (i == 12) return RenderScale.HudNative ? "HUD native" : "HUD scaled"; // RenderScale.cs: 3D off-screen + upscale, or the whole screen scaled
         if (i == 11) { int p = RenderScale.Pct; for (int k = 0; k < resSteps.Length; k++) if (resSteps[k] == p) return resCaps[k]; return "Res " + p + "%"; }
         return Names[i];
     }
@@ -58,6 +59,7 @@ public static class PerfLab
             case 8: WorldOff = !WorldOff; Collect(); break;
             case 9: SkyOff = !SkyOff; Collect(); break;
             case 10: { int a = QualitySettings.antiAliasing; QualitySettings.antiAliasing = a >= 4 ? 2 : a >= 2 ? 1 : 4; break; }
+            case 12: RenderScale.HudNative = !RenderScale.HudNative; break;
             case 11:
             {
                 int p = RenderScale.Pct, k = 0;

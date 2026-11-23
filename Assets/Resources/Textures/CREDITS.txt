@@ -1,15 +1,47 @@
 Photo-scanned textures, all CC0 (public domain), source: Poly Haven (https://polyhaven.com), 1K diffuse maps, resized.
 Files are JPEG data stored with the .bytes extension (loaded as TextAsset, decoded with ImageConversion.LoadImage so they are CPU-readable without import settings).
-asphalt.bytes  512  Poly Haven "asphalt_track"       CC0
+asphalt.bytes  1024 Poly Haven "asphalt_track"       CC0  (EnvTex.RoadDetail R, 3.2 m tile; was 512)
+kerbconc.bytes 1024 Poly Haven "concrete_floor_worn_001"  CC0  (EnvTex.RoadDetail G: the kerbs' concrete)
+leafspray.bytes 1024x512 PNG  ambientCG "LeafSet002", "LeafSet005"  CC0  (cut-out sprays for EnvTex.Foliage's leaf clusters)
+(asphalt / kerbconc / leafspray: Tools/Photo/make_photos.py, from GitHub mirrors of the original CC0 files, Docs/ASSETS.md)
+zinc.bytes     512  ambientCG "Metal032"            CC0  (TracksideArt: Armco zinc)
+wallconc.bytes 1024 Poly Haven "concrete_wall_008"  CC0  (TracksideArt: poured concrete walls)
 grass.bytes    512  Poly Haven "leafy_grass"         CC0  (also used as the leaf-cluster detail of the tree cards)
 gravel.bytes   512  Poly Haven "gravel_floor_02"     CC0
 concrete.bytes 512  Poly Haven "concrete_floor_01"   CC0
 bark.bytes     256  Poly Haven "pine_bark"           CC0
-Building materials (EnvTex.BuildingAtlas: box-filtered into 128 px atlas tiles, so stored at 256 px):
-plaster.bytes    256  Poly Haven "plastered_wall"            CC0  (Amal Kumar)
-brick.bytes      256  Poly Haven "red_brick"                 CC0  (Rob Tuytel)
-rooftiles.bytes  256  Poly Haven "clay_roof_tiles_02"        CC0  (Amal Kumar)  Italian barrel tiles (coppi)
-panels.bytes     256  Poly Haven "concrete_slab_wall"        CC0  (Dimitrios Savva)
-cladding.bytes   256  Poly Haven "box_profile_metal_sheet"   CC0  (Amal Kumar)
-corrugated.bytes 256  Poly Haven "corrugated_iron_02"        CC0  (Sergej Majboroda, Jenelle van Heerden)
-shutter.bytes    256  Poly Haven "painted_metal_shutter"     CC0  (Charlotte Baglioni, Rico Cilliers, Dario Barresi)
+Building materials (EnvTex.BuildingAtlas: box-filtered into 256 px atlas tiles, stored at 512 px since wave 2 (2026-11-20); same Poly Haven assets, re-fetched at 2K and halved):
+plaster.bytes    512  Poly Haven "plastered_wall"            CC0  (Amal Kumar)
+brick.bytes      512  Poly Haven "red_brick"                 CC0  (Rob Tuytel)
+rooftiles.bytes  512  Poly Haven "clay_roof_tiles_02"        CC0  (Amal Kumar)  Italian barrel tiles (coppi)
+panels.bytes     512  Poly Haven "concrete_slab_wall"        CC0  (Dimitrios Savva)
+cladding.bytes   512  Poly Haven "box_profile_metal_sheet"   CC0  (Amal Kumar)
+corrugated.bytes 512  Poly Haven "corrugated_iron_02"        CC0  (Sergej Majboroda, Jenelle van Heerden)
+shutter.bytes    512  Poly Haven "painted_metal_shutter"     CC0  (Charlotte Baglioni, Rico Cilliers, Dario Barresi)
+
+From Adi's asset pack RacingSim_Assets (made for this game, Nov 2026):
+fac_c00..fac_c14.bytes  building facade cells (Tools/Photo/pack_facades.py), CC0
+crowd_people.bytes      seated crowd sprites (Tools/Photo/pack_crowd.py): renders of Microsoft Rocketbox avatars,
+                        https://github.com/microsoft/Microsoft-Rocketbox, MIT licence:
+
+MIT License
+
+Copyright (c) 2020 Microsoft
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -52,6 +52,22 @@ public static class Trackside
     static Vector4 seatTint = new Vector4(0.36f, 0.37f, 0.40f, 1f); // crowd quads: colour of the empty seats (F2_CROWD)
     static Material crowdMat;
     static readonly int[] BoldAds = { 1, 6, 4, 0, 15, 12, 3, 8, 13, 2 };
+    // Per-circuit stand layouts (gap list item 18): where the real grandstands are, in priority order (the graphics
+    // level takes the first 1 / 3 / 5, as the generic layout did). Each entry: { s (m along the lap, from the circuit's
+    // corner data), side (2 = the outside of the sharpest bend within 60 m of s, +1 left, -1 right), m before the apex
+    // (or before s for a fixed side; negative = after), half length (m) }. Circuits not listed keep the generic layout
+    // (the sharpest braking corners). MainRows: rows of the main-straight stands where they are much bigger than usual.
+    static readonly Dictionary<string, float[][]> StandLayout = new Dictionary<string, float[][]>
+    {
+        // La Source (hairpin, outside), the Eau Rouge exit (up the left side of Raidillon, ~1112-1210 m), the Bus Stop
+        // chicane, the Les Combes braking zone, Pouhon
+        ["spa"] = new[] { new[] { 384f, 2f, 15f, 20f }, new[] { 1180f, 1f, 0f, 22f }, new[] { 6733f, 2f, 18f, 20f }, new[] { 2412f, 2f, 30f, 20f }, new[] { 3818f, 2f, 10f, 18f } },
+        // the last chicane, T1 (braking from the main straight), the Esses, the hairpin, Spoon
+        ["suzuka"] = new[] { new[] { 5402f, 2f, 18f, 20f }, new[] { 728f, 2f, 30f, 22f }, new[] { 1198f, 2f, 0f, 18f }, new[] { 2905f, 2f, 15f, 18f }, new[] { 3802f, 2f, 10f, 18f } },
+        // T3 (the big uphill stop), T1, the last corner, T4
+        ["spielberg"] = new[] { new[] { 1402f, 2f, 18f, 20f }, new[] { 463f, 2f, 25f, 20f }, new[] { 3994f, 2f, 15f, 20f }, new[] { 2225f, 2f, 15f, 18f }, new[] { 3790f, 2f, 15f, 18f } },
+    };
+    static readonly Dictionary<string, int> MainRows = new Dictionary<string, int> { ["suzuka"] = 17 };
     static bool aoOn = true;
     // Armco W-beam profile (Medium / High): heights up the 0.31 m beam and depth behind its front plane (m)
     static readonly float[] WY = { 0f, 0.075f, 0.155f, 0.235f, 0.31f }, WDep = { 0.035f, 0f, 0.075f, 0f, 0.035f };
@@ -128,6 +144,35 @@ public static class Trackside
         }
     }
 
+    // a track marshal standing at ground point c beside a post, facing the track (-D), turned a little towards the
+    // approaching cars (they come from -T): orange overalls, a white or orange cap, a face in one of three skin tones
+    // (PaintWhite tinted through the vertex colour); flag = holds a rolled yellow flag on a short pole. Six boxes,
+    // ~60 triangles in the atlas mesh (no draw call); Medium / High.
+    static void Marshal(Vector3 c, Vector3 T, Vector3 D, int seed, bool flag)
+    {
+        Vector3 up = Vector3.up;
+        float yaw = -0.15f - 0.45f * Rand(seed, 81);
+        Vector3 f = (-D * Mathf.Cos(yaw) - T * Mathf.Sin(yaw)).normalized, s = Vector3.Cross(up, f).normalized;
+        var keepT = tint;
+        float k = 0.9f + 0.14f * Rand(seed, 82);
+        tint = keepT * new Color(k, k, k);
+        Box(A, c + up * 0.45f, s, up, f, 0.15f, 0.45f, 0.1f, TracksideArt.MarshalOrange);                 // legs
+        Box(A, c + up * 1.16f, s, up, f, 0.2f, 0.27f, 0.12f, TracksideArt.MarshalOrange);                  // torso
+        Box(A, c + s * 0.255f + up * 1.12f, s, up, f, 0.05f, 0.28f, 0.06f, TracksideArt.MarshalOrange);    // arms
+        Box(A, c - s * 0.255f + up * 1.12f, s, up, f, 0.05f, 0.28f, 0.06f, TracksideArt.MarshalOrange);
+        float sk = Rand(seed, 83);
+        tint = keepT * (sk < 0.55f ? new Color(0.86f, 0.68f, 0.55f) : sk < 0.85f ? new Color(0.7f, 0.5f, 0.37f) : new Color(0.42f, 0.29f, 0.22f));
+        Box(A, c + up * 1.55f, s, up, f, 0.09f, 0.11f, 0.1f, TracksideArt.PaintWhite);                    // head
+        tint = keepT;
+        Box(A, c + up * 1.68f + f * 0.03f, s, up, f, 0.1f, 0.03f, 0.12f, Rand(seed, 84) < 0.6f ? TracksideArt.PaintWhite : TracksideArt.MarshalOrange); // cap
+        if (flag)
+        {
+            Vector3 h = c + s * 0.3f + f * 0.1f;
+            Box(A, h + up * 1.1f, s, up, f, 0.012f, 0.6f, 0.012f, TracksideArt.PostDark);                   // pole
+            Box(A, h + up * 1.42f, s, up, f, 0.035f, 0.24f, 0.035f, TracksideArt.PaintYellow);              // rolled flag
+        }
+    }
+
     // a vertical panel facing n (towards the viewer), centred on c at ground, from height y0 to y1, unmirrored texture
     static void Panel(MB m, Vector3 c, Vector3 n, float halfW, float y0, float y1, Vector4 r)
     {
@@ -180,6 +225,16 @@ public static class Trackside
         Quad(m, b + f - s + up * y0, b + f + s + up * y0, b + f + s + up * y1, b + f - s + up * y1, front, r);
         Quad(m, b - f + s + up * y0, b + f + s + up * y0, b + f + s + up * y1, b - f + s + up * y1, along, r);
         Quad(m, b - f - s + up * y0, b + f - s + up * y0, b + f - s + up * y1, b - f - s + up * y1, -along, r);
+    }
+    // a catch-fence post in the fence layer (F): the fence texture's opaque cable rows (v 0..2/64 of each 1 m tile), so it
+    // shares the fence's material, visibility and distance veil
+    static readonly Vector4 FenceSolid = new Vector4(0f, 0.006f, 0.03f, 0.025f);
+    static void FencePost(Vector3 b, Vector3 front, Vector3 along, float half, float y0, float y1)
+    {
+        Vector3 f = front * half, s = along * half, up = Vector3.up; var r = FenceSolid;
+        Quad(F, b + f - s + up * y0, b + f + s + up * y0, b + f + s + up * y1, b + f - s + up * y1, front, r);
+        Quad(F, b - f + s + up * y0, b + f + s + up * y0, b + f + s + up * y1, b - f + s + up * y1, along, r);
+        Quad(F, b - f - s + up * y0, b + f - s + up * y0, b + f - s + up * y1, b - f - s + up * y1, -along, r);
     }
     // flat ground decal strip piece (y = h) between lateral lines; r = grime column, v along
     // contact shadow on the ground round a box footprint (centre c, half lengths hl along T and hd along D): four strips
@@ -274,6 +329,11 @@ public static class Trackside
     // positions and their lines of sight to the road against them (and against the model trees' crowns).
     public struct Solid { public float cx, cz, tx, tz, hl, hd, y0, y1; public bool rel; }
     public static readonly List<Solid> Solids = new List<Solid>();
+    // TV camera platforms on the scaffold towers (outside of the corners): where a real broadcast camera stands. pos is
+    // the lens (y above the local ground, like rel solids), look = the way it faces (back up the road, horizontal);
+    // GameManager.BuildTvCams can put its cameras here (they clear the fences and the tower itself)
+    public struct TvMount { public Vector3 pos, look; public int idx; }
+    public static readonly List<TvMount> TvMounts = new List<TvMount>();
     public static void AddSolid(Vector3 c, Vector3 along, float hl, float hd, float y0, float y1, bool rel)
     {
         var a = new Vector2(along.x, along.z); if (a.sqrMagnitude < 1e-8f) a = Vector2.right; a.Normalize();
@@ -363,7 +423,7 @@ public static class Trackside
     // ================================================================ build
     public static void Build(Track t, Transform root, bool street)
     {
-        Bays.Clear(); Lane = null; feet.Clear(); Tall.Clear(); Solids.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
+        Bays.Clear(); Lane = null; feet.Clear(); Tall.Clear(); Solids.Clear(); TvMounts.Clear(); fenceRs.Clear(); optional.Clear(); postRs.Clear(); fenceMat = null; Late = null;
         if (t == null || t.N < 8 || root == null) return;
         { var tod = TimeOfDay.For(street); Shader.SetGlobalFloat("_F2Night", tod == TimeOfDay.Kind.Night ? 1f : tod == TimeOfDay.Kind.Evening ? 0.45f : 0f); } // lit windows (Baked)
         int N = t.N; float ds = (float)t.ds;
@@ -1146,7 +1206,9 @@ public static class Trackside
             int ms = pitSide == 0 ? -1 : -pitSide;
             int mainN = low ? 1 : high ? 3 : 2;
             float mhl = street ? 18f : 24f;
-            int mrows = low ? 9 : 13;
+            string cid = t.def != null && t.def.id != null ? t.def.id : "";
+            int mrows = low ? 9 : 13, bigRows;
+            if (!low && MainRows.TryGetValue(cid, out bigRows)) mrows = bigRows; // (Suzuka: the huge main-straight stands)
             float[] at = { 0f, -(2f * mhl + 6f), 2f * mhl + 6f };
             endScreens = false;
             for (int k = 0; k < mainN; k++)
@@ -1168,6 +1230,29 @@ public static class Trackside
             scored.Sort((a, b) => b.Key.CompareTo(a.Key));
             var used = new List<int>();
             int placed = 0;
+            float[][] layout;
+            if (!street && StandLayout.TryGetValue(cid, out layout))
+            {
+                // this circuit's own layout: the real stands' corners, nothing else (scored stays for no one)
+                scored.Clear();
+                int pw = Mathf.Max(2, Mathf.RoundToInt(60f / ds));
+                foreach (var st in layout)
+                {
+                    if (placed >= cornerN) break;
+                    int si = W(Mathf.RoundToInt(st[0] / ds)), apex = si, side;
+                    if (st[1] > 1.5f)
+                    {
+                        for (int j = -pw; j <= pw; j++) if (curvAbs[W(si + j)] > curvAbs[apex]) apex = W(si + j);
+                        side = Outside(apex);
+                    }
+                    else side = st[1] > 0f ? 1 : -1;
+                    bool nearU = false; foreach (int u in used) if (Gap(u, apex) < Mathf.RoundToInt(200f / ds)) nearU = true;
+                    if (nearU) continue;
+                    int at3 = W(apex - Mathf.RoundToInt(st[2] / ds));
+                    // (a stand that does not fit, e.g. a building in the way, is moved out up to 10 m by Stand itself)
+                    if (Stand(at3, side, st[3], low ? 7 : 10, !low)) { used.Add(apex); placed++; }
+                }
+            }
             foreach (var kv in scored)
             {
                 if (placed >= cornerN) break;
@@ -1223,11 +1308,74 @@ public static class Trackside
                         Box(A, c - D * 1.0f + T * 1.05f + up * 0.64f, T, up, D, 0.04f, 0.04f, 0.04f, TracksideArt.TyreBlack);
                         Box(A, c - D * 0.98f - T * 1.12f + up * 0.32f, T, up, D, 0.26f, 0.32f, 0.22f, TracksideArt.PaintWhite);
                         Box(A, c - D * 0.98f - T * 1.12f + up * 0.67f, T, up, D, 0.28f, 0.03f, 0.24f, TracksideArt.StripeBlue);
+                        // the marshals themselves, beside the cabin and behind the barrier: one with the flag ready, a
+                        // second at most posts (real posts are never empty on race day)
+                        for (int q = 0; q < 2; q++)
+                        {
+                            if (q == 1 && Rand(k, 86) < 0.3f) continue;
+                            Vector3 mc = c - D * (0.2f + 0.35f * Rand(k, 87 + q)) + T * (q == 0 ? 1.6f : -1.7f);
+                            if (!Free(mc, lat - 1.6f)) continue;
+                            Marshal(mc, T, D, k * 7 + q + (sg > 0 ? 0 : 3), q == 0);
+                        }
                     }
                     AddFoot(c, T, 1.3f, 1.3f, 3.6f); AoPad(c, T, D, 1.05f, 1.05f, 0.9f);
                     sideT++;
                     break;
                 }
+            }
+        }
+
+        // ---------------------------------------------------------------- spectators along the catch fence (general admission)
+        // Race day at a parkland circuit: people stand two deep behind the catch fence on the outside of the big corners
+        // where there is no grandstand. Crowd cards (the stands' texture and material, Standing): a full front row and a
+        // back row on a low step with gaps; a footprint keeps the woods and the town out. High: up to 6 corners; Medium:
+        // up to 4, only in chunks whose crowd layer already draws (no new draw call); Low: none. Procedural circuits
+        // only: on a real-world map (Monza) the map's own stands and buildings come later and would clash with them.
+        if (!low && !street && !RealWorld.HasBuildings)
+        {
+            int maxSp = high ? 6 : 4, spots = 0, segN = Mathf.Max(1, Mathf.RoundToInt(7f / ds));
+            int spBefore = Mathf.RoundToInt(40f / ds), spAfter = Mathf.RoundToInt(70f / ds);
+            var spAt = new List<int>();
+            var spFeet = new List<Vector4>();
+            foreach (int apex in corners)
+            {
+                if (spots >= maxSp) break;
+                if (curvAbs[apex] < 1f / 300f || Gap(apex, 0) < Mathf.RoundToInt(250f / ds)) continue;
+                bool near = false; foreach (int u in spAt) if (Gap(u, apex) < Mathf.RoundToInt(300f / ds)) near = true;
+                if (near) continue;
+                int sg = Outside(apex), s = SI(sg), cards = 0;
+                spFeet.Clear();
+                for (int j = -spBefore; j + segN <= spAfter; j += segN)
+                {
+                    int i0 = W(apex + j), i1 = W(apex + j + segN);
+                    if (!fenceZ[s, i0] || !fenceZ[s, i1] || InPit(i0, sg) || InPit(i1, sg)) continue;
+                    var p0 = t.pts[i0]; var p1 = t.pts[i1];
+                    Vector3 D0 = Nrm(p0) * sg, D1 = Nrm(p1) * sg;
+                    SetChunk(i0);
+                    if (!high && C.v.Count == 0) continue;
+                    bool front = false;
+                    for (int row = 0; row < 2; row++)
+                    {
+                        if (row == 1 && (!front || Rand(i0, 93) < 0.25f)) continue; // the back row only behind a front row
+                        float back = 3.4f + row * 1.1f + 0.3f * Rand(i0, 90 + row);
+                        float o0 = Off(i0, sg) + back, o1 = Off(i1, sg) + back;
+                        Vector3 a = P(p0) + D0 * o0, b = P(p1) + D1 * o1, mid = (a + b) * 0.5f;
+                        float len = (b - a).magnitude;
+                        if (len < 2f || len > 3f * segN * ds) continue;
+                        if (!Free(a, o0 - 2f) || !Free(b, o1 - 2f) || !Free(mid, (o0 + o1) * 0.5f - 2f)) continue;
+                        Standing(a, b, row * 0.3f, 1.7f, (D0 + D1).normalized, Rand(i0, 95 + row) < 0.45f ? 1 : 0, 8800 + i0 * 3 + row);
+                        spFeet.Add(new Vector4(mid.x, mid.z, b.x - a.x, b.z - a.z));
+                        if (row == 0) front = true;
+                        cards++;
+                    }
+                }
+                // footprints only now: Free above must not see this corner's own cards
+                foreach (var fp in spFeet)
+                {
+                    var dir = new Vector3(fp.z, 0f, fp.w);
+                    AddFoot(new Vector3(fp.x, 0f, fp.y), dir, dir.magnitude * 0.5f, 1.2f);
+                }
+                if (cards > 0) { spAt.Add(apex); spots++; }
             }
         }
 
@@ -1275,6 +1423,8 @@ public static class Trackside
                 Box(A, c - D * 0.5f - T * 0.2f + up * (th + 1.55f), T, up, D, 0.5f, 0.17f, 0.15f, TracksideArt.GantryDark, true);
                 Box(A, c - D * 0.5f - T * 0.78f + up * (th + 1.55f), T, up, D, 0.1f, 0.12f, 0.12f, TracksideArt.GlassDark, true);
                 AddFoot(c, T, hf + 1f, hf + 1f, th + 2.2f); Tall.Add(c); AoPad(c, T, D, hf, hf, 1.0f);
+                // the lens: in front of the tower's solid (+1.5 m pad of the TV cameras' inside test), 1 m over the platform rail
+                TvMounts.Add(new TvMount { pos = c - D * (hf + 2.7f) + up * (th + 2.3f), look = -T, idx = i });
                 camNo++;
             }
             // recovery cranes: yellow carrier, cab, outriggers, the boom raised over the barrier
@@ -1358,6 +1508,13 @@ public static class Trackside
             int step = Mathf.Max(1, Mathf.RoundToInt((street ? 3f : 4f) / ds));
             float maxLen = street ? 6f : low ? 22f : 15f, maxTurn = Mathf.Cos(3.5f * Mathf.Deg2Rad);
             float postGap = low ? 12f : 8f;
+            // tunnel bore (Monaco, Waterfront.BuildTunnel: covered from tunnelFrom to tunnelTo): no debris fence inside it.
+            // The fence stands 0.25 m behind the barrier line and leans 0.55 m in at the top, so inside the bore its top
+            // came through the tunnel walls as diagonal strips of chain-link. A 2 m margin keeps the leaning top clear of
+            // the portals too; the walls themselves stay.
+            bool hasBore = t.def != null && t.def.tunnelTo > t.def.tunnelFrom;
+            double boreFrom = hasBore ? t.def.tunnelFrom - 2.0 : 0.0, boreTo = hasBore ? t.def.tunnelTo + 2.0 : 0.0;
+            bool InBore(int bi) { if (!hasBore) return false; double bs = t.pts[((bi % N) + N) % N].s; return bs >= boreFrom && bs <= boreTo; }
             var samples = new List<int>();
             for (int i = 0; i < N; i += step) samples.Add(i);
             if (N - samples[samples.Count - 1] < Mathf.Max(1, step / 2)) samples.RemoveAt(samples.Count - 1);
@@ -1375,7 +1532,7 @@ public static class Trackside
                     int i = i0 % N;
                     Vector3 up = Vector3.up, mid = (da + db).normalized, len3 = b - a;
                     float len = len3.magnitude;
-                    bool dirty = dirt[s, i] > 0.3f, fz = fences && (street || fenceZ[s, i]);
+                    bool dirty = dirt[s, i] > 0.3f, fz = fences && (street || fenceZ[s, i]) && !InBore(i0) && !InBore(i1) && !InBore((i0 + i1) / 2);
                     float topY;
                     if (IsWall(i))
                     {
@@ -1487,11 +1644,16 @@ public static class Trackside
                             }
                         }
                         aoOn = true;
-                        Post(Pm, fa + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
+                        // the mesh is a solid for the TV cameras (GameManager.BuildTvCams): a camera must not film through it
+                        AddSolid((fa + fb) * 0.5f + lean * 0.5f, len3, len * 0.5f, 0.4f, y0, y2 + 0.05f, true);
+                        // the fence's posts and its top stay go in the fence layer itself (the solid cable rows of its texture,
+                        // FenceSolid), so whatever hides the fence (Low, also when Auto steps down mid-race; no cutout shader)
+                        // hides them too: no orphan comb of posts along the Armco. Far away they thin to the fence's veil.
+                        FencePost(fa + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1);
                         if (tall && !low)
                             for (float d = 5f; d < len - 2f; d += 5f)
-                                Post(Pm, Vector3.Lerp(fa, fb, d / len) + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1, TracksideArt.PostDark);
-                        Quad(Pm, fa + da * 0.06f + up * y1, fa + da * 0.06f + up * (y1 + 0.1f), fa + lean + up * (y2 + 0.05f), fa + lean + up * (y2 - 0.05f), Vector3.Cross(mid, up), TracksideArt.Sw(TracksideArt.PostDark));
+                                FencePost(Vector3.Lerp(fa, fb, d / len) + da * 0.06f, -mid, len3 / Mathf.Max(len, 1e-3f), 0.05f, topY - 0.3f, y1);
+                        Quad(F, fa + da * 0.06f + up * y1, fa + da * 0.06f + up * (y1 + 0.1f), fa + lean + up * (y2 + 0.05f), fa + lean + up * (y2 - 0.05f), Vector3.Cross(mid, up), FenceSolid);
                     }
                     fenceU += len;
                     segNo++;
@@ -1554,9 +1716,17 @@ public static class Trackside
                         float len = (front - pf).magnitude;
                         int nbk = Mathf.Max(1, Mathf.RoundToInt(len / 1.2f));
                         float bv = 0.08f, yT = hT - bv;
-                        tint = dirt[s, pI] > 0.3f ? new Color(0.82f, 0.8f, 0.78f) : Color.white;
+                        Color tecBase = dirt[s, pI] > 0.3f ? new Color(0.82f, 0.8f, 0.78f) : Color.white;
                         for (int q = 0; q < nbk; q++)
                         {
+                            // weathered, not showroom-new: each module a little lighter / darker and warmer (sun-faded,
+                            // dusty) than its neighbours, and black tyre rubber smeared across the face at wheel height
+                            // on some of them (more where cars hit: dirt > 0.3). Load time only; +2 quads per module.
+                            int tq = tecNo;
+                            float wk = 0.84f + 0.18f * Rand(tq + pI * 13, 301), warm = 0.05f * Rand(tq + pI * 13, 302);
+                            Color modT = tecBase * new Color(wk, wk * (1f - warm * 0.4f), wk * (1f - warm), 1f);
+                            bool rub = Rand(tq + pI * 13, 303) < (dirt[s, pI] > 0.3f ? 0.55f : 0.22f);
+                            tint = modT;
                             float f0 = (float)q / nbk, f1 = (float)(q + 1) / nbk;
                             Vector3 a0 = Vector3.Lerp(pf, front, f0), b0 = Vector3.Lerp(pf, front, f1);
                             Vector3 ka = Vector3.Lerp(pb, back, f0), kb = Vector3.Lerp(pb, back, f1);
@@ -1565,7 +1735,21 @@ public static class Trackside
                             a0 += al * 0.02f; b0 -= al * 0.02f; ka += al * 0.02f; kb -= al * 0.02f;
                             var rc = TracksideArt.Sw(((tecNo++) & 1) == 0 ? TracksideArt.PaintBlue : TracksideArt.PaintRed);
                             Vector3 fa = a0 + al * bv, fb = b0 - al * bv, sa = a0 + nb * bv, sb = b0 + nb * bv;
-                            Quad(A, fa + up * skirt, fb + up * skirt, fb + up * 0.66f, fa + up * 0.66f, -nb, rc);
+                            if (rub)
+                            {
+                                // a dark rubber smear at wheel height (~0.25-0.5 m) over part of the module's width
+                                float r0 = 0.22f + 0.06f * Rand(tq, 304), r1 = r0 + 0.16f + 0.12f * Rand(tq, 305);
+                                float x0 = 0.05f + 0.4f * Rand(tq, 306), x1 = Mathf.Min(0.97f, x0 + 0.3f + 0.4f * Rand(tq, 307));
+                                Vector3 ma = Vector3.Lerp(fa, fb, x0), mb = Vector3.Lerp(fa, fb, x1);
+                                Quad(A, fa + up * skirt, fb + up * skirt, fb + up * r0, fa + up * r0, -nb, rc);
+                                Quad(A, fa + up * r0, ma + up * r0, ma + up * r1, fa + up * r1, -nb, rc);
+                                Quad(A, mb + up * r0, fb + up * r0, fb + up * r1, mb + up * r1, -nb, rc);
+                                tint = modT * new Color(0.4f, 0.4f, 0.42f, 1f);
+                                Quad(A, ma + up * r0, mb + up * r0, mb + up * r1, ma + up * r1, -nb, rc);
+                                tint = modT;
+                                Quad(A, fa + up * r1, fb + up * r1, fb + up * 0.66f, fa + up * 0.66f, -nb, rc);
+                            }
+                            else Quad(A, fa + up * skirt, fb + up * skirt, fb + up * 0.66f, fa + up * 0.66f, -nb, rc);
                             Quad(A, fa + up * 0.66f, fb + up * 0.66f, fb + up * 0.78f, fa + up * 0.78f, -nb, TracksideArt.Sw(TracksideArt.PaintWhite));
                             Quad(A, fa + up * 0.78f, fb + up * 0.78f, fb + up * yT, fa + up * yT, -nb, rc);
                             Quad(A, sa + up * skirt, fa + up * skirt, fa + up * yT, sa + up * yT, (-nb - al).normalized, rc);

@@ -27,7 +27,7 @@ Shader "F2/Road"
         _Asphalt ("Asphalt colour", Color) = (0.34, 0.34, 0.35, 1)
         _Dust ("Dusty edge colour", Color) = (0.50, 0.48, 0.45, 1)
         _Paint ("Paint", Color) = (0.93, 0.93, 0.90, 1)
-        _KerbRed ("Kerb red", Color) = (0.76, 0.07, 0.06, 1)
+        _KerbRed ("Kerb red", Color) = (0.56, 0.08, 0.075, 1) // (was 0.76, 0.07, 0.06: clipped to 255, 30, 20 in the sun)
         _KerbYellow ("Sausage kerb yellow", Color) = (0.93, 0.74, 0.10, 1)
         _HalfWidth ("Half track width (m)", Float) = 6
         _Grid ("Grid: first slot (m), pitch (m), slots, slot offset (m)", Vector) = (0, 8, 0, 1.8)

@@ -32,7 +32,7 @@ public static class WorldBuilder
             {
                 var af = QualitySettings.anisotropicFiltering;
                 if (af == AnisotropicFiltering.Disable) return 1;
-                if (af == AnisotropicFiltering.ForceEnable) return sd == 90f ? 3 : 2;
+                return sd == 90f ? 3 : 2; // Enable or ForceEnable (SetGraphics now uses Enable on Medium/High)
             }
             int s = PlayerPrefs.GetInt("gfx", 0);
             return s == 0 ? 2 : Mathf.Clamp(s, 1, 3);
@@ -442,6 +442,7 @@ public static class WorldBuilder
     {
         var root = new GameObject("World").transform;
         Gfx = LiveGfx; // the level actually chosen now, not the last saved one
+        MapEdits.Load(t.def != null ? t.def.id : null); // Adi's hand edits for this circuit, if any (MapEdits.cs)
         Debug.Log("WorldBuilder: building " + (t.def != null ? t.def.id : "?") + " for graphics level " + Gfx); // (once per build; the shooter's console.log shows it)
         { var bs = Resources.Load<Shader>("Baked"); BakeReady = bs != null && bs.isSupported; }
         BakeTint.Clear();
@@ -474,8 +475,14 @@ public static class WorldBuilder
         float wallLat = (float)Traffic.WallOffset(t);
         bool green = EnvTex.IsGreen(env.grass);
         // (a touch brighter and warmer than the palette: lawns in full sun read light and yellow-green, Real Racing style)
-        var grassTex = EnvTex.GroundDetail(green ? new Color(env.grass.r * 1.12f, env.grass.g * 1.08f, env.grass.b * 0.95f).linear : env.grass.linear);
+        var grassMean = green ? new Color(env.grass.r * 1.12f, env.grass.g * 1.08f, env.grass.b * 0.95f).linear : env.grass.linear;
+        // the CC0 photo turf (Resources/Photo/grass, ASTC, 1024) scaled to this palette in the shader (_Gain); without
+        // it (or without Ground.shader) the procedural / runtime-built texture as before
+        Vector4 grassGain = Vector4.one;
+        var grassPhoto = GroundShaded ? EnvTex.GroundPhoto(grassMean, out grassGain) : null;
+        var grassTex = grassPhoto != null ? grassPhoto : EnvTex.GroundDetail(grassMean);
         var grass = GroundShaded ? new Material(groundSh) { mainTexture = grassTex } : Mat(Color.white, grassTex);
+        if (GroundShaded) grass.SetVector("_Gain", grassGain);
         float gsize = Mathf.Max(4400, ext + 3000);
         grass.mainTextureScale = new Vector2(1f / 4.5f, 1f / 4.5f);
         if (GroundShaded)
@@ -672,7 +679,7 @@ public static class WorldBuilder
             roadMat.SetVector("_SunDir", -sunGo.transform.forward);
             roadMat.SetColor("_SunCol", sun.color * sun.intensity);
             // sunlit asphalt is a clean mid grey, not black (sRGB 0.38 -> about 0.5 on screen in the sun after the bake)
-            roadMat.SetColor("_Asphalt", Street(t) ? new Color(0.38f, 0.38f, 0.39f) : new Color(0.365f, 0.365f, 0.375f)); // (base a touch lighter now that the dry sheen and the edge dust no longer bleach it: ~150 sRGB in the sun)
+            roadMat.SetColor("_Asphalt", Street(t) ? new Color(0.38f, 0.38f, 0.39f) : new Color(0.38f, 0.38f, 0.385f)); // (0.365 -> 0.38, near neutral: chase asphalt measured 140 sRGB after the grade fix, target 150-160; base a touch lighter now that the dry sheen and the edge dust no longer bleach it: ~150 sRGB in the sun)
             roadMat.SetColor("_Dust", new Color(0.52f, 0.50f, 0.47f));
             RoadSurface.Attach(root.gameObject, roadSh);
         }
@@ -761,11 +768,13 @@ public static class WorldBuilder
                 });
                 if (GroundShaded)
                 {
-                    var tm = new Material(groundSh) { mainTexture = EnvTex.Turf() };
+                    Vector4 tgain; var tph = EnvTex.TurfPhoto(out tgain); // photo turf (1 x 1 m tile) or the procedural one
+                    var tm = new Material(groundSh) { mainTexture = tph != null ? tph : EnvTex.Turf() };
                     tm.SetTexture("_MacroTex", EnvTex.Macro());
                     tm.SetVector("_DryTint", new Vector4(1, 1, 1, 0));
                     tm.SetFloat("_Turf", 1f);
-                    tm.mainTextureScale = new Vector2(1f / 2f, 1f / 4f); // one tile = 2 m across x 4 m along (EnvTex.Turf)
+                    if (tph != null) tm.SetVector("_Gain", tgain);
+                    tm.mainTextureScale = tph != null ? Vector2.one : new Vector2(1f / 2f, 1f / 4f); // one tile = 1 x 1 m (photo) / 2 m across x 4 m along (EnvTex.Turf)
                     var tgo = MeshObj("Astroturf", v, uv, tri, tm, true, uv2t); tgo.transform.SetParent(root);
                     tgo.GetComponent<MeshFilter>().sharedMesh.SetUVs(3, uv3t);
                 }
@@ -791,7 +800,9 @@ public static class WorldBuilder
                 Material gm;
                 if (GroundShaded)
                 {
-                    gm = new Material(groundSh) { mainTexture = EnvTex.Gravel() };
+                    Vector4 gravGain; var gravPhoto = EnvTex.GravelPhoto(out gravGain); // CC0 photo stones (ASTC), else the runtime texture
+                    gm = new Material(groundSh) { mainTexture = gravPhoto != null ? gravPhoto : EnvTex.Gravel() };
+                    gm.SetVector("_Gain", gravGain);
                     gm.SetTexture("_MacroTex", EnvTex.Macro());
                     gm.SetVector("_DryTint", new Vector4(1, 1, 1, 0));
                     gm.SetVector("_Wall", new Vector4(wallLat, 0.1f, 0, 0));
@@ -874,6 +885,7 @@ public static class WorldBuilder
         if (late != null) Drape(late);
         // the real surroundings' meshes, at their final heights (after Drape), lit by the bake below like the rest
         RealWorld.Build(t, root);
+        Landmarks.Build(root, t); // Adi's hand-placed models (MapEdits.models), merged per material, lit by the bake below
         // lighting baked into the vertices (LightBake.cs); if the phone can't run that shader, the sun and
         // real-time shadows are used as before
         if (LightBake.Begin(t, -sunGo.transform.forward))

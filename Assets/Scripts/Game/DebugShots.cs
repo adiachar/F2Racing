@@ -188,6 +188,7 @@ public class DebugShots : MonoBehaviour
         Title("SHOT_BOOT");
         PerfStats.FromQuery(q); // stats=1: render stats overlay + a PERF_STATS console line per shot (PerfStats.cs)
         ModelInstancing.FromQuery(q); // inst=0: model trees merged as before (A/B against the GPU-instanced ones)
+        if (Get(q, "photo", "1") == "0") { EnvTex.NoPhotos = true; Sky.NoPhotoSky = true; } // photo=0: procedural textures + sky (A/B)
         ShotsCanvas(Mathf.Clamp(GetInt(q, "w", 1280), 64, 8192), Mathf.Clamp(GetInt(q, "h", 720), 64, 8192));
     }
     internal void Fail(string msg) { error = msg; Debug.LogWarning("[Shots] " + msg); }

@@ -815,6 +815,11 @@ public partial class CarModel : MonoBehaviour
         for (int i = 0; i < blockR.Count; i++) if (blockR[i] != null) blockR[i].SetPropertyBlock(mpb);
     }
     void LateUpdate() { if (mpbDirty) Flush(); }
+    // ghost fade (CarGhost.cs) of a merged rival: an instanced value in the car's own block (a plain _Ghost in a
+    // block would split the rivals' instanced draws, and Flush replaces the block anyway)
+    static readonly int GhostVId = Shader.PropertyToID("_GhostV");
+    public bool IsMerged => merged;
+    public void SetGhost(float g) { if (!merged || mpb == null) return; mpb.SetVector(GhostVId, new Vector4(g, 0f, 0f, 0f)); Flush(); }
     void OnEnable() { if (merged) Flush(); }
     // a wing is damaged: split the wing pieces off the merged body (+5 draw calls, only while it is damaged)
     void MergedSplit(bool want)
@@ -1065,6 +1070,7 @@ public partial class CarModel : MonoBehaviour
     // A stencil bit stops overlapping triangles (and two cars' overlapping shadows) darkening twice. Its length
     // follows the sun's height by itself. One draw per near car (the player, near rivals); far rivals (car_far) keep
     // only the contact blob. Off at night, in heavy rain, with the sun near the horizon and in baked shade.
+    public static bool PlanarShadows = false;
     static Mesh shadowMesh; static bool shadowMeshTried;
     static Material planarMat; static bool planarTried;
     static Mesh ShadowMesh()
@@ -1131,11 +1137,16 @@ public partial class CarModel : MonoBehaviour
         for (int i = 0; i < v.Length; i++)
         {
             var p = v[i];
-            if (p.z < -1.5f && Mathf.Abs(p.x) < 0.62f && p.y > 0.5f) { p.y = 0.5f + (p.y - 0.5f) * 0.45f; v[i] = p; }
-            // (the body and tyres are solid: only a mild softening on the airbox / halo top; the thin rear wing more)
-            float hs = Mathf.Max(p.z < -1.55f ? 0.9f * Mathf.Clamp01((p.y - 0.45f) / 0.35f) : 0f, 0.35f * Mathf.Clamp01((p.y - 0.6f) / 0.4f));
+            // the rear wing, endplates and pillars squashed to ~0.45-0.61 (just under the rear tyres' top, 0.63): their
+            // shadow now ends inside the tyres' and gearbox's instead of landing ~1 m behind as a separate pale block
+            // (Spa, sun ahead). Ramped in over z -1.45..-1.6 so the engine cover's tail has no step.
+            float wf = Mathf.Clamp01((-1.45f - p.z) / 0.15f);
+            if (wf > 0f && Mathf.Abs(p.x) < 0.62f && p.y > 0.45f) { p.y -= wf * (p.y - 0.45f) * 0.7f; v[i] = p; }
+            // (the body and tyres are solid: only a mild softening on the airbox / halo top; the squashed wing a little:
+            // a strong fade there drew the wing as a lighter, outlined block that read as a second, detached shadow)
+            float hs = Mathf.Max(p.z < -1.55f ? 0.5f * Mathf.Clamp01((p.y - 0.45f) / 0.2f) : 0f, 0.35f * Mathf.Clamp01((p.y - 0.6f) / 0.4f));
             float xs = Mathf.Clamp01((Mathf.Abs(p.x) - 0.72f) / 0.14f);
-            float zs = Mathf.Max(Mathf.Clamp01((p.z - 2.55f) / 0.3f), Mathf.Clamp01((-1.85f - p.z) / 0.2f));
+            float zs = Mathf.Max(Mathf.Clamp01((p.z - 2.55f) / 0.3f), 0.45f * Mathf.Clamp01((-1.85f - p.z) / 0.2f));
             float s = Mathf.Clamp01(Mathf.Max(hs, Mathf.Max(xs, zs)));
             soft[i] = s; col[i] = new Color32(255, 255, 255, (byte)(s * 255f + 0.5f));
         }
@@ -1157,6 +1168,9 @@ public partial class CarModel : MonoBehaviour
     // res: the car's model (null: the built-from-code fallback car)
     static void AddSunShadow(GameObject root, string res)
     {
+        // Adi: the projected silhouette shadow looked bad. RR3 style: only the soft contact blob under the car
+        // (tyre patches + floor core, ContactShadowMat). Kept as a switch; off for every car. Saves a 12k-tri draw per car too.
+        if (!PlanarShadows) return;
         if (res != null && res.EndsWith("_far")) return; // far rivals: the contact blob only
         var mesh = ShadowMesh(); var mat = PlanarMat();
         if (mesh == null || mat == null) return;
@@ -1232,9 +1246,15 @@ public partial class CarModel : MonoBehaviour
     static Material ContactShadowMat()
     {
         if (contactMat != null) return contactMat;
-        var baseMat = Resources.Load<Material>("Shadow");
-        if (baseMat == null) return contactMat = WorldBuilder.ShadowMat();
-        contactMat = new Material(baseMat);
+        // F2/CarBlob: Unlit/Transparent plus the ghost fade (CarGhost.cs); the old material if it is missing
+        var blob = Resources.Load<Shader>("CarBlob");
+        if (blob != null && blob.isSupported) contactMat = new Material(blob) { name = "CarBlob" };
+        else
+        {
+            var baseMat = Resources.Load<Material>("Shadow");
+            if (baseMat == null) return contactMat = WorldBuilder.ShadowMat();
+            contactMat = new Material(baseMat);
+        }
         // texel -> car space (model units): quad 2.4 m x 5.6 m centred at z = 0.3
         contactMat.mainTexture = WorldBuilder.Tex(96, 224, (u, v, px, py) =>
         {

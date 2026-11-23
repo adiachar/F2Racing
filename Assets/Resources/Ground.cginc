@@ -1,6 +1,6 @@
 // Ground.cginc — shared code of Ground.shader (grass, terrain, verges, gravel traps). Lighting is baked into the vertex
 // colours (LightBake.cs) like Baked.shader. Two texture reads per pixel:
-//   _MainTex  detail (photo grass / gravel, CC0, see Textures/CREDITS.txt), world space, a few metres per tile; Medium/High read it a second time at ~3.4x the scale, turned, and average the two
+//   _MainTex  detail (photo grass / gravel, CC0: Resources/Photo, ASTC, x _Gain; or EnvTex's procedural), world space, a few metres per tile; Medium/High read it a second time at ~3.4x the scale, turned, and average the two
 //   _MacroTex linear data at ~100 m per tile, turned 37 degrees: R brightness drift, G dry patches, B clumps
 // Mesh data: uv0 = world (x, z) in metres; uv2 = (distance from the track centreline m, distance along the lap m) on
 // verges and gravel traps, (0, 0) on the open land, where the track-relative terms below are all zero.
@@ -56,6 +56,7 @@ float GBand(float x, float a, float b, float w)
     return saturate((x - a) / w + 0.5) - saturate((x - b) / w + 0.5);
 }
 float _MacroScale, _MipBias;
+float4 _Gain;        // linear rgb gain of a photo albedo to the circuit's mean colour (EnvTex.PhotoAlbedo); 1 = as is
 fixed4 _DryTint;      // rgb multiplier of dry patches, a = how much
 float4 _Stripe;       // from (m), to (m), stripe width (m), strength
 float4 _Wall;         // barrier line (m), darkening, -, -
@@ -67,6 +68,7 @@ fixed4 _RunGreen, _RunBlue; // the run-off paints
 sampler2D _F2RoadShadow; // global (RoadShadow.cs): sun shadows in track space, here continued onto verges and run-offs
 float4 _F2RoadShadowP;   // x: strips per metre along, y: 1 / strips, z: across scale of the fine zone (1/m), w: outer half width (m)
 float4 _F2RoadShadowQ;   // the coarser outer zone: x: where it starts (m), y: its across scale (1/m), z: its first column (0..0.5)
+float _Wet;              // global (Weather.cs): 0 dry, 0.5 damp, 1 wet. In rain the deck takes most of the sun (as Road.cginc)
 
 v2f vert (appdata v)
 {
@@ -93,22 +95,48 @@ fixed4 frag (v2f i) : SV_Target
     // second, larger and turned copy of the same photo detail, averaged in: the 4.5 m tile never shows a repeat
     float2 u2 = float2(i.uv.x * 0.8 - i.uv.y * 0.6, i.uv.x * 0.6 + i.uv.y * 0.8) * 0.29;
     half4 d2 = tex2Dbias(_MainTex, float4(u2, 0, max(_MipBias, 0.0)));
+    // photo albedos (Resources/Photo: grass, gravel) are scaled to the circuit's palette here (1 = procedural texture)
+    d.rgb *= (half3)_Gain.rgb; d2.rgb *= (half3)_Gain.rgb;
     half3 d0 = d.rgb;                                    // the sharp read alone (gravel stones near the camera)
     d.rgb = lerp(d.rgb, d2.rgb, 0.4 - 0.25 * _Turf);    // (turf: keep the fibres)
     // grass: the alpha holds clumps (~0.75 m at this tile, ~2.6 m patches at the larger one); 0.5 = neutral
     half tuft = (half)lerp(0.5, d.a, _Clumps), lush = (half)lerp(0.5, d2.a, _Clumps);
 #else
-    half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.6)); // Low: blurrier mips, kinder to the texture cache
+    half4 d = tex2Dbias(_MainTex, float4(i.uv.xy, 0, 0.3)); // Low: a little blurrier mips, kinder to the texture cache (0.6 -> 0.3: Low has no aniso, and the near verges and run-offs went to smears; Docs/PERFORMANCE.md "Clarity")
+    d.rgb *= (half3)_Gain.rgb; // photo albedo -> the circuit's palette (as HQ)
 #endif
     half4 mac = tex2D(_MacroTex, i.uv.zw);
     half3 col = d.rgb * (0.80 + 0.40 * mac.r);
-    col = lerp(col, col * _DryTint.rgb, mac.g * _DryTint.a);
+    // dry patches: on mown grass (_Clumps 1) only a third of them (real Monza verges are evenly lush, no brown mange)
+    col = lerp(col, col * _DryTint.rgb, mac.g * _DryTint.a * (1.0 - 0.67 * _Clumps));
 #ifdef GROUND_HQ
     // clumps: the turf is lumpy (darker hollows between tufts), lush darker blue-green patches and thin, paler ones
     col *= 0.9 + 0.2 * tuft;
     col *= lerp(half3(1.0, 1.0, 1.0), half3(0.80, 0.87, 0.84), saturate((lush - 0.56) * 3.5));
     col *= lerp(half3(1.0, 1.0, 1.0), half3(1.10, 1.06, 0.88), saturate((0.40 - lush) * 3.5));
 #endif
+
+    // ---- the woods on the open land, seen from the track (gap list item 18): tree crowns on the procedural terrain.
+    // Only the "Terrain" mesh has track coordinates (0, 0) and a vertex alpha below 1 (LightBake: 1 - 0.5 x the woods'
+    // share, Environment.Canopy); verges, gravel and run-offs have lat > 0.5, the flat sheet alpha 1, so they skip it.
+    // ~7 m crowns (the detail tile is 4.5 m): two turned, warped egg-crate waves, broken up by the detail's clumps
+    // (alpha), lit tops and dark gaps between them, faded to their mean once a crown is under ~3 px (no shimmer).
+    // No reads: maths on the reads above, in a branch only the woods take.
+    float2 fq = fwidth(i.uv.xy) * 0.64; // (outside the branch)
+    float wood = lat < 0.5 ? saturate((1.0 - (float)i.sideSun) * 2.0) : 0.0;
+    if (wood > 0.004)
+    {
+        float2 q = i.uv.xy * 0.64;
+        float2 r = float2(q.x * 0.6 - q.y * 0.8, q.x * 0.8 + q.y * 0.6) * 1.37 + 0.31;
+        float k1 = sin(q.x * 6.2832 + 1.3 * sin(q.y * 2.4)) * sin(q.y * 6.2832 + 1.1 * sin(q.x * 1.9));
+        float k2 = sin(r.x * 6.2832) * sin(r.y * 6.2832);
+        float crown = saturate(0.5 + 0.34 * k1 + 0.24 * k2 + 0.5 * ((float)d.a - 0.5));
+        float fade = saturate(1.6 - max(fq.x, fq.y) * 2.5);
+        crown = lerp(0.55, crown, fade);
+        // gaps: dark and a little blue (shade under the crowns); tops: warmer, catching the sky
+        half3 wc = col * (half)(0.40 + 1.0 * crown) * lerp(half3(0.82, 0.92, 1.04), half3(1.06, 1.02, 0.88), (half)crown);
+        col = lerp(col, wc, (half)wood);
+    }
 
     // ---- forest floor under the trees behind the barrier (verge: uv3.y; the run-off strip's uv3 is its own data)
     // Uniform branch on _Forest: only the verge whose mesh got RealWorld.VergeFloor's uv3 sets it (Monza). Every other
@@ -147,9 +175,14 @@ fixed4 frag (v2f i) : SV_Target
         half3 pc = lerp(_RunGreen.rgb, _RunBlue.rgb, (half)blueF);
         pc *= (0.9 + 0.2 * mac.r) * (1.0 + 0.55 * agg);
         pc = lerp(pc, half3(0.16, 0.16, 0.15), (half)saturate(agg * 3.0 - 0.6) * 0.35);
-        // turf: the fibre texture (rgb), a drift in tone
+        // turf: the fibre texture (rgb); then turf and paint a quarter less saturated (both read as a uniform teal band),
+        // a slow drift in tone along the lap (~150 m and ~40 m), and a faint grey film of rubber / dust next to the kerb
+        // (the same for the green paint)
         half3 tc = col;
         col = lerp(tc, pc, (half)paintF);
+        half tl = dot(col, half3(0.3, 0.59, 0.11));
+        col = lerp(half3(tl, tl, tl), col, 0.8) * (half)(0.93 + 0.07 * sin(along * 0.042) + 0.04 * sin(along * 0.157 + 1.3));
+        col = lerp(col, half3(0.16, 0.16, 0.15), (half)saturate(1.0 - rel * 1.6) * 0.22);
         // outer edge: soil and worn grass creep onto it in patches (and dust over the paint); inner edge: rubber dust
         float wob = 0.18 * sin(along * 0.31 + mac.b * 5.0) + 0.1 * sin(along * 1.7);
         half soilE = (half)saturate((rel - 1.62 - wob) * 3.0) * (half)saturate(mac.b * 1.6 + 0.1);
@@ -195,7 +228,8 @@ fixed4 frag (v2f i) : SV_Target
     // where the run-off meets the grass: worn, patchy (wider in places along the lap), soil between the tufts
     half wpatch = (half)saturate(0.55 + 0.6 * sin(along * 0.043 + mac.b * 6.0) + 0.3 * sin(along * 0.17));
     half worn = (half)saturate(1.0 - abs(lat - _Stripe.x - 0.2) * (1.6 - 0.7 * wpatch)) * saturate((0.66 - tuft) * 3.0) * (half)saturate(_Stripe.w * 20.0) * (half)_Clumps;
-    col = lerp(col, half3(0.20, 0.17, 0.12) * (0.8 + 0.4 * mac.r), worn * (0.4 + 0.3 * wpatch));
+    // (only where wpatch peaks, and lighter: it put brown soil patches all along the verges)
+    col = lerp(col, half3(0.20, 0.17, 0.12) * (0.8 + 0.4 * mac.r), worn * 0.45 * wpatch * wpatch);
 #else
     // Low: the worn edge as a mean darkening only
     col *= 1.0 - 0.12 * (half)saturate(1.0 - abs(lat - _Stripe.x - 0.2) * 1.3) * (half)saturate(_Stripe.w * 20.0) * (half)_Clumps;
@@ -255,7 +289,12 @@ fixed4 frag (v2f i) : SV_Target
         float2 gsc = float2(_F2RoadShadowP.y, 1.0) * 1.5;
         half shade = tex2Dgrad(_F2RoadShadow, suv, sgx * gsc, sgy * gsc).r;
         half edge = (half)saturate((_F2RoadShadowP.w - lat) * 0.5); // fades out at the mask's outer edge
-        col *= 1.0 - sf * (1.0 - shade) * edge;
+        // rain (wet only, the same split as the road in Road.cginc): the cloud deck takes half the sun's share and blurs
+        // the shadows towards an even 0.75, the sky fill gains 20 %: no hard fence-post / tree shadows under a dark sky.
+        // Dry: (1 - sf) + sf * lerp(1, shade, edge) = the old 1 - sf * (1 - shade) * edge, unchanged
+        float rainK = saturate(_Wet * 2.0 - 1.0);
+        half shR = lerp(shade, (half)0.75, (half)(0.8 * rainK));
+        col *= (1.0 - sf) * (half)(1.0 + 0.2 * rainK) + sf * lerp((half)1.0, shR, edge) * (half)(1.0 - 0.5 * rainK);
     }
 
     col *= i.color;

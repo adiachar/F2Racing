@@ -16,6 +16,7 @@ Shader "F2/CarWheelFace"
         _Glow ("Brake glow", Color) = (0, 0, 0, 0)
         _Dust ("Brake dust", Range(0, 1)) = 0
         _CoverR ("Cover radius (share of the face)", Range(0, 1)) = 0.5
+        _Ghost ("Ghost fade (penalty, CarGhost.cs)", Range(0, 1)) = 0
     }
     SubShader
     {
@@ -30,10 +31,13 @@ Shader "F2/CarWheelFace"
             #pragma fragment frag
             #pragma target 3.0
             #pragma multi_compile_fog
+            #pragma multi_compile_local __ F2_GHOST // ghost twin material only (CarGhost.cs)
             #include "UnityCG.cginc"
             #include "Grade.cginc"
             #include "Lighting.cginc"
+            #include "CarGhost.cginc"
 
+            float _Ghost;
             fixed4 _Color, _Cover; half4 _Glow; half _Blur, _Dust, _CoverR;
             half4 _GroundRefl; half _CarLit;
 
@@ -94,6 +98,9 @@ Shader "F2/CarWheelFace"
                 half3 col = lerp(rimC, covC, cover);
                 col += _Glow.rgb * ring * 0.6 * _Blur * (1.0 - cover);
                 half alpha = max(cover, smearA);
+                #if defined(F2_GHOST)
+                F2GhostClip(i.pos.xy, _Ghost); col = (half3)F2GhostTint((float3)col, _Ghost, (float)x2); // ghost (CarGhost.cginc)
+                #endif
                 fixed4 c = fixed4(col, alpha);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb); // colour grade + tone curve (Grade.cginc)

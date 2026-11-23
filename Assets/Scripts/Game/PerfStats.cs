@@ -9,7 +9,9 @@
 //    Unity alone would draw, LOD culling aside); other renderers drawn (cars, people, sky); distinct materials and
 //    shader variants (shader + keywords) among the drawn world renderers
 //  * alpha-tested card overdraw: the area of the foliage / fence cards (SectorVisibility's 12 m clusters) projected
-//    on the screen, in screens (1.0 = every pixel shaded once by a card), drawn and before
+//    on the screen, in screens (1.0 = every pixel shaded once by a card), drawn and before; each cluster is tested
+//    against the frustum, clipped to the screen rectangle and capped at 1 screen (near-plane / off-screen cards no
+//    longer blow the sum up)
 //  * sector: current sector / count, renderers hidden by the sets, average set size, the build time of the sets
 //  * memory: textures (incl. runtime-generated: EnvTex atlases, photo textures, the model atlas, people, wheel), from
 //    size, format and mips (x2 for the ones still readable: CPU copy), and meshes (vertex streams + indices, x2 readable)
@@ -72,6 +74,7 @@ public class PerfStats : MonoBehaviour
     // where the drawn world triangles are: by distance from the camera (box to eye) and outside the corridor (the box
     // is more than CorridorM from every centreline point: never near the racing surface); the biggest drawn groups
     const float CorridorM = 250f;
+    const float ClusterHalf = 6f, ClusterR = 10.4f; // SectorVisibility card clusters: 12 m cubes
     readonly long[] distTris = new long[4]; long offCorTris; int offCorDrawn;
     float[] corr; string[] group; SectorVisibility corrFor;
     readonly Dictionary<string, long> groupTris = new Dictionary<string, long>();
@@ -115,7 +118,7 @@ public class PerfStats : MonoBehaviour
             if (corrFor != sv || corr == null || corr.Length != sv.Rs.Length) Corridor(sv);
             GeometryUtility.CalculateFrustumPlanes(cam, planes);
             float f = Screen.height / (2f * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad)), scr = (float)Screen.width * Screen.height;
-            var cp = cam.transform.position; var fw = cam.transform.forward;
+            var cp = cam.transform.position; var fw = cam.transform.forward; var rt = cam.transform.right; var up = cam.transform.up;
             for (int i = 0; i < sv.Rs.Length; i++)
             {
                 var r = sv.Rs[i]; if (r == null || !r.enabled || !r.gameObject.activeInHierarchy) continue;
@@ -128,8 +131,20 @@ public class PerfStats : MonoBehaviour
                     for (int c = sv.CardStart[i], e = c + sv.CardCount[i]; c < e; c++)
                     {
                         var q = sv.Cards[c]; var d = new Vector3(q.x, q.y, q.z) - cp; float z = Vector3.Dot(d, fw);
-                        if (z < 1f || z > cam.farClipPlane) continue;
-                        float px = f / z; card += 0.5f * q.w * px * px; // (cards at random angles: about half their area faces the camera)
+                        // the 12 m cluster as a sphere (r 10.4 m) against the frustum: behind the camera or off-screen = 0
+                        if (z < -ClusterR || z > cam.farClipPlane + ClusterR) continue;
+                        bool outF = false;
+                        for (int k = 0; k < 6; k++) if (planes[k].GetDistanceToPoint(cp + d) < -ClusterR) { outF = true; break; }
+                        if (outF) continue;
+                        // project the cluster's square (12 m side) at no less than its half size (camera inside or near it)
+                        // and clip it to the screen rectangle: only the visible fraction of the card area counts
+                        float zc = Mathf.Max(z, ClusterHalf), px = f / zc, hs = ClusterHalf * px;
+                        float sx = Screen.width * 0.5f + Vector3.Dot(d, rt) * px, sy = Screen.height * 0.5f + Vector3.Dot(d, up) * px;
+                        float vx = Mathf.Min(sx + hs, Screen.width) - Mathf.Max(sx - hs, 0f), vy = Mathf.Min(sy + hs, Screen.height) - Mathf.Max(sy - hs, 0f);
+                        if (vx <= 0f || vy <= 0f) continue;
+                        float frac = vx * vy / (4f * hs * hs);
+                        // (cards at random angles: about half their area faces the camera); one cluster covers at most 1 screen
+                        card += Mathf.Min(0.5f * q.w * px * px * frac, scr);
                     }
                 wBefore++; wTrisBefore += sv.Tris[i]; cardBefore += card;
                 if (!drawn) continue;

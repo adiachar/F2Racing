@@ -12,7 +12,10 @@ Shader "F2/ShiftLed"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            #pragma multi_compile_local __ F2_GHOST // ghost twin material only (CarGhost.cs)
             #include "UnityCG.cginc"
+            #include "CarGhost.cginc"
+            float _Ghost; // ghost fade (penalty, CarGhost.cs): screen-door only
 
             struct appdata { float4 vertex : POSITION; fixed4 color : COLOR; };
             struct v2f { float4 pos : SV_POSITION; fixed4 color : COLOR; };
@@ -24,7 +27,13 @@ Shader "F2/ShiftLed"
                 o.color = v.color;
                 return o;
             }
-            fixed4 frag(v2f i) : SV_Target { return fixed4(i.color.rgb, 1); }
+            fixed4 frag(v2f i) : SV_Target 
+            {
+                #if defined(F2_GHOST)
+                F2GhostClip(i.pos.xy, _Ghost);
+                #endif
+                return fixed4(i.color.rgb, 1);
+            }
             ENDCG
         }
     }

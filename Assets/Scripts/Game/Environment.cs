@@ -24,6 +24,7 @@ public class EnvRing
     public float dist, depth = 160, hMin, hVar, jag;   // m beyond the circuit's half-size; crest height = hMin + 0..hVar
     public Color low, top;                             // colour at the foot and at the highest crests
     public float peakDir = float.NaN, peakGain, peakWidth = 40; // an extra massif towards this compass bearing (deg, 0 = north / +z, 90 = east / +x)
+    public float wood;                                 // 0 bare / rock, 1 wooded hills: crowns texture (EnvTex.FarWood), darker, less haze
 }
 
 // a landmark, placed relative to the track like the real one
@@ -42,6 +43,7 @@ public class EnvDef
     // ground palette (albedo): main cover, second tone in patches, bare soil / rock / sand on high ground
     public Color grass = new Color(0.24f, 0.44f, 0.17f), dry = new Color(0.30f, 0.46f, 0.19f), soil = new Color(0.45f, 0.40f, 0.30f);
     public float patch = 0.3f, patchScale = 140, soilAt = 0;      // share of the second tone, its blob size (m), lift (m) where soil shows (0 = never)
+    public float scrub;                                           // share of the bare high ground (soil / rock) under scrub (maquis) in ~45 m patches
     // terrain away from the track
     public float flatTo = 60, ramp = 90;                          // m from the track where the land starts to move, and how gently
     public float rough = 3, roughScale = 220; public bool ridged; // rolling amplitude (m), wavelength (m), sharp dune crests
@@ -53,6 +55,9 @@ public class EnvDef
     // canopy m and coloured like tree tops, so a few hundred real trees along its edge read as a deep forest
     public float canopy = 0, canopyAt = 48, cover = 0.5f;
     public float poplar = 0.06f;                                  // share of Lombardy poplars among the broad-leaf trees
+    // the woods on the hillsides (gap list item 18): extra crowns inside the woods where the land rises (2 cards each,
+    // sunk so only the upper crown stands out of the canopy-textured ground), and farmhouses / barns in the clearings
+    public int slopeTrees, farms;
     public bool realModels;                                       // real tree / shrub / lamp models near the track (ModelLib.cs; Medium and High)
     public Color leaf = new Color(0.19f, 0.42f, 0.21f), leaf2 = new Color(0.19f, 0.42f, 0.21f), trunk = new Color(0.36f, 0.25f, 0.19f);
     // backdrop
@@ -77,13 +82,13 @@ public static class Environment
         // Monaco: a city stacked on a steep slope between the harbour and pale limestone mountains. No countryside.
         ["monaco"] = new EnvDef
         {
-            grass = C(0.37f, 0.36f, 0.34f), dry = C(0.20f, 0.31f, 0.16f), soil = C(0.44f, 0.41f, 0.36f), patch = 0.2f, patchScale = 70, soilAt = 95,
+            grass = C(0.37f, 0.36f, 0.34f), dry = C(0.20f, 0.31f, 0.16f), soil = C(0.44f, 0.41f, 0.36f), patch = 0.2f, patchScale = 70, soilAt = 95, scrub = 0.55f,
             flatTo = 46, ramp = 70, rough = 8, roughScale = 180, rise = 120, riseDist = 300,
             tree = TreeKind.Palm, tree2 = TreeKind.Pine, tree2Share = 0.55f, treeMul = 0.9f, treeNear = 16, treeFar = 340,
             leaf = C(0.22f, 0.40f, 0.18f), leaf2 = C(0.17f, 0.30f, 0.15f), trunk = C(0.40f, 0.33f, 0.26f),
             rings = new[]
             {
-                new EnvRing { dist = 470, depth = 240, hMin = 230, hVar = 190, jag = 0.55f, low = C(0.27f, 0.31f, 0.22f), top = C(0.50f, 0.47f, 0.42f), peakDir = 250, peakGain = 170, peakWidth = 35 },
+                new EnvRing { dist = 470, depth = 240, hMin = 230, hVar = 190, jag = 0.55f, low = C(0.27f, 0.31f, 0.22f), top = C(0.50f, 0.47f, 0.42f), peakDir = 250, peakGain = 170, peakWidth = 35, wood = 0.45f },
                 new EnvRing { dist = 860, depth = 300, hMin = 420, hVar = 300, jag = 0.7f, low = C(0.33f, 0.36f, 0.32f), top = C(0.52f, 0.51f, 0.50f) },
             },
             blocks = 240, floorsMin = 5, floorsMax = 13,
@@ -102,12 +107,12 @@ public static class Environment
             grass = C(0.16f, 0.31f, 0.13f), dry = C(0.21f, 0.34f, 0.14f), patch = 0.3f,
             flatTo = 62, ramp = 110, rough = 12, roughScale = 260, rise = 60, riseDist = 300,
             tree = TreeKind.Spruce, tree2 = TreeKind.Broadleaf, tree2Share = 0.12f, treeNear = 22, treeFar = 330, treeSize = 1.1f,
-            canopy = 15, canopyAt = 46, cover = 0.82f,
+            canopy = 15, canopyAt = 38, cover = 0.82f, slopeTrees = 1400, farms = 9,
             leaf = C(0.10f, 0.23f, 0.13f), leaf2 = C(0.17f, 0.36f, 0.16f),
             rings = new[]
             {
-                new EnvRing { dist = 520, depth = 220, hMin = 95, hVar = 120, jag = 0.15f, low = C(0.11f, 0.22f, 0.15f), top = C(0.15f, 0.27f, 0.19f) },
-                new EnvRing { dist = 900, depth = 260, hMin = 190, hVar = 170, jag = 0.15f, low = C(0.20f, 0.30f, 0.28f), top = C(0.27f, 0.36f, 0.36f) },
+                new EnvRing { dist = 520, depth = 220, hMin = 95, hVar = 120, jag = 0.15f, low = C(0.11f, 0.22f, 0.15f), top = C(0.15f, 0.27f, 0.19f), wood = 1f },
+                new EnvRing { dist = 900, depth = 260, hMin = 190, hVar = 170, jag = 0.15f, low = C(0.12f, 0.21f, 0.17f), top = C(0.16f, 0.25f, 0.22f), wood = 1f }, // spruce to the crest
             },
             groundRefl = C(0.10f, 0.14f, 0.10f),
         },
@@ -121,7 +126,7 @@ public static class Environment
             leaf = C(0.19f, 0.38f, 0.16f), leaf2 = C(0.27f, 0.42f, 0.15f),
             rings = new[]
             {
-                new EnvRing { dist = 430, depth = 60, hMin = 22, hVar = 12, jag = 0.5f, low = C(0.16f, 0.30f, 0.15f), top = C(0.22f, 0.37f, 0.18f) },
+                new EnvRing { dist = 430, depth = 60, hMin = 22, hVar = 12, jag = 0.5f, low = C(0.16f, 0.30f, 0.15f), top = C(0.22f, 0.37f, 0.18f), wood = 0.8f },
                 new EnvRing { dist = 900, depth = 300, hMin = 20, hVar = 30, jag = 0.6f, low = C(0.40f, 0.46f, 0.48f), top = C(0.55f, 0.59f, 0.63f), peakDir = 0, peakGain = 230, peakWidth = 70 },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Bridge, s = 3580, side = 1, off = 0 } }, // the old banked oval crosses over the Serraglio (where the map data has the bridge)
@@ -146,12 +151,12 @@ public static class Environment
             grass = C(0.19f, 0.39f, 0.14f), dry = C(0.24f, 0.41f, 0.16f), patch = 0.3f,
             flatTo = 62, rough = 8, roughScale = 240, rise = 14, riseDist = 260,
             tree = TreeKind.Broadleaf, tree2 = TreeKind.Spruce, tree2Share = 0.3f, treeMul = 1.3f, treeNear = 24, treeFar = 420, treeSize = 1.15f,
-            canopy = 11, canopyAt = 52, cover = 0.5f,
+            canopy = 11, canopyAt = 52, cover = 0.5f, slopeTrees = 900, farms = 4,
             leaf = C(0.15f, 0.37f, 0.15f), leaf2 = C(0.10f, 0.26f, 0.14f),
             rings = new[]
             {
-                new EnvRing { dist = 500, depth = 200, hMin = 45, hVar = 60, jag = 0.2f, low = C(0.14f, 0.31f, 0.18f), top = C(0.18f, 0.36f, 0.21f) },
-                new EnvRing { dist = 900, depth = 280, hMin = 70, hVar = 90, jag = 0.35f, low = C(0.26f, 0.38f, 0.37f), top = C(0.34f, 0.44f, 0.46f), peakDir = 290, peakGain = 220, peakWidth = 60 },
+                new EnvRing { dist = 500, depth = 200, hMin = 45, hVar = 60, jag = 0.2f, low = C(0.14f, 0.31f, 0.18f), top = C(0.18f, 0.36f, 0.21f), wood = 1f },
+                new EnvRing { dist = 900, depth = 280, hMin = 70, hVar = 90, jag = 0.35f, low = C(0.26f, 0.38f, 0.37f), top = C(0.34f, 0.44f, 0.46f), peakDir = 290, peakGain = 220, peakWidth = 60, wood = 0.9f },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Wheel, s = 5560, side = -2, off = 150 } },
         },
@@ -179,7 +184,7 @@ public static class Environment
             leaf = C(0.21f, 0.37f, 0.16f), leaf2 = C(0.33f, 0.40f, 0.20f),
             rings = new[]
             {
-                new EnvRing { dist = 500, depth = 200, hMin = 40, hVar = 45, jag = 0.15f, low = C(0.36f, 0.42f, 0.23f), top = C(0.44f, 0.47f, 0.27f) },
+                new EnvRing { dist = 500, depth = 200, hMin = 40, hVar = 45, jag = 0.15f, low = C(0.36f, 0.42f, 0.23f), top = C(0.44f, 0.47f, 0.27f), wood = 0.5f },
                 new EnvRing { dist = 900, depth = 260, hMin = 70, hVar = 70, jag = 0.2f, low = C(0.42f, 0.47f, 0.36f), top = C(0.50f, 0.53f, 0.44f) },
             },
             groundRefl = C(0.16f, 0.16f, 0.11f),
@@ -205,11 +210,11 @@ public static class Environment
             grass = C(0.20f, 0.40f, 0.14f), dry = C(0.26f, 0.43f, 0.16f), patch = 0.3f,
             flatTo = 62, ramp = 110, rough = 10, roughScale = 260, rise = 70, riseDist = 300,
             tree = TreeKind.Spruce, tree2 = TreeKind.Broadleaf, tree2Share = 0.2f, treeMul = 1.1f, treeNear = 40, treeFar = 380, clump = 0.4f, treeSize = 1.1f,
-            canopy = 14, canopyAt = 70, cover = 0.42f,
+            canopy = 14, canopyAt = 70, cover = 0.42f, slopeTrees = 1100, farms = 10,
             leaf = C(0.10f, 0.25f, 0.13f), leaf2 = C(0.18f, 0.38f, 0.16f),
             rings = new[]
             {
-                new EnvRing { dist = 470, depth = 300, hMin = 240, hVar = 230, jag = 0.3f, low = C(0.12f, 0.27f, 0.15f), top = C(0.27f, 0.45f, 0.21f) },
+                new EnvRing { dist = 470, depth = 300, hMin = 240, hVar = 230, jag = 0.3f, low = C(0.12f, 0.27f, 0.15f), top = C(0.27f, 0.45f, 0.21f), wood = 1f },
                 new EnvRing { dist = 860, depth = 340, hMin = 480, hVar = 380, jag = 0.75f, low = C(0.22f, 0.34f, 0.30f), top = C(0.60f, 0.62f, 0.64f) },
             },
             marks = new[] { new EnvMark { kind = MarkKind.Sculpture, side = 9 } }, // the big steel sculpture in the infield (generic shape)
@@ -380,9 +385,25 @@ public static class Environment
         {
             float s = Mathf.SmoothStep(0, 1, (lift - e.soilAt * 0.55f) / (e.soilAt * 0.45f)) * (0.55f + 0.45f * Noise(x / 37f, z / 37f, 41));
             c = Color.Lerp(c, e.soil, s);
+            if (e.scrub > 0)
+            {
+                // the rock is not bare everywhere: dark scrub (maquis, pines) in patches, more in the hollows (load time)
+                float sn = 0.65f * Noise(x / 45f, z / 45f, 47) + 0.35f * Noise(x / 13f, z / 13f, 49);
+                float sc = Mathf.SmoothStep(0, 1, (sn - (1f - e.scrub)) / 0.18f) * s;
+                c = Color.Lerp(c, Color.Lerp(e.leaf, e.leaf2, Noise(x / 30f, z / 30f, 53)) * (0.7f + 0.25f * Noise(x / 9f, z / 9f, 57)), sc);
+            }
         }
         float cn = Canopy(x, z);
-        if (cn > 0) { var lf = Color.Lerp(e.leaf, e.leaf2, e.tree2Share * Noise(x / 60f, z / 60f, 95)) * (0.42f + 0.2f * Noise(x / 15f, z / 15f, 97) + 0.16f * Hash(Mathf.RoundToInt(x), Mathf.RoundToInt(z), 98)); c = Color.Lerp(c, lf, Mathf.Clamp01(cn * 5f)); }
+        if (cn > 0)
+        {
+            // the canopy: stands of the second species in ~70 m patches (lighter broad-leaf among the spruce), and a
+            // little less blue than the leaf colour (with the haze on top the old tint read as a grey-green slope).
+            // Ground.cginc draws the crowns themselves on it (the terrain's vertex alpha, LightBake)
+            float sp = Mathf.SmoothStep(0f, 1f, (Noise(x / 70f, z / 70f, 95) - (1f - Mathf.Min(0.9f, e.tree2Share * 2f))) / 0.15f);
+            var lf = Color.Lerp(e.leaf, e.leaf2, sp) * (0.40f + 0.2f * Noise(x / 15f, z / 15f, 97) + 0.12f * Hash(Mathf.RoundToInt(x), Mathf.RoundToInt(z), 98));
+            lf.b *= 0.85f;
+            c = Color.Lerp(c, lf, Mathf.Clamp01(cn * 5f));
+        }
         float k = 0.93f + 0.14f * Noise(x / 23f, z / 23f, 43); // mottling
         return new Color(c.r / e.grass.r * k, c.g / e.grass.g * k, c.b / e.grass.b * k, 1f);
     }
@@ -452,9 +473,15 @@ public static class Environment
     static Vector3 Dir(float bearingDeg) { float a = bearingDeg * Mathf.Deg2Rad; return new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a)); }
 
     // ================================================================ backdrop: rings of distant land, and the sea
+    // wooded rings: a dark spruce / mixed canopy as a linear multiplier of the baked light (~1.6-2 on these faces, so
+    // ~sRGB 55,90,55 on screen before the fog), and the canopy texture's tile in metres (EnvTex.FarWood)
+    static readonly Color ForestLow = new Color(0.020f, 0.055f, 0.018f), ForestTop = new Color(0.027f, 0.062f, 0.026f);
+    const float FarWoodTile = 96f;
     public static void Backdrop(Transform parent, float cx, float cy, float ext)
     {
-        var e = Cur; var b = new Buf();
+        var e = Cur; Buf bPlain = new Buf(), bWood = new Buf();
+        // the canopy texture first: the wooded rings' tint is divided by its mean (FarWoodMean is only known once it is made)
+        if (WorldBuilder.BakeReady && e.rings != null) for (int r = 0; r < e.rings.Length; r++) if (e.rings[r].wood > 0.01f) { EnvTex.FarWood(); break; }
         var haze = RenderSettings.fogColor;
         bool sea = !float.IsNaN(e.seaDir) && !RealWorld.HasWaterAreas;
         bool real = RealWorld.Active && RealWorld.HasTerrain;
@@ -477,8 +504,27 @@ public static class Environment
                 // dark wall. The tint is a linear multiplier of the baked light, which is about 1.6 on these up-turned faces,
                 // so the haze target is the fog colour in linear space over 1.6: far crests end up at the fog colour on screen)
                 float hz = Mathf.Lerp(0.30f, 0.56f, Mathf.Clamp01((g.dist - 450f) / 500f));
+                // wooded hills (gap list item 18: the Ardennes, Suzuka's hills read as bare pale shapes): the canopy
+                // texture (EnvTex.FarWood, one read like the white texture before), the tint divided by its mean so the
+                // average is kept. The ring's colour goes (by its wood share) to a dark forest canopy albedo, and nearly
+                // all of the tint's own haze goes: the linear fog (~15-20 % at the first ring) already lays the haze on top,
+                // and the two together left Spa's hills a pale blue-grey. Result: dark green woods, bluer towards the crest
+                // and on the far ring, melting into the fog
+                // (fw: how much of that applies; partly wooded rings, wood <= 0.4 such as Monaco's rock with scrub, keep
+                // their own colour, a little darker, as before)
+                bool wood = g.wood > 0.01f && WorldBuilder.BakeReady;
+                var rb = wood ? bWood : bPlain;
+                float fw = wood ? Mathf.Clamp01((g.wood - 0.4f) / 0.6f) : 0f;
+                // (far wooded rings keep more of it: the 900 m ring is bluer than the 500 m one, aerial perspective by
+                // distance, now that the material's fog is thinner, _FogKeep below)
+                float farW = Mathf.Clamp01((g.dist - 450f) / 500f);
+                if (wood) hz *= 1f - Mathf.Lerp(0.45f, 0.85f, fw) * g.wood * (1f - 0.35f * farW);
                 Color hazeL = haze.linear / 1.6f;
-                Color low = Color.Lerp(g.low, hazeL, hz), top = Color.Lerp(g.top, hazeL, Mathf.Min(1f, hz + 0.2f));
+                Color gLow = Color.Lerp(g.low, ForestLow, fw), gTop = Color.Lerp(g.top, ForestTop, fw);
+                Color low = Color.Lerp(gLow, hazeL, hz), top = Color.Lerp(gTop, hazeL, Mathf.Min(1f, hz + Mathf.Lerp(0.2f, 0.06f, fw)));
+                if (wood) { float k = (1f - 0.3f * g.wood * (1f - fw)) / Mathf.Max(0.05f, EnvTex.FarWoodMean); low *= k; top *= k; low.a = top.a = 1f; }
+                // ~96 m per tile along the ring (a whole number of tiles round it: no seam) and up the slope
+                float uScale = Mathf.Max(1f, Mathf.Round(radius * 2f * Mathf.PI / FarWoodTile)) / (2f * Mathf.PI), vScale = 1f / FarWoodTile;
                 float Crest(int i)
                 {
                     float a = i * Mathf.PI * 2 / Seg;
@@ -494,6 +540,9 @@ public static class Environment
                     return h;
                 }
                 float hTop = g.hMin + g.hVar + (float.IsNaN(g.peakDir) ? 0 : g.peakGain);
+                // crest trees: spruce tall and narrow, broad-leaf woods (Suzuka) lower and rounder
+                bool crSpruce = e.tree == TreeKind.Spruce;
+                float crestTree = (crSpruce ? 26f : 20f) * Mathf.Clamp(e.treeSize, 0.8f, 1.2f), crestW = crSpruce ? 0.32f : 0.55f;
                 for (int i = 0; i < Seg; i++)
                 {
                     float a0 = i * Mathf.PI * 2 / Seg, a1 = (i + 1) * Mathf.PI * 2 / Seg;
@@ -509,10 +558,51 @@ public static class Environment
                     var inward = mid + Vector3.up * 60 - (p0 + p1) * 0.5f;
                     Color cm0 = Color.Lerp(low, top, Mathf.Clamp01(h0 * 0.62f / hTop)), cm1 = Color.Lerp(low, top, Mathf.Clamp01(h1 * 0.62f / hTop));
                     Color ct0 = Color.Lerp(low, top, Mathf.Clamp01(h0 / hTop * 1.15f)), ct1 = Color.Lerp(low, top, Mathf.Clamp01(h1 / hTop * 1.15f));
-                    Band(b, p0, p1, m1, m0, inward, low, low, cm1, cm0);
-                    Band(b, m0, m1, t1, t0, inward, cm0, cm1, ct1, ct0);
+                    if (wood)
+                    {
+                        Vector2 q0 = new Vector2(a0 * uScale, p0.y * vScale), q1 = new Vector2(a1 * uScale, p1.y * vScale);
+                        Vector2 n0 = new Vector2(a0 * uScale, m0.y * vScale), n1 = new Vector2(a1 * uScale, m1.y * vScale);
+                        Vector2 w0 = new Vector2(a0 * uScale, t0.y * vScale), w1 = new Vector2(a1 * uScale, t1.y * vScale);
+                        Band(rb, p0, p1, m1, m0, inward, low, low, cm1, cm0, q0, q1, n1, n0);
+                        Band(rb, m0, m1, t1, t0, inward, cm0, cm1, ct1, ct0, n0, n1, w1, w0);
+                        // a broken, tree-like crest (the smooth ridge line read as a bare hill): a row of tree tips stuck
+                        // on the ridge, one triangle each, in groups with gaps; their foot is sunk into the slope so only
+                        // the part above the crest shows. Same mesh and material (no draw call), ~1.3k tris a ring
+                        if (fw > 0.5f)
+                        {
+                            float crLen = Vector3.Distance(t0, t1);
+                            int crN = Mathf.Max(1, Mathf.RoundToInt(crLen / 11f));
+                            Vector3 crAlong = t1 - t0; crAlong.y = 0; crAlong = crAlong.normalized;
+                            for (int ck = 0; ck < crN; ck++)
+                            {
+                                int cid = i * 97 + ck;
+                                float crH = Hash(cid, seed, 21);
+                                if (crH < 0.07f) continue;                                                   // a gap
+                                float crGrp = 0.5f + 0.5f * Mathf.Sin(cid * 0.29f + seed * 1.7f);            // stands of taller trees
+                                float crF = (ck + 0.2f + 0.6f * Hash(cid, seed, 23)) / crN;
+                                Vector3 crBase = Vector3.Lerp(t0, t1, crF);
+                                float crTall = crestTree * (0.45f + 0.4f * crGrp + 0.45f * crH);
+                                Vector3 crSide = crAlong * (crTall * crestW);
+                                Vector3 crA = crBase - crSide + Vector3.down * 4f, crB = crBase + crSide + Vector3.down * 4f, crTip = crBase + Vector3.up * crTall;
+                                Color crCol = Color.Lerp(ct0, ct1, crF) * 0.9f; crCol.a = 1f;
+                                float crU = Mathf.Lerp(a0, a1, crF) * uScale;
+                                if (Vector3.Dot(Vector3.Cross(crB - crA, crTip - crA), inward) < 0) { var crT = crA; crA = crB; crB = crT; }
+                                int cv = rb.v.Count;
+                                rb.v.Add(crA); rb.v.Add(crB); rb.v.Add(crTip);
+                                rb.col.Add(crCol); rb.col.Add(crCol); rb.col.Add(crCol);
+                                rb.uv.Add(new Vector2(crU - 0.05f, crA.y * vScale)); rb.uv.Add(new Vector2(crU + 0.05f, crB.y * vScale)); rb.uv.Add(new Vector2(crU, crTip.y * vScale));
+                                rb.tri.Add(cv); rb.tri.Add(cv + 1); rb.tri.Add(cv + 2);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Band(rb, p0, p1, m1, m0, inward, low, low, cm1, cm0);
+                        Band(rb, m0, m1, t1, t0, inward, cm0, cm1, ct1, ct0);
+                    }
                 }
             }
+        var b = bPlain;
         if (sea)
         {
             // a beach, then the sea out to the horizon (a flat sheet: the dunes hide most of it from the track)
@@ -530,26 +620,42 @@ public static class Environment
         // not baked (old phones): vertex colours are not drawn, so the material carries an average colour
         Color avg = e.rings != null && e.rings.Length > 0 ? Color.Lerp(e.rings[0].low, haze, 0.15f) : new Color(0.3f, 0.4f, 0.33f);
         var bgo = Emit("EnvBackdrop", b, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : avg, null, 0f), parent);
-        if (bgo != null)
-        {
-            // normals turned mostly skywards: distant slopes are lit almost evenly (the haze washes out their shading),
-            // so the side of the ring away from the sun is not a dark band
-            var bm = bgo.GetComponent<MeshFilter>().sharedMesh; var bn = bm.normals;
-            for (int i = 0; i < bn.Length; i++) bn[i] = (bn[i] + Vector3.up * 1.6f).normalized;
-            bm.normals = bn;
-        }
+        SkyNormals(bgo);
+        // the wooded rings: one more draw call (only on circuits that have them), same shader, the crowns texture
+        // its fog is thinner (Baked.shader _FogKeep: keep -> sqrt(keep), vertex only): at 1-2 km the full fog left Spa's
+        // spruce hills a bare grey-green; the tint above already carries the aerial perspective by ring distance
+        var woodMat = WorldBuilder.Mat(Color.white, EnvTex.FarWood(), 0f);
+        // (only where the hills are real forest, wood >= 0.7: Monaco's scrubby rock and Budapest's rim keep the full fog;
+        // the value is kept when LightBake hands the material to F2/Baked, like _WinGlow)
+        float fogKeep = 0f;
+        if (e.rings != null) for (int r = 0; r < e.rings.Length; r++) if (e.rings[r].wood >= 0.7f) fogKeep = 1f;
+        woodMat.SetFloat("_FogKeep", fogKeep);
+        SkyNormals(Emit("EnvBackdropWood", bWood, woodMat, parent));
+    }
+    // normals turned mostly skywards: distant slopes are lit almost evenly (the haze washes out their shading),
+    // so the side of the ring away from the sun is not a dark band
+    static void SkyNormals(GameObject bgo)
+    {
+        if (bgo == null) return;
+        var bm = bgo.GetComponent<MeshFilter>().sharedMesh; var bn = bm.normals;
+        for (int i = 0; i < bn.Length; i++) bn[i] = (bn[i] + Vector3.up * 1.6f).normalized;
+        bm.normals = bn;
     }
     // quad with a colour per corner
     static void Band(Buf b, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 outward, Color c0, Color c1, Color c2, Color c3)
+        => Band(b, p0, p1, p2, p3, outward, c0, c1, c2, c3, Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero);
+    // ... and a uv per corner
+    static void Band(Buf b, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 outward, Color c0, Color c1, Color c2, Color c3,
+                     Vector2 u0, Vector2 u1, Vector2 u2, Vector2 u3)
     {
         if (Vector3.Dot(Vector3.Cross(p1 - p0, p2 - p0), outward) < 0)
         {
-            var tp = p1; p1 = p3; p3 = tp; var tc = c1; c1 = c3; c3 = tc;
+            var tp = p1; p1 = p3; p3 = tp; var tc = c1; c1 = c3; c3 = tc; var tu = u1; u1 = u3; u3 = tu;
         }
         int i = b.v.Count;
         b.v.Add(p0); b.v.Add(p1); b.v.Add(p2); b.v.Add(p3);
         b.col.Add(c0); b.col.Add(c1); b.col.Add(c2); b.col.Add(c3);
-        for (int k = 0; k < 4; k++) b.uv.Add(Vector2.zero);
+        b.uv.Add(u0); b.uv.Add(u1); b.uv.Add(u2); b.uv.Add(u3);
         b.tri.Add(i); b.tri.Add(i + 1); b.tri.Add(i + 2); b.tri.Add(i); b.tri.Add(i + 2); b.tri.Add(i + 3);
     }
 
@@ -712,6 +818,7 @@ public static class Environment
             ModelLib.Flush(root);
         }
         if (e.canopy > 0) WoodBands(t, bb, near, far, v, nrm, uv, uv2, col, tri, rnd);
+        if (e.canopy > 0 && e.slopeTrees > 0) SlopeTrees(bb, low, v, nrm, uv, uv2, col, tri);
         if (tri.Count == 0) return;
         // (named "Trees" as before: WorldBuilder.Drape lays them onto the circuit's height field and keeps these normals)
         var fm = FoliageMaterial();
@@ -758,6 +865,92 @@ public static class Environment
                 count++;
             }
         }
+    }
+
+    // The hillsides inside the woods (gap list item 18: Spa's near hills read as smooth bare slopes behind the barrier):
+    // crowns standing out of the canopy where the land rises, so the slope has a broken, treed outline and texture
+    // instead of a painted one. Two cards each (no sway), sunk by a third of their height into the ground (only the upper
+    // crown shows above the canopy-textured terrain: fewer pixels than a whole tree), denser low on the slope near the
+    // track where they are seen. Same mesh and draw call as the other trees; own random stream (the trees above are
+    // placed exactly as before).
+    static void SlopeTrees((double minX, double minY, double maxX, double maxY) bb, bool low, List<Vector3> v, List<Vector3> nrm, List<Vector2> uv, List<Vector2> uv2, List<Color> col, List<int> tri)
+    {
+        var e = Cur; var rnd = new System.Random(29);
+        int want = low ? e.slopeTrees / 2 : e.slopeTrees, placed = 0, tries = 0;
+        float reach = 520f;
+        while (placed < want && tries++ < want * 30)
+        {
+            float x = (float)(bb.minX - reach + rnd.NextDouble() * (bb.maxX - bb.minX + 2 * reach));
+            float z = (float)(bb.minY - reach + rnd.NextDouble() * (bb.maxY - bb.minY + 2 * reach));
+            float d = Clear(x, z);
+            if (d < e.canopyAt + 14f || d > reach) continue;
+            if (Canopy(x, z) < 0.6f) continue;
+            // on rising land: the environment's own relief, or the circuit's hillside (Eau Rouge: the height field)
+            float lift = Lift(x, z);
+            if (lift < 4f)
+            {
+                float g = (Mathf.Abs(GroundY(x + 8f, z) - GroundY(x - 8f, z)) + Mathf.Abs(GroundY(x, z + 8f) - GroundY(x, z - 8f))) / 16f;
+                if (g < 0.06f) continue;
+            }
+            // denser near the track (seen large) than far up the hill
+            if (rnd.NextDouble() > 1.15f - d / reach) continue;
+            if (Waterfront.InWater(x, z) || Trackside.Blocked(x, z, 6f) || Taken(x, z, 10f)) continue;
+            bool second = e.tree2 != TreeKind.None && rnd.NextDouble() < e.tree2Share * 1.5f;
+            var kind = second ? e.tree2 : e.tree;
+            float sz = (0.95f + (float)rnd.NextDouble() * 0.6f) * e.treeSize, hh = kind == TreeKind.Spruce ? 15f * sz : 10f * sz;
+            var foot = new Vector3(x, lift - 0.33f * hh, z);
+            var leaf = Color.Lerp(e.leaf, e.leaf2, second ? 1f : 0.15f * (float)rnd.NextDouble()).linear * 0.85f; leaf.a = 1f;
+            EmitTree(v, nrm, uv, uv2, col, tri, foot, kind, sz, leaf, rnd, 2);
+            placed++;
+        }
+    }
+
+    // Farmhouses and barns in the clearings of the wooded hills (Spa, Spielberg, Suzuka): white or stone walls under a
+    // dark slate or red tile roof, on open land just outside the woods. Into the props mesh (no new draw call); they
+    // claim their ground, so the trees keep off.
+    static void Farms(Buf props, System.Random rnd)
+    {
+        var e = Cur; if (e.farms <= 0 || dist == null || RealWorld.Active) return;
+        Color[] walls = { C(0.86f, 0.84f, 0.79f), C(0.62f, 0.58f, 0.52f), C(0.78f, 0.72f, 0.62f) };
+        Color[] roofs = { C(0.22f, 0.23f, 0.26f), C(0.50f, 0.25f, 0.18f), C(0.30f, 0.29f, 0.29f) };
+        int placed = 0, tries = 0;
+        while (placed < e.farms && tries++ < e.farms * 400)
+        {
+            float x = fx0 + 120 + (float)rnd.NextDouble() * (fx1 - fx0 - 240), z = fz0 + 120 + (float)rnd.NextDouble() * (fz1 - fz0 - 240);
+            float d = Clear(x, z);
+            if (d < 110f || d > 480f) continue;
+            // a clearing: open here, woods close by on at least two sides
+            if (Canopy(x, z) > 0.05f) continue;
+            int woods = 0;
+            for (int q = 0; q < 6; q++) { float a = q * 1.0472f; if (Canopy(x + Mathf.Cos(a) * 55f, z + Mathf.Sin(a) * 55f) > 0.5f) woods++; }
+            if (woods < 2 || Waterfront.InWater(x, z) || Taken(x, z, 40f) || Trackside.Blocked(x, z, 20f)) continue;
+            float gx = Lift(x + 6, z) - Lift(x - 6, z), gz = Lift(x, z + 6) - Lift(x, z - 6);
+            if (gx * gx + gz * gz > 9f) continue; // not on a steep bit (> ~15 %)
+            Vector3 ax = new Vector3(gx, 0, gz); if (ax.sqrMagnitude < 1e-4f) ax = new Vector3(1, 0, 0.4f); ax = new Vector3(-ax.z, 0, ax.x).normalized;
+            Vector3 az = new Vector3(-ax.z, 0, ax.x);
+            // a house and a barn beside it (the barn longer, lower), each a box with a pitched roof
+            for (int b = 0; b < 2; b++)
+            {
+                Vector3 c = new Vector3(x, 0, z) + (b == 0 ? Vector3.zero : az * 16f + ax * 6f);
+                c.y = GroundY(c.x, c.z) - 0.6f;
+                float ex = b == 0 ? 6f + (float)rnd.NextDouble() * 2f : 10f + (float)rnd.NextDouble() * 4f, ez = b == 0 ? 4.5f : 5.5f, h = b == 0 ? 6.4f : 5.2f;
+                var wc = walls[rnd.Next(walls.Length)] * (0.9f + 0.1f * (float)rnd.NextDouble()); wc.a = 1f;
+                var rc = roofs[(b + rnd.Next(roofs.Length)) % roofs.Length];
+                Box(props, c + Vector3.up * ((h - 1.5f) * 0.5f), ax, Vector3.up, az, ex, (h + 1.5f) * 0.5f, ez, wc); // (a plinth 1.5 m into the slope)
+                Gable(props, c + Vector3.up * h, ax, az, ex + 0.5f, ez + 0.6f, ez * 0.75f, rc, wc);
+            }
+            Claim(new Vector3(x, 0, z), 26f); placed++;
+        }
+    }
+    // a pitched roof along ax over a (2 ex) x (2 ez) plan: two slopes and the two gable triangles (wall colour)
+    static void Gable(Buf b, Vector3 c, Vector3 ax, Vector3 az, float ex, float ez, float h, Color roof, Color wall)
+    {
+        Vector3 x = ax * ex, z = az * ez, r = Vector3.up * h;
+        Quad(b, c - x - z, c + x - z, c + x + r, c - x + r, -az + Vector3.up, roof);
+        Quad(b, c - x + z, c + x + z, c + x + r, c - x + r, az + Vector3.up, roof);
+        Vector3 xi = ax * (ex - 0.5f);
+        Tri(b, c + xi - z, c + xi + z, c + xi + r, ax, wall);
+        Tri(b, c - xi - z, c - xi + z, c - xi + r, -ax, wall);
     }
 
     // ground a landmark will stand on (known before the town rows are built, so they leave room)
@@ -929,6 +1122,7 @@ public static class Environment
             }
         }
 
+        Farms(props, rnd);
         Emit("EnvProps", props, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : C(0.85f, 0.84f, 0.80f), null, 0.1f), root);
         if (blocks.tri.Count > 0)
         {

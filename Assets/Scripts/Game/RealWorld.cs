@@ -139,6 +139,7 @@ public static class RealWorld
         var sw = System.Diagnostics.Stopwatch.StartNew();
         WorldData w = null;
         try { w = WorldData.Load(t.def.id); } catch (System.Exception e) { Debug.LogWarning("RealWorld: " + e.Message); }
+        MapEdits.Apply(w); // Adi's hand edits (Resources/MapEdits/<id>.json): remove areas, extra trees and buildings
         if (w == null || !(w.HasTerrain || w.bN > 0 || w.aN > 0 || w.lN > 0 || w.tN > 0)) return;
         D = w; env = Environment.Cur; sty = StyleFor(t.def.id, env); gfx = WorldBuilder.Gfx;
         var bb = t.Bounds(); bbX0 = (float)bb.minX; bbZ0 = (float)bb.minY; bbX1 = (float)bb.maxX; bbZ1 = (float)bb.maxY;
@@ -949,7 +950,15 @@ public static class RealWorld
             fClass = 3; fPal = 2; fBw = 6f; fFh = fGfH = 6f; fCap = 0.6f; fCornice = 0f;
             fUpC = CellUv(CIndustry); fGfC = CellUv(CIndustry, GLoading, 0.18f);
         }
-        else if (kind == 4) { fClass = 5; fPal = 2; fBw = fFh = fGfH = 4.6f; fUpC = fGfC = CellUv(CConcrete); fCornice = 0f; }
+        else if (kind == 4 && area < 900f) { fClass = 5; fPal = 2; fBw = fFh = fGfH = 4.6f; fUpC = fGfC = CellUv(CConcrete); fCornice = 0f; }
+        else if (kind == 4)
+        {
+            // a big sports hall / stand block that is not built as a stand (far, or not a long rectangle): no more blank
+            // precast box (gap list item 23): ribbed cladding with a strip window, or concrete panels with windows, over a
+            // glazed / windowed ground floor. Same atlas cells as the offices and sheds (no new swatch, no cost)
+            fClass = 3; fPal = 2; fBw = 4.6f; fFh = 4.6f; fGfH = 4.6f; fCap = 0.7f; fCornice = 0f;
+            fUpC = h2 < 0.5f ? CellUv(CIndustry) : CellUv(CPanelWin); fGfC = CellUv(CPanelWin, GLobby, 0.35f);
+        }
         else if (kind == 5 || kind == 6) { fClass = 6; fPal = 3; fFh = fGfH = 4f; fUpC = fGfC = CellUv(CStone); fCornice = 0.4f; fCap = 0.9f; }
         else if (kind == 8 && H > 26f) { fClass = 2; fPal = 2; fFh = 3.4f; fGfH = 4.2f; fUpC = CellUv(CTower); fGfC = CellUv(GLobby); fCornice = 0f; fCap = 0.9f; }
         else if (kind == 2 && (H > 11f || h > 0.5f))
@@ -1248,7 +1257,7 @@ public static class RealWorld
         Vector3 FL = cen + F * hs - A * hl, FR = cen + F * hs + A * hl, BL = cen - F * hs - A * hl, BR = cen - F * hs + A * hl;
         Trackside.AddSolid(cen, A, hl + 0.8f, hs + 1.2f, gmin - 1f, roofY + 3.5f, false); // (roof flags, floodlights)
         var mb = Buf(SBuild, Block(ocx, ocz), 220 + 28 * (Mathf.RoundToInt(2f * hl / 9f) + 3));
-        Color conc = C(0.80f, 0.80f, 0.78f), dark = C(0.62f, 0.62f, 0.61f), white = Color.white;
+        Color conc = C(0.68f, 0.68f, 0.66f), dark = C(0.53f, 0.53f, 0.52f), white = C(0.75f, 0.75f, 0.74f); // (was 0.80 / 0.62 / 1.0: stands blew out to white in the sun)
         float k = 0.95f + 0.1f * Hash(b, 77); conc *= k; conc.a = 1f; dark.a = 1f;
         var cc = CellUv(CConcrete); var pl = CellUv(CPlaster); float bw = TileW(CConcrete), fh = TileH(CConcrete);
         float bays = Mathf.Max(1f, Mathf.Round(2f * hl / bw));
@@ -1286,7 +1295,7 @@ public static class RealWorld
         // other one, and a white rail along the front: the seating reads as blocks of people, not one noisy slab
         Vector2 flat = new Vector2(0.5f, 0.5f);
         int aisles = Mathf.Max(2, Mathf.RoundToInt(2f * hl / 9f)); float slopeLen = Mathf.Sqrt(depth * depth + rise * rise);
-        Color step = C(0.74f, 0.74f, 0.72f), mouth = C(0.10f, 0.10f, 0.11f), rail = C(0.93f, 0.93f, 0.92f);
+        Color step = C(0.74f, 0.74f, 0.72f), mouth = C(0.10f, 0.10f, 0.11f), rail = C(0.70f, 0.70f, 0.69f);
         Vector3 upRake = (BL - FL + up * (topY - frontY)) / slopeLen; // unit vector up the slope
         for (int q = 0; q <= aisles; q++)
         {
@@ -2438,7 +2447,8 @@ public static class RealWorld
                 float n1 = noiseTab[nz1 + ((int)(x * 0.2f) & 255)], n2 = noiseTab[nz2 + ((int)(x * 0.031f + 97f) & 255)];
                 if (kind == 0 || kind == 3 || kind == 8 || kind == 10)
                 {
-                    float t = Smooth((n2 - 0.55f) / 0.15f) * patch;
+                    // (mown lawns and verges, kinds 0 / 8: a third of the dry patching; real Monza verges are evenly lush)
+                    float t = Smooth((n2 - 0.55f) / 0.15f) * patch * (kind == 0 || kind == 8 ? 0.35f : 1f);
                     c = new Color(c.r * (1f + (dryK.r - 1f) * t), c.g * (1f + (dryK.g - 1f) * t), c.b * (1f + (dryK.b - 1f) * t));
                 }
                 // the forest floor (FloorMask: the mapped woods and the crowns planted near the track), blended in, never a
@@ -2468,14 +2478,38 @@ public static class RealWorld
                 px[k] = new Color32(S(c.r * bright), S(c.g * bright), S(c.b * bright), a);
             }
         }
+        SoftEdges(px, lnx, lnz);
         var tex = new Texture2D(lnx, lnz, TextureFormat.RGBA32, true, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 4, name = "RealLand" };
         tex.SetPixels32(px);
-        // Low / Medium: GPU-compressed (ETC2 / DXT5, 8 bits per texel instead of 32: 1280^2 = 2.2 MB instead of 8.7 MB, and
-        // a quarter of the texture bandwidth on every terrain pixel). The map is smooth (~3 m per texel, multiplied by the
-        // detail texture), so the block coding does not show; High keeps the exact RGBA32 map.
-        if (gfx <= 2 && (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))) { tex.Apply(true, false); tex.Compress(true); tex.Apply(false, true); }
+        // Every level: GPU-compressed (ETC2 / DXT5, 8 bits per texel instead of 32: 1280^2 = 2.2 MB instead of 8.7 MB, High's
+        // 2048^2 = 5.6 MB instead of 22 MB, and a quarter of the texture bandwidth on every terrain pixel). The map is smooth
+        // (~3 m per texel on Medium, ~2 m on High, multiplied by the detail texture), so the block coding does not show.
+        // (High used to keep the exact RGBA32 map: gap list P3. Compress is load-time only, ~100 ms more at 2048^2.)
+        if (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8) || SystemInfo.SupportsTextureFormat(TextureFormat.DXT5)) { tex.Apply(true, false); tex.Compress(true); tex.Apply(false, true); }
         else tex.Apply(true, true);
         return tex;
+    }
+    // load time: feather the land-use polygon edges (a [1 2 1] blur across and along, ~3-6 m) so a lawn of another tone
+    // never shows as a hard-edged rectangle; colour only, and paved texels (alpha 0: roads, car parks) neither blur nor
+    // bleed into the grass. The alpha (detail kind) stays exact.
+    static void SoftEdges(Color32[] px, int nx, int nz)
+    {
+        var tmp = new Color32[px.Length];
+        for (int pass = 0; pass < 2; pass++)
+        {
+            var src = pass == 0 ? px : tmp; var dst = pass == 0 ? tmp : px;
+            int dx = pass == 0 ? 1 : nx, len = pass == 0 ? nx : nz;
+            for (int k = 0; k < px.Length; k++)
+            {
+                var c = src[k]; dst[k] = c;
+                if (c.a == 0) continue;
+                int pos = pass == 0 ? k % nx : k / nx;
+                int r = c.r * 2, g = c.g * 2, b = c.b * 2, w = 2;
+                if (pos > 0) { var q = src[k - dx]; if (q.a != 0) { r += q.r; g += q.g; b += q.b; w++; } }
+                if (pos < len - 1) { var q = src[k + dx]; if (q.a != 0) { r += q.r; g += q.g; b += q.b; w++; } }
+                dst[k] = new Color32((byte)((r + w / 2) / w), (byte)((g + w / 2) / w), (byte)((b + w / 2) / w), c.a);
+            }
+        }
     }
     // colour (linear albedo) and ground detail of a land-use polygon (alpha: 0 paved, 85 grass, 170 rough, 255 canopy)
     static void Palette(int kind, int p, Color grass, Color dry, Color soil, out Color c, out byte a)
@@ -2493,7 +2527,7 @@ public static class RealWorld
             case 5: c = C(0.12f, 0.17f, 0.18f).linear; a = 0; break;
             case 6: c = Color.Lerp(C(0.72f, 0.65f, 0.50f).linear, soil, 0.4f); a = 170; break;
             case 7: c = C(0.36f, 0.36f, 0.37f).linear; a = 0; break;
-            case 8: c = grass * 1.06f; a = 85; break;
+            case 8: c = grass * 1.02f; a = 85; break; // (was 1.06: a lighter lawn rectangle between run-off and Armco)
             case 9: c = C(0.56f, 0.53f, 0.49f).linear; a = 170; break;
             case 10: c = C(0.30f, 0.36f, 0.22f).linear; a = 85; break;
             case 11: c = C(0.33f, 0.33f, 0.34f).linear; a = 0; break;

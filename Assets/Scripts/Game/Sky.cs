@@ -172,7 +172,7 @@ public class Sky : MonoBehaviour
         switch (t)
         {
             case TimeOfDay.Kind.Morning: // low, cool-gold sun
-                sun.transform.rotation = Quaternion.Euler(24, -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.76f; carSun = 1.50f;
+                sun.transform.rotation = Quaternion.Euler(PhotoSunElev(t, 24f), -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.76f; carSun = 1.50f;
                 sky = new Color(0.36f, 0.44f, 0.60f);
                 RenderSettings.ambientSkyColor = new Color(0.60f, 0.68f, 0.80f); RenderSettings.ambientEquatorColor = new Color(0.54f, 0.55f, 0.56f);
                 break;
@@ -181,7 +181,7 @@ public class Sky : MonoBehaviour
                 RenderSettings.ambientSkyColor = new Color(0.62f, 0.69f, 0.81f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.56f, 0.57f);
                 break;
             case TimeOfDay.Kind.Evening: // golden hour: a strong, low, warm sun lights every wall that faces it
-                sun.transform.rotation = Quaternion.Euler(13, 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 2.0f; ambGain = 1.0f; carSun = 1.72f;
+                sun.transform.rotation = Quaternion.Euler(PhotoSunElev(t, 13f), 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 2.0f; ambGain = 1.0f; carSun = 1.72f;
                 sky = new Color(0.33f, 0.33f, 0.36f); // the dusk dome is orange low down, blue above: near-neutral fill (0.29,0.32,0.45 made the shade purple)
                 RenderSettings.ambientSkyColor = new Color(0.56f, 0.57f, 0.63f); RenderSettings.ambientEquatorColor = new Color(0.58f, 0.52f, 0.46f);
                 RenderSettings.ambientGroundColor *= new Color(1f, 0.85f, 0.7f);
@@ -209,13 +209,14 @@ public class Sky : MonoBehaviour
     public static Transform CloudDome => Current != null ? Current.dome : null;
     public const float CloudFill = DomeFill;
     // 0..1: how much of the sun reaches the ground through the cloud (the cars' sun light follows this)
-    public static float SunShare => (1f - 0.55f * Weather.Wetness) * todSun;
+    public static float SunShare => (1f - 0.7f * Weather.Wetness) * todSun; // (0.55 left a hard sun under the rain deck)
     // the cars' sun relative to the world's (SunAt: carSun); GameManager drives LightBake.CarSun with CarSunShare
     public static float CarSunK { get; private set; } = 1f;
     public static float CarSunShare => SunShare * CarSunK;
 
     // Re-applies the sky, fog, clouds, sun and glare for a new weather without rebuilding the world, and re-renders
     // the cars' sky reflection once (a one-off, like at the build).
+    internal static float lastRebakeWet = 0f; // the wetness the trackside cubes were last baked with (CarEnv sets it at the first bake)
     public static void SetWeather(float w)
     {
         if (!haveLook) return;
@@ -233,7 +234,8 @@ public class Sky : MonoBehaviour
             if (s.dome != null) { s.dome.position = s.probeRef.transform.position; s.dome.localScale = Vector3.one * (s.probeRef.farClipPlane * DomeFill); }
             s.probeId = s.probeRef.RenderProbe();
         }
-        CarEnv.Rebake(); // the trackside cubes hold the old sky: bake them again (one per frame)
+        // the trackside cubes hold the old sky: bake them again (one per frame), but only if the wetness really changed
+        if (Mathf.Abs(w - lastRebakeWet) > 0.01f) { lastRebakeWet = w; CarEnv.Rebake(); }
     }
 
     // ---------------------------------------------------------------- aerial perspective (Grade.cginc F2Haze)
@@ -265,7 +267,8 @@ public class Sky : MonoBehaviour
 
     static void SkyAndFog(Look k)
     {
-        if (skyInst != null)
+        if (photoSky) PhotoParams(k, Weather.Wetness);
+        else if (skyInst != null)
         {
             skyInst.SetFloat("_AtmosphereThickness", k.atmosphere); skyInst.SetFloat("_Exposure", k.exposure);
             skyInst.SetColor("_SkyTint", k.tint);
@@ -280,8 +283,8 @@ public class Sky : MonoBehaviour
     {
         if (sunLight == null) return;
         if (sunBase < 0f) { sunBase = sunLight.intensity; shadowBase = sunLight.shadowStrength; }
-        sunLight.intensity = sunBase * (1f - 0.55f * w);
-        sunLight.shadowStrength = shadowBase * (1f - 0.7f * w);        // overcast: soft, faint shadows
+        sunLight.intensity = sunBase * (1f - 0.7f * w);
+        sunLight.shadowStrength = shadowBase * (1f - 0.85f * w);       // overcast: soft, faint shadows (the road's mask: Road.cginc)
     }
 
     static void CloudParams(Look k)
@@ -296,7 +299,79 @@ public class Sky : MonoBehaviour
         cloudMat.SetColor("_ShadeCol", Color.Lerp(new Color(0.74f, 0.78f, 0.86f), new Color(0.44f, 0.47f, 0.52f), c) * cloudShade * (1f - 0.2f * Weather.Wetness));
         cloudMat.SetColor("_SunCol", new Color(1f, 0.95f, 0.85f) * cloudSun * (1f - 0.5f * c));
         cloudMat.SetVector("_Wind", new Vector4(0.030f, 0.012f, 0.050f, 0.020f) * ((0.7f + 0.6f * c) * k.wind));
+        // photo sky: its own clouds in the dry (the dome keeps only the haze band, no cloud reads); the rain deck
+        // closes over it from damp on
+        cloudMat.SetFloat("_CloudOn", photoSky ? PhotoCloudOn(Weather.Wetness) : 1f);
     }
+
+    // ---------------------------------------------------------------- photo sky (SkyPhoto.shader; Docs/ASSETS.md)
+    // Real CC0 sky panoramas (Poly Haven, Resources/Photo, Tools/Photo/make_photos.py), each turned so its sun sits
+    // where the world's sun is:
+    //   afternoon  sky_day         kloofendal_48d_partly_cloudy_puresky (8K), sun 47.9 deg (the world's is 48)
+    //   morning    sky_morning_hq  autumn_field_puresky, clear and hazy, sun 29 deg (the world's sun moves 24 -> 29)
+    //   evening    sky_evening_hq  kloppenheim_06_puresky, golden-hour cumulus, sun 8 deg (the world's 13 -> 8)
+    //   wet        sky_overcast    overcast_soil_puresky, a closed grey deck, no sun (any time but night)
+    // Night keeps the procedural sky; damp keeps the dry photo with the cloud dome's broken deck over it. Missing
+    // texture or shader, or NoPhotoSky: the procedural sky as before (and the world's sun where it was). The skybox is
+    // what the reflection probe and CarEnv's cubes render, so the cars mirror these clouds too.
+    public static bool NoPhotoSky;                     // A/B and shots (DebugShots sets it before a build)
+    static bool photoSky; static string photoName; static Vector3 photoSun;
+    public static bool PhotoSky => photoSky;
+    static string DryPhoto(TimeOfDay.Kind t) => t == TimeOfDay.Kind.Afternoon ? "sky_day" : t == TimeOfDay.Kind.Morning ? "sky_morning_hq" : t == TimeOfDay.Kind.Evening ? "sky_evening_hq" : null;
+    static bool HasDryPhoto(TimeOfDay.Kind t)
+    {
+        string n = DryPhoto(t);
+        return !NoPhotoSky && n != null && EnvTex.PhotoTex(n) != null && Resources.Load<Shader>("SkyPhoto") != null;
+    }
+    // the world sun's elevation for a time of day: the photo's own sun when that photo sky will be used
+    static float PhotoSunElev(TimeOfDay.Kind t, float procedural)
+    {
+        if (!HasDryPhoto(t)) return procedural;
+        return t == TimeOfDay.Kind.Morning ? 29f : t == TimeOfDay.Kind.Evening ? 8f : procedural;
+    }
+    static string PhotoFor(float w)
+    {
+        if (w > 0.75f && EnvTex.PhotoTex("sky_overcast") != null) return "sky_overcast";
+        return DryPhoto(tod);
+    }
+    static readonly string[] PhotoSkies = { "sky_day", "sky_morning_hq", "sky_evening_hq", "sky_overcast" };
+    static Material PhotoSkyMaterial(Light sun)
+    {
+        // a new session: free the panoramas it will not show (4-7.5 MB each); the overcast one loads when it rains
+        string keep = NoPhotoSky ? null : DryPhoto(tod);
+        foreach (var n in PhotoSkies) if (n != keep) EnvTex.UnloadPhotoTex(n);
+        if (sun == null || !HasDryPhoto(tod)) return null;
+        var sh = Resources.Load<Shader>("SkyPhoto");
+        if (!sh.isSupported) return null;
+        photoSun = -sun.transform.forward;
+        var m = new Material(sh);
+        photoName = null;
+        return m;
+    }
+    // which panorama (dry / overcast), and the circuit's look on top of it; rain greys and darkens it
+    static void PhotoParams(Look k, float w)
+    {
+        if (skyInst == null) return;
+        string want = PhotoFor(w);
+        if (want != photoName)
+        {
+            var tex = EnvTex.PhotoTex(want);
+            if (tex != null) { skyInst.mainTexture = tex; photoName = want; }
+            // (the overcast deck has no sun: its brightest part simply faces the world sun)
+            skyInst.SetFloat("_SunAz", Mathf.Atan2(photoSun.z, photoSun.x));
+        }
+        bool overcast = photoName == "sky_overcast", day = photoName == "sky_day";
+        // the photo's own colour (graded offline): the circuit tint is NOT applied (shots, 20 Nov: Monza's warm tint
+        // turned the cyan-white glow round the sun lime green, 226,245,211); the day sky keeps half the circuit's exposure
+        Vector4 t = Vector4.one; float ex = 1f;
+        if (day && w < 0.75f) ex = Mathf.Lerp(1f, k.exposure / 2f, 0.5f);
+        if (overcast) ex = tod == TimeOfDay.Kind.Evening ? 0.55f : tod == TimeOfDay.Kind.Morning ? 0.85f : 0.95f;
+        skyInst.SetVector("_Tint", t);                  // (a vector: no sRGB conversion of a multiplier)
+        skyInst.SetFloat("_Exposure", ex);
+        skyInst.SetFloat("_Grey", overcast ? 0.2f : Mathf.Clamp01(0.8f * w));
+    }
+    // the cloud dome's deck over the photo: none in the dry and under the overcast panorama, the broken deck when damp
+    static float PhotoCloudOn(float w) => photoName == "sky_overcast" ? 0f : Mathf.Clamp01((w - 0.05f) * 2.5f);
 
     // ---------------------------------------------------------------- setup
     static Texture2D noiseTex, glareTex;
@@ -329,8 +404,15 @@ public class Sky : MonoBehaviour
         if (sun != null) hazeSun = -sun.transform.forward;
         var k = Wetted(dryLook, Weather.Wetness);
         sunLight = sun; sunBase = -1f; // dimmed in Create, after the road has read the dry sun colour and the bake is done
-        var skyMat = Resources.Load<Material>("Sky");
-        if (skyMat != null)
+        photoSky = false;
+        var photo = PhotoSkyMaterial(sun);
+        var skyMat = photo != null ? null : Resources.Load<Material>("Sky");
+        if (photo != null)
+        {
+            photoSky = true; RenderSettings.skybox = photo; skyInst = photo;
+            PhotoParams(k, Weather.Wetness);
+        }
+        else if (skyMat != null)
         {
             skyMat = new Material(skyMat);
             skyMat.SetFloat("_SunSize", tod == TimeOfDay.Kind.Night ? 0.018f : 0.035f); skyMat.SetFloat("_SunSizeConvergence", 6f); // night: a small moon
@@ -508,26 +590,31 @@ public class Sky : MonoBehaviour
         return sum / norm;
     }
 
-    // 256x256 cloud density in alpha: domain-warped fbm (organic shapes) plus a little billow (puffy edges),
+    // 256x256 cloud density in alpha: lightly warped fbm puffs; R: a smooth broad field for the rain deck (Clouds.shader);
     // stretched to the full 0..1 range so the shader's cover threshold means the same for every seed
     static Texture2D CloudNoise()
     {
         const int N = 256;
-        var val = new float[N * N]; float lo = 1e9f, hi = -1e9f;
+        var val = new float[N * N]; var deck = new float[N * N]; float lo = 1e9f, hi = -1e9f, dlo = 1e9f, dhi = -1e9f;
         for (int y = 0; y < N; y++) for (int x = 0; x < N; x++)
         {
             float u = (float)x / N, v = (float)y / N;
-            float wx = Fbm(u, v, 4, 2, 101) - 0.5f, wy = Fbm(u, v, 4, 2, 203) - 0.5f;
-            float n = Fbm(u + wx * 0.25f, v + wy * 0.25f, 4, 5, 7) * 0.75f + (1f - Mathf.Abs(Fbm(u, v, 8, 3, 55) * 2f - 1f)) * 0.25f;
+            // puffs: a light warp only (0.25 made swirls), smaller cells (6, was 4), a soft lumpy octave on top (the old
+            // ridged 1-|2f-1| term drew streaks)
+            float wx = Fbm(u, v, 3, 2, 101) - 0.5f, wy = Fbm(u, v, 3, 2, 203) - 0.5f;
+            float n = Fbm(u + wx * 0.08f, v + wy * 0.08f, 6, 5, 7) * 0.8f + Fbm(u, v, 12, 2, 55) * 0.2f;
             val[y * N + x] = n; if (n < lo) lo = n; if (n > hi) hi = n;
+            deck[y * N + x] = Fbm(u, v, 2, 3, 301); // the rain deck: broad, smooth, no warp
         }
         // trim the extreme tails a little so the range is well used
         float span = hi - lo; lo += span * 0.04f; hi -= span * 0.04f;
+        for (int i = 0; i < deck.Length; i++) { if (deck[i] < dlo) dlo = deck[i]; if (deck[i] > dhi) dhi = deck[i]; }
         var px = new Color32[N * N];
         for (int i = 0; i < px.Length; i++)
         {
             byte b = (byte)Mathf.Clamp(Mathf.RoundToInt((val[i] - lo) / (hi - lo) * 255f), 0, 255);
-            px[i] = new Color32(255, 255, 255, b);
+            byte r = (byte)Mathf.Clamp(Mathf.RoundToInt((deck[i] - dlo) / Mathf.Max(dhi - dlo, 1e-4f) * 255f), 0, 255);
+            px[i] = new Color32(r, 255, 255, b);
         }
         var t = new Texture2D(N, N, TextureFormat.RGBA32, true) { name = "CloudNoise", wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear, anisoLevel = 0 };
         t.SetPixels32(px); t.Apply(true, true);

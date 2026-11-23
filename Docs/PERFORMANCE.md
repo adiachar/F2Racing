@@ -4,6 +4,69 @@
 
 **19 Nov 2026: `Docs/PERF-ARCHITECTURE.md`** — why the Redmi Note 12 Pro ran at 20-23 fps (GPU-bound: native 2.6 Mpx rendering and car triangles), the base render scale (RenderScale.cs), rival LODs (CarLod.cs), on-device timing and A/B switches (PerfLab.cs).
 
+## Photo textures, wave 1 (20 Nov 2026, gfx; Docs/ASSETS.md "Photo textures")
+
+CC0 photo scans replace procedural / low-res surfaces at about the same per-pixel cost. Estimates, untested in a build.
+
+| Surface | Before | After | Reads per pixel | GPU memory |
+|---|---|---|---|---|
+| Grass, verges, terrain (green circuits) | 512² RGBA32 runtime texture from a photo | 1024² ASTC 6x6 photo (ambientCG Grass001) x `_Gain` | same (HQ 2, Low 1) + 1 MUL; ~9x less texel bandwidth | 1.4 -> 0.62 MB |
+| Gravel traps | 512² RGBA32 | 1024² ASTC 6x6 (Poly Haven gravel_floor_02) | same + 1 MUL | 1.4 -> 0.62 MB |
+| Road fine grain (HQ) | 512² R8, 1.6 m tile | 1024² RG8, 3.2 m tile (same texel size, half the repeats); G = kerb concrete | same 2 (G comes free), +2 ALU on kerbs | 0.35 -> 2.8 MB |
+| Sky (afternoon) | Unity procedural skybox + cloud dome (2 reads Low, 4 HQ) | 8192 x 2048 ASTC 6x6 photo panorama, 1 read + atan2; dome draws only its haze band in the dry (cloud reads skipped by a uniform branch) | sky pixels: Low 2 -> 1, HQ 4 -> 1 | +7.5 MB |
+| Tree cards | 1024 x 512 RGBA32, procedural leaves | 2048 x 1024 with real leaf sprays (ambientCG LeafSet), ETC2 / DXT5 at load | same 1; 4x lower bandwidth per texel | 2.8 -> 2.8 MB |
+
+Net: GPU texture memory about +8.5 MB (sky +7.5, road +2.5, grass and gravel -1.6; the old docs' 38-42 MB -> ~47-50
+MB; budget 150 MB on High); APK about +10 MB (ASTC sky 7.5 MB, grass + gravel 1.2 MB, JPEG / PNG bytes +0.9 MB; the
+PNG sources in git are 17 MB). Load time:
+RoadDetail builds 2 x 1 M texels (was 0.26 M), the tree atlas paints 4x the texels plus a runtime ETC2 compress
+(~0.3-0.8 s more on a phone, a guess: measure); transient managed heap +~30 MB while the atlas is painted (float
+arrays, freed after). A/B: shot parameter `photo=0` (procedural textures and sky, EnvTex.NoPhotos / Sky.NoPhotoSky).
+
+### Photo textures, wave 2 (20 Nov 2026, gfx; untested in a build)
+
+| Surface | Before | After | Reads per pixel | GPU memory |
+|---|---|---|---|---|
+| Sky, morning / evening / wet | procedural skybox + cloud dome (2 / 4 reads) | 4K CC0 panoramas (morning, evening ASTC 4x4, overcast 6x6); dome haze only (dry) | 4 -> 1 (HQ), 2 -> 1 (Low) | only the session's sky is loaded (others unloaded): +4.2 MB evening / morning, +1.9 MB when wet |
+| Barriers (Armco, precast blocks, tyre-wall belts and tops, scuffed concrete) | 64 / 128 px regions of the trackside atlas | 4x the texels (256-512 px regions), painted detail x CC0 zinc / concrete; atlas 1024 x 512 -> 2048 x 512 RGBA32 | same 1 | 2.8 -> 5.6 MB |
+| Poured concrete walls, cladding, wall panels | painted | same size, CC0 photo detail baked in | same | +0 |
+| Building facades / roofs (map buildings) | 128 px cells, 256 px photos, RGBA32 1024 x 512 | 256 px cells, 512 px photos, 2048 x 1024 ETC2 / DXT5 at load | same 1 (Baked F2_ATLAS: 256 px cell, 4 px margin, lod clamp 5) | 2.8 -> 2.8 MB |
+| Grandstand seats + crowd | 512 x 128 | 1024 x 256, anti-aliased shapes, moulded seat shells | same | 0.35 -> 1.4 MB |
+
+Wave 2 net: GPU about +4 MB plus the session's sky (+1.9 to +4.2 MB); APK about +11 MB (three ASTC skies 10.3 MB, photo
+bytes +0.5 MB). Totals after both waves: GPU textures ~55-60 MB on High, APK ~+21 MB. Load time: the building atlas
+paints 4x the texels and compresses (ETC2), the trackside atlas adds 0.65 M upscaled texels, the crowd 4x (in
+parallel rows): est. +0.3-0.6 s on a phone, measure.
+
+## Clarity (20 Nov 2026, gfx)
+
+What made the picture soft on the Redmi (WebGL shots at the phone's 1700x765 3D size, Monza s=300/850/2500, High and
+Low), ranked by visual effect per cost, and what was done. GPU ms are estimates for the Mali-G68 at a 0.71 scale.
+
+| # | Cause | Fix | Cost |
+|---|---|---|---|
+| 1 | The whole screen, HUD included, was drawn at 0.71 and stretched by the compositor: soft text and icons, soft 3D | **HUD native** (RenderScale.cs, default on, PerfLab "HUD res"): the race camera draws into a 0.71 off-screen target (MSAA samples and depth memoryless on Vulkan), one pass (Upscale.shader, 1 read, "sharp bilinear" 0.5) stretches it, IMGUI draws at native | +0.8-1.2 ms GPU |
+| 2 | Spare GPU time under the lock not used for pixels | **Adaptive scale** (Auto only): +0.05 at the next session start when every 10 s GPU window stayed < 60% of the lock's budget (>= 30 s, not hot), -0.05 when one was > 85% or hot; 0.71 .. 0.85 of native | 0 when idle; each step ~+15% fragment work, only where measured headroom |
+| 3 | Boards / barriers went to mush ~30 m out (atlas aniso 2x at grazing angles) | TracksideArt atlas aniso 8, mip bias -0.25 (Medium/High; Low has aniso off) | ~0.1-0.3 ms |
+| 4 | Converging road lines and kerb edges over-blurred: fwidth = |ddx|+|ddy| is ~1.4x the footprint on diagonals | Road.cginc: gradient length instead | ~0.02 ms |
+| 5 | Low: near verges / run-offs smeared (no aniso + mip bias 0.6) | Ground.cginc Low bias 0.3 | ~0.1 ms |
+| - | Not changed: grade contrast and haze (haze is ~1% at 100 m, not a cause near the track); RoadShadow mask 0.27 m/texel (soft shadow edges near the camera; 2x finer = 4x memory and bake time); far ground at aniso 4 (8 on the grass costs ~0.5-1 ms); board text is baked (VectorFont) into 46 px/m ads, sharp enough at race distances | | |
+
+Verify the HUD-native path in WebGL: `shoot.py --param rs=0.71` (and `rsharp=0` for plain bilinear).
+
+**Round 2 (20 Nov 2026).** Measured: gfx build b10, `shoot.py --w 2400 --h 1080 --param rs=0.71` (1704x766 3D, 4x
+MSAA), Monza and Spa s=300/2500, chase and cockpit, High and Medium; plus the same spots shot at 1704x767 and
+upscaled offline (numpy copy of Upscale.shader) to compare filters. What read soft, zoomed 2x: the whole 3D a little
+(the 1.4x stretch plus the MSAA resolve: board text 40+ m out, kerb stripes, leaf clumps, the distant road grain),
+the Spa backdrop hill flat and pale. Not soft: HUD (native), car silhouettes (MSAA + the Fresnel sky edge already
+separate them from the road), near road lines and kerbs (round 1).
+
+| # | Change | Cost (Mali-G68, 2400x1080, estimate) |
+|---|---|---|
+| 6 | **Contrast-adaptive sharpen in the upscale pass** (Upscale.shader, `RenderScale.Cas` 0.6, URL `rcas=`; Medium/High only, Low keeps the 1-read pass): 5-tap cross (4 extra bilinear reads inside the same 3x3 texels, L1 hits), negative lobe -0.12 x amp, amp = sqrt(min(min, 1-max)/max) per channel, so flat detail gains contrast and hard edges do not halo. Offline: mean gradient +30% (Monza 6.6 -> 8.5, Spa 5.7 -> 7.4), clipped pixels +0.4%. 1.0 (-0.2 lobe) doubled it and started to crunch aliasing: not used | texture unit ~0.2 -> ~0.8 ms in a pass bound by its 10 MB screen write (~0.8-1 ms), ~30 ALU: **+0.1-0.4 ms**; worst case (texture-bound, no overlap) +0.7 ms. A/B on the phone: `rcas` is shot-only, so compare by the PerfLab "HUD res" toggle (HUD scaled = no pass at all) |
+| 7 | Foliage.cginc: the alpha-to-coverage value fed to clip() was a `half` (rule 3); now float | 0 |
+| - | Already in place, not changed: alpha to coverage on tree cards (Foliage, FoliageInst) and fences (BakedCutout) with a one-pixel alpha ramp; road detail aniso 8; ground aniso 4 (8 on the grass ~0.5-1 ms, not worth it); car paint has no textures (procedural livery, weave by maths), so no mip bias to tune; no car rim added (silhouettes read in every shot, a rim term would only add ALU on ~10% of pixels); no grade fine-contrast lift (the sharpen already lifts flat areas; the pale Spa backdrop is content, the far-hill forest round) | |
+
 This is a static audit. It was done without an editor or a phone, so every number below is an estimate from the code, the asset sizes and the `Tools/PhysicsCheck` timings. Check the numbers on a device with the checklist at the end.
 
 ## Steady frame pacing (Nov 2026)

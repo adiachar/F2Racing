@@ -57,17 +57,20 @@ half3 Shade (fixed4 t, half4 col)
 // Medium / High pixel: alpha to coverage with the mid-distance cut-off (see Foliage.shader)
 half4 FoliageFragHi(v2f i)
 {
-    fixed4 t = tex2D(_MainTex, i.uv); // (no negative bias: cut-outs would crawl)
+    float tpp = max(fwidth(i.uv.x) * _MainTex_TexelSize.z, fwidth(i.uv.y) * _MainTex_TexelSize.w); // texels per pixel
+    // near crowns (about 1-2 texels per pixel: the LOD0 leaf clumps up close) read +0.6 mip: the painted leaves' texel
+    // noise sparkled light/dark and shimmered at speed. Fades out by 3 texels per pixel, so the mid / far crowns (and
+    // their cut-off below) are as before. Same single read. (No negative bias: cut-outs would crawl.)
+    fixed4 t = tex2Dbias(_MainTex, float4(i.uv, 0.0, 0.6 * saturate(3.0 - tpp)));
     // mid distance: the mips round a crown off into a smooth blob. Raise the cut-off where the (mipped)
     // painted crown is dark - the shaded gaps between leaf clumps - and lower it on the lit clumps, once the
     // texture is minified: the rim breaks into lobes and the gaps open to the sky. Tied to the texture (no
     // crawling), no extra read; the solid interior (alpha near 1) is untouched. Floats: no compares.
-    float tpp = max(fwidth(i.uv.x) * _MainTex_TexelSize.z, fwidth(i.uv.y) * _MainTex_TexelSize.w); // texels per pixel
     float mid = saturate(tpp - 1.0) * saturate(3.0 - tpp * 0.08); // from ~2 texels per pixel, gone at the far LODs
     float lum = saturate(dot((float3)t.rgb, float3(0.3, 0.59, 0.11)) * 4.0);
     float cut = _Cutoff + (0.62 - lum) * 0.34 * mid;
     // alpha sharpened to a one-pixel ramp centred on the cut-off: the coverage of each MSAA sample
-    half a = (half)((t.a - cut) / max(fwidth(t.a), 0.0001) + 0.5);
+    float a = (t.a - cut) / max(fwidth((float)t.a), 0.0001) + 0.5; // (float: clip() is a compare)
     clip(a);
     half4 c = half4(Shade(t, i.color), saturate(a));
     UNITY_APPLY_FOG(i.fogCoord, c);

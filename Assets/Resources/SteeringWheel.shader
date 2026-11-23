@@ -20,6 +20,7 @@ Shader "F2/SteeringWheel"
         _Albedo ("Wheel model albedo atlas", 2D) = "white" {}
         _Led ("Shift lights: lit, flash", Vector) = (0, 0, 0, 0)
         _Paddle ("Paddle angles left, right (rad)", Vector) = (0, 0, 0, 0)
+        _Ghost ("Ghost fade (penalty, CarGhost.cs)", Range(0, 1)) = 0
     }
     SubShader
     {
@@ -35,10 +36,13 @@ Shader "F2/SteeringWheel"
             #pragma target 3.0
             #pragma multi_compile_fog
             #pragma multi_compile __ F2_GRADE_LOW
+            #pragma multi_compile_local __ F2_GHOST // ghost twin material only (CarGhost.cs)
             #include "UnityCG.cginc"
             #include "Grade.cginc"
             #include "Lighting.cginc"
+            #include "CarGhost.cginc"
 
+            float _Ghost; // ghost fade (penalty, CarGhost.cs)
             sampler2D _Dash, _Albedo;
             float4 _Led, _Paddle;
             half _CarLit;
@@ -164,6 +168,9 @@ Shader "F2/SteeringWheel"
                 lc = lerp(lc, float3(0.07, 0.2, 1.0), allBlue);
                 float3 emis = isLed * (lit * lc * 1.6 + lc * 0.025) + isScreen * dash.rgb * 0.95;
 
+                #if defined(F2_GHOST)
+                F2GhostClip(i.pos.xy, _Ghost); col = (half3)F2GhostTint((float3)col, _Ghost, (float)x2); // ghost (CarGhost.cginc; after the derivatives)
+                #endif
                 fixed4 c = fixed4(col, 1.0);
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 c.rgb = F2Grade(c.rgb);

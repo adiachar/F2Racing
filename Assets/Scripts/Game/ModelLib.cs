@@ -229,6 +229,7 @@ public static class ModelLib
     // out of budget or out of reach (the caller plants its card tree)
     public static bool TryTree(Vector3 foot, float trackDist, Color leafLin, System.Random rnd)
     {
+        if (MapEdits.Removed(foot)) return true; // in one of Adi's remove areas (MapEdits): placed as nothing, so no fallback either
         if (!active || trackDist > Reach || treeNames == null || treeNames.Length == 0) return false;
         int lod = trackDist <= Lod0Dist ? 0 : trackDist <= Lod1Dist ? 1 : 2;
         // out of budget: step down a LOD (never up)
@@ -302,6 +303,7 @@ public static class ModelLib
     // a shrub of the given height (m) with its foot at foot; false = out of budget
     public static bool TryShrub(Vector3 foot, float height, float yaw, Color leafLin, System.Random rnd)
     {
+        if (MapEdits.Removed(foot)) return true; // in one of Adi's remove areas (MapEdits): placed as nothing, so no fallback either
         if (!active || shrubNames == null || shrubNames.Length == 0) return false;
         var m = models[shrubNames[rnd.Next(shrubNames.Length)]];
         if (used[3] + m.lods[0].v.Length > cap[3]) return false;
@@ -314,6 +316,7 @@ public static class ModelLib
     // a prop (street lamp) of the given height; false = unknown or out of budget
     public static bool AddProp(string name, Vector3 foot, float yaw, float height)
     {
+        if (MapEdits.Removed(foot)) return true; // in one of Adi's remove areas (MapEdits): placed as nothing, so no fallback either
         if (!active || !models.TryGetValue(name, out var m) || m.kind != 2) return false;
         if (used[4] + m.lods[0].v.Length > cap[4]) return false;
         float s = height / m.height;
@@ -333,6 +336,7 @@ public static class ModelLib
     // a bush (hazel / elder: shrub_02) or a bramble patch (shrub_03): height and crown radius (m)
     public static bool TryBush(Vector3 foot, float height, float radius, float yaw, Color leafLin, bool bramble, System.Random rnd)
     {
+        if (MapEdits.Removed(foot)) return true; // in one of Adi's remove areas (MapEdits): placed as nothing, so no fallback either
         if (!active || !models.TryGetValue(bramble ? "shrub_03" : "shrub_02", out var m) || m.kind != 1) return false;
         if (used[5] + m.lods[0].v.Length > cap[5]) return false;
         float sy = height / m.height, sxz = radius / Mathf.Max(0.1f, m.radius);
@@ -346,6 +350,7 @@ public static class ModelLib
     // a young replanted tree (3-6 m): robinia / ash or the hornbeam-like small tree, slender, never finer than LOD 1
     public static bool TryYoung(Vector3 foot, float height, Color leafLin, System.Random rnd)
     {
+        if (MapEdits.Removed(foot)) return true; // in one of Adi's remove areas (MapEdits): placed as nothing, so no fallback either
         if (!active) return false;
         bool rob = rnd.NextDouble() < 0.55;
         if (!models.TryGetValue(rob ? "park_robinia" : "tree_small_02", out var m) || m.kind != 0 || m.lods.Length < 2) return false;
@@ -362,6 +367,7 @@ public static class ModelLib
     // lights it like the ground it grows from, a little brighter on its sun side).
     public static bool AddCard(int tile, Vector3 foot, Vector3 half, float h, Vector3 lean, Color footC, Color topC, float sway, float phase, bool flip)
     {
+        if (MapEdits.Removed(foot)) return true; // in one of Adi's remove areas (MapEdits): placed as nothing, so no fallback either
         if (!active || !UnderOk || used[6] + 4 > cap[6]) return false;
         var b = Room(0, foot.x, foot.z, 4);
         int o = b.v.Count;

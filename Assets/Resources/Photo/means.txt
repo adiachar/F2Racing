@@ -1,0 +1,4 @@
+# linear mean colour of each photo albedo (Tools/Photo/make_photos.py, pack_photos.py); EnvTex.PhotoMean
+grass 0.15676 0.30466 0.04792
+gravel 0.28664 0.25086 0.22272
+turf 0.04220 0.18773 0.02746
