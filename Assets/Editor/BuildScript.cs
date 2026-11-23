@@ -93,6 +93,7 @@ public static class BuildScript
         PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.Vulkan, UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 });
         // a separate render thread (the main thread runs the 240 Hz physics); graphics jobs are left at Unity's default
         PlayerSettings.SetMobileMTRendering(NamedBuildTarget.Android, true);
+        PlayerSettings.Android.androidIsGame = true; // Android knows it is a game (game modes, game turbo); appCategory=game is added by AndroidGameManifest.cs
         PlayerSettings.enableFrameTimingStats = true; // FrameTimingManager in release players (PerfLab GPU ms)
         // incremental GC: a collection is spread over several frames instead of one long pause (a hitch mid-corner)
         PlayerSettings.gcIncremental = true;
