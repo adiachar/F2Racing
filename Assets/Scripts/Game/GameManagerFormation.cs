@@ -358,7 +358,7 @@ public partial class GameManager
             tvOn = false;
             g.camMode = userCam; g.tvWasOn = true; g.camVel = Vector3.zero; g.tvCur = -1; g.tvCarIdx = -1;
             if (userCam == 2) g.cam.fieldOfView = g.fovCockpit;
-            else if (userCam == 3) g.cam.fieldOfView = g.fovCockpit + 11f;
+            else if (userCam == 3) g.cam.fieldOfView = g.fovCockpit + 11f + 0.06f * g.haloBackPct;
             else if (userCam != TvMode) g.cam.fieldOfView = Fit(g.fovChase);
         }
 

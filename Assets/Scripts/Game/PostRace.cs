@@ -256,7 +256,7 @@ public partial class GameManager
                 ShowCars(true);
                 var ae = g.audioEngine; if (ae != null) ae.engineVol = g.volEngine * 0.01f;
                 g.tvWasOn = true; g.camVel = Vector3.zero; g.tvCur = -1; g.tvCarIdx = -1;
-                if (g.cam != null) { g.cam.nearClipPlane = ChaseNear; g.cam.fieldOfView = g.camMode == 2 ? g.fovCockpit : g.camMode == 3 ? g.fovCockpit + 11f : g.fovChase; }
+                if (g.cam != null) { g.cam.nearClipPlane = ChaseNear; g.cam.fieldOfView = g.camMode == 2 ? g.fovCockpit : g.camMode == 3 ? g.fovCockpit + 11f + 0.06f * g.haloBackPct : g.fovChase; }
             }
             catch (System.Exception e) { Debug.LogWarning("PostRace finish: " + e.Message); }
         }

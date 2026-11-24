@@ -954,7 +954,7 @@ public partial class GameManager
                 if (g.cam != null)
                 {
                     if (userCam == 2) g.cam.fieldOfView = g.fovCockpit;
-                    else if (userCam == 3) g.cam.fieldOfView = g.fovCockpit + 11f;
+                    else if (userCam == 3) g.cam.fieldOfView = g.fovCockpit + 11f + 0.06f * g.haloBackPct;
                     else if (userCam != TvMode) g.cam.fieldOfView = Fit(g.fovChase);
                 }
                 g.ApplyAudio(); // the engine volume

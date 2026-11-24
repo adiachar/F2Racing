@@ -123,7 +123,7 @@ public partial class GameManager
         }
         camMode = camIdx;
         tvWasOn = true; camVel = Vector3.zero; tvCur = -1; tvCarIdx = -1; // chase: snap, no swoop; TV: fresh camera pick
-        if (cam != null && camIdx != TvMode) cam.fieldOfView = camIdx == 2 ? fovCockpit : camIdx == 3 ? fovCockpit + 11 : fovChase;
+        if (cam != null && camIdx != TvMode) cam.fieldOfView = camIdx == 2 ? fovCockpit : camIdx == 3 ? fovCockpit + 11 + 0.06f * haloBackPct : fovChase;
     }
 
     // rival k: metres ahead of the player along the lap (negative = behind) and sideways offset from the racing line
