@@ -25,7 +25,8 @@ public partial class GameManager
     // car set-up
     float aeroBal = 45, brakeBiasPct = 57, brakeMigPct, engBrakePct = 100, diffPowerPct = 15, diffCoastPct = 25, rideFmm, rideRmm;
     // camera
-    float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100, haloBackPct;
+    float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100;
+    internal float haloBackPct;                          // halo cam "helmet in view" 0-100 (GameManager.cs camera; DebugShots haloback=)
     bool haloInCockpit = true;                           // cockpit view draws the halo (hoop + pillar); false hides all of it
     int horizonMode = 0;                                 // Tilt lock: 0 off, 1 cockpit views, 2 all views
     // graphics

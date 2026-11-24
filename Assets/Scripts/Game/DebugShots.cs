@@ -220,7 +220,7 @@ public class DebugShots : MonoBehaviour
         Debug.Log("[Shots] session: " + gm.ShotsTrackInfo + ", screen " + Screen.width + "x" + Screen.height);
         float settle = Mathf.Max(0f, GetF(q, "settle", 1f)), warm = Mathf.Max(0f, GetF(q, "warm", 3f)), hold = Mathf.Max(0f, GetF(q, "hold", 1.5f));
         float ackTimeout = Mathf.Max(1f, GetF(q, "acktimeout", 300f)), kmh = Mathf.Max(0f, GetF(q, "kmh", 0f));
-        haloBackPct = Mathf.Clamp(GetF(q, "haloback", haloBackPct), 0f, 100f); // halo cam "helmet in view" (0-100)
+        gm.haloBackPct = Mathf.Clamp(GetF(q, "haloback", gm.haloBackPct), 0f, 100f); // halo cam "helmet in view" (0-100)
         bool ack = Get(q, "ack", "0") == "1";
         if (postTimes.Count > 0)
         {
