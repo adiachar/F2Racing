@@ -78,7 +78,7 @@ public static class MenuProfile
     // a race finished (pos 1-based of cars; fastest = the player set the race's fastest lap): career stats, XP from
     // the race (Pending: laps, overtakes, clean laps; Progression.cs has the numbers), the safety rating and the
     // driver rating (rows: the result in finishing order with each car's DR and grid slot; laps: the race length)
-    public static void RecordRace(int pos, int cars, bool fastest, MenuUI.Row[] rows = null, int laps = 1)
+    public static void RecordRace(int pos, int cars, bool fastest, MenuUI.Row[] rows = null, int raceLaps = 1)
     {
         Load();
         var rp = Pending; Pending = null;
@@ -122,7 +122,7 @@ public static class MenuProfile
         o.srDelta = Mathf.RoundToInt(o.srAfter) - Mathf.RoundToInt(o.srBefore);
         o.srDeltaStr = o.srDelta > 0 ? "+" + o.srDelta : o.srDelta < 0 ? "\u2013" + (-o.srDelta) : "\u00b10";
         Reasons(o, rp);
-        RateRace(o, rows, laps);
+        RateRace(o, rows, raceLaps);
         Last = o;
     }
 
