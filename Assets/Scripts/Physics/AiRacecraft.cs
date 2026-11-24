@@ -74,6 +74,7 @@ namespace FormulaSim
         double diveK = 1;                 // a late-braking dive's braking share over his own (AiDriver constructor)
         bool diveOn; int diveEnd = -1;    // diving up the inside into the braking zone that ends at diveEnd
         bool ersAttack, ersPush;          // this think: Overtake Mode on the attack straight; the battery boost for the pass
+        bool ersVsPlayer;                 // this think: the car he is attacking is the player (Adi: rivals use boost / OT on him)
         public int overtakesMade, defMoves, divesMade, attacksMade;   // completed passes, defensive moves, dives, attacks (diagnostics)
         public readonly int[] attackEnds = new int[6];   // how attacks ended: 0 past him, 1 door closed, 2 not gaining, 3 dive without overlap, 4 gave way, 5 lost sight
         public int CraftMode => mode;
@@ -187,7 +188,7 @@ namespace FormulaSim
         // Sets speedCap (cars ahead / backing out), pathCap (own lane's curvature), offsetTarget and laneRate.
         bool Racecraft(double dt, double v, bool straight, bool noPass, bool blueFlag, IList<AiDriver> others, FormulaCar player, int playerIdx, double playerLateral, double simTime)
         {
-            int N = track.N; seen = 0; bounds = 0; pathCap = double.MaxValue; laneRate = 2.2; held = false; prepPass = false; ersAttack = ersPush = false;
+            int N = track.N; seen = 0; bounds = 0; pathCap = double.MaxValue; laneRate = 2.2; held = false; prepPass = false; ersAttack = ersPush = ersVsPlayer = false;
             bool racing = pit == null;
             if (others != null) for (int i = 0; i < others.Count; i++) { var o = others[i]; if (o != this && o.idx >= 0) SeeCar(o.idx, o.lateral, o.car, o.offset, o.offsetTarget, o, false, racing && !o.InPit); }
             if (player != null && playerIdx >= 0) { double dp = playerLateral - line.off[playerIdx]; SeeCar(playerIdx, playerLateral, player, dp, dp, player, true, racing); }
@@ -373,6 +374,7 @@ namespace FormulaSim
                 if (tc >= 0 && sGap[tc] > -CarLen)
                 {
                     double tg = sGap[tc] / Math.Max(10, v);
+                    ersVsPlayer = sPl[tc] && tg < 1.2; // within 1.2 s of the player: he goes for it with everything
                     // from the exit when he still has to close into the tow (over 0.3 s back); in the tow already, timed so
                     // the allowance lasts to the braking point (about 120 kW over the car's own map)
                     // (the lap's allowance is kept for the straight into one of its best places to pass)

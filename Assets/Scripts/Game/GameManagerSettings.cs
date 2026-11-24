@@ -24,7 +24,7 @@ public partial class GameManager
     int steerAssist, brakeAssist;                        // 0 off, 1 low, 2 high
     // car set-up
     float aeroBal = 45, brakeBiasPct = 57, brakeMigPct, engBrakePct = 100, diffPowerPct = 15, diffCoastPct = 25, rideFmm, rideRmm;
-    float gripPct = 100, rearGripPct = 100, downPct = 100; // handling test (Adi, Nov 24): player's car only; 100 = the real car
+    float gripPct = 100, rearGripPct = 100, downPct = 100; bool handTest; // handling test (Adi, Nov 24): player's car only; 100 = the real car
     // camera
     float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100;
     internal float haloBackPct;                          // halo cam "helmet in view" 0-100 (GameManager.cs camera; DebugShots haloback=)
@@ -89,7 +89,7 @@ public partial class GameManager
         brakeMigPct = LoadF("brakeMig", 0, 0, 6); engBrakePct = LoadF("engBrake", 100, 50, 150);
         diffPowerPct = LoadF("diffPower", 15, 5, 40); diffCoastPct = LoadF("diffCoast", 25, 5, 50);
         rideFmm = LoadF("rideF", 0, -5, 10); rideRmm = LoadF("rideR", 0, -10, 15);
-        gripPct = LoadF("tstGrip", 100, 80, 110); rearGripPct = LoadF("tstRear", 100, 80, 110); downPct = LoadF("tstDown", 100, 60, 110);
+        gripPct = LoadF("tstGrip", 100, 80, 110); rearGripPct = LoadF("tstRear", 100, 80, 110); downPct = LoadF("tstDown", 100, 60, 110); handTest = PlayerPrefs.GetInt("tstOn", 0) == 1;
         fovChase = LoadF("fovChase", 62, 50, 80); fovCockpit = LoadF("fovCockpit", 55, 45, 80);
         seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200); haloBackPct = LoadF("haloBack", 0, 0, 100);
         horizonMode = LoadI("tiltLock", 0, 2);
@@ -119,7 +119,7 @@ public partial class GameManager
         PlayerPrefs.SetFloat("brakeMig", brakeMigPct); PlayerPrefs.SetFloat("engBrake", engBrakePct);
         PlayerPrefs.SetFloat("diffPower", diffPowerPct); PlayerPrefs.SetFloat("diffCoast", diffCoastPct);
         PlayerPrefs.SetFloat("rideF", rideFmm); PlayerPrefs.SetFloat("rideR", rideRmm);
-        PlayerPrefs.SetFloat("tstGrip", gripPct); PlayerPrefs.SetFloat("tstRear", rearGripPct); PlayerPrefs.SetFloat("tstDown", downPct);
+        PlayerPrefs.SetFloat("tstGrip", gripPct); PlayerPrefs.SetFloat("tstRear", rearGripPct); PlayerPrefs.SetFloat("tstDown", downPct); PlayerPrefs.SetInt("tstOn", handTest ? 1 : 0);
         PlayerPrefs.SetFloat("fovChase", fovChase); PlayerPrefs.SetFloat("fovCockpit", fovCockpit);
         PlayerPrefs.SetFloat("seatUp", seatUpCm); PlayerPrefs.SetFloat("seatFwd", seatFwdCm); PlayerPrefs.SetFloat("camShake", camShakePct); PlayerPrefs.SetFloat("haloBack", haloBackPct);
         PlayerPrefs.SetInt("tiltLock", horizonMode);
@@ -146,8 +146,10 @@ public partial class GameManager
         c.diffPower = diffPowerPct / 100.0; c.diffCoast = diffCoastPct / 100.0;
         c.rideF0 = b.rideF0 + rideFmm / 1000.0; c.rideR0 = b.rideR0 + rideRmm / 1000.0;
         // handling test sliders (config only, the physics code is untouched; 100 % = the real car)
-        c.mu = b.mu * gripPct * 0.01; c.rearGrip = b.rearGrip * rearGripPct * 0.01;
-        c.clA = b.clA * downPct * 0.01; c.clAX = b.clAX * downPct * 0.01;
+        // (Off = exactly the original car, whatever the sliders say)
+        float tg = handTest ? gripPct : 100f, tr = handTest ? rearGripPct : 100f, td = handTest ? downPct : 100f;
+        c.mu = b.mu * tg * 0.01; c.rearGrip = b.rearGrip * tr * 0.01;
+        c.clA = b.clA * td * 0.01; c.clAX = b.clAX * td * 0.01;
     }
     void SetupChanged() { if (car != null) ApplySetup(car.cfg); } // takes effect at once, also in a race
 
@@ -283,9 +285,10 @@ public partial class GameManager
         setup.Slider("Rear ride height", "Lower = more downforce and less drag-free rake. Too low bottoms out.", -10, 15, 1, 0, () => rideRmm, v => { rideRmm = v; SetupChanged(); },
             v => $"{BaseCfg(classIdx).rideR0 * 1000 + v:0} mm");
         // handling test (your car only; tell Claude the numbers that feel real)
-        setup.Slider("Test: tyre grip", "Handling test, your car only. Grip of all four tyres at every speed. 100% = the real car.", 80, 110, 1, 100, () => gripPct, v => { gripPct = v; SetupChanged(); }, Pct);
-        setup.Slider("Test: rear grip", "Handling test, your car only. Less = the rear steps out sooner, e.g. full throttle out of a medium-speed corner. 100% = the real car.", 80, 110, 1, 100, () => rearGripPct, v => { rearGripPct = v; SetupChanged(); }, Pct);
-        setup.Slider("Test: downforce", "Handling test, your car only. Grip that grows with speed (aero). Less = less grip in fast and medium corners, a bit faster on straights. 100% = the real car.", 60, 110, 1, 100, () => downPct, v => { downPct = v; SetupChanged(); }, Pct);
+        setup.Toggle("Handling test", "Off = the original car, always. On = the three Test sliders below change your car (only yours). Tip: for power slides set Traction control Off.", false, () => handTest, v => { handTest = v; SetupChanged(); });
+        setup.Slider("Test: tyre grip", "Handling test, your car only. Grip of all four tyres at every speed. 100% = the real car.", 80, 110, 1, 100, () => gripPct, v => { gripPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
+        setup.Slider("Test: rear grip", "Handling test, your car only. Less = the rear steps out sooner, e.g. full throttle out of a medium-speed corner. 100% = the real car.", 80, 110, 1, 100, () => rearGripPct, v => { rearGripPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
+        setup.Slider("Test: downforce", "Handling test, your car only. Grip that grows with speed (aero). Less = less grip in fast and medium corners, a bit faster on straights. 100% = the real car.", 60, 110, 1, 100, () => downPct, v => { downPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
 
         // ---- CAMERA
         var camTab = new SettingsUI.Tab("CAMERA");

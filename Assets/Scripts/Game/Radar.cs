@@ -44,8 +44,9 @@ public partial class GameManager
     static Texture2D radarBg;
     float rdCx, rdCy, rdRim, rdFade, rdGuiA;
     static readonly float[] rdX = new float[8], rdY = new float[8];
+    static readonly Color RdBlue = new Color(0.16f, 0.52f, 1f, 1f), RdBlueHot = new Color(0.45f, 0.78f, 1f, 1f);
     static readonly Color RdWhite = new Color(0.94f, 0.95f, 0.97f, 0.95f), RdEdge = new Color(0.86f, 0.89f, 0.94f, 0.55f), RdPit = new Color(0.86f, 0.89f, 0.94f, 0.22f);
-    static readonly Color RdOutline = new Color(0.02f, 0.025f, 0.035f, 0.8f), RdMe = new Color(0f, 0.82f, 1f, 1f), RdMeEdge = new Color(1f, 1f, 1f, 0.95f);
+    static readonly Color RdOutline = new Color(0.02f, 0.025f, 0.035f, 0.8f), RdMe = new Color(0.93f, 0.12f, 0.14f, 1f), RdMeEdge = new Color(1f, 1f, 1f, 0.95f);
 
     // the panel: square, right-aligned under the race card, ends above the gas pedal (the old map's place)
     Rect RadarRect()
@@ -93,7 +94,7 @@ public partial class GameManager
                 RdSeg(ox + (ax * fy - ay * fx) * k, oy - (ax * fx + ay * fy) * k, ox + (bx * fy - by * fx) * k, oy - (bx * fx + by * fy) * k, w, RdEdge);
             }
         }
-        for (int i = 0; i + 1 < mmPitN; i++)
+        for (int i = 0; pRun != null && i + 1 < mmPitN; i++) // the pit lane only while he is in it (Adi: cleaner)
         {
             float ax = mmPitX[i] - mx, ay = mmPitY[i] - my; if (ax * ax + ay * ay > lim2) continue;
             float bx = mmPitX[i + 1] - mx, by = mmPitY[i + 1] - my; if (bx * bx + by * by > lim2) continue;
@@ -101,7 +102,8 @@ public partial class GameManager
         }
 
         // rivals: at the same in-between moment as their models (GameManager.Update), a little larger than to scale
-        float hl = Mathf.Max(S(4.4f), 2.8f * k * 1.2f), hw = Mathf.Max(S(1.6f), 0.95f * k * 1.3f);
+        // arrows (Adi, Nov 24): red = you, blue = the others; sharp-edged, a little larger than to scale
+        float hl = Mathf.Max(S(5.2f), 2.8f * k * 1.25f), hw = hl * 0.72f;
         float leftHeat = 0f, rightHeat = 0f;
         for (int i = 0; i < rivals.Count; i++)
         {
@@ -122,15 +124,14 @@ public partial class GameManager
             if (a <= 0.01f) continue;
             float rel = (float)(c.heading - c.r * back) - mh; // its heading against the player's
             float ux = -Mathf.Sin(rel), uy = -Mathf.Cos(rel);
-            Color col = heat >= 0.999f ? HudRed : Color.Lerp(RdWhite, HudAmber, heat);
-            col.a = RdWhite.a;
-            RdCar(sx, sy, ux, uy, hl + S(0.7f), hw + S(0.7f), RdOutline, a);
-            RdCar(sx, sy, ux, uy, hl, hw, col, a);
+            Color col = Color.Lerp(RdBlue, RdBlueHot, heat); // alongside: a brighter blue (the rim arcs warn too)
+            RdArrow(sx, sy, ux, uy, hl + S(1.1f), hw + S(1.1f), RdOutline, a);
+            RdArrow(sx, sy, ux, uy, hl, hw, col, a);
         }
 
-        // the player: cyan, white outline, nose up
-        RdCar(ox, oy, 0f, -1f, hl + S(0.8f), hw + S(0.8f), RdMeEdge, 1f);
-        RdCar(ox, oy, 0f, -1f, hl, hw, RdMe, 1f);
+        // the player: a red arrow with a white edge, nose up
+        RdArrow(ox, oy, 0f, -1f, hl + S(1.3f), hw + S(1.3f), RdMeEdge, 1f);
+        RdArrow(ox, oy, 0f, -1f, hl, hw, RdMe, 1f);
 
         // side warnings on the rim (centred level with the player)
         float lvl = Mathf.Asin(RdLead);
@@ -185,6 +186,18 @@ public partial class GameManager
         c.a *= a * rdGuiA;
         GL.Color(c);
         for (int i = 1; i + 1 < 8; i++) { GL.Vertex3(rdX[0], rdY[0], 0f); GL.Vertex3(rdX[i], rdY[i], 0f); GL.Vertex3(rdX[i + 1], rdY[i + 1], 0f); }
+    }
+    // an arrow head: the tip at +hl, the rear corners at (-hl, +-hw), a notch in the back at -0.35 hl. Two triangles,
+    // hard edges (no soft fringe)
+    void RdArrow(float x, float y, float ux, float uy, float hl, float hw, Color c, float a)
+    {
+        float vx = -uy, vy = ux;
+        RdPt(0, x, y, ux, uy, vx, vy, hl, 0f); RdPt(1, x, y, ux, uy, vx, vy, -hl, hw);
+        RdPt(2, x, y, ux, uy, vx, vy, -0.35f * hl, 0f); RdPt(3, x, y, ux, uy, vx, vy, -hl, -hw);
+        c.a *= a * rdGuiA;
+        GL.Color(c);
+        GL.Vertex3(rdX[0], rdY[0], 0f); GL.Vertex3(rdX[1], rdY[1], 0f); GL.Vertex3(rdX[2], rdY[2], 0f);
+        GL.Vertex3(rdX[0], rdY[0], 0f); GL.Vertex3(rdX[2], rdY[2], 0f); GL.Vertex3(rdX[3], rdY[3], 0f);
     }
     static void RdPt(int i, float x, float y, float ux, float uy, float vx, float vy, float along, float side)
     {

@@ -462,6 +462,10 @@ namespace FormulaSim
             // not spent following 100 m back or on a straight that ends in a fast bend. Overtake Mode only spends the
             // allowance where it gives more than the car's own map, so on from the exit costs nothing until it counts.
             bool attack = seen > 0 ? mode == 1 || prepPass || ersAttack : aheadGap < 30 + 0.8 * v, defend = behindGap < 25;
+            // against the player (within 1.2 s of him, AiRacecraft ersVsPlayer) nobody saves it: Overtake Mode on every
+            // straight it is armed on, and the battery boost too while there is charge (only when racing the player, so a
+            // rival's own pace without him is unchanged)
+            if (ersVsPlayer) { attack = true; otSave = false; }
             car.otOn = car.otArmed && onStraight && car.OtLeft > 0 && (otSave ? defend : attack || defend);
             double soc = double.IsNaN(car.ersEnergy) ? 1 : car.ersEnergy / c.ersCapacity;
             if (onStraight && !wasStraight)
@@ -470,7 +474,7 @@ namespace FormulaSim
             if (!onStraight || soc < 0.25 || (aheadGap > 60 && behindGap > 40)) boostWant = false;
             // the push for the pass: the last seconds of the attack straight, close behind or alongside (where the car
             // ahead clips or its map ramps down), with charge to spare
-            car.boostOn = boostWant || (ersPush && onStraight && soc > 0.35);
+            car.boostOn = boostWant || (ersPush && onStraight && soc > 0.35) || (ersVsPlayer && onStraight && soc > 0.25);
         }
 
         public CarInput LastInput => input;
