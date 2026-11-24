@@ -14,6 +14,9 @@
 //    (Easy ... Master, Custom) with what each sets; "Sign" starts the career (Season.New) and its welcome.
 //  * Qualifying results: your position as the giant red italic figure, your best and pole, the classification with
 //    gaps, the black "Start race" (grid = this order) or the "Menu" link. In a career the grid is saved at once.
+//  * Story films (StoryFilm.cs, Settings > GAME "Story": Film / Cards / Off, pref "storyMode"): Film plays each run of
+//    cards that have a 3D scene as one real-time film (FilmStep; the goals cards stay cards); Cards = the cards only;
+//    Off = only the goals cards. "Prologue" on the full-tables page plays the prologue again.
 // Tables and strings are rebuilt only when the career changes (a session, a new season, the difficulty), not per frame.
 using System.Collections.Generic;
 using FormulaSim;
@@ -27,6 +30,7 @@ public sealed class SeasonUI
     bool picking, confirmNew, full; int pickTeam, pickDiff;
     static readonly string[] TabNames = { "Drivers", "Teams", "Calendar" };
     List<StoryCard> cards; int cardIdx;
+    int filmTo = -1, filmRefusedAt = -1; // the film of cards [cardIdx, filmTo) is playing / from this card on no film (one could not start)
 
     public SeasonUI(MenuUI menu) { m = menu; }
 
@@ -74,7 +78,7 @@ public sealed class SeasonUI
     void StartNew()
     {
         Season.Data = null; // the old save stays on disk until "Sign" (Back = it comes back on the next Open)
-        cards = Story.Prologue(); cardIdx = 0; picking = true; confirmNew = false; full = false;
+        cards = StoryFilms.Filter(Story.Prologue()); cardIdx = 0; filmTo = filmRefusedAt = -1; picking = true; confirmNew = false; full = false;
         pickTeam = -1; for (int t = 0; t < Season.Teams.Count && pickTeam < 0; t++) if (Season.Midfield(t)) pickTeam = t;
         pickDiff = Difficulty.Current; // Custom stays Custom: nothing the player set changes unless he picks a preset
     }
@@ -89,9 +93,28 @@ public sealed class SeasonUI
         else if (d.storyPre < d.round) { l.AddRange(Story.PreRound()); d.storyPre = d.round; }
         else if (d.goalsFor != d.round) Career.FreezeGoals();
         Season.Save();
-        cards = l.Count > 0 ? l : null; cardIdx = 0; cacheKey = int.MinValue;
+        cards = l.Count > 0 ? StoryFilms.Filter(l) : null; cardIdx = 0; filmTo = filmRefusedAt = -1; cacheKey = int.MinValue;
     }
-    void EndCards() { cards = null; cardIdx = 0; cacheKey = int.MinValue; }
+    void EndCards() { cards = null; cardIdx = 0; filmTo = filmRefusedAt = -1; cacheKey = int.MinValue; }
+
+    // Story = Film: the run of cards with a 3D scene from cardIdx on plays as one film (StoryFilm.cs: the game draws it
+    // instead of this page; the result comes back here when it ends). True = nothing else to draw this frame.
+    bool FilmStep()
+    {
+        if (StoryFilms.Busy) { UiKit.Rect(new Rect(0, 0, Screen.width, Screen.height), Color.black); return true; }
+        if (filmTo >= 0)
+        {
+            int to = filmTo; filmTo = -1;
+            if (StoryFilms.TakeResult()) { cardIdx = to; if (cardIdx >= cards.Count) { EndCards(); return true; } }
+            else filmRefusedAt = cardIdx; // it did not start: these as cards
+        }
+        if (StoryFilms.Mode != StoryFilms.ModeFilm || (filmRefusedAt >= 0 && cardIdx >= filmRefusedAt) || cardIdx >= cards.Count || cards[cardIdx].scene == StoryCard.SNone) return false;
+        int j = cardIdx; while (j < cards.Count && cards[j].scene != StoryCard.SNone) j++;
+        if (!StoryFilms.Request(cards, cardIdx, j)) { filmRefusedAt = cardIdx; return false; }
+        filmTo = j;
+        UiKit.Rect(new Rect(0, 0, Screen.width, Screen.height), Color.black); // (the film starts on the next frame, from black)
+        return true;
+    }
 
     static float U(float v) => UiKit.U(v);
 
@@ -410,7 +433,7 @@ public sealed class SeasonUI
 
     public MenuUI.Choice DrawHub(ref int map)
     {
-        if (cards != null && cards.Count > 0) { DrawCard(); return MenuUI.Choice.None; }
+        if (cards != null && cards.Count > 0) { if (!FilmStep() && cards != null) DrawCard(); return MenuUI.Choice.None; }
         if (picking || !Season.Active) { DrawPick(); return MenuUI.Choice.None; }
         Refresh();
         if (full) { DrawFull(); return MenuUI.Choice.None; }
@@ -582,9 +605,11 @@ public sealed class SeasonUI
         UiKit.Hair(f.x0, f.x1, f.foot);
         if (LinkAt(f, ref lx, "‹  Hub", "Career hub")) hit = 0;
         if (LinkAt(f, ref lx, confirmNew ? "Tap again: new career" : "New career", confirmNew ? "This career is wiped" : "Start over as a rookie", confirmNew)) hit = 1;
+        if (LinkAt(f, ref lx, "Prologue", "The story again")) hit = 2;
         UiKit.PopAlpha();
         if (hit == 0) { full = false; confirmNew = false; }
         else if (hit == 1) { if (confirmNew) StartNew(); else confirmNew = true; }
+        else if (hit == 2) { full = false; confirmNew = false; cards = Story.Prologue(); cardIdx = 0; filmTo = filmRefusedAt = -1; } // (Off: as cards)
     }
 
     static readonly string[] Ord = { "", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30" };
@@ -744,7 +769,7 @@ public sealed class SeasonUI
             Difficulty.Set(pickDiff);
             Season.New(pickTeam); picking = false; tab = 0; cacheKey = int.MinValue;
             var l = Story.Welcome(); l.AddRange(Story.PreRound()); Season.Data.storyPre = 0; Season.Save();
-            cards = l; cardIdx = 0;
+            cards = StoryFilms.Filter(l); cardIdx = 0; filmTo = filmRefusedAt = -1;
         }
     }
 

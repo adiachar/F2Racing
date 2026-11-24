@@ -35,6 +35,11 @@
 //            reveal the results table)
 //   dr       driver rating points before the post= finish (DriverRating.cs), e.g. 9600 + pos=1 = a C -> B grade up
 //   menu     home | driver: the menu page with the DR / SR badges instead of race frames (one shot, then done)
+//   story    prologue | welcome | pre | end | <scene>: the career story film (StoryFilm.cs) instead of race frames, frozen
+//            at each t= time. Scenes (one beat each): crash aftermath helmet rival pitlane briefing mia miacheer establish
+//            rivalleaves memory debrief celebrate. Prologue (rookie): crash 0-12.5 (slow motion 2.4-6.4, contact 3.7,
+//            wall 6.4-), aftermath 12.5-19, helmet 19-26, rival 26-33, pit lane 33-41. round=N (1-10): the round for pre
+//   t        list of times (s) into the story film (story=)                default 1
 //   pos      the player's finishing place for post= (default 1; > 3: a short podium seen from a TV angle)
 //   postmode full | short (default full; short: slow motion 0-3.6, podium 3.6-16.2 / 3.6-10 out of the top 3)
 //   settle   seconds to wait after each placement (real time)             default 1.0 (first shot + warm)
@@ -163,6 +168,7 @@ public class DebugShots : MonoBehaviour
     readonly List<double> spots = new List<double>();
     readonly List<double> introTimes = new List<double>(); // intro=...: pre-race intro frames instead of spots x cams
     readonly List<double> postTimes = new List<double>();  // post=...: post-race film frames (PostRace.cs)
+    readonly List<double> storyTimes = new List<double>(); // t=...: story film frames (story=, StoryFilm.cs)
     string error;
 
     // the page URL's query (WebGL player only; null everywhere else, so shot mode cannot start)
@@ -204,6 +210,8 @@ public class DebugShots : MonoBehaviour
             if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)) introTimes.Add(v);
         foreach (var s in Get(q, "post", "").Split(ListSep, System.StringSplitOptions.RemoveEmptyEntries))
             if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)) postTimes.Add(v);
+        foreach (var st in Get(q, "t", "1").Split(ListSep, System.StringSplitOptions.RemoveEmptyEntries))
+            if (double.TryParse(st, NumberStyles.Float, CultureInfo.InvariantCulture, out double sv)) storyTimes.Add(sv);
         Title("SHOT_BOOT");
         PerfStats.FromQuery(q); // stats=1: render stats overlay + a PERF_STATS console line per shot (PerfStats.cs)
         ModelInstancing.FromQuery(q); // inst=0: model trees merged as before (A/B against the GPU-instanced ones)
@@ -243,6 +251,27 @@ public class DebugShots : MonoBehaviour
             if (ack) { while (ShotsAck() < 0 && Time.realtimeSinceStartup - tr < ackTimeout) yield return null; }
             else { while (Time.realtimeSinceStartup - tr < hold) yield return null; }
             Title("SHOT_DONE 1");
+            yield break;
+        }
+        string storyName = Get(q, "story", "").ToLowerInvariant();
+        if (storyName.Length > 0 && storyTimes.Count > 0)
+        {
+            // the career story film (StoryFilm.cs), frozen at each time
+            int storyRound = GetInt(q, "round", 0);
+            for (int k = 0; k < storyTimes.Count; k++)
+            {
+                gm.ShotStory(storyName, (float)storyTimes[k], storyRound);
+                float stWait = settle + (k == 0 ? warm : 0f), stT0 = Time.realtimeSinceStartup;
+                int stF0 = Time.frameCount;
+                while (Time.frameCount - stF0 < 8 || Time.realtimeSinceStartup - stT0 < stWait) yield return null;
+                string stS = storyTimes[k].ToString("0.0##", CultureInfo.InvariantCulture);
+                PerfStats.ShotLog($"story={storyName} t={stS}");
+                Title($"SHOT_READY {k} {storyTimes.Count} s={stS} cam=story");
+                float stR = Time.realtimeSinceStartup;
+                if (ack) { while (ShotsAck() < k && Time.realtimeSinceStartup - stR < ackTimeout) yield return null; }
+                else { while (Time.realtimeSinceStartup - stR < hold) yield return null; }
+            }
+            Title("SHOT_DONE " + storyTimes.Count);
             yield break;
         }
         if (postTimes.Count > 0)

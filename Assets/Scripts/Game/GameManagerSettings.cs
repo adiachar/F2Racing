@@ -356,6 +356,8 @@ public partial class GameManager
             PreRaceNames, 0, () => preRaceIdx, v => preRaceIdx = v);
         game.Choice("Post-race", "Full: after the flag a slow-motion finish, a cool-down lap (the car drives itself, TV cameras, the classification), the podium with the cup and champagne, then your XP, level and safety rating. Short: the finish, the podium and your progress. Off: straight to the results. A tap skips ahead.",
             PostRaceNames, 0, () => PostRaceMode, v => PostRaceMode = v);
+        game.Choice("Story", "The career's story. Film: short 3D scenes with the game's own cars, people and circuits (a tap: next scene, SKIP ends it). Cards: the text cards. Off: only your goals.",
+            StoryFilms.ModeNames, StoryFilms.ModeFilm, () => StoryFilms.Mode, v => StoryFilms.Mode = v); // (StoryFilm.cs)
         game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
         game.Choice("Tyre wear", TyreWearHelp, TyreRules.Names, 0, () => InRace && InSeasonRound ? TyreRules.Auto : TyreWearPref, v => TyreWearPref = v)
             .LockedWhen(() => InRace && InSeasonRound ? "A career round always uses Auto." : null); // TyrePit.cs
