@@ -1084,7 +1084,9 @@ namespace FormulaSim
             }
             if (brk > 0 && c.abs && dir > 0)
             {
-                double sxMax = Math.Max(0.35, Math.Sqrt(Math.Max(0, 0.9 - syR * syR)));
+                // ABS keeps the rears well short of peak slip, so they keep side grip and a straight-line stop stays
+                // straight (Adi approved, Nov 25; was max(0.35, sqrt(0.9 - sy^2)): rears at the peak, a spin at 300 km/h)
+                double sxMax = Math.Max(0.25, Math.Sqrt(Math.Max(0, 0.40 - syR * syR)));
                 if (KapOf(wv) < -sxMax * kPk) { wv = (vxNow - sxMax * kPk * vden) / rw; rearAbs = true; }
             }
             if (Math.Abs(vx) < 0.5 && thr < 0.05 && !reverse) wv = vx / rw; // parked: wheels just roll
