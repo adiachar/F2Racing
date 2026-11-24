@@ -103,7 +103,7 @@ public partial class GameManager
 
         // rivals: at the same in-between moment as their models (GameManager.Update), a little larger than to scale
         // arrows (Adi, Nov 24): red = you, blue = the others; sharp-edged, a little larger than to scale
-        float hl = Mathf.Max(S(5.2f), 2.8f * k * 1.25f), hw = hl * 0.72f;
+        float hl = Mathf.Max(S(4.6f), 2.6f * k), hw = Mathf.Max(S(2.4f), 1.15f * k); // to scale across: a car 3 m beside you sits clear of your arrow
         float leftHeat = 0f, rightHeat = 0f;
         for (int i = 0; i < rivals.Count; i++)
         {
@@ -240,7 +240,7 @@ public partial class GameManager
             float u = (x + 0.5f) / Px - 1f, v = (y + 0.5f) / Px - 1f, r = Mathf.Sqrt(u * u + v * v);
             float inside = Mathf.Clamp01((1f - r) * Px + 0.5f);
             if (inside <= 0f) { px[y * D + x] = new Color32(0, 0, 0, 0); continue; }
-            float baseA = 0.58f + 0.17f * r * r; // darker glass: reads over bright scenery
+            float baseA = 0.80f + 0.12f * r * r; // darker glass: reads over bright scenery
             float inner = Mathf.Clamp01((0.95f - r) * 5f);
             float line = 0f;
             line = Mathf.Max(line, Mathf.Clamp01(1f - Mathf.Abs(u) * Px / 0.9f) * 0.10f * inner);          // straight ahead / behind
