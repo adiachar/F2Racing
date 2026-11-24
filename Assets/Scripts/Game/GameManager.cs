@@ -538,6 +538,7 @@ public partial class GameManager : MonoBehaviour
         for (int ti = 0, tn = Input.touchCount; ti < tn; ti++) // GetTouch: Input.touches allocates an array every frame
         {
             var t = Input.GetTouch(ti);
+            if (t.fingerId == lookFinger) continue; // holding LOOK BACK (GameManagerLookBack.cs)
             var p = new Vector2(t.position.x, Screen.height - t.position.y); // GUI space (y down)
             bool ended = t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled;
             // a finger "owns" the pedal it first touched and keeps controlling it even if it slides off the box
@@ -830,6 +831,7 @@ public partial class GameManager : MonoBehaviour
         if (replaying) { ReplayStep(dt); if (flashT > 0) flashT -= dt; return; } // the race is over: only the recording moves
         if (Paused || PostFreeze) dt = 0; // the settings menu and the front end pause the game; PostFreeze: the post-race film holds the race (PostRace.cs)
         if (hitT > 0) hitT -= dt;
+        LookBackInput(); // the LOOK BACK button / key (GameManagerLookBack.cs), before ReadInput: its finger never steers
         var input = ReadInput(dt);
         ErsButtonsInput(); // BOOST and OVERTAKE buttons into the car (RaceHud.cs)
         acc += dt;
@@ -1177,6 +1179,7 @@ public partial class GameManager : MonoBehaviour
         cam.fieldOfView += (fov - cam.fieldOfView) * Mathf.Min(1, Time.deltaTime * 4);
         CockpitBits(camMode == 2); tvWasOn = false;
         cam.nearClipPlane = camMode == 2 ? CockpitNear() : camMode == 3 ? HaloNear : ChaseNear;
+        LookBackCamera(tr); // LOOK BACK held: the rear view instead (GameManagerLookBack.cs)
     }
     // Near clip plane. The depth buffer's precision far away goes with near / distance^2, so a tiny near plane makes
     // distant road, kerbs, lines and verges z-fight (shimmer and swap as the car moves). Each view uses the largest
@@ -1536,7 +1539,8 @@ public partial class GameManager : MonoBehaviour
         // timing tower, race card and sectors, dash, banners (RaceHud.cs)
         DrawRaceHud(speed);
 
-        if (hudMap) DrawMiniMap();
+        DrawMapHud(); // Map setting: radar (Radar.cs), track map (DrawMiniMap) or off
+        DrawLookBack(); // LOOK BACK button (GameManagerLookBack.cs)
         DrawStartLights(); // the five red lights (GameManagerStart.cs)
 
         // pedals (drawn inside their touch rects; the rects themselves are unchanged)
