@@ -11,6 +11,173 @@ if (Environment.GetEnvironmentVariable("MAPMAX") != null) RacingLine.MapMax = do
 Track[] Circuits() => FormulaSim.Circuits.All.Select(d => d.Build()).ToArray();
 string[] CircuitNames = FormulaSim.Circuits.All.Select(c => c.name).ToArray();
 
+// ---- bridge check: dotnet run -- bridge [circuit id, default suzuka] ----
+// Where the lap crosses itself (Suzuka's figure eight) the car's ground height (HeightField.SampleAlong: the car
+// model's height, the physics grade) must stay on the leg the car drives along: under the bridge the lower road, on
+// it the deck. (1) a scan of both legs through the crossing, every 0.5 m along and every metre across the road, at
+// the car's centre and four wheels, heading along the leg: the worst gap to the leg's own road height; (2) an AI lap
+// with the wheel heights per tick through the crossing (both ways) and every jump of more than 0.3 m between ticks.
+if (args.Length > 0 && args[0] == "bridge")
+{
+    string id = args.Length > 1 ? args[1] : "suzuka";
+    var def = FormulaSim.Circuits.All.First(d => d.id == id); var t = def.Build(); var hf = new HeightField(t);
+    if (!hf.HasBridges) { Console.WriteLine($"{def.name}: no bridges"); return; }
+    int N = t.N; var cfg = new CarConfig();
+    double bw = cfg.wheelbase * cfg.frontWeight, aw = cfg.wheelbase - bw;
+    // the leg's own road height at (x, y) near track point i (the height the car should get)
+    double Own(int i, double x, double y)
+    {
+        var p = t.pts[i]; double al = (x - p.x) * p.tx + (y - p.y) * p.ty;
+        int nb = al >= 0 ? (i + 1) % N : (i - 1 + N) % N; double fa = Math.Min(1, Math.Abs(al) / t.ds);
+        return t.h[i] + (t.h[nb] - t.h[i]) * fa;
+    }
+    // the deck points and the lower leg's point under the middle of the deck
+    var deckIdx = Enumerable.Range(0, N).Where(i => hf.OnDeck(i)).ToList();
+    int up = deckIdx[deckIdx.Count / 2]; int lo = -1; double bd = double.MaxValue;
+    for (int i = 0; i < N; i++) { double sep = Math.Abs(i - up) * t.ds; sep = Math.Min(sep, t.length - sep); if (sep < 100) continue; double d = Math.Pow(t.pts[i].x - t.pts[up].x, 2) + Math.Pow(t.pts[i].y - t.pts[up].y, 2); if (d < bd) { bd = d; lo = i; } }
+    double ang = Math.Acos(Math.Abs(t.pts[up].tx * t.pts[lo].tx + t.pts[up].ty * t.pts[lo].ty)) * 180 / Math.PI;
+    Console.WriteLine($"{def.name}: {deckIdx.Count} deck points ({t.pts[deckIdx[0]].s:F0}-{t.pts[deckIdx[^1]].s:F0} m), upper leg {t.pts[up].s:F0} m at {t.h[up]:F2} m, lower leg {t.pts[lo].s:F0} m at {t.h[lo]:F2} m, crossing angle {ang:F0} deg");
+    // headings up to 25 deg off the leg's own direction (a car on the racing line, sliding, catching a slide)
+    foreach (var (nm, c0) in new[] { ("lower leg (under the bridge)", lo), ("upper leg (over the bridge)", up) })
+        foreach (bool hinted in new[] { false, true })
+        {
+            double worst = 0; string at = ""; int bad = 0, n = 0;
+            for (double s = -60; s <= 60; s += 0.5)
+                for (double lat = -t.width / 2 - 1; lat <= t.width / 2 + 1.001; lat += 1)
+                    for (double yaw = -25; yaw <= 25.001; yaw += 5)
+                    {
+                        int i = ((c0 + (int)Math.Floor(s / t.ds)) % N + N) % N; double fr = s / t.ds - Math.Floor(s / t.ds); var p = t.pts[i]; var q = t.pts[(i + 1) % N];
+                        double hd = Math.Atan2(p.ty, p.tx) + yaw * Math.PI / 180, ch = Math.Cos(hd), sh = Math.Sin(hd);
+                        double cx = p.x + (q.x - p.x) * fr + p.nx * lat, cy = p.y + (q.y - p.y) * fr + p.ny * lat;
+                        for (int w = -1; w < 4; w++)
+                        {
+                            double along = w < 0 ? 0 : w < 2 ? aw : -bw, side = w < 0 ? 0 : (w % 2 == 0 ? 1 : -1) * cfg.track / 2;
+                            double x = cx + ch * along - sh * side, y = cy + sh * along + ch * side;
+                            var nr = t.Nearest(x, y, c0); int leg = i;
+                            double e = Math.Abs((hinted ? hf.SampleAlong(x, y, ch, sh, ref leg) : hf.SampleAlong(x, y, ch, sh)) - Own(nr.idx, x, y)); n++;
+                            if (e > 0.25) bad++;
+                            if (e > worst) { worst = e; at = $"{s:+0.0;-0.0} m along, lat {lat:+0;-0}, yaw {yaw:+0;-0} deg, wheel {w}"; }
+                        }
+                    }
+            Console.WriteLine($"  scan {nm}, {(hinted ? "leg kept  " : "heading only")}: {bad} of {n} samples off their own road by > 0.25 m; worst {worst:F2} m{(worst > 0.25 ? $" ({at})" : "")}");
+        }
+    // an AI lap: wheel heights through the crossing, (a) the leg from the heading alone (skid marks), (b) with the
+    // car's leg kept (the car model, the physics grade from the car's track index)
+    var line = RacingLine.Compute(t, new CarConfig());
+    bool verbose = Environment.GetEnvironmentVariable("BRIDGEV") == "1";
+    foreach (bool hinted in new[] { false, true })
+    {
+        var ai = new AiDriver(t, line, new CarConfig(), new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 }, AiTuning.For(Array.IndexOf(FormulaSim.Circuits.All, def)));
+        ai.Place(t.N - 30, line.off[t.N - 30]);
+        double tt = 0; int st = 0, jumps = 0; double maxJump = 0, maxGrade = 0; var prev = new double[4]; var legs = new[] { -1, -1, -1, -1 }; bool have = false;
+        Console.WriteLine($"  AI lap, {(hinted ? "leg kept (car model, physics grade)" : "leg from the heading only")}:");
+        while (ai.lap < 2 && tt < 300)
+        {
+            if (st++ % 4 == 0) { ai.Think(4 * H, tt, null, null, -1, 0); WheelContact.Update(t, line, ai.car, ai.idx, ai.lateral, 1); ai.car.grade = hinted ? hf.GradeAlong(ai.car.x, ai.car.y, ai.car.heading, ai.idx) : hf.GradeAlong(ai.car.x, ai.car.y, ai.car.heading); }
+            ai.car.Step(ai.LastInput, H); tt += H;
+            var c = ai.car; double ch = Math.Cos(c.heading), sh = Math.Sin(c.heading);
+            var wh = new double[4];
+            for (int w = 0; w < 4; w++)
+            {
+                double along = w < 2 ? aw : -bw, side = (w % 2 == 0 ? 1 : -1) * cfg.track / 2, x = c.x + ch * along - sh * side, y = c.y + sh * along + ch * side;
+                wh[w] = hinted ? hf.SampleAlong(x, y, ch, sh, ref legs[w]) : hf.SampleAlong(x, y, ch, sh);
+            }
+            double sep1 = Math.Abs(ai.idx - lo) * t.ds, sep2 = Math.Abs(ai.idx - up) * t.ds;
+            bool near = Math.Min(sep1, t.length - sep1) < 40 || Math.Min(sep2, t.length - sep2) < 40;
+            if (near) maxGrade = Math.Max(maxGrade, Math.Abs(c.grade));
+            if (have)
+                for (int w = 0; w < 4; w++)
+                {
+                    double j = Math.Abs(wh[w] - prev[w]); maxJump = Math.Max(maxJump, j);
+                    if (j > 0.3) { jumps++; if (jumps <= 12) Console.WriteLine($"    JUMP t {tt:F3} s at {t.pts[ai.idx].s:F0} m lat {ai.lateral:+0.0;-0.0} wheel {w}: {prev[w]:F2} -> {wh[w]:F2} m"); }
+                }
+            if (near && (verbose || st % 24 == 0)) Console.WriteLine($"    t {tt,7:F3} s {t.pts[ai.idx].s,5:F0} m lat {ai.lateral,5:+0.0;-0.0} own {t.h[ai.idx],6:F2}  wheels FL {wh[0],6:F2} FR {wh[1],6:F2} RL {wh[2],6:F2} RR {wh[3],6:F2}  grade {c.grade * 100,5:F1}%");
+            Array.Copy(wh, prev, 4); have = true;
+        }
+        Console.WriteLine($"    -> {jumps} wheel-height jumps > 0.3 m between ticks (biggest step {maxJump:F3} m), steepest grade at the crossing {maxGrade * 100:F1}%, lap {ai.lastLap:F2} s");
+    }
+    return;
+}
+
+// ---- raised kerbs: dotnet run -- kerbs ----
+// Per circuit: the kerbed corners (tightest point within 40 m, R < 280 m), the raised kerb stretches (Track.KerbLift,
+// chosen in CircuitDef.Layout), the lift profile across a raised kerb, and an AI lap with and without them (lap time,
+// share of the time a tyre rides a raised kerb, highest lift seen).
+if (args.Length > 0 && args[0] == "kerbs")
+{
+    var prof = FormulaSim.Circuits.Suzuka.Build(); int pi = Array.FindIndex(prof.raiseL, r => r >= 1);
+    Console.WriteLine($"lift across a raised kerb (left, full height), m from the road edge: " + string.Join(" ", new[] { -0.2, 0, 0.35, 0.7, 1.05, 1.4, 1.5 }.Select(u => $"{u:F2}:{prof.KerbLift(pi, prof.HalfWidth(pi) + u) * 100:F1}cm")));
+    { // the car on it: the most steady cornering g at 150 km/h in a right-hander, the left (outside) tyres on a kerb lifted 0 / 2.5 / 5 cm
+        var parts = new List<string>();
+        foreach (double lift in new[] { 0.0, 0.025, 0.05 })
+        {
+            double best = 0, shake = 0;
+            for (double stv = 0.05; stv <= 1.0; stv += 0.05)
+            {
+                var car = new FormulaCar(new CarConfig { tc = TcMode.High }) { vx = 150 / 3.6, gear = 5 }; double gs = 0, vb = 0; int n = 0; bool ok = true;
+                for (int i = 0; i < 240 * 3; i++)
+                {
+                    for (int w = 0; w < 4; w++) car.SetWheelSurface(w, w % 2 == 0 ? SurfaceType.Kerb : SurfaceType.Asphalt, w % 2 == 0 ? 0.9 : 1, w % 2 == 0 ? 0.004 : 0, w % 2 == 0 ? 0.008 : 0);
+                    car.wLift[0] = car.wLift[2] = lift;
+                    double v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+                    car.Step(new CarInput(-stv, v < 150 / 3.6 ? 1.0 : 0.2, 0), H);
+                    if (Math.Abs(Math.Atan2(car.vy, car.vx)) > 0.3) { ok = false; break; }
+                    if (i > 240 * 2) { gs += Math.Abs(car.ay) / 9.81; vb += car.vib; n++; }
+                }
+                if (ok && n > 0 && gs / n > best) { best = gs / n; shake = vb / n; }
+            }
+            parts.Add($"{lift * 100:F1} cm: {best:F2} g, shake {shake:F2}");
+        }
+        Console.WriteLine($"most steady g at 150 km/h, the outside tyres on a kerb lifted: {string.Join(" | ", parts)}");
+    }
+    double sumDiff = 0;
+    for (int ci = 0; ci < FormulaSim.Circuits.All.Length; ci++)
+    {
+        var def = FormulaSim.Circuits.All[ci]; var t = def.Build(); int N = t.N, W = (int)Math.Round(40 / t.ds);
+        int kerbed = 0, slowMed = 0;
+        for (int i = 0; i < N; i++)
+        {
+            double c = Math.Abs(t.pts[i].curv); if (c < 1.0 / 280) continue; bool peak = true;
+            for (int k = -W; k <= W && peak; k++) { if (k == 0) continue; double c2 = Math.Abs(t.pts[((i + k) % N + N) % N].curv); if (c2 > c || (c2 == c && k < 0)) peak = false; }
+            if (!peak) continue; kerbed++; if (1 / c >= CircuitDef.RaiseRmin && 1 / c <= CircuitDef.RaiseRmax) slowMed++;
+        }
+        var runs = new List<string>();
+        if (t.raiseL != null)
+            foreach (var (nm, a) in new[] { ("L", t.raiseL), ("R", t.raiseR) })
+            {
+                int start = Array.FindIndex(a, r => r <= 0); if (start < 0) start = 0;
+                for (int q = 0; q < N; q++)
+                {
+                    int i = (start + q) % N; if (a[i] <= 0 || a[(i - 1 + N) % N] > 0) continue;
+                    int j = i; while (a[(j + 1) % N] > 0) j = (j + 1) % N;
+                    runs.Add($"{nm} {t.pts[i].s:F0}-{t.pts[j].s:F0}");
+                }
+            }
+        // AI laps with and without the raised kerbs
+        var line = RacingLine.Compute(t, new CarConfig());
+        (double lap, double share, double top) Lap(bool raised)
+        {
+            var rl = t.raiseL; var rr = t.raiseR; if (!raised) { t.raiseL = null; t.raiseR = null; }
+            var hf = t.h != null ? new HeightField(t) : null;
+            var d = new AiDriver(t, line, new CarConfig(), new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 }, AiTuning.For(ci));
+            d.Place(N - 30, line.off[N - 30]); double tt = 0; int st = 0, on = 0, all = 0; double top = 0;
+            while (d.lap < 3 && tt < 600)
+            {
+                if (st++ % 4 == 0) { d.Think(4 * H, tt, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx); }
+                d.car.Step(d.LastInput, H); tt += H;
+                if (d.lap >= 1) { all++; double m = d.car.wLift.Max(); if (m > 0) on++; top = Math.Max(top, m); }
+            }
+            t.raiseL = rl; t.raiseR = rr;
+            return (d.lastLap, (double)on / Math.Max(1, all), top);
+        }
+        var a1 = Lap(false); var a2 = Lap(true); sumDiff += Math.Abs(a2.lap - a1.lap);
+        Console.WriteLine($"{def.name}: {kerbed} kerbed corners ({t.kerbCorners}), {slowMed} medium/slow, {t.raisedCorners} raised ({100.0 * t.raisedCorners / Math.Max(1, kerbed):F0}%); stretches (side, m from the line): {string.Join(", ", runs)}");
+        Console.WriteLine($"    AI lap flat kerbs {a1.lap:F3} s, raised {a2.lap:F3} s ({a2.lap - a1.lap:+0.000;-0.000}); a tyre on a raised kerb {a2.share * 100:F1}% of the time, highest lift {a2.top * 100:F1} cm");
+    }
+    Console.WriteLine($"sum of |lap change| {sumDiff:F3} s");
+    return;
+}
+
 // ---- damage check: dotnet run -- damage ----
 // Steady corner at fixed steer and speed with and without damage: lateral g, yaw rate, aero balance (front wing
 // damage must understeer = less yaw for the same steer); then a straight line with hands off to show the pull.
@@ -536,7 +703,7 @@ if (args.Length > 0 && args[0] == "train")
                 if (d.lap >= 3) return d.lastLap;
             }
             if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1);
-            if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
+            if (hf != null && steps % 4 == 1) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx);
             d.car.Step(d.LastInput, H); time += H;
         }
         return 6000;
@@ -657,7 +824,7 @@ if (args.Length > 1 && args[0] == "trace")
                 if (d.recovered) { Console.WriteLine($"RESET {d.who.name} (pace {d.who.pace:F2}) at {t.pts[d.idx].s:F0} m, t {time:F1}"); { int on = hist[k].FindIndex(h => { var w = h.Split("slip")[1].Trim().Split(' ')[0]; return Math.Abs(double.Parse(w, CultureInfo.InvariantCulture)) > 5; }); if (on < 0) on = hist[k].Count - 1; for (int q = Math.Max(0, on - 30); q < Math.Min(hist[k].Count, on + 12); q += 2) Console.WriteLine(hist[k][q]); } hist[k].Clear(); }
             }
         if (steps % 4 == 1) for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) Traffic.Collide(ds[i].car, ds[j].car);
-        foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); d.car.Step(d.LastInput, H); }
+        foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx); d.car.Step(d.LastInput, H); }
         time += H;
     }
     return;
@@ -701,7 +868,7 @@ if (args.Length > 0 && args[0] == "audit")
         var ends = new List<string>(); double vPk = 0; bool onStraight = false; double flatT = 0;
         while (d.lap < 3 && time < 600)
         {
-            if (steps++ % 4 == 0) { d.Think(4 * H, time, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); }
+            if (steps++ % 4 == 0) { d.Think(4 * H, time, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx); }
             var c = d.car; c.Step(d.LastInput, H); time += H;
             if (d.lap != 2) continue;
             double v = Math.Sqrt(c.vx * c.vx + c.vy * c.vy) * 3.6, kw = c.ersKw;
@@ -894,7 +1061,7 @@ if (args.Length > 0 && args[0] == "traffic")
                 var d = C(k);
                 if (d.InPit) { d.PitStep(H, time); continue; }
                 if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1);
-                if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
+                if (hf != null && steps % 4 == 1) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx);
                 d.car.Step(d.LastInput, H);
             }
             time += H;
@@ -954,7 +1121,7 @@ if (args.Length > 0 && args[0] == "traffic")
             d.Place(t.N - 30, line.off[t.N - 30]); double time = 0; int steps = 0;
             while (d.lap < 3 && time < 600)
             {
-                if (steps++ % 4 == 0) { d.Think(4 * H, time, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading); }
+                if (steps++ % 4 == 0) { d.Think(4 * H, time, null, null, -1, 0); WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx); }
                 d.car.Step(d.LastInput, H); time += H;
             }
             return d.lastLap;
@@ -1083,13 +1250,13 @@ if (args.Length > 0 && args[0] == "perf")
             sw[0].Start(); for (int k = 0; k < n; k++) { ds[k].Think(4 * H, time, ds, null, -1, 0); if (ds[k].idx >= 0) Traffic.Wall(ds[k].car, t.pts[ds[k].idx], ds[k].lateral, wall); } sw[0].Stop();
             sw[1].Start(); for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) Traffic.Collide(ds[i].car, ds[j].car);
             if (lod) for (int k = 1; k < n; k++) want[k] = time > 60 ? AiLod.WantFor(t, pIdx, k, ds) : 1; sw[1].Stop();
-            sw[4].Start(); if (hf != null) for (int k = 1; k < n; k++) ds[k].car.grade = hf.Grade(ds[k].car.x, ds[k].car.y, ds[k].car.heading); sw[4].Stop();
+            sw[4].Start(); if (hf != null) for (int k = 1; k < n; k++) ds[k].car.grade = hf.GradeAlong(ds[k].car.x, ds[k].car.y, ds[k].car.heading, ds[k].idx); sw[4].Stop();
         }
         sw[2].Start();
         { var c0 = ds[0].car; var nr = t.Nearest(c0.x, c0.y, pIdx); pIdx = nr.idx; WheelContact.Update(t, line, c0, nr.idx, nr.lateral, 0.5, 0); }
         if (steps % 4 == 1) for (int k = 1; k < n; k++) WheelContact.Update(t, line, ds[k].car, ds[k].idx, ds[k].lateral, 0.5, 0);
         sw[2].Stop();
-        sw[4].Start(); if (hf != null) ds[0].car.grade = hf.Grade(ds[0].car.x, ds[0].car.y, ds[0].car.heading); sw[4].Stop();
+        sw[4].Start(); if (hf != null) ds[0].car.grade = hf.GradeAlong(ds[0].car.x, ds[0].car.y, ds[0].car.heading, ds[0].idx); sw[4].Stop();
         sw[3].Start();
         ds[0].car.Step(ds[0].LastInput, H);
         for (int k = 1; k < n; k++)
@@ -1174,7 +1341,7 @@ if (args.Length > 0 && args[0] == "race")
             for (int k = 0; k < n; k++)
             {
                 var d = ds[k];
-                if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
+                if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); if (hf != null && steps % 4 == 1) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx);
                 // COARSE=1: the game's far-rival saving (GameManagerPerf.cs) with car 0 standing in for the player and camera
                 // (as RivalCoarse: skip a tick, then 2 ticks at once; a car leaving 120 Hz while a tick behind catches up)
                 bool cs = coarse && k > 0 && time > 60 && Coarse(t, ds[0], d);
@@ -1344,7 +1511,7 @@ Console.WriteLine($"  worst {worstPos:E2} m at {worstAt}; {(worstPos < 1e-3 ? "M
                 dd.Place(t2.N - 30, line.off[t2.N - 30]);
                 while (dd.lap < laps && tt < 600)
                 {
-                    if (st++ % 4 == 0) { dd.Think(4 * H, tt, null, null, -1, 0); WheelContact.Update(t2, line, dd.car, dd.idx, dd.lateral, 1); if (hf != null) dd.car.grade = hf.Grade(dd.car.x, dd.car.y, dd.car.heading); }
+                    if (st++ % 4 == 0) { dd.Think(4 * H, tt, null, null, -1, 0); WheelContact.Update(t2, line, dd.car, dd.idx, dd.lateral, 1); if (hf != null) dd.car.grade = hf.GradeAlong(dd.car.x, dd.car.y, dd.car.heading, dd.idx); }
                     dd.car.Step(dd.LastInput, H); tt += H;
                 }
                 return dd.lastLap;

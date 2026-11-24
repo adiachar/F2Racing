@@ -261,7 +261,7 @@ public partial class GameManager
                 {
                     var d = rv[k];
                     d.Think(4 * H, g.simTime, rv, g.PsAiSees(), g.idx, g.playerLat);
-                    var rc = d.car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(rc.x, rc.y, rc.heading) : 0;
+                    var rc = d.car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(rc.x, rc.y, rc.heading, d.idx) : 0;
                     if (d.idx >= 0) Traffic.Wall(rc, g.track.pts[d.idx], d.lateral, g.wallAt);
                 }
                 for (int s = 0; s < M; s++) if (drv[s] != null) Advance(s, drv[s].idx);

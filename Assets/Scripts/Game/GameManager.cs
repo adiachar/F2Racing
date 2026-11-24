@@ -457,7 +457,7 @@ public partial class GameManager : MonoBehaviour
             {
                 rivals[i].Think(4 * H, simTime, rivals, PsAiSees(), idx, playerLat); // PsAiSees: the player's car, or null while he is a penalty ghost (PenaltyServe.cs)
                 if (rivals[i].InPit) continue; // driven along the pit lane (PitStep below)
-                var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(rc.x, rc.y, rc.heading) : 0;
+                var rc = rivals[i].car; rc.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(rc.x, rc.y, rc.heading, rivals[i].idx) : 0;
                 if (rivals[i].idx >= 0) Traffic.Wall(rivals[i].car, track.pts[rivals[i].idx], rivals[i].lateral, wallAt);
             }
             RcStep(); // race control sees every car (GameManagerRaceControl.cs)
@@ -852,7 +852,7 @@ public partial class GameManager : MonoBehaviour
             {
                 SetSurface();
                 LineCheck(simTime); // the timing line, every step (idx is before the step here)
-                if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.GradeAlong(car.x, car.y, car.heading);
+                if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.GradeAlong(car.x, car.y, car.heading, idx);
                 car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
                 car.Step(PostInput(PsInput(StartInput(input))), H); // the start: revs only on the grid, launch clutch after lights out; PsInput: serving a live penalty (PenaltyServe.cs); PostInput: the cool-down lap's autopilot (PostRace.cs)
                 StartAfterStep();
@@ -1278,7 +1278,7 @@ public partial class GameManager : MonoBehaviour
             for (int j = 0; j <= len; j += step12)
             {
                 var q = track.pts[W(from - back + j)];
-                tgt.Add(new Vector3((float)q.x, WorldBuilder.H(q.x, q.y) + 0.9f, (float)q.y));
+                tgt.Add(new Vector3((float)q.x, WorldBuilder.HOn(W(from - back + j), q.x, q.y) + 0.9f, (float)q.y)); // (HOn: its own leg at a bridge, not the deck above)
             }
             // the solids anywhere near that stretch (bounding box of the targets, grown by the camera's offset)
             float x0 = float.MaxValue, z0 = float.MaxValue, x1 = float.MinValue, z1 = float.MinValue;
