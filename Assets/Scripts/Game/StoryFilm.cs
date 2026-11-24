@@ -228,6 +228,7 @@ public partial class GameManager
         readonly People.PoseBuf pa = new People.PoseBuf(), pb = new People.PoseBuf();
         // shared by the film: the flag mesh and its materials
         Mesh flagMesh; Material poleMat, yellowMat, teamFlagMat;
+        Texture2D scrim; // the soft dark ground behind the captions (made once per film)
 
         sealed class Actor
         {
@@ -253,8 +254,11 @@ public partial class GameManager
             savedWeather = Weather.Index;
             bool season = Season.Active && Season.Data != null && Season.Data.team >= 0 && Season.Data.team < Season.Teams.Count;
             team = season ? Livery.ForTeam(Season.Data.team, Season.TeamColour(Season.Data.team)) : Livery.Player[Mathf.Clamp(g.liveryIdx, 0, Livery.Player.Length - 1)];
-            argent = Livery.Teams[0];
-            teo = new Livery("Varga", new Color(0.03f, 0.06f, 0.22f), new Color(0.93f, 0.93f, 0.95f), new Color(0.93f, 0.93f, 0.95f), 3); // navy, white centre stripe
+            // navy with a white centre stripe: a brighter navy than a modern livery (the wet clear coat mirrors the grey sky)
+            // and a navy edge line, so only the stripe and the wings are white
+            teo = new Livery("Varga", new Color(0.05f, 0.13f, 0.46f), new Color(0.93f, 0.93f, 0.95f), new Color(0.03f, 0.07f, 0.26f), 3);
+            // Argent: carbon black, the silver only on the engine cover and nose (as the team's livery), a darker line
+            argent = new Livery("Argent", new Color(0.03f, 0.035f, 0.04f), new Color(0.62f, 0.65f, 0.68f), new Color(0.02f, 0.02f, 0.025f), 1);
             mia = new Livery("Mia", new Color(0.86f, 0.08f, 0.06f), new Color(1f, 0.80f, 0.10f), new Color(0.05f, 0.05f, 0.06f));
             marshal = new Livery("Marshal", new Color(1f, 0.42f, 0.05f), new Color(0.95f, 0.95f, 0.95f), new Color(0.1f, 0.1f, 0.1f));
             Stages();
@@ -420,6 +424,10 @@ public partial class GameManager
                 default: Celebrate(lt, u); break;
             }
             Animate(lt);
+            // the flashback's rain dims the cars' sun to a third: lift it so the two cars read (GameManager.Update sets
+            // it again from scratch every frame, so this lasts this frame only)
+            if (Flashback(cards[b].scene) && LightBake.Active && LightBake.CarSun != null)
+                LightBake.CarSun.intensity = Mathf.Max(LightBake.CarSun.intensity, 1.25f * Sky.CarSunShare * 1.9f);
             g.camVel = Vector3.zero;
             g.FpsWindowReset(2f); // the whole circuit may be in view: Auto never steps the frame rate down for it
             return true;
@@ -503,8 +511,7 @@ public partial class GameManager
                     bool nico = c.who == StoryCard.Nico;
                     riv = Driver(argent, argent.secondary, !nico, People.GCap);
                     if (riv != null) { riv.clip = People.FoldArms; riv.lodK = 0.5f; }
-                    m1 = Crew(501, argent, People.OMechanic, People.GCap); if (m1 != null) m1.clip = People.Kneel;
-                    m2 = Engineer(502, argent, false);
+                    m1 = Crew(501, argent, People.OMechanic, People.GCap); if (m1 != null) m1.clip = People.Kneel; // (one, at the far wheel)
                     break;
                 }
                 case StoryCard.SRivalLeaves:
@@ -850,17 +857,19 @@ public partial class GameManager
             Put(drv, at, Yaw(-pG));
             Look(drv, SP(false, 0.4f, 0f) + Vector3.up * 0.75f, 0.85f); // into the cockpit
             Vector3 head = Head(drv, at + Vector3.up * 1.6f);
+            // wide from the lane (the whole car, him beside its cockpit), then a slow push-in that keeps the car in frame;
+            // he sits in the centre-left third, high enough to clear the captions
             if (u < 0.5f)
             {
                 float e = PrSmooth(u / 0.5f);
-                Vector3 p = SP(false, -5.5f + 1.2f * e, -4.6f) + Vector3.up * 1.55f;
-                Cam(p, Vector3.Lerp(head, car + Vector3.up * 0.6f, 0.4f), 34f, 0.1f, 0f, Hand(0.2f, 0.5f, 4.4f, lt));
+                Vector3 p = SP(false, 4.5f - 1.0f * e, -8.6f) + Vector3.up * 1.7f;
+                Cam(p, head - Vector3.up * 0.35f, 42f, -0.3f, 0.12f, Hand(0.18f, 0.5f, 4.4f, lt));
             }
             else
             {
                 float e = PrSmooth((u - 0.5f) / 0.5f);
-                Vector3 p = SP(false, 2.7f - 0.4f * e, -1.9f + 0.3f * e) + Vector3.up * 1.35f;
-                Cam(p, head - Vector3.up * 0.1f, Mathf.Lerp(27f, 22f, e), -0.25f, 0.1f, Hand(0.18f, 0.6f, 6.6f, lt));
+                Vector3 p = SP(false, 3.4f - 0.5f * e, -6.4f + 0.8f * e) + Vector3.up * 1.6f;
+                Cam(p, head - Vector3.up * 0.25f, Mathf.Lerp(34f, 29f, e), -0.3f, 0.15f, Hand(0.15f, 0.5f, 6.6f, lt));
             }
         }
 
@@ -871,13 +880,12 @@ public partial class GameManager
             Vector3 at = SP(true, -3.5f, Mathf.Min(1.4f, rGd - 0.4f));
             Put(riv, at, Yaw(-rG));
             Put(m1, SP(true, 1.65f, 1.25f), Yaw(-rG));
-            Put(m2, SP(true, 3.3f, 1.4f), Yaw(-rG) - 30f);
+            // wide from the lane with the car beside him, a slow push-in; Raske alone in the centre-left third
             float e = PrSmooth(u);
-            Vector3 p = SP(true, -1.1f - 1.0f * e, -6.0f + 2.2f * e) + Vector3.up * 1.5f;
+            Vector3 p = SP(true, -0.6f - 0.6f * e, -9.0f + 2.4f * e) + Vector3.up * 1.6f;
             Vector3 head = Head(riv, at + Vector3.up * 1.6f);
-            Cam(p, head - Vector3.up * 0.15f, Mathf.Lerp(30f, 20f, e), 0.25f, 0.05f, Hand(0.12f, 0.4f, 8.8f, lt));
+            Cam(p, head - Vector3.up * 0.3f, Mathf.Lerp(40f, 30f, e), -0.3f, 0.14f, Hand(0.12f, 0.4f, 8.8f, lt));
             Look(riv, camPos, 0.75f); // into the lens
-            Look(m2, car + Vector3.up * 0.6f, 0.5f);
         }
 
         void RivalLeaves(float lt, float u)
@@ -1057,9 +1065,10 @@ public partial class GameManager
             // the flashback look: a cold dusk tint and a vignette
             if (Flashback(sc))
             {
-                UiKit.Rect(new Rect(0, 0, W, H), new Color(0.03f, 0.05f, 0.13f, 0.36f));
-                float vw = W * 0.22f, vh = H * 0.26f;
-                var dark = new Color(0f, 0f, 0f, 0.55f); var clear = new Color(0f, 0f, 0f, 0f);
+                // a cool haze that lifts the darks (the rain deck is dark enough), then a light vignette
+                UiKit.Rect(new Rect(0, 0, W, H), new Color(0.46f, 0.53f, 0.66f, 0.13f));
+                float vw = W * 0.16f, vh = H * 0.2f;
+                var dark = new Color(0.01f, 0.02f, 0.05f, 0.4f); var clear = new Color(0.01f, 0.02f, 0.05f, 0f);
                 UiKit.Gradient(new Rect(0, 0, W, vh), dark, clear);
                 UiKit.Gradient(new Rect(0, H - vh, W, vh), clear, dark);
                 UiKit.Gradient(new Rect(0, 0, vw, H), dark, clear, 0f, true);
@@ -1092,6 +1101,23 @@ public partial class GameManager
             if (black > 0.004f) UiKit.Rect(new Rect(0, 0, W, H), new Color(0f, 0f, 0f, Mathf.Clamp01(black)));
         }
 
+        // black, alpha 0.72 at the bottom left, falling smoothly to 0 at the right edge and the top (64 x 32, once)
+        static Texture2D Scrim()
+        {
+            const int w = 64, h = 32;
+            var t = new Texture2D(w, h, TextureFormat.RGBA32, false) { name = "StoryScrim", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            var px = new Color32[w * h];
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    float u = x / (w - 1f), v = y / (h - 1f); // v = 0 at the bottom row (drawn at the bottom)
+                    float ax = 1f - u * u * (3f - 2f * u), ay = 1f - v * v * (3f - 2f * v);
+                    px[y * w + x] = new Color32(0, 0, 0, (byte)(255f * 0.72f * Mathf.Sqrt(ax) * ay));
+                }
+            t.SetPixels32(px); t.Apply(false, true);
+            return t;
+        }
+
         Font TitleFont(StoryCard c) => c.kind == StoryCard.Quote || c.kind == StoryCard.Message || (c.title != null && c.title.StartsWith("“", System.StringComparison.Ordinal)) ? UiKit.HeavyItalic : UiKit.Heavy;
 
         void Measure(int b)
@@ -1122,11 +1148,17 @@ public partial class GameManager
             float aB = c.body != null ? UiKit.EaseOut((lt - bodyAt[b]) / 0.6f) * fade : 0f;
             float aG = Mathf.Max(aK, aT);
             if (aG <= 0.003f) return;
-            // the ground under the text
-            UiKit.Gradient(new Rect(0, H * 0.42f, W, H * 0.58f), new Color(0f, 0f, 0f, 0f), new Color(0f, 0f, 0f, 0.62f * aG));
-
             float x = safe.x + UiKit.U(30), bottom = H - lb - UiKit.U(18);
             float yB = bottom - bodyH, yT = (c.body != null ? yB - UiKit.U(8) : bottom) - titleH, yK = yT - UiKit.U(18);
+            // the soft dark ground under the text block (bottom left, fading out to the right and upwards)
+            if (scrim == null) scrim = Scrim();
+            if (scrim != null)
+            {
+                float sx1 = Mathf.Max(W * 0.5f, x + figW + capW + UiKit.U(90)), sy0 = Mathf.Max(0f, yK - UiKit.U(70));
+                var old = GUI.color; GUI.color = new Color(1f, 1f, 1f, aG * old.a);
+                GUI.DrawTexture(new Rect(0, sy0, sx1, H - sy0), scrim, ScaleMode.StretchToFill, true);
+                GUI.color = old;
+            }
             if (c.figure != null)
             {
                 UiKit.PushAlpha(aT);
@@ -1185,6 +1217,8 @@ public partial class GameManager
             if (poleMat != null) Object.Destroy(poleMat);
             if (yellowMat != null) Object.Destroy(yellowMat);
             if (teamFlagMat != null) Object.Destroy(teamFlagMat);
+            if (scrim != null) Object.Destroy(scrim);
+            scrim = null;
             flagMesh = null; poleMat = yellowMat = teamFlagMat = null;
         }
 
