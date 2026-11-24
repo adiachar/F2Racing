@@ -4,20 +4,20 @@
 //  * PsAward: the seconds go into pitLoss as before (the order, the tower and the radio count them at once) and into
 //    psOwed. As he serves, both go down together, so his place in the order never jumps.
 //  * Serving (PsInput, every physics step, on the player's INPUT only, like a pit limiter; the car's physics is not
-//    touched): the time lost is lost += (1 - v / v_ref) dt, v_ref = the racing line's target speed at the car's point,
+//    touched): the timer runs in REAL seconds (a 5 s penalty takes 5 s; Nov 24) while the car is held very slow: the
+//    cap is CapShare of v_ref and the car brakes itself down to it. (Before: the time lost, lost += (1 - v / v_ref) dt, v_ref = the racing line's target speed at the car's point,
 //    wet-scaled as RacingLineView does (sqrt of the grip) and scaled to the player's own pace (his best lap against
 //    the line's lap; 0.97-1.3), so the time he really loses is the penalty. His speed is capped at CapShare of v_ref
-//    (never below 60 km/h): the throttle fades out over the last few km/h below the cap, and boost, Overtake Mode
+//    (never below 50 km/h): the throttle fades out over the last few km/h below the cap, and boost, Overtake Mode
 //    and the deploy map are cut near it (above the cap the throttle is 0, so the MGU-K gives nothing either).
-//    Done when the lost time reaches the penalty. Serving waits under SC / VSC, in the pit lane and in the last 200 m
+//    done when the lost time reached the penalty.) Serving waits under SC / VSC, in the pit lane and in the last 200 m
 //    of the race; what is left at the flag stays added to his time (as before).
 //  * Ghost: while serving, no contact between the player and any rival (PlayerContact skips the pair; rivals still
 //    hit each other) and the rivals' race craft does not see him (PsAiSees: AiDriver.Think gets no player car). After
 //    the penalty he stays a ghost until no car overlaps him, then fades back in over 1 s (the rivals see him again
 //    during that second; contact returns at its end).
-//  * Look: a float _Ghost 0..1 on the player's car renderers through ONE cached MaterialPropertyBlock (read back
-//    first, so blocks other code set are kept): a slow gentle pulse while a ghost, 0 in the cockpit / halo views. The
-//    car shaders' dithered fade for it is the graphics account's (Docs/COORDINATION.md); until then it does nothing.
+//  * Look: CarGhost.Set (F2_GHOST twin materials, dithered fade ~80 % of the pixels at 1): a slow gentle pulse while
+//    a ghost, 0 in the cockpit / halo views.
 //  * HUD (from DrawRcHud): "PENALTY · SLOW DOWN" in the race HUD's dark glass, an amber dot, the seconds left and a
 //    thin amber bar of the time still to serve; "PENALTY · ON HOLD" while serving waits.
 //  * Results (PsResults, after MenuUI.ShowResults): only the unserved seconds are added; the chip reads "served".
@@ -28,7 +28,7 @@ using UnityEngine;
 
 public partial class GameManager
 {
-    const double CapShare = 0.78, CapMin = 60 / 3.6, CapBand = 0.04, HoldLastM = 200;
+    const double CapShare = 0.35, CapMin = 50 / 3.6, CapBand = 0.04, HoldLastM = 200;
     const float GhostFadeIn = 1f, GhostFadeOut = 0.5f, GhostPulseT = 1.8f;
     double psOwed, psBatch, psServed, psBank, psVScale = 1;   // s still to serve, this batch (bar), served, lost not yet booked
     bool psServing, psLive, psGhost, psFading;              // serving now; serving is possible; ghost (no contact); fading in
@@ -45,6 +45,7 @@ public partial class GameManager
         psOwed = psBatch = psServed = psBank = 0; psServing = psGhost = psFading = false; psVis = 0f;
         psLive = true;
         PsWrite(0f);
+        if (model != null) CarGhost.Prepare(model.gameObject); // twins + shader variant warmed now, not mid-race
     }
 
     // a time penalty for the player: true = it is served on track (else it is only added, as before)
@@ -75,15 +76,12 @@ public partial class GameManager
         if (v > cap * 0.95 && car.deployMap > 0) car.deployMap = 0;
         double k = (cap - v) / (cap * CapBand + 0.5);
         if (k < 1) inp.throttle *= k > 0 ? k : 0;
-        // the time lost against the reference
-        psBank += (1 - v / vref) * H;
-        if (psBank < -2) psBank = -2;
-        if (psBank > 0)
-        {
-            double take = System.Math.Min(psBank, psOwed);
-            psOwed -= take; psBank -= take; psServed += take; pitLoss -= take;
-            if (psOwed <= 1e-9) { psOwed = 0; psBatch = 0; psBank = 0; psServing = false; }
-        }
+        // well above the cap the car brakes itself down to it, like a pit limiter (Adi: "very slow")
+        if (v > cap * 1.05) { double b = System.Math.Min(0.6, (v / cap - 1.05) * 1.5); if (inp.brake < b) inp.brake = b; }
+        // the timer runs in real seconds (Adi: a 5 s penalty must take 5 s, not ~23 s of lost time at 78 %)
+        double take = System.Math.Min(H, psOwed);
+        psOwed -= take; psServed += take; pitLoss -= take;
+        if (psOwed <= 1e-9) { psOwed = 0; psBatch = 0; psBank = 0; psServing = false; }
         return inp;
     }
 
@@ -142,28 +140,18 @@ public partial class GameManager
         if (model != psRendFor)
         {
             if (psGhostSet != 0f) PsWrite(0f);              // the car model was swapped (PickPlayerModel): clear the old one
-            psRend = null; psRendFor = model; psGhostSet = 0f; // (a new model has nothing of ours on it)
-            if (g <= 0f) return;                             // looked up only once a ghost is needed
+            psRendFor = model; psGhostSet = 0f;              // (a new model has nothing of ours on it)
+            if (g <= 0f) return;
         }
         if (Mathf.Abs(g - psGhostSet) < 0.004f && (g > 0f || psGhostSet == 0f)) return;
         PsWrite(g);
     }
 
+    // through CarGhost: it swaps in the F2_GHOST twin materials while g > 0 (a plain _Ghost value alone draws nothing)
     void PsWrite(float g)
     {
-        if (psRend == null)
-        {
-            if (g <= 0f || model == null) { psGhostSet = 0f; return; }
-            psRend = model.GetComponentsInChildren<Renderer>(true); psRendFor = model; // once per car model
-        }
-        if (psMpb == null) psMpb = new MaterialPropertyBlock();
-        for (int i = 0; i < psRend.Length; i++)
-        {
-            var r = psRend[i]; if (r == null) continue;
-            r.GetPropertyBlock(psMpb);                       // keep what other code set on it
-            psMpb.SetFloat(GhostId, g);
-            r.SetPropertyBlock(psMpb);
-        }
+        var m = psRendFor != null ? psRendFor : model;
+        if (m != null) CarGhost.Set(m.gameObject, g);
         psGhostSet = g;
     }
 

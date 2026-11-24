@@ -18,7 +18,7 @@ float F2Bayer4(float2 sp)
     return (4.0 * (2.0 * xl + lo.y) + 2.0 * xh + hi.y + 0.5) * (1.0 / 16.0);
 }
 // drops the pixel when its threshold is under 0.55 g (g > 0 only: at 0 nothing would drop anyway)
-void F2GhostClip(float2 sp, float g) { clip(F2Bayer4(sp) - 0.55 * g); }
+void F2GhostClip(float2 sp, float g) { clip(F2Bayer4(sp) - 0.8 * g); } // 0.8: low opacity (Adi), was 0.55
 // linear colour before fog / grade: a little cooler and paler, and a soft blue-white lift towards the silhouette.
 // graze: (1 - N.V)^2 or similar, 0 facing the camera .. 1 at the edge
 float3 F2GhostTint(float3 col, float g, float graze)
