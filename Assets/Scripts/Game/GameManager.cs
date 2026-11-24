@@ -332,8 +332,8 @@ public partial class GameManager : MonoBehaviour
     void BuildLine()
     {
         if (lineView != null) lineView.Destroy(); else if (lineGo != null) Destroy(lineGo);
-        var lc = CarConfig.ForClass(classIdx); lc.aeroFront = aeroBal / 100.0;
-        line = RacingLine.Compute(track, lc); lineFor = classIdx;
+        var lc = CarConfig.ForClass(classIdx); lc.aeroFront = aeroBal / 100.0; ScaleAero(lc); // Settings > Downforce (every car, and so the line)
+        line = RacingLine.Compute(track, lc); lineFor = classIdx; lineAero = AeroPct;
         lineView = RacingLineView.Build(track, line, world.transform); lineGo = lineView != null ? lineView.go : null; // draped itself (vertex heights)
         var rubber = Scenery.Rubber(track, line, world.transform);
         var boards = Scenery.Boards(track, line, world.transform, (float)Traffic.WallOffset(track));
@@ -406,7 +406,7 @@ public partial class GameManager : MonoBehaviour
         {
             // spread the picks over the whole field: stars, midfield and backmarkers
             var who = field != null ? field[k] : grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
-            var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel();
+            var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel(); ScaleAero(rc);
             rc.compound = Weather.PhysicsCompound(rivalSet); rc.damage = DamageNow == 2; // a career round always has damage (CareerSession.cs)
             TyreRulesFor(rc, rivalSet); // the session's tyre wear and temperature, as the player's (TyrePit.cs)
             // the speed profile's grip share multiplies the tyre mu directly (RacingLine.SpeedProfile), so the wet
@@ -1457,7 +1457,7 @@ public partial class GameManager : MonoBehaviour
         FrameLog.SessionStart(); // the debug overlay's 2-minute summary starts again
         raceLaps = ui.practice ? 0 : MenuUI.LapCounts[ui.lapsIdx];
         PrepareSession(); // weekend / championship: qualifying, circuit of the round, grid (Qualifying.cs)
-        if (lineFor != classIdx && world != null) { Destroy(world); world = null; } // new class: rebuild with its racing line
+        if ((lineFor != classIdx || lineAero != AeroPct) && world != null) { Destroy(world); world = null; } // new class: rebuild with its racing line
         LoadMap(); ApplyWeather(); // the menu may have changed the weather
         if (raceLaps > 0) raceLaps = RaceDistanceLaps(raceLaps); // Settings > Race distance (GameManagerRaceControl.cs)
         menuOpen = false; ApplyScreenLock();

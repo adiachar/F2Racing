@@ -47,6 +47,34 @@ if (args.Length > 0 && args[0] == "spin")
     return;
 }
 
+// ---- straight-line braking stability: dotnet run -- brakes ----
+// Full brake on a straight from a speed, with a small disturbance (a 0.03 rad/s yaw kick, or a hint of steering as a
+// touch / tilt player gives). Reports the heading change, the body slip and the time the front / rear locked or ABS
+// worked. ABS on / off, downforce 100 / 60 %. Pure check, changes nothing.
+if (args.Length > 0 && args[0] == "brakes")
+{
+    foreach (double kmh in new[] { 300.0, 200.0, 120.0 })
+    foreach (double df in new[] { 1.0, 0.6 })
+    foreach (bool abs in new[] { true, false })
+    foreach (var (dname, r0, st) in new[] { ("yaw kick", 0.03, 0.0), ("steer 3%", 0.0, 0.03) })
+    {
+        var cfg = CarConfig.ForClass(0); cfg.abs = abs; cfg.clA *= df; cfg.clAX *= df;
+        var car = new FormulaCar(cfg) { vx = kmh / 3.6, r = r0 };
+        // settle 0.5 s at speed on a trickle of throttle, then brake
+        for (int i = 0; i < 120; i++) car.Step(new CarInput(0, 0.6, 0), H);
+        car.r = r0; double h0 = car.heading, maxB = 0, maxDh = 0; int lf = 0, lr = 0, ab = 0, n = 0; double tStop = 0;
+        for (int i = 0; i < 240 * 8 && car.vx > 15 / 3.6; i++)
+        {
+            car.Step(new CarInput(st, 0, 1), H); n++;
+            double b = Math.Abs(Math.Atan2(car.vy, Math.Max(0.1, car.vx))) * 180 / Math.PI; if (b > maxB) maxB = b;
+            double dh = Math.Abs(car.heading - h0) * 180 / Math.PI; if (dh > maxDh) maxDh = dh;
+            if (car.lockF) lf++; if (car.lockR) lr++; if (car.absActive) ab++; tStop = i * H;
+        }
+        Console.WriteLine($"{kmh,4:F0} km/h DF {df * 100,3:F0}% ABS {(abs ? "on " : "off")} {dname,-9}: heading change {maxDh,6:F1} deg, max slip {maxB,5:F1} deg, locked F {lf * 100.0 / n,4:F0}% R {lr * 100.0 / n,4:F0}%, ABS working {ab * 100.0 / n,4:F0}%, to 15 km/h in {tStop:F2} s{(maxB > 15 ? "  ** SPUN **" : maxB > 5 ? "  * slides *" : "")}");
+    }
+    return;
+}
+
 // ---- bridge check: dotnet run -- bridge [circuit id, default suzuka] ----
 // Where the lap crosses itself (Suzuka's figure eight) the car's ground height (HeightField.SampleAlong: the car
 // model's height, the physics grade) must stay on the leg the car drives along: under the bridge the lower road, on

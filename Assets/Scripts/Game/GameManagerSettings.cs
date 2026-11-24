@@ -149,8 +149,19 @@ public partial class GameManager
         // (Off = exactly the original car, whatever the sliders say)
         float tg = handTest ? gripPct : 100f, tr = handTest ? rearGripPct : 100f, td = handTest ? downPct : 100f;
         c.mu = b.mu * tg * 0.01; c.rearGrip = b.rearGrip * tr * 0.01;
-        c.clA = b.clA * td * 0.01; c.clAX = b.clAX * td * 0.01;
+        c.clA = b.clA * td * 0.01 * AeroPct * 0.01; c.clAX = b.clAX * td * 0.01 * AeroPct * 0.01; // x Settings > Downforce (all cars)
     }
+    // ---- Settings > Downforce: every car's aero (clA, clAX) x AeroPct; pref "aeroPct" (Adi, Nov 25: 60 % by default)
+    internal static readonly string[] AeroNames = { "Fun 60%", "70%", "80%", "Real 100%" };
+    static readonly int[] AeroVals = { 60, 70, 80, 100 };
+    int aeroIdxCache = -1, lineAero = -1;
+    int AeroIdx
+    {
+        get { if (aeroIdxCache < 0) { int p = PlayerPrefs.GetInt("aeroPct", 60); aeroIdxCache = 0; for (int i = 0; i < AeroVals.Length; i++) if (AeroVals[i] == p) aeroIdxCache = i; } return aeroIdxCache; }
+        set { aeroIdxCache = Mathf.Clamp(value, 0, AeroVals.Length - 1); PlayerPrefs.SetInt("aeroPct", AeroVals[aeroIdxCache]); }
+    }
+    int AeroPct => AeroVals[AeroIdx];
+    void ScaleAero(CarConfig c) { double k = AeroPct * 0.01; c.clA *= k; c.clAX *= k; }
     void SetupChanged() { if (car != null) ApplySetup(car.cfg); } // takes effect at once, also in a race
 
     void ApplyAudio()
@@ -288,7 +299,7 @@ public partial class GameManager
         setup.Toggle("Handling test", "Off = the original car, always. On = the three Test sliders below change your car (only yours). Tip: for power slides set Traction control Off.", false, () => handTest, v => { handTest = v; SetupChanged(); });
         setup.Slider("Test: tyre grip", "Handling test, your car only. Grip of all four tyres at every speed. 100% = the real car.", 80, 110, 1, 100, () => gripPct, v => { gripPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
         setup.Slider("Test: rear grip", "Handling test, your car only. Less = the rear steps out sooner, e.g. full throttle out of a medium-speed corner. 100% = the real car.", 80, 110, 1, 100, () => rearGripPct, v => { rearGripPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
-        setup.Slider("Test: downforce", "Handling test, your car only. Grip that grows with speed (aero). Less = less grip in fast and medium corners, a bit faster on straights. 100% = the real car.", 60, 110, 1, 100, () => downPct, v => { downPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
+        setup.Slider("Test: downforce", "Handling test, your car only, on top of GAME > Downforce. 100% = no change.", 60, 110, 1, 100, () => downPct, v => { downPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
 
         // ---- CAMERA
         var camTab = new SettingsUI.Tab("CAMERA");
@@ -359,6 +370,8 @@ public partial class GameManager
         game.Choice("Story", "The career's story. Film: short 3D scenes with the game's own cars, people and circuits (a tap: next scene, SKIP ends it). Cards: the text cards. Off: only your goals.",
             StoryFilms.ModeNames, StoryFilms.ModeFilm, () => StoryFilms.Mode, v => StoryFilms.Mode = v); // (StoryFilm.cs)
         game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
+        game.Choice("Downforce", "Grip that grows with speed, for every car (rivals and the racing line too). Fun 60%: you brake earlier for fast corners. Real 100%: the real 2026 car (laps match real pole times). A change restarts the session.", AeroNames, 0,
+            () => AeroIdx, v => { AeroIdx = v; if (InRace) { BuildLine(); ResetCar(); } }).NoReset();
         game.Choice("Tyre wear", TyreWearHelp, TyreRules.Names, 0, () => InRace && InSeasonRound ? TyreRules.Auto : TyreWearPref, v => TyreWearPref = v)
             .LockedWhen(() => InRace && InSeasonRound ? "A career round always uses Auto." : null); // TyrePit.cs
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });

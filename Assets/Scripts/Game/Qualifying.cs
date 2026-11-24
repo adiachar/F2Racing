@@ -191,7 +191,7 @@ public partial class GameManager
     double BaseLap(DriverProfile who)
     {
         int set = Weather.BestSet();
-        var rc = CarConfig.ForClass(classIdx); rc.compound = Weather.PhysicsCompound(set);
+        var rc = CarConfig.ForClass(classIdx); ScaleAero(rc); rc.compound = Weather.PhysicsCompound(set);
         var tune = AiTuning.For(builtFor); tune.grip *= Weather.TrackFactor(set, 1);
         double diff = DiffScale[diffIdx];
         double grip = tune.grip * diff * (0.86 + 0.14 * who.pace), brake = tune.brakeUse * diff * (0.84 + 0.16 * who.pace);
