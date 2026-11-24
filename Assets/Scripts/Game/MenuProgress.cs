@@ -3,15 +3,20 @@
 //  * EXPERIENCE: "+410 XP" (ExtraBold ink), the level line (ink on its track) filling from the old XP to the new
 //    (0.6 s after the page opens, 1.4 s), a "LEVEL UP" tag popping in when it passes a level, the biggest three XP
 //    sources under it
+//  * DRIVER RATING (a race against rivals; DriverRating.cs): the grade letter, old -> new points, the change as a tag,
+//    "Grade up" / "Grade down" in the kicker line
 //  * SAFETY RATING: the grade letter (green S A B, ink C, amber D E), old -> new score, the change as a tag (white on
 //    green up, white on amber down, ink when unchanged), up to three reasons with their values (green good, amber bad)
 // Every string is built once when the race is recorded; the line and the level shown are the only things animated.
 // The progress REVEAL (after the post-race sequence, PostRace.cs: OpenResults(true)): a full-screen Paper page before the
 // results table. Left: the giant position, WINNER / PODIUM / IN THE POINTS, the championship points counting up (in a
 // season). Middle: +XP counting up, the level line filling (a red flash, a burst and a LEVEL UP stamp when it passes a
-// level, the level names switching), the XP sources one by one. Right: the safety grade (it flips with a pop, a GRADE UP
-// / GRADE DOWN stamp, a shake when it drops), the score counting from the old to the new value, the reasons one by one.
-// ~4.6 s; a tap finishes the animation, the next one (or Continue) opens the results table. Every string (count-up
+// level, the level names switching), the XP sources one by one. Right, top: the DRIVER RATING (a race against rivals):
+// the points counting from the old to the new value, the line to the next grade filling, and when it crosses a grade
+// the letter flips with a pop, a red burst and a GRADE UP stamp (GRADE DOWN + a shake when it drops), then the
+// "Beat 7 of 10 · field C" line. Right, below: the safety grade (it flips with a pop, a GRADE UP / GRADE DOWN stamp, a
+// shake when it drops), the score counting from the old to the new value, the reasons one by one.
+// ~5.4 s (~4.6 without a driver rating); a tap finishes the animation, the next one (or Continue) opens the results table. Every string (count-up
 // steps included) is built once when the reveal opens; the animation is a function of the reveal clock (shot mode can
 // freeze it: RevealSeek).
 using UnityEngine;
@@ -53,6 +58,29 @@ public sealed partial class MenuUI
         UiKit.Hair(x, x + w, y, UiKit.PaperTrack);
         y += U(7);
 
+        // ---- driver rating (a race against rivals)
+        if (o.drRated)
+        {
+            UiKit.Kicker(new Rect(x, y, w, U(14)), "Driver rating", 8.5f);
+            if (o.drGradeAfter != o.drGradeBefore)
+            {
+                bool better = o.drGradeAfter > o.drGradeBefore;
+                UiKit.Text(new Rect(x, y, w, U(14)), better ? "Grade up" : "Grade down", UiKit.Heavy, 9f, better ? UiKit.Red : UiKit.BadInk, TextAnchor.MiddleRight);
+            }
+            y += U(15);
+            UiKit.Text(new Rect(x, y, U(30), U(24)), DriverRating.Grades[o.drGradeAfter], UiKit.Heavy, 20f, DriverRating.GradeColor(o.drGradeAfter));
+            float dx = x + U(32), dbw = UiKit.Width(o.drBeforeStr, UiKit.Body, 10.5f);
+            UiKit.Text(new Rect(dx, y, dbw + U(2), U(24)), o.drBeforeStr, UiKit.Body, 10.5f, UiKit.InkSub);
+            UiKit.Icon(new Rect(dx + dbw + U(4), y + U(8), U(8), U(8)), UiKit.IconNext, UiKit.InkSub);
+            UiKit.Text(new Rect(dx + dbw + U(15), y, U(70), U(24)), o.drAfterStr, UiKit.Heavy, 13f, UiKit.Ink);
+            Color ddc = o.drDelta > 0 ? UiKit.GoodInk : o.drDelta < 0 ? UiKit.BadInk : UiKit.Ink;
+            float ddw = UiKit.StampWidth(o.drDeltaStr, 8.5f);
+            UiKit.Stamp(new Rect(x + w - ddw, y + U(4), ddw, U(16)), o.drDeltaStr, ddc, Color.white, 8.5f);
+            y += U(27);
+            UiKit.Hair(x, x + w, y, UiKit.PaperTrack);
+            y += U(7);
+        }
+
         // ---- safety rating
         UiKit.Kicker(new Rect(x, y, w, U(14)), "Safety rating", 8.5f);
         if (o.gradeAfter != o.gradeBefore)
@@ -90,10 +118,14 @@ public sealed partial class MenuUI
 
     // ================================================================== the progress reveal
     bool reveal; float revealAt, revealFixed = -1f;
-    const float RevealDone = 4.6f, RevealShotOff = 30f;
+    const float RevealShotOff = 30f;
+    float rvDone = 4.6f, rvSrAt;   // the reveal's end; the safety block's clock offset (later when DR comes first)
     string rvWord, rvOf; string[] rvXp, rvSr, rvPts; int rvSrMin, rvPtsN; float rvCross = -1f, rvXpW, rvSlashX;
     readonly string[] rvSrcLab = new string[3], rvSrcVal = new string[3]; int rvSrcN;
     const float RvFlip = 2.95f;
+    // driver rating: 32 steps of the points count, the clock time the count first crosses into another grade
+    string[] rvDr; float rvDrCross = -1f;
+    const float RvDrIn = 2.1f, RvDrCount = 2.4f, RvDrDur = 1.0f;
 
     // the results page; with the reveal first when there is a race outcome to show
     public void OpenResults(bool withReveal)
@@ -143,6 +175,21 @@ public sealed partial class MenuUI
         rvSrMin = Mathf.Min(a, b); rvSr = new string[Mathf.Abs(b - a) + 1];
         for (int i = 0; i < rvSr.Length; i++) rvSr[i] = (rvSrMin + i).ToString();
         rvSlashX = UiKit.Width("100", UiKit.Heavy, 26f);
+        // driver rating (a race against rivals): first on the right, the safety block 1.1 s later
+        rvDr = null; rvDrCross = -1f; rvSrAt = 0f; rvDone = 4.6f;
+        if (o.drRated)
+        {
+            rvSrAt = 1.1f; rvDone = 5.4f;
+            rvDr = new string[33];
+            for (int i = 0; i <= 32; i++) rvDr[i] = DriverRating.Pts(Mathf.RoundToInt(Mathf.Lerp(o.drBefore, o.drAfter, i / 32f)));
+            if (o.drGradeAfter != o.drGradeBefore && o.drAfter != o.drBefore)
+            {
+                int edge = o.drGradeAfter > o.drGradeBefore ? DriverRating.Floor[o.drGradeBefore + 1] : DriverRating.Floor[o.drGradeBefore];
+                float q = (edge - o.drBefore) / (float)(o.drAfter - o.drBefore), lo = 0f, hi = 1f;
+                for (int k = 0; k < 24; k++) { float mid = (lo + hi) * 0.5f; if (UiKit.EaseInOut(mid) < q) lo = mid; else hi = mid; }
+                rvDrCross = RvDrCount + RvDrDur * (lo + hi) * 0.5f;
+            }
+        }
         // championship points (a season round): count up to the number in the "+18 PTS" tag
         if (!ReferenceEquals(noteParsed, resultNote)) ParseNote();
         rvPtsN = 0; rvPts = null;
@@ -245,14 +292,69 @@ public sealed partial class MenuUI
         }
         if (kb >= 0.999f) { UiKit.PushAlpha(In(rc, 2.35f)); UiKit.Text(new Rect(colM, sy + U(2), wM, U(14)), o.xpAfterStr, UiKit.Body, 9f, UiKit.InkMuted); UiKit.PopAlpha(); }
 
-        // ---- right: the safety rating
-        e = In(rc, 2.2f);
+        // ---- right, top: the driver rating (a race against rivals)
+        float ry = top;
+        if (rvDr != null)
+        {
+            e = In(rc, RvDrIn);
+            if (e > 0.001f)
+            {
+                UiKit.PushAlpha(e);
+                bool dCross = rvDrCross >= 0f && rc >= rvDrCross, better = o.drGradeAfter > o.drGradeBefore;
+                float dSince = dCross ? rc - rvDrCross : -1f;
+                UiKit.Kicker(new Rect(colR, ry, wR, U(14)), "Driver rating", 8.5f);
+                if (dCross)
+                {
+                    string gt = better ? "GRADE UP" : "GRADE DOWN"; float gw = UiKit.StampWidth(gt, 8.5f);
+                    var gr = UiKit.Scale(new Rect(colR + wR - gw, ry - U(1), gw, U(16)), 1f + 0.4f * (1f - UiKit.EaseOut(dSince / 0.3f)));
+                    UiKit.Stamp(gr, gt, better ? UiKit.Red : UiKit.BadInk, Color.white, 8.5f);
+                }
+                // the points counting; the grade and the line follow the shown points
+                float dk = UiKit.EaseInOut((rc - RvDrCount) / RvDrDur);
+                float shown = Mathf.Lerp(o.drBefore, o.drAfter, dk);
+                int g = rc >= RvDrCount + RvDrDur ? o.drGradeAfter : DriverRating.GradeOf(shown);
+                float pop = dCross ? 1f + 0.45f * (1f - UiKit.EaseOut(dSince / 0.35f)) : 1f;
+                float shake = dCross && !better ? Mathf.Sin(dSince * 55f) * U(4f) * Mathf.Clamp01(1f - dSince / 0.45f) : 0f;
+                var gl = UiKit.Scale(new Rect(colR + shake, ry + U(14), U(56), U(48)), pop);
+                bool hot = dCross && better && dSince < 0.6f;
+                UiKit.Text(gl, DriverRating.Grades[g], UiKit.Heavy, 42f, hot ? UiKit.Red : DriverRating.GradeColor(g), TextAnchor.MiddleCenter);
+                if (dCross && better) Burst(gl.center, dSince / 0.7f, UiKit.Red);
+                float sx = colR + U(64);
+                int di = Mathf.Clamp(Mathf.RoundToInt(dk * 32f), 0, 32);
+                UiKit.Text(new Rect(sx, ry + U(14), wR - U(64), U(30)), rvDr[di], UiKit.Heavy, 24f, UiKit.Ink);
+                if (dk >= 0.999f)
+                {
+                    Color dc = o.drDelta > 0 ? UiKit.GoodInk : o.drDelta < 0 ? UiKit.BadInk : UiKit.Ink;
+                    float dw = UiKit.StampWidth(o.drDeltaStr, 9f);
+                    UiKit.Stamp(UiKit.Scale(new Rect(sx, ry + U(45), dw, U(16)), 1f + 0.3f * (1f - UiKit.EaseOut((rc - RvDrCount - RvDrDur) / 0.25f))), o.drDeltaStr, dc, Color.white, 9f);
+                }
+                // the line to the next grade (red while it flashes past a grade)
+                float ly = ry + U(68), lh = Mathf.Max(3f, Mathf.Round(U(4f))), fr = g >= 5 ? 1f : DriverRating.FracOf(shown);
+                UiKit.Rect(new Rect(colR, ly, wR, lh), UiKit.PaperTrack);
+                if (fr > 0.001f) UiKit.Rect(new Rect(colR, ly, Mathf.Max(lh, wR * fr), lh), hot ? UiKit.Red : UiKit.Ink);
+                if (dk > 0.001f && dk < 0.999f) UiKit.Rect(new Rect(colR + wR * fr - U(2), ly - U(2), U(4), lh + U(4)), UiKit.A(UiKit.Red, 0.85f), 2f);
+                UiKit.Text(new Rect(colR, ly + lh + U(2), wR, U(13)), DriverRating.NextLabel[g], UiKit.Body, 8.5f, UiKit.InkSub, TextAnchor.MiddleRight);
+                if (o.drNote != null)
+                {
+                    UiKit.PushAlpha(In(rc, RvDrCount + RvDrDur));
+                    UiKit.Text(new Rect(colR, ly + lh + U(2), wR, U(13)), o.drNote, UiKit.Body, UiKit.Fit(o.drNote, UiKit.Body, 8.5f, wR * 0.55f, 6.5f), UiKit.Ink);
+                    UiKit.PopAlpha();
+                }
+                UiKit.Hair(colR, colR + wR, ry + U(102), UiKit.PaperTrack);
+                UiKit.PopAlpha();
+            }
+            ry += U(112);
+        }
+
+        // ---- right: the safety rating (below the driver rating when there is one: smaller, 1.1 s later)
+        float so = rvSrAt; bool small = rvDr != null;
+        e = In(rc, 2.2f + so);
         if (e > 0.001f)
         {
             UiKit.PushAlpha(e);
-            float ry = top;
-            bool flipped = rc >= RvFlip, changed = o.gradeAfter != o.gradeBefore, better = o.gradeAfter < o.gradeBefore;
-            float sinceFlip = rc - RvFlip;
+            float flipAt = RvFlip + so;
+            bool flipped = rc >= flipAt, changed = o.gradeAfter != o.gradeBefore, better = o.gradeAfter < o.gradeBefore;
+            float sinceFlip = rc - flipAt;
             UiKit.Kicker(new Rect(colR, ry, wR, U(14)), "Safety rating", 8.5f);
             if (flipped && changed)
             {
@@ -263,27 +365,27 @@ public sealed partial class MenuUI
             int gShown = flipped ? o.gradeAfter : o.gradeBefore;
             float pop = flipped && changed ? 1f + 0.45f * (1f - UiKit.EaseOut(sinceFlip / 0.35f)) : 1f;
             float shake = flipped && changed && !better ? Mathf.Sin(sinceFlip * 55f) * U(4f) * Mathf.Clamp01(1f - sinceFlip / 0.45f) : 0f;
-            var gl = UiKit.Scale(new Rect(colR + shake, ry + U(14), U(46), U(56)), pop);
-            UiKit.Text(gl, Progression.Grades[gShown], UiKit.Heavy, 50f, UiKit.PaperGrade(gShown), TextAnchor.MiddleCenter);
+            var gl = UiKit.Scale(small ? new Rect(colR + shake, ry + U(14), U(56), U(40)) : new Rect(colR + shake, ry + U(14), U(46), U(56)), pop);
+            UiKit.Text(gl, Progression.Grades[gShown], UiKit.Heavy, small ? 34f : 50f, UiKit.PaperGrade(gShown), TextAnchor.MiddleCenter);
             if (flipped && changed && better) Burst(gl.center, sinceFlip / 0.7f, UiKit.GoodInk);
             // the score counting
-            float sk = UiKit.EaseInOut((rc - 2.5f) / 0.9f);
+            float sk = UiKit.EaseInOut((rc - 2.5f - so) / 0.9f);
             int sv = Mathf.RoundToInt(Mathf.Lerp(o.srBefore, o.srAfter, sk)); int si = Mathf.Clamp(sv - rvSrMin, 0, rvSr.Length - 1);
-            float sx = colR + U(56);
-            UiKit.Text(new Rect(sx, ry + U(16), rvSlashX + U(4), U(32)), rvSr[si], UiKit.Heavy, 26f, UiKit.Ink, TextAnchor.MiddleRight);
-            UiKit.Text(new Rect(sx + rvSlashX + U(8), ry + U(22), U(50), U(24)), "/ 100", UiKit.Body, 10f, UiKit.InkSub);
+            float sx = colR + (small ? U(64) : U(56)), ssz = small ? 20f : 26f;
+            UiKit.Text(new Rect(sx, ry + U(14), rvSlashX + U(4), small ? U(26) : U(32)), rvSr[si], UiKit.Heavy, ssz, UiKit.Ink, TextAnchor.MiddleRight);
+            UiKit.Text(new Rect(sx + rvSlashX + U(8), ry + (small ? U(16) : U(22)), U(50), U(24)), "/ 100", UiKit.Body, 10f, UiKit.InkSub);
             if (sk >= 0.999f)
             {
                 Color dc = o.srDelta > 0 ? UiKit.GoodInk : o.srDelta < 0 ? UiKit.BadInk : UiKit.Ink;
                 float dw = UiKit.StampWidth(o.srDeltaStr, 9f);
-                UiKit.Stamp(UiKit.Scale(new Rect(sx, ry + U(50), dw, U(17)), 1f + 0.3f * (1f - UiKit.EaseOut((rc - 3.4f) / 0.25f))), o.srDeltaStr, dc, Color.white, 9f);
+                UiKit.Stamp(UiKit.Scale(new Rect(sx, ry + (small ? U(41) : U(50)), dw, U(17)), 1f + 0.3f * (1f - UiKit.EaseOut((rc - 3.4f - so) / 0.25f))), o.srDeltaStr, dc, Color.white, 9f);
             }
             // why
-            float ry2 = ry + U(80);
-            if (o.reasons == 0) { UiKit.PushAlpha(In(rc, 3.0f)); UiKit.Text(new Rect(colR, ry2, wR, U(16)), "No change", UiKit.Body, 10f, UiKit.InkSub); UiKit.PopAlpha(); }
-            for (int i = 0; i < o.reasons; i++)
+            float ry2 = ry + (small ? U(64) : U(80));
+            if (o.reasons == 0) { UiKit.PushAlpha(In(rc, 3.0f + so)); UiKit.Text(new Rect(colR, ry2, wR, U(16)), "No change", UiKit.Body, 10f, UiKit.InkSub); UiKit.PopAlpha(); }
+            for (int i = 0; i < o.reasons && ry2 + U(16) <= bot; i++)
             {
-                float er = In(rc, 3.0f + 0.2f * i);
+                float er = In(rc, 3.0f + so + 0.2f * i);
                 if (er <= 0.001f) break;
                 UiKit.PushAlpha(er);
                 var r = UiKit.Slide(new Rect(colR, ry2, wR, U(16)), er, -10f);
@@ -301,14 +403,14 @@ public sealed partial class MenuUI
         float ef = In(rc, 0.8f);
         UiKit.PushAlpha(ef);
         UiKit.Hair(x0, f.x1, f.foot);
-        UiKit.Kicker(new Rect(x0, f.actY - U(10), W * 0.5f, U(20)), rc < RevealDone ? "Tap to skip" : "Tap to continue", 9f);
+        UiKit.Kicker(new Rect(x0, f.actY - U(10), W * 0.5f, U(20)), rc < rvDone ? "Tap to skip" : "Tap to continue", 9f);
         string prim = "Continue"; float bw = UiKit.BlackButtonWidth(prim);
         if (UiKit.BlackButton(new Rect(f.x1 - bw, f.actY - U(24), bw, U(48)), prim)) go = true;
         UiKit.PopAlpha();
         // a tap anywhere: the animation to its end, then on to the table
         if (!go && UiKit.Press(new Rect(0, 0, Screen.width, Screen.height), true, out _))
         {
-            if (rc < RevealDone) { if (revealFixed >= 0f) revealFixed = RevealDone; else revealAt = Time.unscaledTime - RevealDone; }
+            if (rc < rvDone) { if (revealFixed >= 0f) revealFixed = rvDone; else revealAt = Time.unscaledTime - rvDone; }
             else go = true;
         }
         if (go) { reveal = false; GUIUtility.hotControl = 0; }

@@ -27,7 +27,10 @@
 //   post     list of times (s) from the chequered flag of a made-up finish (PostRace.cs), frozen at each time (replaces
 //            s; Full: slow motion 0-3.6, cool-down lap 3.6-22 (heli, tracking, onboard wave, TV; classification from 4.6),
 //            podium 22-34.6 (crane, handover 25.2, lift 26.4, confetti 27, champagne 29.2, high wide 32.6), then the progress
-//            reveal (34.6 + its time, done ~4.6 s in) and from 30 s into the reveal the results table)
+//            reveal (34.6 + its time, done ~5.4 s in: driver rating 2.1-3.5, safety 3.3-4.6) and from 30 s into the
+//            reveal the results table)
+//   dr       driver rating points before the post= finish (DriverRating.cs), e.g. 9600 + pos=1 = a C -> B grade up
+//   menu     home | driver: the menu page with the DR / SR badges instead of race frames (one shot, then done)
 //   pos      the player's finishing place for post= (default 1; > 3: a short podium seen from a TV angle)
 //   postmode full | short (default full; short: slow motion 0-3.6, podium 3.6-16.2 / 3.6-10 out of the top 3)
 //   settle   seconds to wait after each placement (real time)             default 1.0 (first shot + warm)
@@ -222,6 +225,20 @@ public class DebugShots : MonoBehaviour
         float ackTimeout = Mathf.Max(1f, GetF(q, "acktimeout", 300f)), kmh = Mathf.Max(0f, GetF(q, "kmh", 0f));
         gm.haloBackPct = Mathf.Clamp(GetF(q, "haloback", gm.haloBackPct), 0f, 100f); // halo cam "helmet in view" (0-100)
         bool ack = Get(q, "ack", "0") == "1";
+        int drSet = GetInt(q, "dr", -1); if (drSet >= 0) MenuProfile.SetDr(drSet); // driver rating before the shots (DriverRating.cs)
+        string menuPage = Get(q, "menu", "").ToLowerInvariant();
+        if (menuPage == "home" || menuPage == "driver")
+        {
+            gm.ShotMenu(menuPage == "driver");
+            float ts = Time.realtimeSinceStartup; int f0 = Time.frameCount;
+            while (Time.frameCount - f0 < 8 || Time.realtimeSinceStartup - ts < settle + warm) yield return null;
+            Title("SHOT_READY 0 1 s=0 cam=" + menuPage);
+            float tr = Time.realtimeSinceStartup;
+            if (ack) { while (ShotsAck() < 0 && Time.realtimeSinceStartup - tr < ackTimeout) yield return null; }
+            else { while (Time.realtimeSinceStartup - tr < hold) yield return null; }
+            Title("SHOT_DONE 1");
+            yield break;
+        }
         if (postTimes.Count > 0)
         {
             // the post-race film of a made-up finish (PostRace.cs), frozen at each time

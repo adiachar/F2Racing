@@ -15,7 +15,9 @@
 //    line at the player's pace = a corner cut; a place gained that way must be given back within 15 s or +5 s),
 //    barrier hits, clean sectors and laps, overtakes for XP, the rivals' track limits (3 warnings, then +5 s, like the
 //    player's in RaceControl). Off track or into a barrier within 2 s of being hit by a car = no penalty.
-//  * ProgressFinish (FinishRace): rival time penalties into the result order, the race handed to MenuProfile.
+//  * ProgressFinish (FinishRace): rival time penalties into the result order, each car's driver rating and grid slot
+//    into the rows (PgRateRows; DriverRating.cs), the race handed to MenuProfile.
+//  * A race quit or restarted after lights out (ProgressAbandon) costs driver rating as a last place (DriverRating.cs).
 //  * DrawProgressToast (RaceHud): small, top centre, 2 s: "Contact  ·  Safety –4", "VER  +5 s  ·  collision".
 // Race penalties (not the safety rating) follow Settings > Flags & safety car (raceCtl, as the track-limit strikes).
 // Nothing is allocated per frame: arrays are made per session, toast strings only when something happens.
@@ -38,6 +40,8 @@ public partial class GameManager
     double pgPen; int pgPenSerial, pgPenLast;   // time penalties given here to the player (s), for the radio
     // toast
     string pgToast; float pgToastT, pgToastW = -1f; bool pgToastWarn; int pgToastH;
+    double pgDrScale;   // the rival level of this race (DiffScale), for the rivals' driver rating
+    bool pgDrArmed; float pgQuitD;   // past lights out + 1 s with rivals: leaving now costs pgQuitD levels of DR
     // Settings debug row
     float pgResetAsk = -10f, pgResetDone = -10f;
 
@@ -64,6 +68,7 @@ public partial class GameManager
         pgPrevX = double.NaN; pgExc = false; pgSec = -1; pgLap = 0; pgLapClean = true; pgLapPit = false;
         pgPen = 0; pgToastT = 0;
         PsReset(); // live penalties (PenaltyServe.cs)
+        pgDrScale = DiffScale[Mathf.Clamp(diffIdx, 0, DiffScale.Length - 1)];
         if (raceLaps <= 0 || playground || track == null || shotFreeze) return;
         MenuProfile.Load();
         pgRace = new RaceProgress(MenuProfile.Sr, Progression.OfflineWeight) { fromPole = playerSlot == 0 };
@@ -74,13 +79,43 @@ public partial class GameManager
     {
         if (pgRace == null) return;
         MenuProfile.CommitLoss(pgRace.Losses);
+        if (pgDrArmed) MenuProfile.CommitQuit(pgQuitD); // a DNF: driver rating as last (worked out at lights out + 1 s)
+        pgDrArmed = false;
         pgRace = null;
+    }
+
+    // ---------------------------------------------------------------- driver rating (DriverRating.cs)
+    double DrScale => pgDrScale > 0 ? pgDrScale : DiffScale[Mathf.Clamp(diffIdx, 0, DiffScale.Length - 1)];
+    int RivalDr(int i) => DriverRating.RivalPoints(DrScale, rivals[i].who.pace, rivals[i].who.consistency);
+    // rival i's grid slot (PlaceRival: the k-th slot the player does not take)
+    int RivalSlot(int i) => i < playerSlot ? i : i + 1;
+
+    // each car's DR points and grid slot into the result rows (rows[0] = the player, rows[i + 1] = rivals[i])
+    internal void PgRateRows(MenuUI.Row[] rows)
+    {
+        if (rows == null || rows.Length == 0) return;
+        MenuProfile.Load();
+        rows[0].dr = Mathf.Max(1, MenuProfile.Dr); rows[0].grid = playerSlot;
+        for (int i = 0; i < rivals.Count && i + 1 < rows.Length; i++) { rows[i + 1].dr = RivalDr(i); rows[i + 1].grid = RivalSlot(i); }
+    }
+
+    // shot mode (DebugShots.cs menu=): a menu page over the loaded session
+    internal void ShotMenu(bool driver) => ui.ShotPage(driver);
+
+    // a quit: scored as last behind every rival, plus DriverRating.QuitCost
+    float PgQuitDelta()
+    {
+        MenuProfile.Load();
+        float lp = DriverRating.LevelOf(MenuProfile.Dr), sum = 0f;
+        for (int i = 0; i < rivals.Count; i++) sum -= DriverRating.Expect(lp, RivalDr(i), playerSlot < RivalSlot(i), raceLaps);
+        return DriverRating.Delta(sum, rivals.Count, raceLaps, true);
     }
 
     // FinishRace, before the results open: rival penalties into the order, the race to the profile
     void ProgressFinish(MenuUI.Row[] rows)
     {
         double refLap = RefLap();
+        PgRateRows(rows); // driver rating inputs (DriverRating.cs)
         for (int i = 0; i < rivals.Count && i + 1 < rows.Length; i++)
             if (RivalPen(i) > 0) { rows[i + 1].progress -= RivalPen(i) / refLap; rows[i + 1].penalty = RivalPen(i); }
         if (rows.Length > 0) rows[0].penalty = PlayerPenaltyTotal();
@@ -88,7 +123,7 @@ public partial class GameManager
         if (idx >= 0) { PgLaps(); PgSectors(); }      // the last lap and sector (FinishRace runs before this frame's tick)
         if (pgExc) PgExcEnd(raceTime, true);
         if (pgRace.clean && pgRace.laps >= 1) pgRace.gainClean += pgRace.Pull(Progression.CleanRacePull);
-        MenuProfile.Pending = pgRace; pgRace = null;
+        MenuProfile.Pending = pgRace; pgRace = null; pgDrArmed = false;
     }
 
     // ---------------------------------------------------------------- every frame (Update, after the physics)
@@ -104,6 +139,9 @@ public partial class GameManager
         pgPrevX = car.x; pgPrevY = car.y;
         if (tele) { pgTeleT = t; if (pgExc) PgExcEnd(t, false); Unclean(); if (t > Countdown) pgRace.clean = false; } // a recovery: not a clean race
         if (t < Countdown) return;
+        // once, 1 s after lights out: what a quit would cost (ResetCar has already reset the clock, the grid and the
+        // rivals by the time a restart reaches ProgressAbandon)
+        if (!pgDrArmed && t > Countdown + 1.0 && rivals.Count > 0) { pgQuitD = PgQuitDelta(); pgDrArmed = true; }
         PgLaps();
         PgSectors();
         PgExcursion(dt, t);

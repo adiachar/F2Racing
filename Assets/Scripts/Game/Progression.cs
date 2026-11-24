@@ -11,6 +11,7 @@
 //    level L -> L + 1 needs 250 + 70 (L - 1)^1.15 XP (rounded to 10): 250, 320, 410 ... level 2 after one or two
 //    races (~400 XP each), ~1100 XP per level at 10, ~3000 at 25; capped at level 100 (~650k XP in all).
 //    The race's XP is multiplied by the difficulty (CareerDifficulty.cs: Easy x0.8 ... Master x2; WithDifficulty).
+//  * Driver rating (GT-style DR, E D C B A A+ from points, an Elo against the field): DriverRating.cs.
 // RaceProgress: one race's live tally (GameManagerProgress.cs). RaceOutcome: what the results page shows (strings
 // built once). Nothing here allocates per frame.
 using UnityEngine;
@@ -46,6 +47,15 @@ public static class Progression
     public static int GradeOf(float sr) => sr >= 90f ? 0 : sr >= 75f ? 1 : sr >= 60f ? 2 : sr >= 45f ? 3 : sr >= 30f ? 4 : 5;
     // S A B green (good), C neutral, D E amber (warning)
     public static Color GradeColor(int g) => g <= 2 ? UiKit.Good : g == 3 ? UiKit.TextCol : UiKit.Warn;
+    // the grades worst -> best, as GT lists them (E D C B A S; index = 5 - grade)
+    public static readonly string[] GradesUp = { "E", "D", "C", "B", "A", "S" };
+    static readonly float[] GradeFloor = { 90f, 75f, 60f, 45f, 30f, 0f };
+    // share of the way from the grade's floor to the next grade (1 at S)
+    public static float GradeFrac(float sr)
+    {
+        int g = GradeOf(sr); if (g == 0) return Mathf.Clamp01((sr - 90f) / 10f);
+        return Mathf.Clamp01((sr - GradeFloor[g]) / (GradeFloor[g - 1] - GradeFloor[g]));
+    }
 
     // ---- level curve: cum[L] = total XP at the start of level L (cum[1] = 0)
     static int[] cum;
@@ -114,5 +124,8 @@ public sealed class RaceOutcome
     public readonly string[] reason = new string[3], reasonVal = new string[3];
     public readonly bool[] reasonGood = new bool[3];
     public int reasons;
+    // the driver rating (DriverRating.cs): drRated = a race against rivals (else no DR change and none shown)
+    public bool drRated; public int drBefore, drAfter, drGradeBefore, drGradeAfter;
+    public string drBeforeStr, drAfterStr, drDeltaStr, drNote; public int drDelta;
     public bool LevelUp => levelAfter > levelBefore;
 }

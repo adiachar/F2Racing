@@ -2,8 +2,8 @@
 // (MenuStudio.cs: the driver standing on paper in the middle; drag across the middle to turn him). Layout (the
 // "Redesign 1 · Paper" mockup, 844 x 390 units):
 //  * masthead: "APEX WORLD SERIES" and the nav (PLAY underlined: Home is where play starts), a rule under it
-//  * left: the driver's number as the giant red italic figure, his name, "country · level · safety" and a thin ink XP
-//    line; the whole block opens the Driver page
+//  * left: the driver's number as the giant red italic figure, his name, "country · level", a thin ink XP line and the
+//    GT-style DR / SR badges (letter + a line to the next grade); the whole block opens the Driver page
 //  * centre: the 3D driver (no 2D drawn over him)
 //  * right: the next race: "NEXT · QUICK RACE", the circuit (or the championship round), length · laps · pole; a tap
 //    changes it (the Circuit step, or the season hub in a championship)
@@ -74,7 +74,7 @@ public sealed partial class MenuUI
         float lw = Mathf.Min(U(250), f.w * 0.3f);
         float e0 = UiKit.Enter(KeyHome, 0, 0.05f, 0.45f);
         UiKit.PushAlpha(e0);
-        var block = UiKit.Slide(new Rect(x0, y0 + U(66), lw, U(194)), e0, -10f);
+        var block = UiKit.Slide(new Rect(x0, y0 + U(66), lw, U(222)), e0, -10f);
         bool hitDriver = DriverBlock(block, y0, true);
         UiKit.PopAlpha();
         if (hitDriver) GoPage(Page.Driver);

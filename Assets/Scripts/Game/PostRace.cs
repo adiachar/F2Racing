@@ -125,6 +125,7 @@ public partial class GameManager
             }
             PostCapture();
             pLap = raceLaps + 1;
+            PgRateRows(rows); // driver rating (DriverRating.cs; DebugShots dr= sets the rating before)
             ui.ShowResults(rows, MapNames[mapIdx], raceLaps, 600.0 * raceLaps / 6 + 61.234, 90, 0, 0);
             RaceFinished(rows);
             PostBegin(rows, true, full ? 0 : 1);

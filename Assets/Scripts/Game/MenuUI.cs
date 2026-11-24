@@ -53,7 +53,8 @@ public sealed partial class MenuUI
 
     // one car in the results; GameManager fills these when the player takes the flag
     // penalty: time penalties (s), already taken off progress (GameManagerProgress.cs); shown as "+5s"
-    public struct Row { public string name; public Color colour; public bool player; public double progress, best, penalty; }
+    // dr / grid: the car's driver rating points and grid slot (GameManager.PgRateRows; DriverRating.cs), 0 = not rated
+    public struct Row { public string name; public Color colour; public bool player; public double progress, best, penalty; public int dr, grid; }
 
     readonly string[] mapNames; readonly int playgroundIdx; readonly int[] rivalCounts; readonly string[] diffNames;
     readonly MapPreview[] previews; readonly double[] lengths;   // per circuit, built when first needed
@@ -175,7 +176,7 @@ public sealed partial class MenuUI
         resStopsStr = resStops > 0 ? resStops.ToString() : null;
         resPenStr = resPenalty > 0 ? $"+{resPenalty:0} s" : null;
         noteParsed = null; noteLine = notePts = noteChamp = null;
-        MenuProfile.RecordRace(resPos, results.Length, resPlayerFastest); // career stats, XP and safety rating (MenuDriver.cs)
+        MenuProfile.RecordRace(resPos, results.Length, resPlayerFastest, results, laps); // career stats, XP, safety and driver rating (MenuDriver.cs)
         page = Page.Results; reveal = false; // (the post-race sequence, PostRace.cs, hides this page and reopens it with the progress reveal: OpenResults)
     }
 
@@ -529,6 +530,7 @@ public sealed partial class MenuUI
             float x = tp.x + c * (cw + colGap);
             UiKit.Kicker(new Rect(x + U(8), headY, cw * 0.1f, U(14)), "Pos", 8.5f);
             UiKit.Kicker(new Rect(x + cw * 0.15f, headY, cw * 0.4f, U(14)), "Driver", 8.5f);
+            UiKit.Kicker(new Rect(x + cw * 0.495f, headY, cw * 0.055f, U(14)), "DR", 8.5f);
             UiKit.Kicker(new Rect(x + cw * 0.55f, headY, cw * 0.22f, U(14)), "Best lap", 8.5f);
             UiKit.Kicker(new Rect(x + cw * 0.76f, headY, cw * 0.22f, U(14)), "Gap", 8.5f, TextAnchor.MiddleRight);
             UiKit.Hair(x, x + cw, tableY - U(1), UiKit.Ink);
@@ -544,7 +546,9 @@ public sealed partial class MenuUI
             UiKit.Text(new Rect(x + U(8), y, cw * 0.08f, rh), Ord[Mathf.Min(i + 1, Ord.Length - 1)], UiKit.Heavy, fs, i < 3 ? UiKit.Ink : UiKit.InkSub);
             UiKit.Rect(new Rect(x + cw * 0.115f, y + rh * 0.26f, Mathf.Max(2f, Mathf.Round(U(2.5f))), rh * 0.48f), r.colour); // team colour
             UiKit.Text(new Rect(x + cw * 0.15f, y, cw * 0.40f, rh), r.name, r.player ? UiKit.Heavy : UiKit.Medium, fs, UiKit.Ink);
-            if (pens[i] != null) UiKit.Text(new Rect(x + cw * 0.15f, y, cw * 0.40f - U(4), rh), pens[i], UiKit.Heavy, fs * 0.85f, UiKit.BadInk, TextAnchor.MiddleRight); // time penalty
+            if (pens[i] != null) UiKit.Text(new Rect(x + cw * 0.15f, y, cw * 0.345f - U(4), rh), pens[i], UiKit.Heavy, fs * 0.85f, UiKit.BadInk, TextAnchor.MiddleRight); // time penalty
+            int drg = r.player ? MenuProfile.DrGrade : r.dr > 0 ? DriverRating.GradeOf(r.dr) : -1; // driver rating (DriverRating.cs)
+            if (drg >= 0) UiKit.Text(new Rect(x + cw * 0.495f, y, cw * 0.055f, rh), DriverRating.Grades[drg], UiKit.Heavy, fs * 0.85f, r.player ? DriverRating.GradeColor(drg) : UiKit.InkMuted);
             bool fl = i == fastestRow;
             UiKit.Text(new Rect(x + cw * 0.55f, y, cw * 0.22f, rh), bests[i], fl ? UiKit.Heavy : UiKit.Body, fs, fl ? UiKit.Ink : UiKit.InkSub);
             if (fl)

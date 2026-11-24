@@ -2,11 +2,14 @@
 //  * "Paper" look (UiKit.cs), the masthead with DRIVER underlined. Left: the same driver block as Home (the giant red
 //    italic number, name, country · level · safety, the ink XP line); centre: the 3D driver on paper (MenuStudio.cs;
 //    drag to turn him); right: the editable profile as label / value rows: name (a text field on an ink rule; the
-//    phone's keyboard opens), number 1-99 and country (‹ value ›), level with its XP line, safety rating S A B C D E
-//    with the score (the current grade underlined in red, its letter green for S A B, ink for C, amber for D E). Under
-//    the bottom rule: Back (a link) and the career stats (races, wins, podiums, poles).
+//    phone's keyboard opens), number 1-99 and country (‹ value ›), level with its XP line, then GT-style the two
+//    ratings side by side, worst to best: driver rating E D C B A A+ with its points, safety rating E D C B A S with
+//    its score (the current grade underlined in red). Under the bottom rule: Back (a link) and the career stats.
+//  * the driver block (Home and Driver) ends in two rating badges: DR and SR, the letter and a thin line to the next
+//    grade (RatingBadge).
 // MenuProfile keeps the profile in PlayerPrefs: drvName, drvNum, drvCountry, drvRaces, drvWins, drvPodiums,
-// drvPoles, drvXp (total), drvSr (safety rating 0-100). Races, XP and the safety rating are recorded when the results
+// drvPoles, drvXp (total), drvSr (safety rating 0-100), drvDr (driver rating points, DriverRating.cs). Races, XP and
+// the ratings are recorded when the results
 // page opens (MenuUI.ShowResults, with the race's tally from GameManagerProgress.cs; rules in Progression.cs), poles
 // when qualifying ends (SeasonUI.ShowQuali; their XP comes with the race). The strings shown are rebuilt when a value
 // changes.
@@ -25,7 +28,11 @@ public static class MenuProfile
     public static string Name = "Driver", NumStr = "1", LevelStr = "Level 1", XpStr = "0 / 250 XP", SrStr = "70";
     public static string RacesStr = "0", WinsStr = "0", PodiumsStr = "0", PolesStr = "0";
     public static int Num = 1, Country, Races, Wins, Podiums, Poles, Xp, Level = 1, Grade = 1;
-    public static float XpFrac, Sr = Progression.SrStart;
+    public static float XpFrac, Sr = Progression.SrStart, SrFrac;
+    // driver rating (DriverRating.cs): points, grade (0 E .. 5 A+), share of the way to the next grade, "12,450"
+    public static int Dr = DriverRating.Start, DrGrade;
+    public static float DrFrac;
+    public static string DrStr = "1,000";
     public static string Safety => Progression.Grades[Grade];   // the grade letter
     public static RaceProgress Pending;  // GameManager (FinishRace): the race just finished, applied by RecordRace
     public static RaceOutcome Last;      // the last race's XP and safety change (results page)
@@ -42,6 +49,7 @@ public static class MenuProfile
         Races = PlayerPrefs.GetInt("drvRaces", 0); Wins = PlayerPrefs.GetInt("drvWins", 0);
         Podiums = PlayerPrefs.GetInt("drvPodiums", 0); Poles = PlayerPrefs.GetInt("drvPoles", 0); Xp = Mathf.Max(0, PlayerPrefs.GetInt("drvXp", 0));
         Sr = Mathf.Clamp(PlayerPrefs.GetFloat("drvSr", Progression.SrStart), 0f, 100f);
+        Dr = Mathf.Clamp(PlayerPrefs.GetInt("drvDr", DriverRating.Start), 0, DriverRating.Max);
         Build();
     }
     static void Build()
@@ -50,7 +58,8 @@ public static class MenuProfile
         Level = Progression.LevelOf(Xp); XpFrac = Progression.FracOf(Xp);
         LevelStr = Progression.LevelNames[Level];
         XpStr = Level >= Progression.MaxLevel ? "Max level" : (Xp - Progression.StartOf(Level)) + " / " + Progression.Need(Level) + " XP";
-        Grade = Progression.GradeOf(Sr); SrStr = Mathf.RoundToInt(Sr).ToString();
+        Grade = Progression.GradeOf(Sr); SrStr = Mathf.RoundToInt(Sr).ToString(); SrFrac = Progression.GradeFrac(Sr);
+        DrGrade = DriverRating.GradeOf(Dr); DrFrac = DriverRating.FracOf(Dr); DrStr = DriverRating.Pts(Dr);
         RacesStr = Races.ToString(); WinsStr = Wins.ToString(); PodiumsStr = Podiums.ToString(); PolesStr = Poles.ToString();
     }
 
@@ -67,8 +76,9 @@ public static class MenuProfile
     public static void SetCountry(int c) { Load(); Country = Mathf.Clamp(c, 0, Countries.Length - 1); PlayerPrefs.SetInt("drvCountry", Country); }
 
     // a race finished (pos 1-based of cars; fastest = the player set the race's fastest lap): career stats, XP from
-    // the race (Pending: laps, overtakes, clean laps; Progression.cs has the numbers) and the safety rating
-    public static void RecordRace(int pos, int cars, bool fastest)
+    // the race (Pending: laps, overtakes, clean laps; Progression.cs has the numbers), the safety rating and the
+    // driver rating (rows: the result in finishing order with each car's DR and grid slot; laps: the race length)
+    public static void RecordRace(int pos, int cars, bool fastest, MenuUI.Row[] rows = null, int laps = 1)
     {
         Load();
         var rp = Pending; Pending = null;
@@ -112,8 +122,37 @@ public static class MenuProfile
         o.srDelta = Mathf.RoundToInt(o.srAfter) - Mathf.RoundToInt(o.srBefore);
         o.srDeltaStr = o.srDelta > 0 ? "+" + o.srDelta : o.srDelta < 0 ? "\u2013" + (-o.srDelta) : "\u00b10";
         Reasons(o, rp);
+        RateRace(o, rows, laps);
         Last = o;
     }
+
+    // the driver rating: an Elo against the field (DriverRating.Race); not rated without rivals
+    static void RateRace(RaceOutcome o, MenuUI.Row[] rows, int laps)
+    {
+        o.drBefore = o.drAfter = Dr; o.drGradeBefore = o.drGradeAfter = DrGrade;
+        if (!DriverRating.Race(Dr, rows, laps, out float d, out int beaten, out int avg)) return;
+        o.drRated = true;
+        Dr = DriverRating.Apply(Dr, d);
+        Save();
+        o.drAfter = Dr; o.drGradeAfter = DrGrade;
+        o.drBeforeStr = DriverRating.Pts(o.drBefore); o.drAfterStr = DrStr;
+        o.drDelta = o.drAfter - o.drBefore;
+        o.drDeltaStr = o.drDelta > 0 ? "+" + DriverRating.Pts(o.drDelta) : o.drDelta < 0 ? "\u2013" + DriverRating.Pts(-o.drDelta) : "\u00b10";
+        int n = rows.Length - 1;
+        o.drNote = (beaten >= n ? "Beat all " + n : "Beat " + beaten + " of " + n) + "  \u00b7  field " + DriverRating.Grades[DriverRating.GradeOf(avg)];
+    }
+
+    // a race quit or restarted after lights out (GameManagerProgress.ProgressAbandon): DR as last, minus a bit more
+    public static void CommitQuit(float dLevel)
+    {
+        Load();
+        if (dLevel >= 0f) return;
+        Dr = DriverRating.Apply(Dr, dLevel);
+        Save();
+    }
+
+    // shot mode (DebugShots.cs dr=): the driver rating before the made-up finish
+    public static void SetDr(int pts) { Load(); Dr = Mathf.Clamp(pts, 0, DriverRating.Max); Save(); }
 
     // up to three reasons for the safety change, the biggest first
     static void Reasons(RaceOutcome o, RaceProgress rp)
@@ -160,11 +199,11 @@ public static class MenuProfile
         Build();
     }
 
-    // debug (Settings > Game > Reset progress): XP, level, safety rating and career stats back to new
+    // debug (Settings > Game > Reset progress): XP, level, both ratings and career stats back to new
     public static void ResetProgress()
     {
         Load();
-        Xp = 0; Sr = Progression.SrStart; Races = Wins = Podiums = Poles = 0; Last = null; Pending = null; PolePending = false;
+        Xp = 0; Sr = Progression.SrStart; Dr = DriverRating.Start; Races = Wins = Podiums = Poles = 0; Last = null; Pending = null; PolePending = false;
         Save();
     }
 
@@ -172,6 +211,7 @@ public static class MenuProfile
     {
         PlayerPrefs.SetInt("drvRaces", Races); PlayerPrefs.SetInt("drvWins", Wins); PlayerPrefs.SetInt("drvPodiums", Podiums);
         PlayerPrefs.SetInt("drvPoles", Poles); PlayerPrefs.SetInt("drvXp", Xp); PlayerPrefs.SetFloat("drvSr", Sr);
+        PlayerPrefs.SetInt("drvDr", Dr);
         PlayerPrefs.Save();
         Build();
     }
@@ -182,22 +222,33 @@ public sealed partial class MenuUI
     const string KeyDriver = "driver";
     GUIStyle nameStyle; int nameStyleH = -1; string nameTyped;
 
-    // "India  ·  Level 14  ·  Safety A": rebuilt when the country, level or grade changes
+    // "India  ·  Level 14": rebuilt when the country or level changes (the ratings are the badges under the XP line)
     int idKey = int.MinValue; string idLine;
     string IdLine()
     {
         MenuProfile.Load();
-        int key = MenuProfile.Country * 7919 + MenuProfile.Level * 104729 + MenuProfile.Grade * 31;
+        int key = MenuProfile.Country * 7919 + MenuProfile.Level * 104729;
         if (key != idKey || idLine == null)
         {
             idKey = key;
-            idLine = (MenuProfile.Country > 0 ? MenuProfile.Countries[MenuProfile.Country] + "  ·  " : "") + MenuProfile.LevelStr + "  ·  Safety " + MenuProfile.Safety;
+            idLine = (MenuProfile.Country > 0 ? MenuProfile.Countries[MenuProfile.Country] + "  ·  " : "") + MenuProfile.LevelStr;
         }
         return idLine;
     }
 
-    // the driver block (Home and Driver): the giant red italic number, the name, the id line, the XP line.
-    // tap: the block is a button (Home -> Driver page). Returns true when tapped.
+    // a rating badge (GT's DR / SR): the grade letter, the caption with the value right of it, a thin ink line to
+    // the next grade
+    static void RatingBadge(Rect r, string cap, string letter, Color lc, string val, float frac)
+    {
+        float lw = U(30), tx = r.x + lw, tw = r.width - lw;
+        UiKit.Text(new Rect(r.x, r.y, lw, r.height), letter, UiKit.Heavy, 20f, lc);
+        UiKit.Kicker(new Rect(tx, r.y + U(3), tw, U(12)), cap, 8f);
+        UiKit.Text(new Rect(tx, r.y + U(3), tw, U(12)), val, UiKit.Heavy, 9f, UiKit.Ink, TextAnchor.MiddleRight);
+        UiKit.Meter(new Rect(tx, r.y + U(19), tw, Mathf.Max(2f, Mathf.Round(U(2f)))), frac);
+    }
+
+    // the driver block (Home and Driver): the giant red italic number, the name, the id line, the XP line, the DR and
+    // SR badges. tap: the block is a button (Home -> Driver page). Returns true when tapped.
     bool DriverBlock(Rect block, float y0, bool tap)
     {
         float pd = 0f;
@@ -207,7 +258,12 @@ public sealed partial class MenuUI
         string nm = UiKit.Upper(MenuProfile.Name), il = IdLine();
         UiKit.Text(new Rect(block.x + U(2), y0 + U(197), lw, U(28)), nm, UiKit.Heavy, UiKit.Fit(nm, UiKit.Heavy, 22f, lw, 13f), Color.Lerp(UiKit.Ink, UiKit.Red, pd));
         UiKit.Text(new Rect(block.x + U(2), y0 + U(223), lw, U(16)), il, UiKit.Body, UiKit.Fit(il, UiKit.Body, 12f, lw, 8.5f), UiKit.InkSub);
-        UiKit.Meter(new Rect(block.x + U(2), y0 + U(246), Mathf.Min(U(230), lw), Mathf.Max(2f, Mathf.Round(U(3f)))), MenuProfile.XpFrac);
+        float mw = Mathf.Min(U(230), lw);
+        UiKit.Meter(new Rect(block.x + U(2), y0 + U(246), mw, Mathf.Max(2f, Mathf.Round(U(3f)))), MenuProfile.XpFrac);
+        // DR and SR, GT-style, side by side
+        float bw = (mw - U(16)) * 0.5f, by = y0 + U(258);
+        RatingBadge(new Rect(block.x + U(2), by, bw, U(26)), "DR", DriverRating.Grades[MenuProfile.DrGrade], DriverRating.GradeColor(MenuProfile.DrGrade), MenuProfile.DrStr, MenuProfile.DrFrac);
+        RatingBadge(new Rect(block.x + U(18) + bw, by, bw, U(26)), "SR", MenuProfile.Safety, UiKit.PaperGrade(MenuProfile.Grade), MenuProfile.SrStr, MenuProfile.SrFrac);
         return hit;
     }
 
@@ -223,7 +279,7 @@ public sealed partial class MenuUI
         float lw = Mathf.Min(U(250), W * 0.3f);
         float e0 = UiKit.Enter(KeyDriver, 0, 0.05f, 0.45f);
         UiKit.PushAlpha(e0);
-        var block = UiKit.Slide(new Rect(x0, y0 + U(66), lw, U(194)), e0, -10f);
+        var block = UiKit.Slide(new Rect(x0, y0 + U(66), lw, U(222)), e0, -10f);
         DriverBlock(block, y0, false);
         UiKit.PopAlpha();
 
@@ -255,20 +311,11 @@ public sealed partial class MenuUI
         UiKit.Meter(new Rect(ix, y + U(24), iw, Mathf.Max(2f, Mathf.Round(U(3f)))), MenuProfile.XpFrac);
         y += U(40);
 
-        // safety rating: the six grades, the current one underlined in red
-        UiKit.Kicker(new Rect(ix, y, iw, U(14)), "Safety rating", 8.5f);
-        Color gc = UiKit.PaperGrade(MenuProfile.Grade);
-        UiKit.Text(new Rect(ix, y - U(2), iw, U(18)), MenuProfile.SrStr, UiKit.Heavy, 13f, gc, TextAnchor.MiddleRight);
-        y += U(16);
-        float gw = iw / Progression.Grades.Length;
-        for (int i = 0; i < Progression.Grades.Length; i++)
-        {
-            var g = new Rect(ix + i * gw, y, gw, U(28));
-            bool on = i == MenuProfile.Grade;
-            UiKit.Text(g, Progression.Grades[i], on ? UiKit.Heavy : UiKit.Medium, on ? 16f : 13f, on ? gc : UiKit.InkMuted, TextAnchor.MiddleCenter);
-            if (on) UiKit.Rect(new Rect(g.center.x - U(9), g.yMax, U(18), Mathf.Max(2f, Mathf.Round(U(2f)))), UiKit.Red);
-        }
-        UiKit.Hair(ix, ix + iw, y + U(34), UiKit.PaperTrack);
+        // the two ratings, GT-style, worst to best, the current grade underlined in red: DR (points) and SR (score)
+        float half = (iw - U(20)) * 0.5f;
+        Ladder(ix, y, half, "Driver rating", MenuProfile.DrStr, DriverRating.Grades, MenuProfile.DrGrade, DriverRating.GradeColor(MenuProfile.DrGrade));
+        Ladder(ix + half + U(20), y, half, "Safety rating", MenuProfile.SrStr, Progression.GradesUp, 5 - MenuProfile.Grade, UiKit.PaperGrade(MenuProfile.Grade));
+        UiKit.Hair(ix, ix + iw, y + U(50), UiKit.PaperTrack);
         UiKit.PopAlpha();
 
         // ---- the action row: Back, and the career stats on the right
@@ -280,6 +327,27 @@ public sealed partial class MenuUI
         sx = StatLeft(sx, f.actY, "Wins", MenuProfile.WinsStr);
         StatLeft(sx, f.actY, "Races", MenuProfile.RacesStr);
     }
+
+    // a rating's grades in a row (worst first), the current one (on) in its colour and underlined in red; the caption
+    // and the value on the line above
+    static void Ladder(float x, float y, float w, string cap, string val, string[] grades, int on, Color gc)
+    {
+        float vw = UiKit.Width(val, UiKit.Heavy, 12f);
+        UiKit.Kicker(new Rect(x, y, w - vw - U(4), U(14)), cap, UiKit.Fit(UiKit.Caps(cap), UiKit.Body, 8.5f, w - vw - U(6), 6.5f));
+        UiKit.Text(new Rect(x, y - U(2), w, U(18)), val, UiKit.Heavy, 12f, gc, TextAnchor.MiddleRight);
+        y += U(16);
+        float gw = w / grades.Length;
+        for (int i = 0; i < grades.Length; i++)
+        {
+            var g = new Rect(x + i * gw, y, gw, U(28));
+            bool cur = i == on;
+            UiKit.Text(g, grades[i], cur ? UiKit.Heavy : UiKit.Medium, cur ? 15f : 11.5f, cur ? gc : UiKit.InkMuted, TextAnchor.MiddleCenter);
+            if (cur) UiKit.Rect(new Rect(g.center.x - U(8), g.yMax, U(16), Mathf.Max(2f, Mathf.Round(U(2f)))), UiKit.Red);
+        }
+    }
+
+    // shot mode (DebugShots.cs menu=home|driver): open a menu page
+    internal void ShotPage(bool driver) { if (driver) GoPage(Page.Driver); else GoHome(); }
 
     // a career number (caption over a big value) placed to the left of x, centred on y; returns the next x
     static float StatLeft(float x, float y, string caption, string value)
