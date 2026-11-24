@@ -1,7 +1,7 @@
 // Ghost car (live penalties, GameManager PenaltyServe.cs; CarGhost.cs sets it): a float _Ghost 0..1 per renderer
 // through a MaterialPropertyBlock. Drawn as a dithered screen-door fade in the shader's own opaque pass (no
-// transparency, no extra pass): a stable 4x4 Bayer pattern in screen pixels drops 0.55 x _Ghost of the pixels
-// (about half at 1), plus a slight cool tint and a rim lift so the car reads as "not really there".
+// transparency, no extra pass): a stable 4x4 Bayer pattern in screen pixels drops 0.65 x _Ghost of the pixels
+// (10/16 at 1), plus a slight cool tint and a rim lift so the car reads as "not really there".
 // Only in the F2_GHOST variant (multi_compile_local): CarGhost.cs swaps the car to twin materials with the keyword
 // while it is a ghost, so the normal variant has no clip() (Mali keeps early-Z / hidden-surface removal for it).
 // All float (PRECISION RULE, CarPaint.shader).
@@ -17,8 +17,9 @@ float F2Bayer4(float2 sp)
     float xl = lo.x + lo.y - 2.0 * lo.x * lo.y, xh = hi.x + hi.y - 2.0 * hi.x * hi.y;
     return (4.0 * (2.0 * xl + lo.y) + 2.0 * xh + hi.y + 0.5) * (1.0 / 16.0);
 }
-// drops the pixel when its threshold is under 0.55 g (g > 0 only: at 0 nothing would drop anyway)
-void F2GhostClip(float2 sp, float g) { clip(F2Bayer4(sp) - 0.8 * g); } // 0.8: low opacity (Adi), was 0.55
+// drops the pixel when its threshold is under 0.65 g (g > 0 only: at 0 nothing would drop anyway)
+void F2GhostClip(float2 sp, float g) { clip(F2Bayer4(sp) - 0.65 * g); } // 0.65: 10/16 of the pixels gone at g = 1, 6/16 at the
+// blink's low 0.55 (PenaltyServe.cs blinks g 0.55..1 at 2 Hz: GT's see-through, visibly pulsing; was a steady 0.8)
 // linear colour before fog / grade: a little cooler and paler, and a soft blue-white lift towards the silhouette.
 // graze: (1 - N.V)^2 or similar, 0 facing the camera .. 1 at the edge
 float3 F2GhostTint(float3 col, float g, float graze)

@@ -7,8 +7,8 @@
 //    reaction when the weather changes. Races of 1-5 laps get no stops (only damage or a puncture forces one).
 //    Live wear is measured lap by lap and brings a stop forward when the tyre would go past the cliff.
 //  * RaceControl: flags. A stopped car or a heavy crash (a reset with high damage) shows a yellow flag; a
-//    repeated, heavy or blocking incident brings out, by chance, a Virtual Safety Car (every car about 40 %
-//    slower than its normal speed at that point of the lap) or the Safety Car (a pace car on the racing line,
+//    repeated, heavy or blocking incident brings out, by chance, a Virtual Safety Car (every car held to 60 % of the
+//    racing line's speed at that point of the lap: one reference for the field and the player's delta) or the Safety Car (a pace car on the racing line,
 //    the field queues behind it in order without overtaking, it comes in after 2-3 laps, restart at the line).
 //    Blue flags for cars about to be lapped, track-limits strikes and the VSC delta for the player.
 using System;
@@ -510,7 +510,7 @@ namespace FormulaSim
                 bool applies = flag == Flag.Vsc || flag == Flag.VscEnding || (ScOnTrack && gapAhead[playerSlot] > 150);
                 if (applies)
                 {
-                    double vRef = Math.Max(5, line.speed[p.idx] * VscFactor);
+                    double vRef = VscRef(p.idx);
                     vscDelta = Math.Max(-5, Math.Min(2, vscDelta + dt * (1 - p.v / vRef)));
                     deltaWarn = vscDelta < 0;
                     deltaPenT = vscDelta < -1.0 ? deltaPenT + dt : 0;
@@ -519,6 +519,11 @@ namespace FormulaSim
                 else vscDelta = Math.Min(2, vscDelta + dt);
             }
         }
+
+        // the VSC reference at track point i: VscFactor of the racing line's speed, ONE reference for the field (like the
+        // real minimum sector times): the player's delta is measured against it and every rival's VSC cap is the same
+        // (AiDriver), so holding the delta at 0 keeps the gap to the car ahead (PhysicsCheck vsc)
+        public double VscRef(int i) => Math.Max(5, line.speed[i] * VscFactor);
 
         void Penalise(double s, string why) { penalty += s; penaltySerial++; penaltyWhy = why; }
 
