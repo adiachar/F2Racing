@@ -888,10 +888,122 @@ if (args.Length > 0 && args[0] == "audit")
     return;
 }
 
+// ---- compounds: dotnet run -c Release -- tyres [circuit] [wear mult] ----
+// One AI car alone per compound on fixed fuel with the game's "Tyre wear" setting applied (TyreRules.Apply):
+//  pace: the best of laps 2-3 on fresh tyres (no wear), the gap to the Soft;
+//  out-lap: lap 1 from a rolling start on cold tyres (the blanket temperature) against the same lap on tyres at their
+//  best temperature; then a stint at the wear multiplier until the tyres are gone: lap times, wear, carcass temperature
+//  and the lowest grip factor of each lap (temperature x compound x wear).
+if (args.Length > 0 && args[0] == "tyres")
+{
+    var inv = CultureInfo.InvariantCulture;
+    string cid = args.Length > 1 ? args[1] : "suzuka";
+    double mult = args.Length > 2 ? double.Parse(args[2], inv) : 6;
+    int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == cid); var def = FormulaSim.Circuits.All[ti]; var t2 = def.Build();
+    var line = RacingLine.Compute(t2, new CarConfig()); var hf = t2.h != null ? new HeightField(t2) : null;
+    var ace = new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 };
+    TyreRules.Strong = true;
+    // exploring: TLK=2 (temperature loss x), HS=0.39,0.45,0.51 (heat share S,M,H)
+    if (System.Environment.GetEnvironmentVariable("TLK") is string tlk) TyreRules.TempLossK = double.Parse(tlk, inv);
+    if (System.Environment.GetEnvironmentVariable("HC") is string hc) TyreRules.HeatCapK = double.Parse(hc, inv);
+    if (System.Environment.GetEnvironmentVariable("HS") is string hs) { var v = hs.Split(','); for (int k = 0; k < 3; k++) TyreRules.HeatShare[k] = double.Parse(v[k], inv); }
+    CarConfig Cfg(int s, double m, double start)
+    {
+        var c = new CarConfig { fuelStart = 30, fuelFlow = 0, compound = (Compound)s };
+        TyreRules.Apply(c, m, true); TyreRules.Fit(c, s); if (!double.IsNaN(start)) c.tyreStart = start;
+        return c;
+    }
+    // drive laps from a rolling start just before the line: (lap time, worse-axle wear, mean carcass C, lowest grip)
+    List<(double t, double w, double tc, double g)> Drive(int s, double m, double start, int maxLaps)
+    {
+        var d = new AiDriver(t2, line, Cfg(s, m, start), ace, AiTuning.For(ti)); var res = new List<(double, double, double, double)>();
+        int i0 = t2.N - 40; d.Place(i0, line.off[i0], line.speed[i0] * 0.7);
+        double tt = 0, gMin = 2; int st = 0, lapSeen = d.lap;
+        while (d.lap <= maxLaps && tt < maxLaps * 200)
+        {
+            if (st++ % 4 == 0)
+            {
+                d.Think(4 * H, tt, null, null, -1, 0); WheelContact.Update(t2, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
+                if (d.lap != lapSeen) { if (lapSeen >= 1) res.Add((d.lastLap, Math.Max(d.car.wearF, d.car.wearR), 0.5 * (d.car.tyreTF + d.car.tyreTR), gMin)); lapSeen = d.lap; gMin = 2; if (Math.Max(d.car.wearF, d.car.wearR) > 0.97) break; }
+                if (d.lap >= 1) gMin = Math.Min(gMin, Math.Min(d.car.gripF, d.car.gripR));
+            }
+            d.car.Step(d.LastInput, H); tt += H;
+        }
+        return res;
+    }
+    var c0 = Cfg(0, mult, double.NaN);
+    Console.WriteLine($"{def.name}: ideal lap {line.lapTime:F2} s, wear x{mult:0.#} (Soft {TyreStrategy.BaseSoftRate(cid) * mult * 100:F0}%/lap), tyreLoss {c0.tyreLoss:F3}, blanket {c0.tyreStart:F0} C");
+    Console.WriteLine($"  set  pace (gap)        out-lap cold/warm (cost)  | stint at x{mult:0.#}: lap time / wear % / carcass C / min grip");
+    double soft = 0;
+    for (int s = 0; s < 3; s++)
+    {
+        var cmp = CompoundTable.Defs[s];
+        var fresh = Drive(s, 1e-3, cmp.opt, 3); double pace = Math.Min(fresh[1].t, fresh[2].t); if (s == 0) soft = pace;
+        var cold = Drive(s, 1e-3, double.NaN, 1); var warm = Drive(s, 1e-3, cmp.opt, 1);
+        var run = Drive(s, mult, double.NaN, 40);
+        if (System.Environment.GetEnvironmentVariable("TYREDEBUG") == "1") Console.WriteLine("      fresh: " + string.Join("  ", fresh.Select(r => $"{r.t:F2}/{r.tc:F0}/{r.g:F3}")));
+        int cliff = run.FindIndex(r => r.w >= TyreStrategy.CliffWear) + 1;
+        Console.WriteLine($"  {TyreSets.Letter[s]}   {pace,6:F2} ({pace - soft:+0.00;-0.00})   {cold[0].t,6:F2}/{warm[0].t,6:F2} ({cold[0].t - warm[0].t:+0.00})  | cliff L{cliff}: " +
+            string.Join("  ", run.Select(r => $"{r.t:F1}/{r.w * 100:F0}/{r.tc:F0}/{r.g:F2}")));
+    }
+    return;
+}
+
 // ---- tyre strategy plans: dotnet run -- race strat (no driving: the plans the rivals make, per race length) ----
 if (args.Length > 1 && args[0] == "race" && args[1] == "strat")
 {
     var tracks = Circuits();
+    // race strat <mult | auto>: the game's "Tyre wear" setting (TyreRules): plans for short races, then a driven 10-lap race
+    if (args.Length > 2)
+    {
+        bool auto = args[2] == "auto"; double mx = auto ? 0 : double.Parse(args[2], CultureInfo.InvariantCulture);
+        TyreRules.Strong = true;
+        foreach (var id in new[] { "spa", "monaco", "monza", "suzuka" })
+        {
+            int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == id); var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
+            foreach (int laps in new[] { 3, 5, 8, 10, 15, 20 })
+            {
+                double m = auto ? TyreRules.Mult(TyreRules.Auto, laps, id) : mx;
+                var plans = new List<string>(); var stops = new int[4];
+                for (int k = 0; k < 10; k++) { var st = new TyreStrategy(k + 1, id); st.Plan(laps, 0, id, line.lapTime, TyreStrategy.BaseSoftRate(id) * m); plans.Add(st.Describe()); stops[Math.Min(3, st.StopsPlanned)]++; }
+                Console.WriteLine($"{id,-7} {laps,2} laps x{m,4:F1} (S/M/H ~{TyreRules.LifeLaps(0, m, id):F0}/{TyreRules.LifeLaps(1, m, id):F0}/{TyreRules.LifeLaps(2, m, id):F0} laps): stops 0/1/2/3+ = {stops[0]}/{stops[1]}/{stops[2]}/{stops[3]}  e.g. {string.Join(" | ", plans.Take(5))}");
+            }
+        }
+        foreach (var id in new[] { "monza", "suzuka" })
+        {
+            int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == id); var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());
+            int n = 10, laps = 10; double m = auto ? TyreRules.Mult(TyreRules.Auto, laps, id) : mx;
+            var ds = new List<AiDriver>(); var rcs = new RaceControl(t, line, 5) { totalLaps = laps }; rcs.Init(n);
+            for (int k = 0; k < n; k++)
+            {
+                var cfg = new CarConfig { fuelStart = 0.23 * t.length / 1000 * (laps + 0.5) + 2 }; TyreRules.Apply(cfg, m, true);
+                var d = new AiDriver(t, line, cfg, DriverProfile.Grid[k * 2], AiTuning.For(ti), 1, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); d.rc = rcs; d.slot = k; d.PlanRace(laps, 0, k + 1); ds.Add(d);
+            }
+            var plan0 = ds.Select(d => d.strat.Describe()).ToArray();
+            var log = ds.Select(_ => new List<string>()).ToArray(); var setSeen = ds.Select(d => d.setSerial).ToArray();
+            double time = 0; int steps = 0;
+            while (time < laps * 160 && ds.Min(d => d.lap) <= laps)
+            {
+                if (steps++ % 4 == 0)
+                {
+                    for (int k = 0; k < n; k++)
+                    {
+                        double wr = Math.Max(ds[k].car.wearF, ds[k].car.wearR); int lp = ds[k].lap;
+                        ds[k].Think(4 * H, time, ds, null, -1, 0);
+                        if (ds[k].setSerial != setSeen[k]) { setSeen[k] = ds[k].setSerial; log[k].Add($"L{lp}:{TyreSets.Letter[ds[k].tyreSet]}(worn {wr * 100:F0}%)"); }
+                    }
+                    for (int k = 0; k < n; k++) rcs.Feed(k, ds[k]); rcs.Update(4 * H, time, time > 2);
+                    for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) Traffic.Collide(ds[i].car, ds[j].car);
+                }
+                foreach (var d in ds) { if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1); d.car.Step(d.LastInput, H); }
+                time += H;
+            }
+            Console.WriteLine($"{id} {laps} laps x{m:F1} driven ({time:F0} s), finishing order:");
+            foreach (int k in Enumerable.Range(0, n).OrderByDescending(k => ds[k].progress))
+                Console.WriteLine($"  {ds[k].who.name,-13} plan {plan0[k],-26} stops: {string.Join(" ", log[k]),-44} wear at the flag {Math.Max(ds[k].car.wearF, ds[k].car.wearR) * 100:F0}%");
+        }
+        return;
+    }
     foreach (var id in new[] { "spa", "monaco", "monza" })
     {
         int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == id); var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig());

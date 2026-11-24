@@ -665,7 +665,7 @@ public class TeamRadio : MonoBehaviour
         var cfg = car.cfg;
         if (rt > cd + 30 && !double.IsNaN(car.tyreTF))
         {
-            double opt = cfg.tyreOpt, win = cfg.tyreWindow;
+            var cmp = CompoundTable.Get(cfg.compound); double opt = cmp.opt, win = cmp.window; // the compound's own window (Soft 95, Hard 115 C)
             bool fast = speed > 30;
             coldFT = car.tyreTF < opt - 0.55 * win ? (fast ? coldFT + T : coldFT) : car.tyreTF > opt - 0.35 * win ? 0f : coldFT;
             coldRT = car.tyreTR < opt - 0.55 * win ? (fast ? coldRT + T : coldRT) : car.tyreTR > opt - 0.35 * win ? 0f : coldRT;

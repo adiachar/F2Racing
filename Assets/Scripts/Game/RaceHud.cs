@@ -771,6 +771,7 @@ public partial class GameManager
             if (tread > 0.02f) UiKit.Rect(new Rect(tr.x, tr.yMax - th * tread, tw, th * tread), tread < 0.3f ? HudRed : tc, 3f);
         }
         TyreIcon(new Rect(dx + S(214.5f), dy + S(23.5f), S(13), S(13)), carSet);
+        DrawTyreCue(dx, dy); // worn % and COLD / HOT (TyrePit.cs)
         if (!wings) return;
 
         // left wing: tyre temperatures and tread, brake temperatures
