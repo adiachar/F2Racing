@@ -1116,6 +1116,7 @@ public partial class GameManager : MonoBehaviour
     readonly DriverFeel feel = new DriverFeel(); // head / camera motion from the car's forces, steering wheel, shift lights (DriverFeel.cs)
     void LateUpdate()
     {
+        if (StoryCamera()) return; // the career story film has the camera (StoryFilm.cs; menu / shot mode only)
         if (PreRaceCamera()) return; // the pre-race intro has the camera (PreRace.cs)
         if (FormCamera()) return; // a TV shot of the formation lap (GameManagerFormation.cs)
         if (PostCamera()) return; // the post-race film: flag, cool-down lap, podium (PostRace.cs)
@@ -1500,6 +1501,7 @@ public partial class GameManager : MonoBehaviour
     {
         if (white == null) white = Texture2D.whiteTexture;
         if (menuOpen && !replaying) { DrawSettings(); return; } // the settings screen covers everything (race paused, or over the start menu)
+        if (StoryGui()) return; // the career story film instead of the menu page (StoryFilm.cs)
         if (ui.Showing)
         {
             ui.canReplay = CanReplay; ui.playerCar = model; // (the menu's studio shows a copy of the car)

@@ -128,3 +128,6 @@ you."); retired on Hard+ -> Lena ("You walked away from a race. We don't do that
   And Viktor Raske." Raske: "So Teo's boy made it. Let's see how long he stays.") + Mia.
 - Otherwise: **The rivalry continues.** Lena: "Same goals, sharper knives. Next year." Mia: "Grandpa lost too,
   sometimes. He never stopped. Neither will you."
+
+## Story films (StoryFilm.cs)
+Settings > GAME "Story": **Film** (default) plays each run of story cards as short real-time 3D scenes (the circuit loaded behind the menu, the game's cars and People rigs; the card's lines as captions; tap = next scene, SKIP ends it), **Cards** = the text cards, **Off** = only the goals cards. Scenes: prologue crash in the rain (Teo vs Raske, slow motion, the wall), Teo at his car, the player at his car ("Bring it home, kid"), Raske at the Argent garage, Mia waving in the pit lane; per round Lena's briefing / debrief, Mia waving / cheering, Raske's garage or his car leaving, a Teo memory lap, a chapter crane over the team's box, the season-end celebration. The goals cards stay cards. Shots: `story=prologue&t=1,5,10` (DebugShots.cs).
