@@ -288,6 +288,7 @@ public partial class GameManager
         camTab.Slider("Halo cam: helmet in view", "Moves the halo camera back and up so your helmet shows at the bottom of the screen. 0 = just above the head.", 0, 100, 10, 0, () => haloBackPct, v => haloBackPct = v, Pct);
         camTab.Choice("Halo in cockpit", "Show the halo in the cockpit view, as a real driver sees it, or hide all of it.", new[] { "Hide", "Show" }, 1, () => haloInCockpit ? 1 : 0, v => haloInCockpit = v == 1);
         camTab.Choice("Lens flare", "Sun flare with ghosts and an anamorphic streak when you look toward the sun (off on Low graphics).", new[] { "Off", "On" }, 1, () => PlayerPrefs.GetInt(LensFlare.PrefKey, 1), v => PlayerPrefs.SetInt(LensFlare.PrefKey, v));
+        camTab.Toggle("Look back button", "LOOK BACK on the left: hold it to see behind you, let go to look ahead (not in the TV view). Key: E.", true, () => LookBackBtn, v => LookBackBtn = v); // GameManagerLookBack.cs
         camTab.Choice("Tilt lock", "Keeps the picture level with your eyes when you tilt the phone, in real time.", new[] { "Off", "Cockpit", "All views" }, 0, () => horizonMode, v => horizonMode = v);
 
         // ---- GRAPHICS
@@ -330,8 +331,8 @@ public partial class GameManager
             () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
         game.Choice("Driver read-out", "Tyres, brakes and fuel beside the steering-wheel display.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
-        game.Choice("Mini-map", "Local: the track round your car (300 m ahead), turned to your heading, with the cars near you. Top right.", new[] { "Local", "Off" }, 0,
-            () => hudMap ? 0 : 1, v => hudMap = v == 0);
+        game.Choice("Map", "Top right. Radar: the cars round you where they are on the road, turned with your car (amber / red = alongside, with a warning on that side). Track map: the track round your car (300 m ahead), turned to your heading.", MapModeNames, 0,
+            () => MapMode, v => MapMode = v); // (Radar.cs; PlayerPrefs "hudMapMode")
         game.Toggle("Timing tower", "Order, gaps and tyres on the left in a race. Tap it for gap / interval, the arrow for all cars.", true, () => hudTower, v => hudTower = v);
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);

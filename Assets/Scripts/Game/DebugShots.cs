@@ -16,6 +16,10 @@
 //   kmh      player speed shown (wheels / spray only: physics is frozen)  default 0
 //   haloback halo cam "helmet in view" setting, 0-100                        default the saved setting
 //   hud      1 = draw the race HUD                                        default 0 (clean frames)
+//   map      radar | track | off: the Map setting for this run (not saved; needs hud=1)  default the saved setting
+//   lookback 1 = LOOK BACK held in every shot (rear view; GameManagerLookBack.cs)   default 0
+//   tilt     1 = tilt-steering HUD layout (brake left, OVERTAKE / BOOST / LOOK BACK beside it)  default 0 (touch)
+//   side     m: rival 0 level with the player, this far left of the racing line (negative = right): radar warning
 //   intro    list of times (s) into the race start (Race start: Full): the cinematic (PreRace.cs), frozen at each
 //            time for one frame (replaces s; cam = the view it hands over to). With a pit lane and the driver model
 //            (Monza): flyover 0-5.0, garage walk 5.0-10.6, cockpit edge 10.6-12.5, onboard / ignition 12.5-16.3, release
@@ -89,6 +93,7 @@ public partial class GameManager
         tilt = false; showLine = false;
         ui.mode = MenuUI.ModeQuick; ui.quali = false;
         shotFreeze = true;
+        ShotsHudParams(q); // map=, lookback=, tilt=, side= (GameManagerLookBack.cs)
     }
 
     internal static int ShotCam(string name) { int i = System.Array.IndexOf(ShotCamNames, name); return i >= 0 ? i : 0; }
@@ -121,6 +126,7 @@ public partial class GameManager
             rivals[k].Place(j, rl, kmh / 3.6);
             rivals[k].car.gridHold = false;
         }
+        ShotsAlongside(i, hw); // side=<m>: rival 0 alongside (GameManagerLookBack.cs)
         camMode = camIdx;
         tvWasOn = true; camVel = Vector3.zero; tvCur = -1; tvCarIdx = -1; // chase: snap, no swoop; TV: fresh camera pick
         if (cam != null && camIdx != TvMode) cam.fieldOfView = camIdx == 2 ? fovCockpit : camIdx == 3 ? fovCockpit + 11 + 0.06f * haloBackPct : fovChase;
