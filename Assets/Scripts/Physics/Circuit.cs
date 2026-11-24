@@ -132,6 +132,7 @@ namespace FormulaSim
                 t.kerbL[i] = t.kerbR[i] = on ? (float)Track.KerbWidth : 0f;
                 t.runL[i] = t.runR[i] = baseRun;
             }
+            RaisedKerbs(t);
             if (style != CircuitStyle.Parkland) return;
             // gravel traps on the outside of slower corners, from a little before the apex to well after it
             int before = (int)Math.Round(20 / t.ds), after = (int)Math.Round(90 / t.ds);
@@ -141,6 +142,63 @@ namespace FormulaSim
                 if (Math.Abs(c) < 1.0 / 160) continue;
                 var arr = c > 0 ? t.runR : t.runL; // left-hand corner: the outside is on the right
                 for (int k = -before; k <= after; k++) arr[((i + k) % N + N) % N] = SurfaceType.Gravel;
+            }
+        }
+
+        // Raised kerbs (Track.KerbLift): at some of the medium and slow corners (apex radius RaiseRmin-RaiseRmax m)
+        // the kerb inside the apex (20 m before it to 15 m after) and the kerb outside the exit (5-45 m after the
+        // apex) slope up to Track.KerbRise at the outer lip, easing in and out over 6 m; every other kerb stays flat.
+        // Which corners: RaiseShare % of all the kerbed corners (rounded), taken from the medium and slow ones in an
+        // order fixed per circuit (a hash of the circuit id and the corner's number along the lap).
+        public const double RaiseRmin = 25, RaiseRmax = 200, RaiseShare = 0.4;
+        void RaisedKerbs(Track t)
+        {
+            int N = t.N, W = (int)Math.Round(40 / t.ds);
+            uint seed = 2166136261; foreach (char ch in id ?? "") { seed ^= ch; seed *= 16777619; }
+            var cand = new System.Collections.Generic.List<(uint h, int apex)>();
+            int corners = 0;
+            for (int i = 0; i < N; i++)
+            {
+                double c = Math.Abs(t.pts[i].curv);
+                if (c < 1.0 / 280) continue; // (the kerbs' own threshold)
+                bool peak = true; // the tightest point within 40 m (the first of equals)
+                for (int k = -W; k <= W && peak; k++)
+                {
+                    if (k == 0) continue;
+                    double c2 = Math.Abs(t.pts[((i + k) % N + N) % N].curv);
+                    if (c2 > c || (c2 == c && k < 0)) peak = false;
+                }
+                if (!peak) continue;
+                corners++;
+                if (1 / c < RaiseRmin || 1 / c > RaiseRmax) continue;
+                uint h = seed ^ ((uint)corners * 0x9E3779B1u); h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+                cand.Add((h, i));
+            }
+            cand.Sort((x, y) => x.h != y.h ? x.h.CompareTo(y.h) : x.apex.CompareTo(y.apex));
+            int take = Math.Min(cand.Count, (int)Math.Round(RaiseShare * corners));
+            t.kerbCorners = corners; t.raisedCorners = take;
+            if (take == 0) return;
+            var rl = new float[N]; var rr = new float[N];
+            for (int q = 0; q < take; q++)
+            {
+                int i = cand[q].apex; bool leftTurn = t.pts[i].curv > 0; // the inside of a left-hander is on the left
+                Raise(t, leftTurn ? rl : rr, i, -20, 15);
+                Raise(t, leftTurn ? rr : rl, i, 5, 45);
+            }
+            for (int i = 0; i < N; i++) { if (t.kerbL[i] <= 0) rl[i] = 0; if (t.kerbR[i] <= 0) rr[i] = 0; }
+            t.raiseL = rl; t.raiseR = rr;
+        }
+        static void Raise(Track t, float[] a, int apex, double from, double to)
+        {
+            const double Ease = 6;
+            int i0 = (int)Math.Floor((from - Ease) / t.ds), i1 = (int)Math.Ceiling((to + Ease) / t.ds);
+            for (int k = i0; k <= i1; k++)
+            {
+                double s = k * t.ds, w = Math.Min(1, Math.Min(s - (from - Ease), to + Ease - s) / Ease);
+                if (w <= 0) continue;
+                w = w * w * (3 - 2 * w);
+                int j = ((apex + k) % t.N + t.N) % t.N;
+                a[j] = Math.Max(a[j], (float)w);
             }
         }
     }
@@ -399,6 +457,7 @@ namespace FormulaSim
                     if (line != null) { double off = Math.Abs(wl - line.off[wi]), u = Math.Min(1, Math.Max(0, (off - 1.5) / 2.5)); mu *= 1 - (0.04 + 0.10 * marbles) * u * u * (3 - 2 * u); }
                 }
                 car.SetWheelSurface(w, type, mu, def.roll, def.bump);
+                car.wLift[w] = type == SurfaceType.Kerb ? t.KerbLift(wi, wl) : 0; // a raised kerb lifts the tyre (Track.KerbLift)
             }
         }
     }

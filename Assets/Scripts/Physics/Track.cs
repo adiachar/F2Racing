@@ -53,6 +53,23 @@ namespace FormulaSim
             return run;
         }
 
+        // Raised kerbs (some corners' apex and exit kerbs, chosen by CircuitDef.Layout): raiseL / raiseR = 0..1 per
+        // point (null = every kerb flat); the kerb's top rises from 0 at the road edge to raise x KerbRise at its
+        // outer lip (a straight slope). KerbLift is the one profile: the tyres (WheelContact) and the kerb mesh
+        // (WorldBuilder) both read it, so the car rides exactly the kerb that is drawn.
+        public const double KerbRise = 0.05;
+        public float[] raiseL, raiseR;
+        public int kerbCorners, raisedCorners; // (counts, for the reports)
+        public double KerbLift(int i, double lat)
+        {
+            if (raiseL == null) return 0;
+            bool left = lat > 0; float r = left ? raiseL[i] : raiseR[i];
+            if (r <= 0) return 0;
+            double kw = left ? kerbL[i] : kerbR[i], u = (Math.Abs(lat) - HalfWidth(i)) / kw;
+            if (u <= 0 || u > 1.002) return 0; // (on the road, or behind the kerb; the mesh's outer lip may round to just past 1)
+            return r * KerbRise * Math.Min(1, u);
+        }
+
         static (double, double) Catmull((double x, double y) p0, (double x, double y) p1, (double x, double y) p2, (double x, double y) p3, double t)
         {
             double D((double x, double y) a, (double x, double y) b) { double d = Math.Sqrt(Math.Sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y))); return d == 0 ? 1e-4 : d; }

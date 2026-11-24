@@ -1007,6 +1007,7 @@ public partial class CarModel : MonoBehaviour
     {
         if (car == null) return;
         lastFeed = Time.time;
+        for (int w = 0; w < 4; w++) kerbLift[w] = (float)car.wLift[w]; // raised kerbs: the car rides up on them (Apply)
         if (!double.IsNaN(car.brakeTF)) { brakeT[0] = (float)car.brakeTF; brakeT[1] = (float)car.brakeTR; }
         if (dt > 0) UpdateBrakeLook(dt);
         float wF = (float)car.wearF, wR = (float)car.wearR, dF = double.IsNaN(car.dirtF) ? 0 : (float)car.dirtF, dR = double.IsNaN(car.dirtR) ? 0 : (float)car.dirtR;
@@ -1483,7 +1484,7 @@ public partial class CarModel : MonoBehaviour
             dVel[i] += UnityEngine.Physics.gravity * dt;
             // carbon pieces are light and flat: air slows them hard
             dVel[i] *= 1f / (1f + dt * (0.6f + 0.02f * dVel[i].magnitude));
-            var p = t.position + dVel[i] * dt; float ground = WorldBuilder.H(p.x, p.z) + 0.01f;
+            var p = t.position + dVel[i] * dt; float ground = (WorldBuilder.Height != null ? (float)WorldBuilder.Height.SampleBelow(p.x, p.z, t.position.y) : 0f) + 0.01f; // (under a bridge: the road below, not the deck)
             if (p.y < ground) { p.y = ground; dVel[i] = new Vector3(dVel[i].x * 0.6f, -dVel[i].y * 0.3f, dVel[i].z * 0.6f); dSpin[i] *= 0.6f; if (dVel[i].sqrMagnitude < 0.3f) dVel[i] = Vector3.zero; }
             t.position = p;
             if (dSpin[i].sqrMagnitude > 1f) t.rotation = Quaternion.Euler(dSpin[i] * dt) * t.rotation;
@@ -1557,10 +1558,13 @@ public partial class CarModel : MonoBehaviour
         }
     }
 
+    int hfLeg = -1; // the track point the car is on, for its height at a bridge crossing (HeightField.SampleAlong)
+    readonly float[] kerbLift = new float[4]; // m each tyre is lifted by a raised kerb (FormulaCar.wLift, from Feed)
     // physics -> visuals. heading: rad CCW from +x (physics); delta: + = left; spin: wheel angle (rad)
     public void Apply(double x, double y, double heading, double delta, double frontSpinRad, double rearSpinRad, double axLong, double ay)
     {
-        if (WorldBuilder.Height == null)
+        bool onKerb = kerbLift[0] + kerbLift[1] + kerbLift[2] + kerbLift[3] > 0f && Time.time - lastFeed < 0.25f;
+        if (WorldBuilder.Height == null && !onKerb)
         {
             transform.position = new Vector3((float)x, 0, (float)y);
             transform.rotation = Quaternion.Euler(0, 90f - (float)(heading * Mathf.Rad2Deg), 0);
@@ -1568,11 +1572,24 @@ public partial class CarModel : MonoBehaviour
         else
         {
             // on hills: sit on the ground and lean with it
-            float ch = (float)System.Math.Cos(heading), sh = (float)System.Math.Sin(heading);
-            // (HAlong: on a bridge or under it, the level of the leg the car drives along)
-            float h0 = WorldBuilder.HAlong(x, y, ch, sh);
-            float sf = (WorldBuilder.HAlong(x + ch * 1.7, y + sh * 1.7, ch, sh) - WorldBuilder.HAlong(x - ch * 1.7, y - sh * 1.7, ch, sh)) / 3.4f;   // slope ahead
-            float ss = (WorldBuilder.HAlong(x + sh * 0.8, y - ch * 0.8, ch, sh) - WorldBuilder.HAlong(x - sh * 0.8, y + ch * 0.8, ch, sh)) / 1.6f;   // slope to the right
+            float ch = (float)System.Math.Cos(heading), sh = (float)System.Math.Sin(heading), h0 = 0f, sf = 0f, ss = 0f;
+            var hf = WorldBuilder.Height;
+            if (hf != null)
+            {
+                // (on a bridge or under it, the level of the leg the car drives along: hfLeg keeps the car's own track
+                // point, so at Suzuka's crossing it never takes the other road's height for a frame)
+                h0 = (float)hf.SampleAlong(x, y, ch, sh, ref hfLeg);
+                sf = (float)(hf.SampleAlong(x + ch * 1.7, y + sh * 1.7, ch, sh, ref hfLeg) - hf.SampleAlong(x - ch * 1.7, y - sh * 1.7, ch, sh, ref hfLeg)) / 3.4f;   // slope ahead
+                ss = (float)(hf.SampleAlong(x + sh * 0.8, y - ch * 0.8, ch, sh, ref hfLeg) - hf.SampleAlong(x - sh * 0.8, y + ch * 0.8, ch, sh, ref hfLeg)) / 1.6f;   // slope to the right
+            }
+            // a raised kerb under some tyres (Track.KerbLift, the profile the kerb mesh is built with): the car rides
+            // up on them, tilted across and along by the lift difference (over the 1.6 m track and the 3.4 m wheelbase)
+            if (onKerb)
+            {
+                h0 += (kerbLift[0] + kerbLift[1] + kerbLift[2] + kerbLift[3]) * 0.25f;
+                ss += (kerbLift[1] + kerbLift[3] - kerbLift[0] - kerbLift[2]) * 0.5f / 1.6f;
+                sf += (kerbLift[0] + kerbLift[1] - kerbLift[2] - kerbLift[3]) * 0.5f / 3.4f;
+            }
             var fwd = new Vector3(ch, sf, sh); var right = new Vector3(sh, ss, -ch);
             transform.position = new Vector3((float)x, h0, (float)y);
             transform.rotation = Quaternion.LookRotation(fwd, Vector3.Cross(fwd, right));

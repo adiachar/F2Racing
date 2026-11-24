@@ -17,6 +17,7 @@ public class SkidMarks
     int next;
     readonly Vector3[] lastL = new Vector3[4], lastR = new Vector3[4], lastP = new Vector3[4];
     readonly bool[] active = new bool[4];
+    readonly int[] leg = { -1, -1, -1, -1 }; // each wheel's track point, for the ground height at a bridge crossing
     int dirtyLo = int.MaxValue, dirtyHi = -1; bool dirtyAll; // quads written since the last upload (ring indices)
 
     // for the frame-time overlay / soak test (FrameLog.cs, SoakTest.cs): quads in use, bytes uploaded so far
@@ -86,7 +87,8 @@ public class SkidMarks
     public void Track(int wheel, Vector3 pos, Vector3 side, bool on)
     {
         if (!on) { active[wheel] = false; return; }
-        pos.y = Height + WorldBuilder.HAlong(pos.x, pos.z, side.z, -side.x); // (the car's own leg at a bridge: along its heading)
+        // (the car's own leg at a bridge: along its heading, the wheel's track point kept in leg[])
+        pos.y = Height + (WorldBuilder.Height != null ? (float)WorldBuilder.Height.SampleAlong(pos.x, pos.z, side.z, -side.x, ref leg[wheel]) : 0f);
         side.y = 0; side = side.normalized * HalfWidth;
         Vector3 l = pos - side, r = pos + side;
         if (!active[wheel] || (pos - lastP[wheel]).sqrMagnitude > 25f)

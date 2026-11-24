@@ -150,7 +150,7 @@ public partial class GameManager
         if (d.car.gridHold)
         {
             // the slope under the slot (StepRivals only updates it once the race runs), so the brakes hold against it
-            d.car.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(d.car.x, d.car.y, d.car.heading) : 0;
+            d.car.grade = WorldBuilder.Height != null ? WorldBuilder.Height.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx) : 0;
             return new CarInput(0, 0, 1);
         }
         var li = d.LastInput; double c = Clutch(t);

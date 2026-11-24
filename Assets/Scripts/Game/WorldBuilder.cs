@@ -640,7 +640,8 @@ public static class WorldBuilder
                     {
                         int pc = side > 0 ? KP - 1 - c : c; float across = kf[pc], g = side > 0 ? 1f - across : across;
                         float lat = left + (right - left) * g; code.x = across;
-                        v.Add(WT(i, p.x + p.nx * lat, p.y + p.ny * lat, kh[pc])); uv.Add(new Vector2(lat, d)); uv2.Add(code); uv3.Add(kd);
+                        // + a raised kerb's slope (Track.KerbLift: 0 off the raised corners), the same profile the tyres ride
+                        v.Add(WT(i, p.x + p.nx * lat, p.y + p.ny * lat, kh[pc] + (float)t.KerbLift(i % t.N, lat))); uv.Add(new Vector2(lat, d)); uv2.Add(code); uv3.Add(kd);
                     }
                     if (i < i1)
                         for (int c = 0; c + 1 < KP; c++)

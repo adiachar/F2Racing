@@ -267,10 +267,46 @@ namespace FormulaSim
 
         // the surface under a car heading along (dx, dy): inside a crossing the leg it drives along. Without bridges
         // the same as Sample.
+        // Which leg: the track points within 60 deg of the heading, the nearest one, with a penalty for the angle
+        // (AlignPenalty m^2 x (1 - |cos|)). Nearest alone failed at Suzuka (legs cross at 61 deg): a car a few degrees
+        // off the lower leg's direction, 4-5 m left of its centreline under the deck, got the upper leg's deck point
+        // (nearer) for ~0.1 s: the model jumped 6.3 m up and back, and the physics grade spiked to 185 %.
+        const double AlignPenalty = 600;
         public double SampleAlong(double x, double y, double dx, double dy)
         {
             if (deck == null) return Core(x, y, true);
-            int best = -1; double bd = double.MaxValue, need = 0.5 * Math.Sqrt(dx * dx + dy * dy);
+            int best = AlignedNearest(x, y, dx, dy, out double bd);
+            if (best < 0) return Core(x, y, true);
+            return deck[best] && bd <= DeckHalf * DeckHalf ? RoadAt(best, x, y) : Core(x, y, false);
+        }
+        // the same for something that knows which track point it follows (leg: a car's own track index, kept up to
+        // date here; -1 = not known yet): the nearest point of that stretch of the lap (+-LegScan points), so the
+        // leg can never switch to the other road at a crossing. Lost (more than 30 m off it): as above.
+        const int LegScan = 24;
+        public double SampleAlong(double x, double y, double dx, double dy, ref int leg)
+        {
+            if (deck == null) return Core(x, y, true);
+            int best = -1; double bd = double.MaxValue;
+            if (leg >= 0 && leg < t.N)
+            {
+                var pts = t.pts;
+                for (int q = -LegScan; q <= LegScan; q++)
+                {
+                    int k = leg + q; if (k < 0) k += t.N; else if (k >= t.N) k -= t.N;
+                    double d = (pts[k].x - x) * (pts[k].x - x) + (pts[k].y - y) * (pts[k].y - y);
+                    if (d < bd) { bd = d; best = k; }
+                }
+                if (bd > 30 * 30) best = -1;
+            }
+            if (best < 0) best = AlignedNearest(x, y, dx, dy, out bd);
+            if (best < 0) return Core(x, y, true);
+            leg = best;
+            return deck[best] && bd <= DeckHalf * DeckHalf ? RoadAt(best, x, y) : Core(x, y, false);
+        }
+        int AlignedNearest(double x, double y, double dx, double dy, out double bestD)
+        {
+            int best = -1; double bs = double.MaxValue, bd = double.MaxValue, len = Math.Sqrt(dx * dx + dy * dy), need = 0.5 * len;
+            double inv = len > 1e-9 ? 1 / len : 0;
             var pts = t.pts;
             for (int oy = -1; oy <= 1; oy++)
             {
@@ -284,14 +320,24 @@ namespace FormulaSim
                     for (int q = bStart[b], qe = bStart[b + 1]; q < qe; q++)
                     {
                         int pi = bIdx[q]; var p = pts[pi];
-                        if (Math.Abs(p.tx * dx + p.ty * dy) < need) continue;
-                        double d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
-                        if (d < bd) { bd = d; best = pi; }
+                        double al = Math.Abs(p.tx * dx + p.ty * dy);
+                        if (al < need) continue;
+                        double d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y), sc = d + AlignPenalty * (1 - al * inv);
+                        if (sc < bs) { bs = sc; bd = d; best = pi; }
                     }
                 }
             }
-            if (best < 0) return Core(x, y, true);
-            return deck[best] && bd <= DeckHalf * DeckHalf ? RoadAt(best, x, y) : Core(x, y, false);
+            bestD = bd;
+            return best;
+        }
+
+        // a thing that falls or rests at height yNow (debris): the top surface, or under a bridge deck (the deck more
+        // than 0.5 m above it) the ground below. Without bridges the same as Sample.
+        public double SampleBelow(double x, double y, double yNow)
+        {
+            double top = Core(x, y, true);
+            if (deck == null || top <= yNow + 0.5) return top;
+            return Core(x, y, false);
         }
 
         // the road surface of track point best at (x, y): its height, interpolated towards the next point along, tilted
@@ -360,12 +406,14 @@ namespace FormulaSim
             double c = Math.Cos(heading) * 1.7, s = Math.Sin(heading) * 1.7;
             return (Sample(x + c, y + s) - Sample(x - c, y - s)) / 3.4;
         }
-        // the same for a car: at a bridge, along the leg it drives on (without bridges exactly Grade)
-        public double GradeAlong(double x, double y, double heading)
+        // the same for a car: at a bridge, along the leg it drives on (without bridges exactly Grade). leg: the car's
+        // track index (-1 = not known: the leg from the heading alone)
+        public double GradeAlong(double x, double y, double heading, int leg = -1)
         {
             if (deck == null) return Grade(x, y, heading);
             double ch = Math.Cos(heading), sh = Math.Sin(heading), c = ch * 1.7, s = sh * 1.7;
-            return (SampleAlong(x + c, y + s, ch, sh) - SampleAlong(x - c, y - s, ch, sh)) / 3.4;
+            int l2 = leg;
+            return (SampleAlong(x + c, y + s, ch, sh, ref leg) - SampleAlong(x - c, y - s, ch, sh, ref l2)) / 3.4;
         }
     }
 }

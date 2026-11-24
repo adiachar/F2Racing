@@ -198,6 +198,7 @@ namespace FormulaSim
         // kerbs: a kerb under one side tilts the car, so the roll springs move load onto the kerb side
         public bool kerbTransfer = true;
         public double kerbLift = 0.5;        // share of a surface's bump height that lifts the tyre on average (est.)
+        public double kerbRaise = 0.1;       // share of a raised kerb's lift (Track.KerbLift) that rolls the chassis; the tyre's sidewall takes the rest (est.)
         // tyres that ran through grass, gravel or astroturf pick up dirt and grip less until it wears off
         public double dirtLoss = 0.08, dirtClear = 400; // grip lost when fully dirty; metres driven to clear about 63 %
         // ---- damage (FormulaCar.Damage, FormulaCar.ApplyImpact) ----
@@ -345,8 +346,10 @@ namespace FormulaSim
         // what each tyre is touching (0 FL, 1 FR, 2 RL, 3 RR): grip factor, rolling drag, bump height
         public readonly double[] wMu = { 1, 1, 1, 1 }, wRoll = new double[4], wBump = new double[4];
         public readonly SurfaceType[] wType = new SurfaceType[4];
+        // m each tyre is lifted by a raised kerb (Track.KerbLift, set by WheelContact; 0 off the raised kerbs)
+        public readonly double[] wLift = new double[4];
         public double vib;                  // 0..1 how hard the surface is shaking the car right now (camera, sound)
-        public void SetWheelSurface(int w, SurfaceType type, double mu, double roll, double bump) { wType[w] = type; wMu[w] = mu; wRoll[w] = roll; wBump[w] = bump; }
+        public void SetWheelSurface(int w, SurfaceType type, double mu, double roll, double bump) { wType[w] = type; wMu[w] = mu; wRoll[w] = roll; wBump[w] = bump; wLift[w] = 0; }
         // one surface for all four tyres (older code and tests)
         public double surfaceMu { get => (wMu[0] + wMu[1] + wMu[2] + wMu[3]) / 4; set { for (int i = 0; i < 4; i++) wMu[i] = value; } }
         public double surfaceDrag { get => (wRoll[0] + wRoll[1] + wRoll[2] + wRoll[3]) / 4; set { for (int i = 0; i < 4; i++) wRoll[i] = value; } }
@@ -830,6 +833,15 @@ namespace FormulaSim
                 double kt = c.kerbLift * c.rollStiff / (c.track * c.track);
                 dkF = (wBump[1] - wBump[0]) * kt * c.latTransferFront;
                 dkR = (wBump[3] - wBump[2]) * kt * (1 - c.latTransferFront);
+                if (wLift[0] + wLift[1] + wLift[2] + wLift[3] > 0)
+                {
+                    // a raised kerb under one side: that side rides up by its slope (only there: the flat kerbs and the
+                    // road are untouched), and the car shakes harder on it
+                    double kr = c.kerbRaise * c.rollStiff / (c.track * c.track);
+                    dkF += (wLift[1] - wLift[0]) * kr * c.latTransferFront;
+                    dkR += (wLift[3] - wLift[2]) * kr * (1 - c.latTransferFront);
+                    for (int w = 0; w < 4; w++) vib = Math.Max(vib, Math.Min(1, wLift[w] / 0.03 * vk));
+                }
             }
             double AxleGrip(double fz, double fz0, double share, double camber, double muL, double muR, double dk)
             {
