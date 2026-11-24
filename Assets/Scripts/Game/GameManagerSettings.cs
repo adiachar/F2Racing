@@ -25,7 +25,7 @@ public partial class GameManager
     // car set-up
     float aeroBal = 45, brakeBiasPct = 57, brakeMigPct, engBrakePct = 100, diffPowerPct = 15, diffCoastPct = 25, rideFmm, rideRmm;
     // camera
-    float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100;
+    float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100, haloBackPct;
     bool haloInCockpit = true;                           // cockpit view draws the halo (hoop + pillar); false hides all of it
     int horizonMode = 0;                                 // Tilt lock: 0 off, 1 cockpit views, 2 all views
     // graphics
@@ -88,7 +88,7 @@ public partial class GameManager
         diffPowerPct = LoadF("diffPower", 15, 5, 40); diffCoastPct = LoadF("diffCoast", 25, 5, 50);
         rideFmm = LoadF("rideF", 0, -5, 10); rideRmm = LoadF("rideR", 0, -10, 15);
         fovChase = LoadF("fovChase", 62, 50, 80); fovCockpit = LoadF("fovCockpit", 55, 45, 80);
-        seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200);
+        seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200); haloBackPct = LoadF("haloBack", 0, 0, 100);
         horizonMode = LoadI("tiltLock", 0, 2);
         haloInCockpit = PlayerPrefs.GetInt("haloCockpit", 1) == 1;
         damageMode = LoadI("damage", 1, 2);
@@ -117,7 +117,7 @@ public partial class GameManager
         PlayerPrefs.SetFloat("diffPower", diffPowerPct); PlayerPrefs.SetFloat("diffCoast", diffCoastPct);
         PlayerPrefs.SetFloat("rideF", rideFmm); PlayerPrefs.SetFloat("rideR", rideRmm);
         PlayerPrefs.SetFloat("fovChase", fovChase); PlayerPrefs.SetFloat("fovCockpit", fovCockpit);
-        PlayerPrefs.SetFloat("seatUp", seatUpCm); PlayerPrefs.SetFloat("seatFwd", seatFwdCm); PlayerPrefs.SetFloat("camShake", camShakePct);
+        PlayerPrefs.SetFloat("seatUp", seatUpCm); PlayerPrefs.SetFloat("seatFwd", seatFwdCm); PlayerPrefs.SetFloat("camShake", camShakePct); PlayerPrefs.SetFloat("haloBack", haloBackPct);
         PlayerPrefs.SetInt("tiltLock", horizonMode);
         PlayerPrefs.SetInt("haloCockpit", haloInCockpit ? 1 : 0);
         PlayerPrefs.SetInt("damage", damageMode);
@@ -284,6 +284,7 @@ public partial class GameManager
         camTab.Slider("Cockpit seat height", "Raises or lowers the driver's eyes.", -8, 8, 0.5f, 0, () => seatUpCm, v => seatUpCm = v, v => Signed(v, "0.0", " cm"));
         camTab.Slider("Cockpit seat position", "Moves the driver's eyes forward (+) or back (-).", -10, 10, 0.5f, 0, () => seatFwdCm, v => seatFwdCm = v, v => Signed(v, "0.0", " cm"));
         camTab.Slider("Camera shake", "How much the camera moves with braking, cornering, kerbs and bumps.", 0, 200, 10, 100, () => camShakePct, v => camShakePct = v, Pct);
+        camTab.Slider("Halo cam: helmet in view", "Moves the halo camera back and up so your helmet shows at the bottom of the screen. 0 = just above the head.", 0, 100, 10, 0, () => haloBackPct, v => haloBackPct = v, Pct);
         camTab.Choice("Halo in cockpit", "Show the halo in the cockpit view, as a real driver sees it, or hide all of it.", new[] { "Hide", "Show" }, 1, () => haloInCockpit ? 1 : 0, v => haloInCockpit = v == 1);
         camTab.Choice("Lens flare", "Sun flare with ghosts and an anamorphic streak when you look toward the sun (off on Low graphics).", new[] { "Off", "On" }, 1, () => PlayerPrefs.GetInt(LensFlare.PrefKey, 1), v => PlayerPrefs.SetInt(LensFlare.PrefKey, v));
         camTab.Choice("Tilt lock", "Keeps the picture level with your eyes when you tilt the phone, in real time.", new[] { "Off", "Cockpit", "All views" }, 0, () => horizonMode, v => horizonMode = v);

@@ -1137,8 +1137,14 @@ public partial class GameManager : MonoBehaviour
             // settings: the cockpit eye point can be moved up/down and forward/back a few cm (the view angle stays)
             float seatY = seatUpCm * 0.01f, seatZ = seatFwdCm * 0.01f;
             // the head's movement under braking, cornering, kerbs and speed comes from DriverFeel (springs, small amplitudes)
-            pos = tr.TransformPoint((halo ? new Vector3(0, 1.02f, 0.12f) : new Vector3(0, 0.76f + seatY, 0.30f + seatZ)) + feel.offset);
-            look = tr.TransformPoint(new Vector3(0, halo ? 0.55f : 0.76f + seatY, 30)); // cockpit: 2.8 deg down, fitted to a real F1 onboard frame
+            // halo cam "Helmet in view" setting (haloBackPct): 0 = just above the head; 100 = up on the airbox intake, tipped
+            // down 14 deg so the top of the driver's helmet sits at the bottom of the screen (an F1 T-cam). In between it
+            // slides along the same line (the intake pod behind the head hides the helmet from any point further back)
+            float hb = haloBackPct * 0.01f;
+            Vector3 eye = halo ? new Vector3(0, 1.02f + 0.18f * hb, 0.12f - 0.14f * hb) : new Vector3(0, 0.76f + seatY, 0.30f + seatZ);
+            pos = tr.TransformPoint(eye + feel.offset);
+            float lookY = halo ? eye.y - 30f * Mathf.Tan((0.9f + 13.1f * hb) * Mathf.Deg2Rad) : 0.76f + seatY;
+            look = tr.TransformPoint(new Vector3(0, lookY, 30)); // cockpit: 2.8 deg down, fitted to a real F1 onboard frame
             fov = halo ? fovCockpit + 11 : fovCockpit; // default 55 (halo 66): fitted to a real F1 onboard frame (eye, angle and view solved from its halo, tyre and wheel positions); no widening with speed
             cam.transform.position = pos;
         }
