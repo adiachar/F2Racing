@@ -618,7 +618,9 @@ if (args.Length > 0 && args[0] == "corners")
     var inv = CultureInfo.InvariantCulture;
     foreach (var def in FormulaSim.Circuits.All.Where(d => d.realPole > 0 && (args.Length < 2 || d.id == args[1])))
     {
-        var t = def.Build(); var line = RacingLine.Compute(t, new CarConfig(), 1.3, 0.97, 0.95);
+        var ccf = new CarConfig(); // DF=0.6: downforce scaled (the in-game "Test: downforce" slider)
+        if (Environment.GetEnvironmentVariable("DF") is string dfs) { double df = double.Parse(dfs, inv); ccf.clA *= df; ccf.clAX *= df; }
+        var t = def.Build(); var line = RacingLine.Compute(t, ccf, 1.3, 0.97, 0.95);
         var mins = new List<string>(); int w = (int)Math.Round(40 / t.ds);
         for (int i = 0; i < t.N; i++)
         {
