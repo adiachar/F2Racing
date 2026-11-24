@@ -1,7 +1,7 @@
 // Radar.cs — the proximity radar (Gran Turismo style), the default of the "Map" setting, top right under the race card
 // where the local track map was (RaceHud.cs: HudLayout's cardRect; the track map itself is GameManager.cs: DrawMiniMap).
 //  * a round, translucent panel (one cached texture: dark glass, a hairline rim, faint centre lines); the player's car
-//    in the middle (a little below the centre: ~38 m ahead and ~26 m behind are in view), nose up, turned with the car
+//    in the middle (a little below the centre: ~22 m ahead and ~14 m behind are in view), nose up, turned with the car
 //  * every rival within range as a small rounded car shape at its real place and angle relative to the player (the same
 //    in-between moment the cars are drawn at: GameManager.Update), white; amber as it closes up alongside, red once it
 //    overlaps the player's car (within a car length, side by side). Cars fade out before they reach the rim
@@ -38,8 +38,8 @@ public partial class GameManager
     }
 
     // ---------------------------------------------------------------- radar
-    const float RdRange = 32f;     // m from the panel's centre to its rim
-    const float RdLead = 0.2f;     // the player sits this share of the radius below the centre (38 m ahead, 26 m behind)
+    const float RdRange = 18f;     // m from the panel's centre to its rim (GT-like zoom: a car alongside sits clearly beside you)
+    const float RdLead = 0.2f;     // the player sits this share of the radius below the centre (22 m ahead, 14 m behind)
     const float RdCarLen = 5.6f;   // m, a car length (alongside = less than this apart along the car)
     static Texture2D radarBg;
     float rdCx, rdCy, rdRim, rdFade, rdGuiA;
@@ -227,7 +227,7 @@ public partial class GameManager
             float u = (x + 0.5f) / Px - 1f, v = (y + 0.5f) / Px - 1f, r = Mathf.Sqrt(u * u + v * v);
             float inside = Mathf.Clamp01((1f - r) * Px + 0.5f);
             if (inside <= 0f) { px[y * D + x] = new Color32(0, 0, 0, 0); continue; }
-            float baseA = 0.36f + 0.2f * r * r;
+            float baseA = 0.58f + 0.17f * r * r; // darker glass: reads over bright scenery
             float inner = Mathf.Clamp01((0.95f - r) * 5f);
             float line = 0f;
             line = Mathf.Max(line, Mathf.Clamp01(1f - Mathf.Abs(u) * Px / 0.9f) * 0.10f * inner);          // straight ahead / behind
