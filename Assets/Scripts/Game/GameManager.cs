@@ -408,6 +408,7 @@ public partial class GameManager : MonoBehaviour
             var who = field != null ? field[k] : grid[count == 1 ? 0 : Mathf.RoundToInt(k * (grid.Length - 1) / (float)(count - 1))];
             var rc = CarConfig.ForClass(classIdx); rc.fuelStart = RaceFuel();
             rc.compound = Weather.PhysicsCompound(rivalSet); rc.damage = DamageNow == 2; // a career round always has damage (CareerSession.cs)
+            TyreRulesFor(rc, rivalSet); // the session's tyre wear and temperature, as the player's (TyrePit.cs)
             // the speed profile's grip share multiplies the tyre mu directly (RacingLine.SpeedProfile), so the wet
             // factor of their tyres on the racing line slows corners and braking just as the grip loss does
             var tune = AiTuning.For(builtFor); tune.grip *= Weather.TrackFactor(rivalSet, 1);
@@ -813,6 +814,7 @@ public partial class GameManager : MonoBehaviour
         compIdx = (int)Weather.PhysicsCompound(tyreSet);
         c.speedSens = SpeedSteer[speedSteerIdx]; c.compound = (Compound)compIdx; c.fuelStart = RaceFuel();
         cfgClass = classIdx; ApplySetup(c); // steering rates and lock, aero balance, brakes, differential, ride heights
+        TyreRulesBegin(); TyreRulesFor(c, tyreSet); // Settings > Tyre wear: this session's wear and tyre temperature (TyrePit.cs)
         return c;
     }
 
@@ -1076,7 +1078,7 @@ public partial class GameManager : MonoBehaviour
     void PitStop(bool instant)
     {
         carSet = NextSet; var next = Weather.PhysicsCompound(carSet);
-        car.cfg.compound = next;
+        car.cfg.compound = next; PitFit(); // the set's heat, the pit chips back to the auto pick (TyrePit.cs)
         car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0;
         car.tyreTF = car.tyreTR = car.cfg.tyreStart;       // straight off the blankets
         car.tyreSF = car.tyreSR = double.NaN;               // the surface temperature re-starts from the carcass
@@ -1091,8 +1093,8 @@ public partial class GameManager : MonoBehaviour
         }
         else pitStopLen = pRun != null ? pRun.serviceLen : PitLane.Service;
     }
-    // the next tyre set: the one for the weather first (a wet race boxes for wets), then round the rest
-    int NextSet => Weather.BestSet() != carSet ? Weather.BestSet() : (carSet + 1) % Weather.Sets;
+    // the next tyre set: the player's pick on the pit chips, else the one for the weather first, then round the rest (TyrePit.cs)
+    int NextSet => pitChoice >= 0 ? pitChoice : AutoSet;
     // a lap time in seconds, to turn the pit time loss into race distance
     double RefLap() => bestLap ?? lastLap ?? (line != null && line.lapTime > 0 ? line.lapTime : 90);
 
@@ -1564,8 +1566,9 @@ public partial class GameManager : MonoBehaviour
             float pw = S(58); x -= pw + g;
             bool armed = boxArmed, blink = armed && Mathf.Repeat(Time.unscaledTime * 2f, 1f) < 0.5f;
             if (PillBtn(new Rect(x, y, pw, b), armed ? "BOXING" : "BOX", null, armed && blink ? new Color(1f, 0.16f, 0.1f) : HudAccent, armed, 8.5f))
-            { boxArmed = !boxArmed; Flash(boxArmed ? $"Box this lap: {Weather.TyreName(NextSet)}" : "Box cancelled"); }
+            { boxArmed = !boxArmed; if (!boxArmed) pitChoice = -1; Flash(boxArmed ? $"Box this lap: {Weather.TyreName(NextSet)}" : "Box cancelled"); }
         }
+        DrawPitChips(); // the tyre set for the stop: S / M / H / I / W chips while boxing (TyrePit.cs)
     }
 
     // drag steering: a slim track bottom left; the dot follows your thumb

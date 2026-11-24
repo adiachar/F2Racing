@@ -123,9 +123,12 @@ namespace FormulaSim
         // Plan the race (call once, after the constructor): returns the start set and fits its compound
         public int PlanRace(int laps, int wet, int seed)
         {
-            raceLaps = laps; strat = new TyreStrategy(seed, track.def != null ? track.def.id : "test");
-            tyreSet = strat.Plan(laps, wet, track.def != null ? track.def.id : "test", RefLap);
-            car.cfg.compound = TyreSets.Physics(tyreSet); setSerial++;
+            string cid = track.def != null ? track.def.id : "test";
+            raceLaps = laps; strat = new TyreStrategy(seed, cid);
+            // the game's "Tyre wear" setting scales the wear (CarConfig.tyreLife): the plan starts from that rate
+            double rate = car.cfg.tyreLife != 1 || TyreRules.Strong ? TyreStrategy.BaseSoftRate(cid) / Math.Max(1e-3, car.cfg.tyreLife) * (TyreRules.Strong ? TyreRules.PlanWear : 1) : 0;
+            tyreSet = strat.Plan(laps, wet, cid, RefLap, rate);
+            TyreRules.Fit(car.cfg, tyreSet); setSerial++;
             return tyreSet;
         }
         public void SetWeather(int wet) { if (strat != null) strat.WeatherChanged(wet, lap); }
@@ -415,7 +418,7 @@ namespace FormulaSim
             boxing = false; pitStops++;
             car.RepairWings(); car.FixPunctures();
             car.wearF = car.wearR = 0; car.dirtF = car.dirtR = 0; car.tyreTF = car.tyreTR = car.cfg.tyreStart; car.tyreSF = car.tyreSR = double.NaN;
-            if (strat != null) { tyreSet = strat.OnStop(lapNow, boxReason); car.cfg.compound = TyreSets.Physics(tyreSet); setSerial++; }
+            if (strat != null) { tyreSet = strat.OnStop(lapNow, boxReason); TyreRules.Fit(car.cfg, tyreSet); setSerial++; }
             boxReason = 0;
         }
 

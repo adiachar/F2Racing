@@ -29,12 +29,63 @@ namespace FormulaSim
         public static bool Suits(int s, int wet) => wet == 0 ? s < 3 : wet == 2 ? s >= 3 : s <= 1 || s == Inter;
     }
 
+    // The game's "Tyre wear" setting (game-side config only: the physics defaults stay as calibrated). Faster wear makes
+    // the strategy matter in short races. With it (any setting but Real) the tyre temperature counts for more: grip lost
+    // per window away from the compound's best temperature x TempLossK, so cold tyres after a stop and tyres overheated
+    // by sliding cost grip you can feel; and each compound makes its own heat (HeatShare: the part of the sliding energy
+    // that goes into the tyre), so each one runs near its own window: the Soft comes in first and overheats when it is
+    // pushed or worn, the Hard needs more laps (and more work) to come in. Setting: 0 Auto, 1 Real (x1), 2 x3, 3 x6, 4 x10.
+    public static class TyreRules
+    {
+        public const int Auto = 0, Real = 1;
+        public static double TempLossK = 1.5, HeatCapK = 0.6;
+        // by tyre set (S, M, H, I, W); the default CarConfig.tyreHeatShare is 0.45
+        public static readonly double[] HeatShare = { 0.39, 0.45, 0.52, 0.39, 0.39 };
+        public static readonly double[] Fixed = { 0, 1, 3, 6, 10 };
+        public static readonly string[] Names = { "Auto", "Real (x1)", "x3", "x6", "x10" };
+        // the race's rules are on (set by the game for the race; off = every car exactly as calibrated)
+        public static bool Strong;
+        // with the rules on, the strategy (TyreStrategy) also counts: the wear the cars really see against the table's
+        // first guess (colder, slidier tyres wear more: measured with "tyres" at x1-x10, 1.13-1.26), the time a new set
+        // costs to come in after a stop (s on a 90 s lap, out-lap from "tyres"), and how much the drivers' views differ
+        // (s: wide, so the field splits over one- and two-stop plans)
+        public const double PlanWear = 1.2, StratSpread = 30;
+        public static readonly double[] WarmCost = { 1.5, 3.5, 6.5, 1.5, 1.5 };
+
+        // wear multiplier for a race: Auto makes a Soft last about 40 % of a race of 5+ laps (x2 in shorter ones)
+        public static double Mult(int setting, int laps, string circuit)
+        {
+            if (setting > 0 && setting < Fixed.Length) return Fixed[setting];
+            if (laps < TyreStrategy.ShortRace) return 2;
+            double m = TyreStrategy.CliffWear / (0.4 * laps * TyreStrategy.BaseSoftRate(circuit));
+            return m < 1 ? 1 : m > 12 ? 12 : m;
+        }
+        // apply to a car's config (the player's and every rival's); then Fit on every change of set
+        public static void Apply(CarConfig c, double mult, bool strong)
+        {
+            var d = new CarConfig();
+            c.tyreLife = 1.0 / Math.Max(1e-3, mult);
+            c.tyreLoss = strong ? d.tyreLoss * TempLossK : d.tyreLoss;
+            c.tyreHeatShare = d.tyreHeatShare;
+            c.tyreHeatCap = strong ? d.tyreHeatCap * HeatCapK : d.tyreHeatCap;
+        }
+        // a new set on the car: its physics compound and (with the rules on) its heat
+        public static void Fit(CarConfig c, int set)
+        {
+            c.compound = TyreSets.Physics(set);
+            if (Strong) c.tyreHeatShare = HeatShare[set < 0 || set >= HeatShare.Length ? 0 : set];
+        }
+        // laps a new set lasts before the cliff (wear 0.78) at this multiplier
+        public static double LifeLaps(int set, double mult, string circuit) => TyreStrategy.CliffWear * TyreSets.Life(set) / Math.Max(1e-6, TyreStrategy.BaseSoftRate(circuit) * mult * (Strong ? PlanWear : 1));
+    }
+
     public class TyreStrategy
     {
         public const double CliffWear = 0.78, MaxWear = 0.86;
         public const int ShortRace = 5, RealStrategy = 10;
         // Soft wear per lap (the worse axle) per circuit, from the race test (Tools/PhysicsCheck "race": wear after
         // 5 laps / 5). Only the first guess: the live wear of the car corrects it from lap 3 on.
+        public static double BaseSoftRate(string id) => SoftRate(id);
         static double SoftRate(string id)
         {
             switch (id)
@@ -98,6 +149,9 @@ namespace FormulaSim
             return c * lapRef * 0.6; // lap time ~ grip^-0.6 for a downforce car
         }
 
+        // a new set's out-lap (the game's "Tyre wear" rules only: tyres off the blankets cost grip until they come in)
+        double Warm(int s) => TyreRules.Strong ? TyreRules.WarmCost[s] * lapRef / 90 : 0;
+
         // Plan the laps from fromLap to the finish on new tyres now. needSecond: the 2-compound rule still applies
         // (the plan together with the sets already used must have two different slicks).
         void PlanFrom(int fromLap, int w, bool needSecond)
@@ -107,10 +161,11 @@ namespace FormulaSim
             if (sets.Count > next + 1) sets.RemoveRange(next + 1, sets.Count - next - 1);
             int baseIdx = next;
             if (sets.Count <= baseIdx) sets.Add(0);
-            if (totalLaps <= ShortRace || L <= 1)
+            if ((totalLaps <= ShortRace && totalLaps * softRate < CliffWear) || L <= 1)
             {
                 // a sprint: no stops, and the grippiest set that lasts (the Soft in the dry; the sprint is too short
-                // for a harder compound to come in, and cold Mediums on lap 1 only cost grip)
+                // for a harder compound to come in, and cold Mediums on lap 1 only cost grip). With fast wear (the game's
+                // "Tyre wear" setting) a Soft that would not last the sprint makes it a race to plan like any other.
                 int s0 = allow[0];
                 sets[baseIdx] = s0; return;
             }
@@ -126,10 +181,13 @@ namespace FormulaSim
             void Try(double c, int[] ss, int[] len)
             {
                 if (double.IsNaN(c)) return;
-                double score = c + rng.NextDouble() * 6.0;             // each driver weighs it a little differently
+                double score = c + rng.NextDouble() * (TyreRules.Strong ? TyreRules.StratSpread : 6.0); // each driver weighs it a little differently
                 if (score < bestScore) { bestScore = score; bestSets = ss; bestLen = len; }
             }
             int minStint = Math.Max(3, L / 5);
+            // fast wear: a Soft that cannot last even that long allows shorter stints (down to its own life, at least 2 laps)
+            int softLaps = (int)Math.Floor(MaxWear / Math.Max(1e-6, softRate));
+            if (softLaps < minStint) minStint = Math.Max(2, softLaps);
             // no stop (races under 10 laps, or when the rule is already met)
             foreach (int s in allow) if (Ok(s)) Try(cost[s][L], new[] { s }, new[] { L });
             // one stop
@@ -138,7 +196,7 @@ namespace FormulaSim
                     if (!Ok(s1, s2)) continue;
                     double bc = double.NaN; int ba = -1;
                     for (int a = minStint; a <= L - minStint; a++) { double c = cost[s1][a] + cost[s2][L - a]; if (!double.IsNaN(c) && (double.IsNaN(bc) || c < bc)) { bc = c; ba = a; } }
-                    if (ba > 0) Try(bc + pitLoss, new[] { s1, s2 }, new[] { ba, L - ba });
+                    if (ba > 0) Try(bc + pitLoss + Warm(s2), new[] { s1, s2 }, new[] { ba, L - ba });
                 }
             // two stops
             if (L >= 3 * minStint)
@@ -152,7 +210,7 @@ namespace FormulaSim
                                     double c = cost[s1][a] + cost[s2][b] + cost[s3][L - a - b];
                                     if (!double.IsNaN(c) && (double.IsNaN(bc) || c < bc)) { bc = c; ba = a; bb = b; }
                                 }
-                            if (ba > 0) Try(bc + 2 * pitLoss, new[] { s1, s2, s3 }, new[] { ba, bb, L - ba - bb });
+                            if (ba > 0) Try(bc + 2 * pitLoss + Warm(s2) + Warm(s3), new[] { s1, s2, s3 }, new[] { ba, bb, L - ba - bb });
                         }
             if (bestSets == null)
             {
@@ -194,6 +252,8 @@ namespace FormulaSim
             if (NextStop >= 0 && NextStop < lap) { next++; return BoxThisLap(lap, wear); } // missed (e.g. a stop forced earlier)
             // the tyre would pass the cliff before the stop (or the flag): come in now
             if (done >= 2 && left >= 3) { double r = wear / done; if (wear + 1.5 * r > MaxWear + 0.04) return true; }
+            // fast wear (the game's "Tyre wear" rules): the tyre would be gone before the flag, even with 2 laps left
+            if (TyreRules.Strong && done >= 2 && left >= 2) { double r = wear / done; int until = NextStop > lap ? NextStop - lap : left; if (wear + until * r > 0.97) return true; }
             return false;
         }
 

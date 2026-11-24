@@ -343,6 +343,8 @@ public partial class GameManager
         game.Choice("Post-race", "Full: after the flag a slow-motion finish, a cool-down lap (the car drives itself, TV cameras, the classification), the podium with the cup and champagne, then your XP, level and safety rating. Short: the finish, the podium and your progress. Off: straight to the results. A tap skips ahead.",
             PostRaceNames, 0, () => PostRaceMode, v => PostRaceMode = v);
         game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
+        game.Choice("Tyre wear", TyreWearHelp, TyreRules.Names, 0, () => InRace && InSeasonRound ? TyreRules.Auto : TyreWearPref, v => TyreWearPref = v)
+            .LockedWhen(() => InRace && InSeasonRound ? "A career round always uses Auto." : null); // TyrePit.cs
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();
