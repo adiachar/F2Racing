@@ -11,6 +11,42 @@ if (Environment.GetEnvironmentVariable("MAPMAX") != null) RacingLine.MapMax = do
 Track[] Circuits() => FormulaSim.Circuits.All.Select(d => d.Build()).ToArray();
 string[] CircuitNames = FormulaSim.Circuits.All.Select(c => c.name).ToArray();
 
+// ---- power oversteer check: dotnet run -- spin ----
+// A steady corner on flat ground at a set speed and radius (steering held by a yaw-rate controller, throttle holding
+// the speed), then FULL throttle with the steering frozen for 2.5 s: does the rear step out (body slip angle grows),
+// and how fast. Per class, TC Off / Low, rear grip 100 / 94 / 88 %. Pure check, changes nothing.
+if (args.Length > 0 && args[0] == "spin")
+{
+    foreach (int cls in new[] { 0 })
+    foreach (var (kmh, glat) in new[] { (70.0, 1.6), (100.0, 1.8), (130.0, 2.0), (170.0, 2.2) })
+    foreach (var tc in new[] { TcMode.Off, TcMode.Low })
+    foreach (double rg in new[] { 1.00, 0.94, 0.88 })
+    {
+        var cfg = CarConfig.ForClass(cls); cfg.tc = tc; cfg.rearGrip *= rg;
+        var car = new FormulaCar(cfg);
+        double v0 = kmh / 3.6, R = v0 * v0 / (glat * 9.81);
+        car.vx = v0; double steer = 0.1;
+        for (int i = 0; i < 240 * 6; i++)
+        {
+            double v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+            steer = Math.Clamp(steer + 1.5 * (v / R - car.r) * H, -1, 1);
+            double thr = Math.Clamp(0.3 + (v0 - v) * 0.6, 0, 1), brk = Math.Clamp((v - v0 - 1) * 0.3, 0, 1);
+            car.Step(new CarInput(steer, thr, brk), H);
+        }
+        double b0 = Math.Atan2(car.vy, car.vx) * 180 / Math.PI, maxB = 0, tSpin = double.NaN, r0 = car.r; int g0 = car.gear;
+        for (int i = 0; i < 240 * 25 / 10; i++)
+        {
+            car.Step(new CarInput(steer, 1, 0), H);
+            double b = Math.Atan2(car.vy, car.vx) * 180 / Math.PI;
+            if (Math.Abs(b) > Math.Abs(maxB)) maxB = b;
+            if (double.IsNaN(tSpin) && Math.Abs(b - b0) > 12) tSpin = i * H;
+        }
+        double vEnd = Math.Sqrt(car.vx * car.vx + car.vy * car.vy) * 3.6;
+        Console.WriteLine($"{CarConfig.ClassNames[cls],-15} {kmh,4:F0} km/h R {R,5:F0} m {glat:F1} g gear {g0} TC {tc,-4} rear {rg * 100,3:F0}%: slip {b0,6:F1} -> max {maxB,6:F1} deg, {(double.IsNaN(tSpin) ? "holds" : $"steps out >12 deg after {tSpin:F2} s")}, end {vEnd,4:F0} km/h");
+    }
+    return;
+}
+
 // ---- bridge check: dotnet run -- bridge [circuit id, default suzuka] ----
 // Where the lap crosses itself (Suzuka's figure eight) the car's ground height (HeightField.SampleAlong: the car
 // model's height, the physics grade) must stay on the leg the car drives along: under the bridge the lower road, on
