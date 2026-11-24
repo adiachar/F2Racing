@@ -1453,6 +1453,112 @@ if (args.Length > 0 && args[0] == "perf")
     return;
 }
 
+// ---- VSC delta check: dotnet run -c Release -- vsc ----
+// A 22-car race with race control; when the leader starts lap 2 a VSC is forced. The 8th car becomes the "player":
+// from then on it is driven by a stand-in for a human keeping RaceControl's VSC delta just above 0 (pure pursuit on
+// the racing line, speed = the delta's own reference speed, nudged by the delta). Prints the distance and time gap to
+// the car ahead at the VSC start and at the green flag, and the same for the AI pairs (they should keep theirs).
+// RACEONLY=monza,spa: circuits; DIFF=0.89: the rivals' difficulty (the game's DiffScale; default 1); TARGET=0.1: the
+// delta the stand-in keeps (s).
+if (args.Length > 0 && args[0] == "vsc")
+{
+    var only = Environment.GetEnvironmentVariable("RACEONLY")?.Split(',') ?? new[] { "monza", "spa", "silverstone", "monaco", "test" };
+    double diff = double.Parse(Environment.GetEnvironmentVariable("DIFF") ?? "1", CultureInfo.InvariantCulture);
+    double target = double.Parse(Environment.GetEnvironmentVariable("TARGET") ?? "0.1", CultureInfo.InvariantCulture);
+    Console.WriteLine($"VSC delta check: rivals' difficulty {diff:F2}, the player keeps the delta at +{target:F1} s");
+    var tracks = Circuits(); double sumPl = 0, sumAi = 0; int nPl = 0, nAi = 0;
+    for (int ti = 0; ti < tracks.Length; ti++)
+    {
+        if (!only.Contains(FormulaSim.Circuits.All[ti].id)) continue;
+        var t = tracks[ti]; var line = RacingLine.Compute(t, new CarConfig()); int N = t.N;
+        var hf = t.h != null ? new HeightField(t) : null;
+        var ds = new List<AiDriver>(); int n = DriverProfile.Grid.Length;
+        for (int k = 0; k < n; k++) { var d = new AiDriver(t, line, new CarConfig(), DriverProfile.Grid[k], AiTuning.For(ti), diff, k + 1); d.Place(t.GridIndex(k), (k % 2 == 0 ? 1 : -1) * 1.8); ds.Add(d); }
+        var rcx = new RaceControl(t, line, ti + 1) { totalLaps = 12 }; rcx.Init(n);
+        for (int k = 0; k < n; k++) { ds[k].rc = rcx; ds[k].slot = k; }
+        double Dist(int k) => ds[k].lap + (double)ds[k].idx / N;
+        int[] Order() => Enumerable.Range(0, n).OrderByDescending(Dist).ToArray();
+        int P = -1; double time = 0, deployAt = -1, endAt = -1; int steps = 0;
+        int[] ord0 = null; double[] gap0 = null, gapT0 = null; double vscSumPl = 0, vscSumRef = 0, aiSumV = 0, aiSumRef = 0;
+        // time gaps: when each car last passed each track point (the car behind passing the same point later)
+        var passT = new double[n, N]; var lastIdx = new int[n]; for (int k = 0; k < n; k++) lastIdx[k] = -1;
+        double GapT(int behind, int ahead) { int i = ds[behind].idx; return i < 0 ? double.NaN : time - passT[ahead, i]; }
+        CarInput Follow(AiDriver me, double vt)
+        {
+            var c = me.car; int i = me.idx; double v = Math.Sqrt(c.vx * c.vx + c.vy * c.vy);
+            double Ld = 5 + 0.22 * v; int ia = (i + Math.Max(1, (int)Math.Round(Ld / t.ds))) % N;
+            double room = t.HalfWidth(ia) - 1.0, off = Math.Max(-room, Math.Min(room, line.off[ia]));
+            var pa = t.pts[ia]; double tx = pa.x + pa.nx * off - c.x, ty = pa.y + pa.ny * off - c.y;
+            double ch = Math.Cos(c.heading), sh = Math.Sin(c.heading), fx = ch * tx + sh * ty, fy = -sh * tx + ch * ty;
+            double delta = Math.Atan(c.cfg.wheelbase * 2 * fy / Math.Max(1.0, fx * fx + fy * fy));
+            double lockNow = c.lockAngle > 1e-4 ? c.lockAngle : c.cfg.maxLockDeg * Math.PI / 180;
+            double err = vt - v, thr = Math.Max(0, Math.Min(1, err * 0.5)), brk = Math.Max(0, Math.Min(1, -err * 0.3));
+            if (brk > 0.02) thr = 0;
+            return new CarInput(Math.Max(-1, Math.Min(1, -delta / lockNow)), thr, brk);
+        }
+        CarInput plIn = default;
+        while (time < 1200 && endAt < 0)
+        {
+            if (steps++ % 4 == 0)
+            {
+                for (int k = 0; k < n; k++) ds[k].Think(4 * H, time, ds, null, -1, 0);
+                var before = rcx.flag;
+                for (int k = 0; k < n; k++) rcx.Feed(k, ds[k]);
+                rcx.Update(4 * H, time, time > 2);
+                if (deployAt < 0 && ds.Max(d => d.lap) >= 2)
+                {
+                    var o = Order(); P = o[7]; rcx.playerSlot = P; rcx.ForceVsc(); deployAt = time; ord0 = o;
+                    gap0 = new double[n]; gapT0 = new double[n];
+                    for (int r = 1; r < n; r++) { gap0[o[r]] = (Dist(o[r - 1]) - Dist(o[r])) * t.length; gapT0[o[r]] = GapT(o[r], o[r - 1]); }
+                }
+                if (deployAt >= 0 && before != FormulaSim.Flag.Green && rcx.flag == FormulaSim.Flag.Green) endAt = time;
+                if (P >= 0 && endAt < 0)
+                {
+                    // the stand-in driver: the delta's reference speed (RaceControl.VscRef) a little ahead, nudged by the delta
+                    var me = ds[P]; double v = Math.Sqrt(me.car.vx * me.car.vx + me.car.vy * me.car.vy);
+                    int ip = (me.idx + (int)Math.Round(0.35 * v / t.ds)) % N;
+                    double vRef = Math.Min(rcx.VscRef(ip), rcx.VscRef(me.idx) + 1.5);
+                    double vt = vRef * Math.Max(0.85, Math.Min(1.2, 1 + 0.3 * (rcx.vscDelta - target)));
+                    plIn = Follow(me, vt); vscSumPl += v; vscSumRef += rcx.VscRef(me.idx);
+                    // the rivals against the same reference at their own points (after the first 3 s of slowing down)
+                    if (time > deployAt + 3)
+                        for (int k = 0; k < n; k++) { if (k == P || ds[k].idx < 0) continue; var c = ds[k].car; aiSumV += Math.Sqrt(c.vx * c.vx + c.vy * c.vy); aiSumRef += rcx.VscRef(ds[k].idx); }
+                }
+            }
+            for (int k = 0; k < n; k++)
+            {
+                var d = ds[k];
+                if (steps % 4 == 1) WheelContact.Update(t, line, d.car, d.idx, d.lateral, 1);
+                if (hf != null && steps % 4 == 1) d.car.grade = hf.GradeAlong(d.car.x, d.car.y, d.car.heading, d.idx);
+                d.car.Step(k == P && endAt < 0 ? plIn : d.LastInput, H);
+            }
+            time += H;
+            for (int k = 0; k < n; k++)
+            {
+                int i = ds[k].idx; if (i < 0 || i == lastIdx[k]) continue;
+                if (lastIdx[k] >= 0) for (int j = (lastIdx[k] + 1) % N, g = 0; g < 40; j = (j + 1) % N, g++) { passT[k, j] = time; if (j == i) break; }
+                else passT[k, i] = time;
+                lastIdx[k] = i;
+            }
+        }
+        if (P < 0 || endAt < 0) { Console.WriteLine($"  {CircuitNames[ti]}: no VSC run"); continue; }
+        var o1 = ord0; int A = -1; for (int r = 1; r < n; r++) if (o1[r] == P) A = o1[r - 1];
+        double g1 = (Dist(A) - Dist(P)) * t.length, gt1 = GapT(P, A);
+        double aiD = 0, aiT = 0; int aiN = 0;
+        for (int r = 1; r < n; r++)
+        {
+            int k = o1[r], a = o1[r - 1]; if (k == P || a == P) continue;
+            double gd = (Dist(a) - Dist(k)) * t.length; if (gap0[k] > 300 || ds[k].recovered) continue; // close pairs only
+            aiD += gd - gap0[k]; aiT += GapT(k, a) - gapT0[k]; aiN++;
+        }
+        Console.WriteLine($"  {CircuitNames[ti],-28} VSC {endAt - deployAt:F0} s: player (P8) to the car ahead {gap0[P]:F0} m / {gapT0[P]:F2} s -> {g1:F0} m / {gt1:F2} s "
+                        + $"({g1 - gap0[P]:+0;-0} m, {gt1 - gapT0[P]:+0.00;-0.00} s), delta at the end {rcx.vscDelta:+0.00;-0.00} s, speed {vscSumPl / Math.Max(1, vscSumRef) * 100:F1}% of the reference, pen {rcx.penalty:F0} s; rivals {aiSumV / Math.Max(1, aiSumRef) * 100:F1}% of it; AI pairs: mean {aiD / Math.Max(1, aiN):+0;-0} m / {aiT / Math.Max(1, aiN):+0.00;-0.00} s");
+        sumPl += g1 - gap0[P]; nPl++; sumAi += aiD / Math.Max(1, aiN); nAi++;
+    }
+    Console.WriteLine($"VSC: player's gap to the car ahead grew {sumPl / Math.Max(1, nPl):+0;-0} m on average (AI pairs {sumAi / Math.Max(1, nAi):+0;-0} m)");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "race")
 {
     bool scTest = args.Length > 1 && args[1] == "sc";

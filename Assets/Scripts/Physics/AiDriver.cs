@@ -310,7 +310,12 @@ namespace FormulaSim
             if (paceScale != 1) vt *= paceScale;
             if (rc != null)
             {
-                double cap = rc.Cap(slot, Math.Min(V(ip), V(idx) + 3) * dmgScale);
+                // under the VSC every car keeps to ONE reference, like the real minimum sector times: VscFactor of the
+                // racing line's speed (RaceControl.VscRef, the same as the player's delta), not of this driver's own profile
+                // (that was 3 % faster than the delta on Real and 5 % slower on Easy: the player's gap to the car ahead grew
+                // or shrank). x 1.01: the throttle control sits ~1 % under its target (PhysicsCheck vsc: rivals at 100 %)
+                bool vsc = rc.flag == Flag.Vsc || rc.flag == Flag.VscEnding;
+                double cap = rc.Cap(slot, (vsc ? Math.Min(line.speed[ip], line.speed[idx] + 3) * 1.01 : Math.Min(V(ip), V(idx) + 3)) * dmgScale);
                 if (blueFlag && straight) cap = Math.Min(cap, vt * 0.9);   // blue flag: lift on the straight and let him by
                 if (cap < vt) { vt = cap; capped = true; }
             }
@@ -332,7 +337,7 @@ namespace FormulaSim
             // held back by a car in the lane (or a tight off-line lane): brake for it, not only on the profile's error
             if (held && v > vt + 0.3) { brk = Math.Max(brk, Clamp((v - vt) * 0.3, 0, 1)); thr = 0; }
             ErsButtons(v, (straight || (ersAttack && line.phase[idx] > 0)) && !noPass && !blueFlag && !capped, brakingZone);   // attacking: from the exit
-            if (!formation && (car.otOn || car.boostOn || car.tow > 0.15 || (seen > 0 && (mode == 1 || prepPass) && !noPass && !blueFlag)) && !held && !brakingZone && v > 40 && Math.Abs(car.r * v) < 6)
+            if (!formation && !capped && (car.otOn || car.boostOn || car.tow > 0.15 || (seen > 0 && (mode == 1 || prepPass) && !noPass && !blueFlag)) && !held && !brakingZone && v > 40 && Math.Abs(car.r * v) < 6)
             {
                 // the extra power (or the slipstream's lower drag) takes the car over its own speed profile: stay flat
                 // while the profile does not fall within the next 0.6 s (then the normal control sheds the extra speed

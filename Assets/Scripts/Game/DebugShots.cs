@@ -21,6 +21,8 @@
 //   tyrepick 1 = the starting-tyres card of a race start over every shot (TyrePit.cs; drawn without hud=1)  default 0
 //   tilt     1 = tilt-steering HUD layout (brake left, OVERTAKE / BOOST / LOOK BACK beside it)  default 0 (touch)
 //   side     m: rival 0 level with the player, this far left of the racing line (negative = right): radar warning
+//   pen      s: the player serving a live penalty of this many seconds in every shot (ghost look; banner needs hud=1;
+//            PenaltyServe.cs). peng = 0.55..1 pins the ghost's blink value (default: the live blink)
 //   intro    list of times (s) into the race start (Race start: Full): the cinematic (PreRace.cs), frozen at each
 //            time for one frame (replaces s; cam = the view it hands over to). With a pit lane and the driver model
 //            (Monza): flyover 0-5.0, garage walk 5.0-10.6, cockpit edge 10.6-12.5, onboard / ignition 12.5-16.3, release
@@ -104,6 +106,7 @@ public partial class GameManager
         ui.mode = MenuUI.ModeQuick; ui.quali = false;
         shotFreeze = true;
         ShotsHudParams(q); // map=, lookback=, tilt=, side= (GameManagerLookBack.cs)
+        shotPen = Mathf.Max(0f, DebugShots.GetF(q, "pen", 0f)); shotPenG = Mathf.Min(1f, DebugShots.GetF(q, "peng", -1f)); // pen=, peng= (PenaltyServe.cs)
     }
 
     internal static int ShotCam(string name) { int i = System.Array.IndexOf(ShotCamNames, name); return i >= 0 ? i : 0; }
