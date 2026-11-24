@@ -282,8 +282,9 @@ public partial class GameManager
         // ---- CAR SETUP
         var setup = new SettingsUI.Tab("CAR SETUP");
         setup.Choice("Car", "In a session this restarts it with the new car.", CarConfig.ClassNames, 0, () => classIdx, v => { classIdx = v; if (InRace) { BuildLine(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
-        setup.Choice("Tyre compound", "Soft grips most, wears fastest. Inters for damp, Wets for rain. Fitted at the next restart.", Weather.TyreNames(), 0,
-            () => tyreSet, v => { tyreSet = v; compIdx = (int)Weather.PhysicsCompound(v); });
+        setup.Choice("Tyre compound", "Soft grips most, wears fastest. Inters for damp, Wets for rain. In a race you pick it on the grid before the start; in practice it is fitted at the next restart.", Weather.TyreNames(), 0,
+            () => tyreSet, v => { tyreSet = v; compIdx = (int)Weather.PhysicsCompound(v); })
+            .LockedWhen(() => InRace && (raceLaps > 0 || qualiSession) ? "Choose at the start or in the pits." : null); // no swap mid-session (TyrePit.cs: the start card, the pit chips)
         setup.Slider("Aero balance", "Downforce on the front. More = sharper turn-in, looser rear.", 44, 54, 0.5f, 45, () => aeroBal, v => { aeroBal = v; SetupChanged(); }, v => $"{v:0.0}% F")
             .LockedWhen(() => classIdx == 0 ? null : "Apex Premier car only.");
         setup.Slider("Brake bias", "Braking on the front. Less = the car turns in more, rears lock sooner.", 50, 65, 0.5f, 57, () => brakeBiasPct, v => { brakeBiasPct = v; SetupChanged(); }, v => $"{v:0.0}% F");

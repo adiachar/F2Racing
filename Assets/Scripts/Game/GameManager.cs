@@ -93,7 +93,7 @@ public partial class GameManager : MonoBehaviour
     int tyreSet, carSet, rivalSet; // tyre set chosen / on the player's car now / on the rivals (Weather: 0-2 slicks, 3 inter, 4 wet)
     WeatherFx weatherFx;
     // weather changed (start menu or settings): sky, fog, sun, glare and the road / paint globals at once
-    void ApplyWeather() { Weather.PushGlobals(); Sky.SetWeather(Weather.Wetness); }
+    void ApplyWeather() { Weather.PushGlobals(); Sky.SetWeather(Weather.Wetness); if (car != null) FitPlayerSet(car.cfg, carSet); } // (a wet tyre's dry-track heat and wear: TyrePit.cs)
     int builtFor = -1; double wallAt = 1e9; float hitT; bool menuOpen, absOn = true;
     void LoadMap()
     {
@@ -815,7 +815,7 @@ public partial class GameManager : MonoBehaviour
         compIdx = (int)Weather.PhysicsCompound(tyreSet);
         c.speedSens = SpeedSteer[speedSteerIdx]; c.compound = (Compound)compIdx; c.fuelStart = RaceFuel();
         cfgClass = classIdx; ApplySetup(c); // steering rates and lock, aero balance, brakes, differential, ride heights
-        TyreRulesBegin(); TyreRulesFor(c, tyreSet); // Settings > Tyre wear: this session's wear and tyre temperature (TyrePit.cs)
+        TyreRulesBegin(); FitPlayerSet(c, tyreSet); // Settings > Tyre wear: this session's wear and tyre temperature (TyrePit.cs)
         return c;
     }
 
@@ -1464,7 +1464,7 @@ public partial class GameManager : MonoBehaviour
         ResetCar(); Save();
         SessionStarted(); // qualifying timing, team livery (Qualifying.cs)
         acc = 0; ui.page = MenuUI.Page.None;
-        PreRaceBegin(); // the pre-race intro (PreRace.cs): the race clock and the lights wait for it
+        StartTyresThenIntro(); // the starting-tyres card on the grid (TyrePit.cs), then the pre-race intro (PreRace.cs): the race clock and the lights wait for them
     }
 
     // the player has done raceLaps: freeze the race and rank every car by distance covered
@@ -1516,6 +1516,7 @@ public partial class GameManager : MonoBehaviour
         if (PreRaceGui()) return; // the pre-race intro: captions instead of the HUD (PreRace.cs)
         if (FormGui()) return; // the formation lap's TV shots: captions instead of the HUD (GameManagerFormation.cs)
         if (PostGui()) return; // the post-race film's overlays instead of the HUD (PostRace.cs)
+        if (StartTyresGui()) return; // the starting-tyres card on the grid instead of the HUD (TyrePit.cs)
         if (ShotsHideHud) return; // screenshot mode: clean frames (DebugShots.cs)
         HudInit(); HudLayout();
         if (replaying)

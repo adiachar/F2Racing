@@ -316,7 +316,7 @@ public class PitCrew : MonoBehaviour
     public void Wait(int who, int bayIdx, Livery l, Color oldTyre, Color newTyre, System.Func<CarModel> car = null)
     {
         if (st == St.Run) return;
-        if (st == St.Wait && owner == who && bay == bayIdx) return;
+        if (st == St.Wait && owner == who && bay == bayIdx) { Tyres(oldTyre, newTyre); return; } // (the player may tap another set on the pit chips while the crew waits)
         Prepare(who, bayIdx, l, oldTyre, newTyre, car); st = St.Wait; extra = 0; curS = A; ApplyFrame(A);
     }
     public void CancelWait(int who) { if (st == St.Wait && owner == who) Stop(); }
@@ -326,7 +326,7 @@ public class PitCrew : MonoBehaviour
     {
         if (st == St.Run) return owner == who;
         if (!(st == St.Wait && owner == who && bay == bayIdx)) Prepare(who, bayIdx, l, oldTyre, newTyre, car);
-        else { target = car; AcquireWheels(car != null ? car() : null); }
+        else { target = car; AcquireWheels(car != null ? car() : null); Tyres(oldTyre, newTyre); } // the sets as they are now, not as when the crew began to wait
         st = St.Run; extra = Mathf.Clamp(extraHold, 0f, 10f); clock = clk; curS = clk != null ? clk() : 0f;
         return true;
     }
@@ -336,6 +336,17 @@ public class PitCrew : MonoBehaviour
         st = St.Off; owner = -99; target = null; clock = null; curModel = null;
         if (props != null) { props.HideAll(); props.Show(false); }
         if (pplRoot != null) pplRoot.SetActive(false);
+    }
+
+    // the old / new tyre colours while the crew waits: the carried wheels' bands and the stripe painted on the car when
+    // the new wheels go on (TOn). Prepare runs only when the wait starts (BOX armed near the box, often before the player
+    // taps a set on the pit chips), so without this the car came out with the stripe of the set picked automatically then.
+    void Tyres(Color oldTyre, Color newTyre)
+    {
+        if (oldTyre == oldC && newTyre == newC) return;
+        oldC = oldTyre; newC = newTyre;
+        if (props == null) return;
+        props.pal[SOldBand] = oldTyre; props.pal[SNewBand] = newTyre; props.Recolour();
     }
 
     // ---------------------------------------------------------------- set up one stop

@@ -18,6 +18,7 @@
 //   hud      1 = draw the race HUD                                        default 0 (clean frames)
 //   map      radar | track | off: the Map setting for this run (not saved; needs hud=1)  default the saved setting
 //   lookback 1 = LOOK BACK held in every shot (rear view; GameManagerLookBack.cs)   default 0
+//   tyrepick 1 = the starting-tyres card of a race start over every shot (TyrePit.cs; drawn without hud=1)  default 0
 //   tilt     1 = tilt-steering HUD layout (brake left, OVERTAKE / BOOST / LOOK BACK beside it)  default 0 (touch)
 //   side     m: rival 0 level with the player, this far left of the racing line (negative = right): radar warning
 //   intro    list of times (s) into the race start (Race start: Full): the cinematic (PreRace.cs), frozen at each
@@ -85,6 +86,7 @@ public partial class GameManager
         shotCars = Mathf.Clamp(DebugShots.GetInt(q, "cars", 6), 0, StartGrid.Slots - 1);
         shotHud = DebugShots.Get(q, "hud", "0") == "1";
         shotIntro = DebugShots.Get(q, "intro", "") != ""; // intro=t1,t2,...: frames of the pre-race intro (PreRace.cs)
+        shotTyres = DebugShots.Get(q, "tyrepick", "0") == "1"; // the starting-tyres card (TyrePit.cs)
         string ql = DebugShots.Get(q, "quality", "High").ToLowerInvariant();
         int g = System.Array.FindIndex(GfxNames, n => n.ToLowerInvariant() == ql); gfxIdx = g >= 0 ? g : 3;
         // the world is built by Start's LoadMap right after this, before any SetGraphics: WorldBuilder.LiveGfx then reads

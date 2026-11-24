@@ -62,6 +62,7 @@ public partial class GameManager
         jumped = false; gridThr = 0;
         gridX = car.x; gridY = car.y; gridRpm = car.cfg.idleRpm;
         Countdown = GridStart ? GridWait + 4 + UnityEngine.Random.Range(0.2f, 3.0f) : 0;
+        StartTyresReset(); // the starting-tyres card on the grid (TyrePit.cs): needs Countdown / GridStart
         if (track != null && world != null)
         {
             StartGrid.Paint(world, track);
@@ -80,7 +81,7 @@ public partial class GameManager
         car.gridHold = GridStart && raceTime < Countdown; // on the brakes without selecting reverse (FormulaCar.gridHold)
         if (!GridStart) return input;
         if (form != null) return FormInput(input); // the formation lap: the player drives (GameManagerFormation.cs)
-        if (PreRaceHold) { gridThr = PreRaceThrottle; return new CarInput(0, 0, 1); } // pre-race intro: held, its engine start revs (PreRace.cs)
+        if (PreRaceHold || StartTyresHold) { gridThr = PreRaceThrottle; return new CarInput(0, 0, 1); } // pre-race intro: held, its engine start revs (PreRace.cs); the starting-tyres card (TyrePit.cs)
         if (raceTime < Countdown) { gridThr = input.throttle; return new CarInput(input.steer, 0, 1); }
         double c = Clutch(raceTime - Countdown);
         return c >= 1 ? input : new CarInput(input.steer, input.throttle * c, input.brake);
@@ -110,7 +111,7 @@ public partial class GameManager
             car.rpm = System.Math.Max(car.rpm, gridRpm * (1 - c) + car.rpm * c); // the clutch pulls the revs down gradually
         }
         TracksideArt.SetStartLights(LitLights());
-        if (PreRaceHold) raceTime = -H; // the pre-race intro holds the race clock at 0 (+H after this step): no lights yet
+        if (PreRaceHold || StartTyresHold) raceTime = -H; // the pre-race intro / the starting-tyres card hold the race clock at 0 (+H after this step): no lights yet
     }
 
     // (physics step instead of the player's) the pre-race cinematic poses the car in its pit box / the pit lane: the race

@@ -9,16 +9,22 @@
 //
 // Grip factors (share of a dry slick's grip on dry asphalt):
 //   tyre          Dry    Damp (off line / dry line)   Wet
-//   slick         1.00   0.78 / 0.88                  0.62
-//   intermediate  0.88   0.84 / 0.86                  0.72
+//   slick         1.00   0.78 / 0.86                  0.62
+//   intermediate  0.88   0.84 / 0.88                  0.72
 //   full wet      0.78   0.78 / 0.79                  0.77
 // Paint and kerbs lose more when wet (x0.82 damp, x0.80 wet: a slick on a wet kerb is at ~0.50), grass and
 // astroturf more still, gravel a little.
 // Basis: slicks at about 0.80 of dry grip when damp and 0.60-0.65 when wet (the brief); Pirelli's rule of thumb
 // that the slick -> intermediate crossover comes when the lap time is 110-112 % of the dry lap, and the same again
 // from intermediates to full wets (lap time goes roughly with grip^-0.5..-1 for a downforce car, so ~0.8 of the grip
-// at the first crossover). The crossovers in this table: damp = slicks and inters about even (slicks faster on the
-// dry line, inters off it), wet = full wets > inters > slicks.
+// at the first crossover). The crossovers in this table: dry = slicks, damp = inters (best on the dry line too, by a
+// little; off it slicks are far behind), wet = full wets > inters > slicks.
+// Ideal lap (RacingLine at mu x factor), Monza: dry slick 85.2 s, inter 89.0 (+3.8), full wet 93.3 (+8.1); damp on the
+// line: inter 89.0, slick 89.8, wet ~93; wet: wet 93.8, inter 96.5, slick 102.8 (+9).
+// A wet-weather tyre on a dry track also overheats and wears fast (DryRunning: the player's car only, the rivals never
+// fit one there): at x3 wear an inter runs ~105 C (the Soft's window is 95 +- 28) and is at the cliff in ~4 laps, a full
+// wet runs 110+ C and is there in ~2-3 (a Soft: ~8).
+// (2026-11-25: damp was slicks 0.78 / 0.88, inters 0.84 / 0.86, so slicks were the best set on the dry line.)
 using FormulaSim;
 using UnityEngine;
 
@@ -40,8 +46,8 @@ public static class Weather
         : CarModel.StripeFor(PhysicsCompound(set));
 
     //                                          dry   damp off  damp line  wet
-    static readonly double[,] Asphalt = { { 1.00, 0.78, 0.88, 0.62 },   // slick
-                                          { 0.88, 0.84, 0.86, 0.72 },   // intermediate
+    static readonly double[,] Asphalt = { { 1.00, 0.78, 0.86, 0.62 },   // slick
+                                          { 0.88, 0.84, 0.88, 0.72 },   // intermediate
                                           { 0.78, 0.78, 0.79, 0.77 } }; // full wet
 
     // grip factor of a set on track asphalt, dryLine 0..1 (how much of the tyre is on the dried line; damp only)
@@ -51,6 +57,17 @@ public static class Weather
         if (Index == 0) return Asphalt[k, 0];
         if (Index == 2) return Asphalt[k, 3];
         return Asphalt[k, 1] + (Asphalt[k, 2] - Asphalt[k, 1]) * dryLine;
+    }
+
+    // A wet-weather tyre on a track without the water to cool it (game side: the player's car, after TyreRules.Apply and
+    // Fit; the rivals never fit one there). It runs on the Soft's model, so: more of the sliding energy goes into it
+    // (TyreRules.HeatShare: Soft 0.39) and it wears faster (life x). Dry: inter and full wet; damp: the full wet, milder.
+    public static double DryLife(int set) { int k = Kind(set); return k == 0 ? 1 : Index == 0 ? (k == 1 ? 0.5 : 0.35) : Index == 1 && k == 2 ? 0.6 : 1; }
+    static double DryHeat(int set) { int k = Kind(set); return k == 0 ? 0 : Index == 0 ? (k == 1 ? 0.55 : 0.65) : Index == 1 && k == 2 ? 0.5 : 0; }
+    public static void DryRunning(CarConfig c, int set)
+    {
+        c.tyreLife *= DryLife(set);
+        double h = DryHeat(set); if (h > 0) c.tyreHeatShare = h;
     }
 
     // extra loss on other surfaces when wet (multiplies TrackFactor)
