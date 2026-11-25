@@ -189,15 +189,14 @@ public partial class GameManager
     // the blink: a soft wave between BlinkLo and 1 at BlinkHz (the HUD's amber dot uses it too)
     float PsBlink => shotPenG >= 0f ? shotPenG : BlinkLo + (1f - BlinkLo) * (0.5f + 0.5f * Mathf.Cos(Time.time * (2f * Mathf.PI * BlinkHz)));
 
-    // the _Ghost value on the player's car. Cockpit / halo views: 0. Those views look through the player's own
-    // steering wheel, gloves, halo and tub: a screen-door there would put a dot grid over the wheel's display and the
-    // halo the driver reads every frame, and the clip() variant on a car part that fills a third of the screen costs
-    // Mali its early-Z for it. The HUD banner's blinking dot carries the penalty there (as GT's own car in cockpit view).
+    // the _Ghost value on the player's car, in EVERY view (Adi, Nov 25: he drives in halo / cockpit and wants to see it
+    // there too). Cockpit / halo get 80 % of it so the wheel's display stays readable through the screen-door; the
+    // clip() variant costs Mali early-Z on the tub only while a penalty is being served.
     void PsLook()
     {
         float g = psVis;
         if (g > 0f) g *= PsBlink;
-        if (camMode == 2 || camMode == 3) g = 0f;
+        if (camMode == 2 || camMode == 3) g *= 0.8f;
         if (model != psRendFor)
         {
             if (psGhostSet > 0f) PsWrite(0f);              // the car model was swapped (PickPlayerModel): clear the old one
