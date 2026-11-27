@@ -389,9 +389,18 @@ public partial class GameManager : MonoBehaviour
         double keep = System.Math.Max(System.Math.Min(System.Math.Sqrt(car.vx * car.vx + car.vy * car.vy), 40), 22);
         var cfg = car.cfg; int gear = 1;
         while (gear < cfg.gearTopSpeeds.Length && keep * 3.6 > cfg.gearTopSpeeds[gear - 1] * 0.8) gear++;
-        var dmg = car.damage;
+        var o = car;
         car = new FormulaCar(cfg) { x = p.x, y = p.y, heading = System.Math.Atan2(p.ty, p.tx), vx = keep, gear = gear };
-        car.damage = dmg; // damage survives a recovery
+        // a recovery moves the car, nothing else (Adi): damage, tyre wear / temperatures / dirt, brakes, fuel, battery
+        // and Overtake Mode carry over
+        car.damage = o.damage;
+        car.wearF = o.wearF; car.wearR = o.wearR; car.tyreTF = o.tyreTF; car.tyreTR = o.tyreTR;
+        car.tyreSF = o.tyreSF; car.tyreSR = o.tyreSR; car.tyrePF = o.tyrePF; car.tyrePR = o.tyrePR; car.dirtF = o.dirtF; car.dirtR = o.dirtR;
+        car.brakeTF = o.brakeTF; car.brakeTR = o.brakeTR;
+        car.fuel = o.fuel; car.fuelThisLap = o.fuelThisLap; car.fuelLastLap = o.fuelLastLap;
+        car.ersEnergy = o.ersEnergy; car.ersHarvested = o.ersHarvested;
+        car.otArmed = o.otArmed; car.otEnergy = o.otEnergy; car.otIdx = o.otIdx; car.otRefill = o.otRefill;
+        car.deployMap = o.deployMap; car.windX = o.windX; car.windY = o.windY;
         offTime = wrongTime = 0; cut = true; Flash("Back on track");
     }
 

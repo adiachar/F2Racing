@@ -227,7 +227,10 @@ public partial class GameManager
         return Color.Lerp(TwWarm, TwHot, Mathf.Clamp01(f - 1f));
     }
 
-    void DrawTyreWidget(Rect r, float chipY, float chipH)
+    static readonly Color TwWorn = new Color(0.93f, 0.16f, 0.14f), TwTread = new Color(0.95f, 0.96f, 0.98f);
+    double twGripTF = double.NaN, twGripTR = double.NaN;    // the temperature grip feels (carcass + surface share), for the left wing too
+    // cueX: centre of the COLD / HOT chip (Adi: over the temperature read-out, i.e. the left wing when it is shown)
+    void DrawTyreWidget(Rect r, float chipY, float chipH, float cueX)
     {
         if (tyreCarTex == null) tyreCarTex = MakeTyreCar();
         int set = Mathf.Clamp(carSet, 0, SetLetter.Length - 1);
@@ -245,6 +248,7 @@ public partial class GameManager
         double gF = car.tyreTF, gR = car.tyreTR;
         if (temps && c.tyreSurface && !double.IsNaN(car.tyreSF)) { gF += c.tyreSurfGrip * (car.tyreSF - car.tyreTF); gR += c.tyreSurfGrip * (car.tyreSR - car.tyreTR); }
         double eF = temps ? (gF - cd.opt) / cd.window : double.NaN, eR = temps ? (gR - cd.opt) / cd.window : double.NaN;
+        twGripTF = temps ? gF : double.NaN; twGripTR = temps ? gR : double.NaN;
         float bw = S(3.4f), bh = carH * 0.42f, gap = S(2.2f);
         bool blink = Mathf.Repeat(Time.unscaledTime * 2.5f, 1f) < 0.5f;
         for (int wh = 0; wh < 4; wh++)
@@ -254,8 +258,10 @@ public partial class GameManager
             var br = new Rect(left ? cx - carW * 0.5f - gap - bw : cx + carW * 0.5f + gap, wy - bh * 0.5f, bw, bh);
             UiKit.Rect(new Rect(br.x - S(0.6f), br.y - S(0.6f), br.width + S(1.2f), br.height + S(1.2f)), TwTrack, 1.6f);
             float tread = temps ? Mathf.Clamp01(1f - (float)(front ? car.wearF : car.wearR)) : 1f;
-            Color tc = TyreTempCol(front ? eF : eR);
-            if (tread < 1f - (float)TyreStrategy.CliffWear && blink) tc.a *= 0.35f;  // past the cliff
+            // GT style (Adi): white = tread left, red from the top = worn; the white blinks past the cliff
+            Color tc = TwTread;
+            if (tread < 1f - (float)TyreStrategy.CliffWear && blink) tc.a *= 0.35f;
+            if (tread < 0.995f) UiKit.Rect(new Rect(br.x, br.y, bw, Mathf.Max(S(1f), bh * (1f - tread))), TwWorn, 1.2f);
             if (tread > 0.01f) UiKit.Rect(new Rect(br.x, br.yMax - bh * tread, bw, Mathf.Max(S(1f), bh * tread)), tc, 1.2f);
             UiKit.Outline(br, TwEdge, 1.2f, 0.5f);
         }
@@ -264,7 +270,7 @@ public partial class GameManager
         double lossF = c.tyreLoss * eF * eF, lossR = c.tyreLoss * eR * eR, loss = System.Math.Max(lossF, lossR), e = lossF >= lossR ? eF : eR;
         if (loss > 0.022) tyreCue = e < 0 ? -1 : 1; else if (loss < 0.012) tyreCue = 0;
         if (tyreCue != 0)
-            Chip(new Rect(cx - S(16), chipY, S(32), chipH), tyreCue < 0 ? "COLD" : "HOT", tyreCue < 0 ? TwCold : TwHot, Color.white);
+            Chip(new Rect(cueX - S(16), chipY, S(32), chipH), tyreCue < 0 ? "COLD" : "HOT", tyreCue < 0 ? TwCold : TwHot, Color.white);
     }
 
     // the car outline, top-down, nose up: white with alpha (tinted when drawn). Signed distances, built once.

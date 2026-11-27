@@ -760,7 +760,7 @@ public partial class GameManager
         // colour = temperature against the fitted compound's window) and the compound letter above and below
         var cd = CompoundTable.Get(car.cfg.compound);
         bool temps = car.cfg.chassis && !double.IsNaN(car.tyreTF);
-        DrawTyreWidget(new Rect(dx + S(197), dy + S(3), S(48), dh - S(6)), chipY, chipH);
+        DrawTyreWidget(new Rect(dx + S(197), dy + S(3), S(48), dh - S(6)), chipY, chipH, wings && temps ? dx - gap - wingW * 0.5f : dx + S(221));
         if (!wings) return;
 
         // left wing: tyre temperatures and tread, brake temperatures
@@ -772,13 +772,14 @@ public partial class GameManager
             for (int wh = 0; wh < 4; wh++)
             {
                 bool front = wh < 2, left = (wh & 1) == 0;
-                double t = front ? car.tyreTF : car.tyreTR, wear = front ? car.wearF : car.wearR;
+                // the temperature grip feels (as the tyre widget and the COLD / HOT chip), not the bare carcass
+                double t = front ? (double.IsNaN(twGripTF) ? car.tyreTF : twGripTF) : (double.IsNaN(twGripTR) ? car.tyreTR : twGripTR), wear = front ? car.wearF : car.wearR;
                 var br = new Rect(left ? lw.x + S(8) : lw.xMax - S(8) - bw2, front ? dy + S(6) : dy + S(28), bw2, bh2);
                 UiKit.Rect(br, TyreTempCol((t - cd.opt) / cd.window), 3.5f); // (the tyre widget's colours, TyrePit.cs)
                 TF(br, hTyre[wh].Get(HudNum.Int(Mathf.RoundToInt((float)t)), 0.5f), UiKit.Bold, 6.2f, new Color(0.04f, 0.04f, 0.05f), TextAnchor.MiddleCenter);
                 float tread = Mathf.Clamp01(1 - (float)wear), wx = left ? br.x - S(4) : br.xMax + S(2);
-                UiKit.Rect(new Rect(wx, br.y, S(2), bh2), DimSeg, 1f);
-                UiKit.Rect(new Rect(wx, br.yMax - bh2 * tread, S(2), bh2 * tread), tread < 0.3f ? HudRed : Color.white, 1f);
+                UiKit.Rect(new Rect(wx, br.y, S(2), bh2), HudRed, 1f);             // worn = red from the top (GT)
+                UiKit.Rect(new Rect(wx, br.yMax - bh2 * tread, S(2), bh2 * tread), Color.white, 1f);
             }
             if (!double.IsNaN(car.brakeTF))
             {
