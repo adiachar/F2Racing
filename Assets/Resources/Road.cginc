@@ -287,8 +287,8 @@ fixed4 frag (v2f i) : SV_Target
         float lx0 = cx * cw - _HalfWidth + 0.2 + r2 * 0.35 * cw, lx1 = lx0 + cw * (0.22 + 0.4 * r3);
         float ay0 = cy * 9.0 + 0.5 + r3 * 3.0, ay1 = ay0 + 0.9 + r4 * 4.2;
         // hand-cut edges: a few cm of wobble, so no edge is ruler-straight
-        float wob = 0.035 * sin(along * 3.7 + r2 * 31.0) + 0.02 * sin(along * 9.1 + r3 * 17.0);
-        float wob2 = 0.035 * sin(lat * 4.3 + r4 * 23.0) + 0.02 * sin(lat * 10.3 + r1 * 13.0);
+        float wob = 0.022 * sin(along * 3.7 + r2 * 31.0) + 0.02 * sin(along * 9.1 + r3 * 17.0);
+        float wob2 = 0.03 * sin(lat * 4.3 + r4 * 23.0) + 0.02 * sin(lat * 10.3 + r1 * 13.0);
         lx0 += wob; lx1 -= wob * 0.8; ay0 += wob2; ay1 -= wob2 * 0.7;
         half inR = Band(lat, lx0, lx1, wl) * Band(along, ay0, ay1, wa) * (half)has;
         half outer = Band(lat, lx0 - 0.045, lx1 + 0.045, wl) * Band(along, ay0 - 0.045, ay1 + 0.045, wa) * (half)has;
