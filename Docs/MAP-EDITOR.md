@@ -32,3 +32,4 @@ You edit a circuit while the game is running inside Unity. The game still builds
 - Remove areas don't yet remove things the trackside code builds: the pit building, the grandstands, barriers, fences and kerbs. Ask Claude if you need those.
 - Edits cost nothing per frame: everything is merged into the same batches as the rest of the world.
 - Don't change other files in the project. Only send the `.json` files from `Assets/Resources/MapEdits/`.
+- Besides your edits, most circuits also load a generated fill (`Resources/MapEdits/Auto/<circuit>.json`, made by `Tools/Scenery`): grandstands, hospitality units, kiosks, sheds, farms, tree lines and woods in the empty land beside the track. The editor does not show it or save it, but your remove areas clear it too (and anything of it that would stand on a trackside building is left out).

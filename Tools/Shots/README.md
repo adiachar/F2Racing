@@ -79,6 +79,7 @@ Without `ack=1` each frame holds for `hold` seconds (default 1.5). Watch the tab
 | `settle` / `warm` | seconds to wait after each placement / before the first shot | 1 / 3 (harness: 2 / 5) |
 | `ack` / `acktimeout` | `1` = wait for `window.__shotAck = i` (harness sets this) / max wait s | 0 / 300 |
 | `hold` | seconds per frame without `ack` | 1.5 |
+| `autofill` | `0` = build without the generated scenery fill (`Resources/MapEdits/Auto`, `Tools/Scenery`) for A/B | 1 |
 
 Lists accept `,` `|` or `;`. Rival slots (m ahead, m sideways from the racing line): +18, +34, −14, +55, +78,
 −32, +105, +135, +170, −55, then every 40 m further ahead. The chase and cockpit cameras see the cars ahead,
@@ -102,6 +103,31 @@ chase camera looks into the bend.
 The first suggestions (Rettifilo ~900, Curva Grande ~1700, Lesmo 1 ~2600, Ascari ~4300, Parabolica ~5300) fall
 at or past the apex in this track model, and 4300 m is already on the straight after Ascari. Use them through
 `--s` if you want exit views. Roggia (2112-2160 m) and Lesmo 2 (2832-2880 m) are also good spots.
+
+## Scenery fill spots (Tools/Scenery, Resources/MapEdits/Auto)
+
+Where the generated fill (grandstands, hospitality, kiosks, sheds, farms, tree lines, woods) is easiest to see. Each
+`s` is 70 m before one of the biggest near-track clusters, so the chase camera looks into it; the TV cameras show it
+from the side. Shoot each pair with and without the fill (`--param autofill=0`) and compare. Regenerate the list with
+`cd Tools/Scenery && dotnet run -c Release` (the `shots:` lines of the summary).
+
+```
+python3 Tools/Shots/shoot.py --out /tmp/fill --track silverstone --cam chase,tv --s 4130,4450,4610,5130
+python3 Tools/Shots/shoot.py --out /tmp/fill0 --track silverstone --cam chase,tv --s 4130,4450,4610,5130 --param autofill=0
+```
+
+| circuit | `--s` (chase, tv) | fill on the |
+|---|---|---|
+| silverstone | 4130,4450,4610,5130 | right / right / right / left |
+| austin | 130,1770,3330,4650 | right / left / right / left |
+| budapest | 1490,2650,3650,4010 | right / left / right / left |
+| catalunya | 90,530,3010,4410 | left / right / right / left |
+| zandvoort | 890,1530,2170,3530 | left (all) |
+| suzuka | 1810,1970,3050,3530 | right / right / left / left |
+| spielberg | 770,850,1490,1890 | right (all) |
+| spa | 210 (farms and woods further out: `--cam tv`) | right |
+
+Monza (real map data) and Monaco (street circuit) get no fill.
 
 ## Server notes
 

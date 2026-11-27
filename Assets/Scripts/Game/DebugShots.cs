@@ -47,6 +47,7 @@
 //   t        list of times (s) into the story film (story=)                default 1
 //   pos      the player's finishing place for post= (default 1; > 3: a short podium seen from a TV angle)
 //   postmode full | short (default full; short: slow motion 0-3.6, podium 3.6-16.2 / 3.6-10 out of the top 3)
+//   autofill 0 = build the circuit without the generated scenery fill (Resources/MapEdits/Auto, Tools/Scenery) for A/B
 //   settle   seconds to wait after each placement (real time)             default 1.0 (first shot + warm)
 //   warm     extra seconds before the first shot (shaders, textures)      default 3
 //   ack      1 = after SHOT_READY wait until the page sets window.__shotAck = i (the harness does this after its
@@ -223,6 +224,7 @@ public class DebugShots : MonoBehaviour
         PerfStats.FromQuery(q); // stats=1: render stats overlay + a PERF_STATS console line per shot (PerfStats.cs)
         ModelInstancing.FromQuery(q); // inst=0: model trees merged as before (A/B against the GPU-instanced ones)
         if (Get(q, "photo", "1") == "0") { EnvTex.NoPhotos = true; Sky.NoPhotoSky = true; } // photo=0: procedural textures + sky (A/B)
+        if (Get(q, "autofill", "1") == "0") MapEdits.AutoOff = true; // autofill=0: without the generated scenery fill (MapEdits/Auto, A/B)
         ShotsCanvas(Mathf.Clamp(GetInt(q, "w", 1280), 64, 8192), Mathf.Clamp(GetInt(q, "h", 720), 64, 8192));
     }
     internal void Fail(string msg) { error = msg; Debug.LogWarning("[Shots] " + msg); }

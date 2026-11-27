@@ -781,7 +781,7 @@ public static class Environment
         {
             double x = bb.minX - far * 0.6 + rnd.NextDouble() * (bb.maxX - bb.minX + far * 1.2), y = bb.minY - far * 0.6 + rnd.NextDouble() * (bb.maxY - bb.minY + far * 1.2);
             float fx = (float)x, fz = (float)y;
-            if (WorldBuilder.Pad.Contains(new Vector2(fx, fz)) || Waterfront.InWater(fx, fz) || Trackside.Blocked(fx, fz, 5f) || Taken(fx, fz, 4f)) continue;
+            if (WorldBuilder.Pad.Contains(new Vector2(fx, fz)) || Waterfront.InWater(fx, fz) || Trackside.Blocked(fx, fz, 5f) || Taken(fx, fz, 4f) || MapEdits.Removed(fx, fz)) continue;
             if (e.clump > 0 && Fbm(fx / 170f, fz / 170f, 71) < e.clump) continue; // copses with open land between
             if (e.canopy > 0)
             {
@@ -817,6 +817,7 @@ public static class Environment
             ModelLib.PlaceProps(t);
             ModelLib.Flush(root);
         }
+        EditTrees(v, nrm, uv, uv2, col, tri); // Adi's extra trees and the auto fill's (MapEdits)
         if (e.canopy > 0) WoodBands(t, bb, near, far, v, nrm, uv, uv2, col, tri, rnd);
         if (e.canopy > 0 && e.slopeTrees > 0) SlopeTrees(bb, low, v, nrm, uv, uv2, col, tri);
         if (tri.Count == 0) return;
@@ -825,6 +826,32 @@ public static class Environment
         var treesGo = WorldBuilder.MeshObj("Trees", v, uv, tri, fm, true, uv2); treesGo.transform.SetParent(root);
         var mesh = treesGo.GetComponent<MeshFilter>().sharedMesh; mesh.SetNormals(nrm);
         BakeTint.Add(mesh, col.ToArray());
+    }
+    // Adi's extra trees (MapEdits.Cur.trees) and the auto fill's (MapEdits.Auto, Tools/Scenery) on a circuit without real
+    // map data (with it, MapEdits.Apply puts them into the map's own tree list). The species follow the circuit (under
+    // 5 m: a bush); auto trees keep off the trackside buildings, the water, the remove areas and claimed ground. Own
+    // random stream (the trees above are placed as before); same mesh and draw call.
+    static void EditTrees(List<Vector3> v, List<Vector3> nrm, List<Vector2> uv, List<Vector2> uv2, List<Color> col, List<int> tri)
+    {
+        if (RealWorld.Active) return;
+        var e = Cur; var hand = MapEdits.Cur; var au = MapEdits.Auto;
+        int nh = hand != null ? hand.trees.Count : 0, n = nh + (au != null ? au.trees.Count : 0);
+        if (n == 0) return;
+        var rnd = new System.Random(37); int cards = WorldBuilder.Gfx <= 1 ? 2 : 3;
+        for (int i = 0; i < n; i++)
+        {
+            bool auto = i >= nh; var tr = auto ? au.trees[i - nh] : hand.trees[i];
+            if (auto && cards == 2 && (i & 1) == 1) continue; // (Low: half the auto trees)
+            if (auto && (MapEdits.Removed(tr.x, tr.z) || Waterfront.InWater(tr.x, tr.z) || Trackside.Blocked(tr.x, tr.z, 3f) || Taken(tr.x, tr.z, 1.5f))) continue;
+            float h = Mathf.Clamp(tr.h, 2f, 40f);
+            bool second = e.tree2 != TreeKind.None && e.tree2 != TreeKind.Scrub && Hash(Mathf.RoundToInt(tr.x), Mathf.RoundToInt(tr.z), 61) < e.tree2Share;
+            var kind = second ? e.tree2 : e.tree;
+            if (kind == TreeKind.Scrub || kind == TreeKind.None) kind = e.tree2 != TreeKind.None && e.tree2 != TreeKind.Scrub ? e.tree2 : TreeKind.Broadleaf;
+            if (h < 5f) kind = TreeKind.Scrub;
+            float nominal = kind == TreeKind.Spruce ? 15f : kind == TreeKind.Pine ? 9.6f : kind == TreeKind.Palm ? 9.4f : kind == TreeKind.Scrub ? 2.2f : 10f;
+            var foot = new Vector3(tr.x, Lift(tr.x, tr.z) - 0.35f, tr.z); // (WorldBuilder.Drape lays it onto the height field)
+            EmitTree(v, nrm, uv, uv2, col, tri, foot, kind, Mathf.Clamp(h / nominal, 0.4f, 2.5f), (second ? e.leaf2 : e.leaf).linear, rnd, cards);
+        }
     }
     // the woods' edge: on an 8 m lattice, the wooded points (Canopy > 0.5) next to open land get a forest-edge band
     // card a few metres in, turned along the edge and facing out of the wood; a second, taller row further in near the
@@ -1122,6 +1149,7 @@ public static class Environment
             }
         }
 
+        AutoFill(props, blocks, wallCols); // the auto fill's models and buildings, Adi's buildings (MapEdits)
         Farms(props, rnd);
         Emit("EnvProps", props, WorldBuilder.Mat(WorldBuilder.BakeReady ? Color.white : C(0.85f, 0.84f, 0.80f), null, 0.1f), root);
         if (blocks.tri.Count > 0)
@@ -1134,6 +1162,75 @@ public static class Environment
         }
     }
     static void Claim(Vector3 c, float r) { spots.Add(new Spot { x = c.x, z = c.z, r = r }); }
+
+    // The auto fill (MapEdits.Auto, written by Tools/Scenery) and Adi's simple buildings (MapEdits.Cur.buildings):
+    //  * auto models: checked against the trackside buildings, the water, steep ground, remove areas and claimed ground,
+    //    and given their base height (the lowest ground under the footprint + y); Landmarks.Build draws the rest;
+    //  * buildings, on a circuit without real map data (with it, MapEdits.Apply adds them to the map's buildings):
+    //    roof 0 + kind 3 / 7 = a plain shed, other roof 0 = a block with the town's windows (EnvBlocks), roof > 0 =
+    //    walls under a pitched roof (EnvProps, no new draw call); auto ones checked as the models.
+    // Everything claims its ground, so the farms and trees placed after keep off it.
+    static void AutoFill(Buf props, Buf blocks, Color[] wallCols)
+    {
+        var hand = MapEdits.Cur; var au = MapEdits.Auto; float lo;
+        if (au != null)
+            for (int i = 0; i < au.models.Count; i++)
+            {
+                var e = au.models[i]; e.skip = true;
+                var m = Landmarks.Get(e.name); if (m == null) continue;
+                float sc = e.scale > 0.01f ? e.scale : 1f, a = e.yaw * Mathf.Deg2Rad;
+                Vector3 ax = new Vector3(Mathf.Cos(a), 0, -Mathf.Sin(a)), az = new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a)); // Euler(0, yaw, 0) * right / forward
+                float hx = m.size.x * 0.5f * sc, hz = m.size.z * 0.5f * sc;
+                Vector3 c = new Vector3(e.x, 0, e.z) + ax * (m.min.x * sc + hx) + az * (m.min.z * sc + hz); // footprint centre
+                if (!SpotOk(c, ax, hx, hz, m.size.y * sc, true, out lo)) continue;
+                e.skip = false; e.baseY = lo + e.y;
+                Claim(c, Mathf.Max(hx, hz));
+            }
+        if (RealWorld.Active) return;
+        int nh = hand != null ? hand.buildings.Count : 0, n = nh + (au != null ? au.buildings.Count : 0);
+        Color[] roofs = { C(0.22f, 0.23f, 0.26f), C(0.50f, 0.25f, 0.18f), C(0.30f, 0.29f, 0.29f), C(0.58f, 0.57f, 0.55f) };
+        for (int i = 0; i < n; i++)
+        {
+            bool auto = i >= nh; var b = auto ? au.buildings[i - nh] : hand.buildings[i];
+            float w = Mathf.Max(1f, b.w), d = Mathf.Max(1f, b.d), h = Mathf.Max(2.5f, b.h), a = b.yaw * Mathf.Deg2Rad;
+            Vector3 ax = new Vector3(Mathf.Cos(a), 0, -Mathf.Sin(a)), az = new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a));
+            if (w < d) { var sw = ax; ax = az; az = -sw; float tw = w; w = d; d = tw; } // the long side along ax (the ridge)
+            float ex = w * 0.5f, ez = d * 0.5f; var c = new Vector3(b.x, 0, b.z);
+            if (!SpotOk(c, ax, ex, ez, h, auto, out lo)) continue;
+            c.y = lo;
+            int hs = Mathf.Abs(Mathf.RoundToInt(b.x * 7f + b.z * 13f));
+            Color wc = b.colour.a > 0.01f ? b.colour : wallCols[hs % wallCols.Length]; wc.a = 1f;
+            if (b.roof == 0 && (b.kind == 3 || b.kind == 7))
+            {
+                Box(props, c + Vector3.up * ((h - 1.5f) * 0.5f), ax, Vector3.up, az, ex, (h + 1.5f) * 0.5f, ez, wc); // (a plinth 1.5 m into the ground)
+                Box(props, c + Vector3.up * (h + 0.15f), ax, Vector3.up, az, ex + 0.25f, 0.15f, ez + 0.25f, roofs[3]); // roof edge
+            }
+            else if (b.roof == 0) Block(props, blocks, c, ax, az, ex, ez, h, wc, roofs[3]);
+            else
+            {
+                float wall = h * 0.7f;
+                Box(props, c + Vector3.up * ((wall - 1.5f) * 0.5f), ax, Vector3.up, az, ex, (wall + 1.5f) * 0.5f, ez, wc);
+                Gable(props, c + Vector3.up * wall, ax, az, ex + 0.5f, ez + 0.6f, h - wall, roofs[hs % 3], wc);
+            }
+            Claim(c, Mathf.Max(ex, ez));
+        }
+    }
+    // the ground under a footprint (centre c, half sizes ex along ax, ez across): lo = its lowest point; with check, also
+    // whether it is free (remove areas, water, trackside buildings, claimed ground) and not too steep for its height
+    static bool SpotOk(Vector3 c, Vector3 ax, float ex, float ez, float h, bool check, out float lo)
+    {
+        Vector3 az = new Vector3(-ax.z, 0, ax.x);
+        lo = float.MaxValue; float hi = float.MinValue;
+        for (int q = 0; q < 5; q++)
+        {
+            Vector3 p = q == 4 ? c : c + ax * (q % 2 == 0 ? ex : -ex) + az * (q < 2 ? ez : -ez);
+            float g = GroundY(p.x, p.z); lo = Mathf.Min(lo, g); hi = Mathf.Max(hi, g);
+        }
+        if (!check) return true;
+        float r = (ex + ez) * 0.5f;
+        if (MapEdits.Removed(c.x, c.z) || Waterfront.InWater(c.x, c.z) || Trackside.Blocked(c.x, c.z, r) || !Free(c.x, c.z, r * 0.8f)) return false;
+        return hi - lo <= Mathf.Max(2.5f, 0.3f * h);
+    }
 
     // a block of flats: windowed walls (reaching down into the slope) and a flat or tiled roof
     static void Block(Buf props, Buf walls, Vector3 c, Vector3 ax, Vector3 az, float ex, float ez, float h, Color col, Color roof)

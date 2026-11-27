@@ -7,6 +7,11 @@
 //   models:       landmark models from the asset pack (Landmarks.cs): name, x, base height y, z, yaw, scale (placed exactly where the editor shows it);
 //   buildings:    extra buildings: a w x d rectangle turned by yaw, h tall, OSM kind / roof shape / colour, drawn with
 //                 the same walls, roofs and lighting as the map's buildings (RealWorld, the BLDG list).
+// Auto fill (Resources/MapEdits/Auto/<circuit id>.json, same format, written by Tools/Scenery: grandstands, hospitality,
+// sheds, farms, tree lines and woods in the empty land 15-250 m beyond the barriers): applied after Adi's own edits,
+// never seen or saved by the map editor, and Adi's remove areas clear it too. In it a model's y is its lift above the
+// ground (the base goes on the lowest ground under its footprint); an auto model, building or tree that would stand
+// on a trackside building, in the water, on a steep slope or in a remove area is dropped at build time.
 // No file = no change. Cost: a list check per placed object at build time; nothing per frame.
 using System;
 using System.Collections.Generic;
@@ -22,11 +27,13 @@ public static class MapEdits
         public float x, z, w = 12f, d = 10f, h = 9f, yaw;
         public int kind = 1, roof; // kind / roof as WorldData's BLDG section (1 residential; 0 flat roof)
         public Color colour = new Color(0f, 0f, 0f, 0f); // alpha 0 = the town's usual wall colours
+        [NonSerialized] public bool skip; // (auto fill: dropped at build time)
     }
     // a landmark model (Landmarks.cs); y = the height of its base (world metres, as placed in the editor).
     // alongTrack (for placements written by hand, not by the editor): x = metres along the lap from the line, z = metres
     // to the side (+ = the track normal's side), y = lift above the ground, yaw relative to the direction of travel
-    [Serializable] public class Mdl { public string name = ""; public float x, z, y, yaw, scale = 1f; public bool alongTrack; }
+    [Serializable] public class Mdl { public string name = ""; public float x, z, y, yaw, scale = 1f; public bool alongTrack;
+                                          [NonSerialized] public bool skip; [NonSerialized] public float baseY; } // (auto fill: dropped / base height, set at build time)
     [Serializable]
     public class File
     {
@@ -39,24 +46,34 @@ public static class MapEdits
     }
 
     public static File Cur;              // the edits of the circuit being built (null = none)
+    public static File Auto;             // the generated fill of the circuit being built (null = none; Tools/Scenery)
+    public static bool AutoOff;          // A/B: build without the auto fill (shot param autofill=0)
     public static string TrackId { get; private set; } // the circuit last built (the editor saves under this name)
     public static bool Disabled;         // A/B: build without the edits
 
     public static void Load(string id)
     {
-        Cur = null; TrackId = id;
+        Cur = null; Auto = null; TrackId = id;
         if (Disabled || string.IsNullOrEmpty(id)) return;
-        var ta = Resources.Load<TextAsset>("MapEdits/" + id);
-        if (ta == null) return;
-        try { Cur = JsonUtility.FromJson<File>(ta.text); }
-        catch (Exception e) { Debug.LogWarning("MapEdits/" + id + ": " + e.Message); Cur = null; }
+        Cur = Read("MapEdits/" + id);
+        if (!AutoOff) Auto = Read("MapEdits/Auto/" + id);
+        if (Cur != null) Debug.Log("MapEdits: " + id + ": " + Cur.remove.Count + " remove areas, " + Cur.trees.Count + " trees, " + Cur.buildings.Count + " buildings, " + Cur.models.Count + " models");
+        if (Auto != null) Debug.Log("MapEdits: " + id + " auto fill: " + Auto.trees.Count + " trees, " + Auto.buildings.Count + " buildings, " + Auto.models.Count + " models");
+    }
+    static File Read(string path)
+    {
+        var ta = Resources.Load<TextAsset>(path);
+        if (ta == null) return null;
+        File f = null;
+        try { f = JsonUtility.FromJson<File>(ta.text); }
+        catch (Exception e) { Debug.LogWarning(path + ": " + e.Message); f = null; }
         Resources.UnloadAsset(ta);
-        if (Cur == null) return;
-        if (Cur.remove == null) Cur.remove = new List<Box>();
-        if (Cur.trees == null) Cur.trees = new List<Tree>();
-        if (Cur.buildings == null) Cur.buildings = new List<Bld>();
-        if (Cur.models == null) Cur.models = new List<Mdl>();
-        Debug.Log("MapEdits: " + id + ": " + Cur.remove.Count + " remove areas, " + Cur.trees.Count + " trees, " + Cur.buildings.Count + " buildings, " + Cur.models.Count + " models");
+        if (f == null) return null;
+        if (f.remove == null) f.remove = new List<Box>();
+        if (f.trees == null) f.trees = new List<Tree>();
+        if (f.buildings == null) f.buildings = new List<Bld>();
+        if (f.models == null) f.models = new List<Mdl>();
+        return f;
     }
 
     // inside any remove box (x, z in world metres)
@@ -80,10 +97,13 @@ public static class MapEdits
     // buildings
     public static void Apply(WorldData w)
     {
-        if (Cur == null || w == null) return;
-        int dropB = 0, dropT = 0;
+        if ((Cur == null && Auto == null) || w == null) return;
+        int dropB = 0, dropT = 0, addB = 0, addT = 0;
+        int nRemove = Cur != null ? Cur.remove.Count : 0;
+        int nBld = (Cur != null ? Cur.buildings.Count : 0) + (Auto != null ? Auto.buildings.Count : 0);
+        int nTree = (Cur != null ? Cur.trees.Count : 0) + (Auto != null ? Auto.trees.Count : 0);
         // ---- buildings
-        if (Cur.remove.Count > 0 || Cur.buildings.Count > 0)
+        if (nRemove > 0 || nBld > 0)
         {
             var H = new List<float>(); var MinH = new List<float>(); var Roof = new List<byte>(); var Kind = new List<byte>();
             var Rgba = new List<uint>(); var Off = new List<int>(); var Cnt = new List<int>(); var X = new List<float>(); var Z = new List<float>();
@@ -97,9 +117,12 @@ public static class MapEdits
                 Off.Add(X.Count); Cnt.Add(n);
                 for (int k = 0; k < n; k++) { X.Add(w.bX[o + k]); Z.Add(w.bZ[o + k]); }
             }
-            for (int i = 0; i < Cur.buildings.Count; i++)
+            for (int i = 0; i < nBld; i++)
             {
-                var nb = Cur.buildings[i];
+                int nc = Cur != null ? Cur.buildings.Count : 0;
+                var nb = i < nc ? Cur.buildings[i] : Auto.buildings[i - nc];
+                if (i >= nc && Removed(nb.x, nb.z)) continue; // (auto fill under one of Adi's remove areas)
+                addB++;
                 float hw = Mathf.Max(1f, nb.w) * 0.5f, hd = Mathf.Max(1f, nb.d) * 0.5f, a = nb.yaw * Mathf.Deg2Rad, c = Mathf.Cos(a), s = Mathf.Sin(a);
                 H.Add(Mathf.Max(2.5f, nb.h)); MinH.Add(0f); Roof.Add((byte)Mathf.Clamp(nb.roof, 0, 5)); Kind.Add((byte)Mathf.Clamp(nb.kind, 0, 8));
                 Color32 c32 = nb.colour;
@@ -116,7 +139,7 @@ public static class MapEdits
             w.bRgba = Rgba.ToArray(); w.bOff = Off.ToArray(); w.bCnt = Cnt.ToArray(); w.bX = X.ToArray(); w.bZ = Z.ToArray();
         }
         // ---- single trees
-        if (Cur.remove.Count > 0 || Cur.trees.Count > 0)
+        if (nRemove > 0 || nTree > 0)
         {
             var X = new List<float>(); var Z = new List<float>(); var Hh = new List<float>();
             for (int i = 0; i < w.tN && w.tX != null; i++)
@@ -124,9 +147,15 @@ public static class MapEdits
                 if (Removed(w.tX[i], w.tZ[i])) { dropT++; continue; }
                 X.Add(w.tX[i]); Z.Add(w.tZ[i]); Hh.Add(w.tH[i]);
             }
-            for (int i = 0; i < Cur.trees.Count; i++) { var t = Cur.trees[i]; X.Add(t.x); Z.Add(t.z); Hh.Add(Mathf.Clamp(t.h, 2f, 40f)); }
+            for (int i = 0; i < nTree; i++)
+            {
+                int nc = Cur != null ? Cur.trees.Count : 0;
+                var t = i < nc ? Cur.trees[i] : Auto.trees[i - nc];
+                if (i >= nc && Removed(t.x, t.z)) continue;
+                X.Add(t.x); Z.Add(t.z); Hh.Add(Mathf.Clamp(t.h, 2f, 40f)); addT++;
+            }
             w.tN = X.Count; w.tX = X.ToArray(); w.tZ = Z.ToArray(); w.tH = Hh.ToArray();
         }
-        Debug.Log("MapEdits: removed " + dropB + " buildings, " + dropT + " map trees; added " + Cur.buildings.Count + " buildings, " + Cur.trees.Count + " trees");
+        Debug.Log("MapEdits: removed " + dropB + " buildings, " + dropT + " map trees; added " + addB + " buildings, " + addT + " trees");
     }
 }
