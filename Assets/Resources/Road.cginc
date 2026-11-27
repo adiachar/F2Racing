@@ -265,6 +265,46 @@ fixed4 frag (v2f i) : SV_Target
     float la = min(abs(along - floor(along / lp + 0.5) * lp), min(abs(along - _Loops.y), abs(along - _Loops.z)));
     half tar = Band(abs(la - 0.3), -1.0, 0.025, wa) * Band(ae, -1.0, _HalfWidth - 0.2, wl) * 0.6 * (1.0 - kerbF);
     col *= 1.0 - 0.3 * tar;
+#ifdef ROAD_HQ
+    // ---- worn and repaired sections (about half the 113 m paving sections; none in the rest): the road reads uneven
+    // there, as a real circuit does, while the other half stays clean.
+    //   repair patches: the road cut into cells 9 m along x a third of its width, ~40 % holding a sawn-out rectangle
+    //     filled with fresher, darker asphalt (or older, lighter), outlined by a 5 cm black sealed seam;
+    //   tar snakes: sealed cracks, one meandering dark line per 37 m stretch (most stretches), running along the road
+    //     so they stay still under the car at speed;
+    //   ravelled surface: the aggregate stands out more off the racing line (the grain's contrast x1.5).
+    // Seams and cracks are box-filtered (Band) and fade once a pixel spans ~17 cm, and with speed: nothing crawls.
+    // Branched on the section (whole screen regions agree), ~30 ALU in a worn section, ~2 elsewhere; no texture read.
+    half rep = 0.0;
+    float wornF = Hash1(sec + 131.9);
+    [branch] if (wornF < 0.5 && !kerb)
+    {
+        float cw = max(_HalfWidth * (2.0 / 3.0), 2.0);
+        float cy = floor(along / 9.0), cx = floor((lat + _HalfWidth) / cw);
+        float k = cy * 7.31 + cx * 3.17 + sec * 0.71;
+        float r1 = Hash1(k + 0.37), r2 = Hash1(k + 5.11), r3 = Hash1(k + 9.73), r4 = Hash1(k + 13.9);
+        float has = r1 < 0.4 ? 1.0 : 0.0;
+        float lx0 = cx * cw - _HalfWidth + 0.2 + r2 * 0.35 * cw, lx1 = lx0 + cw * (0.3 + 0.35 * r3);
+        float ay0 = cy * 9.0 + 0.5 + r3 * 3.0, ay1 = ay0 + 1.4 + r4 * 3.8;
+        half inR = Band(lat, lx0, lx1, wl) * Band(along, ay0, ay1, wa) * (half)has;
+        half outer = Band(lat, lx0 - 0.05, lx1 + 0.05, wl) * Band(along, ay0 - 0.05, ay1 + 0.05, wa) * (half)has;
+        half seam = saturate(outer - inR);
+        half fresh = r4 > 0.35 ? 1.0 : 0.0;
+        col *= 1.0 + inR * (fresh * -0.13 + (1.0 - fresh) * 0.07);
+        // tar snakes
+        float cr = floor(along / 37.0), cfr = along / 37.0 - cr;
+        float c1 = Hash1(cr * 2.71 + sec * 0.3 + 3.3);
+        float cxp = (c1 * 2.0 - 1.0) * max(_HalfWidth - 1.0, 0.5) + 0.7 * sin(along * 0.19 + c1 * 20.0) + 0.25 * sin(along * 0.71 + c1 * 9.0);
+        half on = (half)((Hash1(cr * 5.3 + 1.7) < 0.65 ? 1.0 : 0.0) * saturate(sin(cfr * 3.14159) * 3.0 - 0.3));
+        half crack = Band(lat - cxp, -0.022, 0.022, wl) * on;
+        half near = (half)(saturate(1.0 - wl * 6.0) * (1.0 - 0.5 * saturate(_F2RoadMotion)));
+        seam *= near; crack *= near;
+        col *= 1.0 - 0.5 * seam - 0.42 * crack;
+        rep = seam + crack;
+        col *= 1.0 + 0.5 * grain * (1.0 - rub);
+    }
+    tar = saturate(tar + rep * 0.8); // sealant is glossy (the sheen and the wet film below use tar)
+#endif
 
     // ---- painted lines: white edge lines 0.15..0.40 m in from each edge
     half paint = Band(abs(lat), _HalfWidth - 0.40, _HalfWidth - 0.15, wl);
