@@ -284,13 +284,19 @@ fixed4 frag (v2f i) : SV_Target
         float k = cy * 7.31 + cx * 3.17 + sec * 0.71;
         float r1 = Hash1(k + 0.37), r2 = Hash1(k + 5.11), r3 = Hash1(k + 9.73), r4 = Hash1(k + 13.9);
         float has = r1 < 0.4 ? 1.0 : 0.0;
-        float lx0 = cx * cw - _HalfWidth + 0.2 + r2 * 0.35 * cw, lx1 = lx0 + cw * (0.3 + 0.35 * r3);
-        float ay0 = cy * 9.0 + 0.5 + r3 * 3.0, ay1 = ay0 + 1.4 + r4 * 3.8;
+        float lx0 = cx * cw - _HalfWidth + 0.2 + r2 * 0.35 * cw, lx1 = lx0 + cw * (0.22 + 0.4 * r3);
+        float ay0 = cy * 9.0 + 0.5 + r3 * 3.0, ay1 = ay0 + 0.9 + r4 * 4.2;
+        // hand-cut edges: a few cm of wobble, so no edge is ruler-straight
+        float wob = 0.035 * sin(along * 3.7 + r2 * 31.0) + 0.02 * sin(along * 9.1 + r3 * 17.0);
+        float wob2 = 0.035 * sin(lat * 4.3 + r4 * 23.0) + 0.02 * sin(lat * 10.3 + r1 * 13.0);
+        lx0 += wob; lx1 -= wob * 0.8; ay0 += wob2; ay1 -= wob2 * 0.7;
         half inR = Band(lat, lx0, lx1, wl) * Band(along, ay0, ay1, wa) * (half)has;
-        half outer = Band(lat, lx0 - 0.05, lx1 + 0.05, wl) * Band(along, ay0 - 0.05, ay1 + 0.05, wa) * (half)has;
-        half seam = saturate(outer - inR);
+        half outer = Band(lat, lx0 - 0.045, lx1 + 0.045, wl) * Band(along, ay0 - 0.045, ay1 + 0.045, wa) * (half)has;
+        // the sealant was laid unevenly: darker in places, worn to a grey line in others
+        half seam = saturate(outer - inR) * (half)(0.55 + 0.45 * sin(along * 1.7 + lat * 2.3 + r1 * 40.0));
         half fresh = r4 > 0.35 ? 1.0 : 0.0;
-        col *= 1.0 + inR * (fresh * -0.13 + (1.0 - fresh) * 0.07);
+        // inside: fresher asphalt is darker with a finer, crisper aggregate; an old repair is lighter and ravelled
+        col *= 1.0 + inR * (fresh * (-0.1 + 0.9 * grain + 0.25 * clus) + (1.0 - fresh) * (0.06 + 1.2 * grain + 0.4 * clus));
         // tar snakes
         float cr = floor(along / 37.0), cfr = along / 37.0 - cr;
         float c1 = Hash1(cr * 2.71 + sec * 0.3 + 3.3);
@@ -299,7 +305,7 @@ fixed4 frag (v2f i) : SV_Target
         half crack = Band(lat - cxp, -0.022, 0.022, wl) * on;
         half near = (half)(saturate(1.0 - wl * 6.0) * (1.0 - 0.5 * saturate(_F2RoadMotion)));
         seam *= near; crack *= near;
-        col *= 1.0 - 0.5 * seam - 0.42 * crack;
+        col *= 1.0 - 0.55 * seam - 0.45 * crack;
         rep = seam + crack;
         col *= 1.0 + 0.5 * grain * (1.0 - rub);
     }
