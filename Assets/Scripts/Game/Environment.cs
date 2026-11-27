@@ -1177,7 +1177,7 @@ public static class Environment
             for (int i = 0; i < au.models.Count; i++)
             {
                 var e = au.models[i]; e.skip = true;
-                var m = Landmarks.Get(e.name); if (m == null) continue;
+                var m = global::Landmarks.Get(e.name); if (m == null) continue;
                 float sc = e.scale > 0.01f ? e.scale : 1f, a = e.yaw * Mathf.Deg2Rad;
                 Vector3 ax = new Vector3(Mathf.Cos(a), 0, -Mathf.Sin(a)), az = new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a)); // Euler(0, yaw, 0) * right / forward
                 float hx = m.size.x * 0.5f * sc, hz = m.size.z * 0.5f * sc;
