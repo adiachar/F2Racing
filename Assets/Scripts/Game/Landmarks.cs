@@ -1,6 +1,7 @@
 // Landmarks.cs: hand-placed models (Adi's asset pack: buildings, grandstands, pit modules, gantries, kiosks ... 37
 // models, Tools/Models/pack_landmarks.py -> Resources/Landmarks/landmarks.bytes + Photo/lm_<material> textures), put on
-// a circuit by the map editor (MapEdits.models). All placements of a circuit are merged into ONE world-space mesh per
+// a circuit by the map editor (MapEdits.models) and by the generated scenery fill (MapEdits.Auto, Tools/Scenery; checked
+// and given its base height in Environment.AutoFill). All placements of a circuit are merged into ONE world-space mesh per
 // material (about 22 materials at most, usually far fewer), so they cost a few draw calls in all, and the light bake
 // (LightBake.Apply) lights them like every other building: sun, sky, contact shade, night lamps.
 // Load: the model file is parsed once per session (~1 MB); textures load only for the materials a circuit uses.
@@ -77,16 +78,19 @@ public static class Landmarks
     // every model of the circuit's edits, merged per material, under root (call before the light bake)
     public static void Build(Transform root, Track t)
     {
-        var f = MapEdits.Cur;
-        if (f == null || f.models == null || f.models.Count == 0 || !Load()) return;
+        var f = MapEdits.Cur; var au = MapEdits.Auto; // Adi's edits, then the generated fill (Tools/Scenery)
+        int nHand = f != null && f.models != null ? f.models.Count : 0, nAll = nHand + (au != null && au.models != null ? au.models.Count : 0);
+        if (nAll == 0 || !Load()) return;
         int nMat = matKeys.Length;
         var V = new List<Vector3>[nMat]; var N = new List<Vector3>[nMat]; var UV = new List<Vector2>[nMat]; var T = new List<int>[nMat];
         int placed = 0;
-        for (int i = 0; i < f.models.Count; i++)
+        for (int i = 0; i < nAll; i++)
         {
-            var e = f.models[i];
+            bool auto = i >= nHand;
+            var e = auto ? au.models[i - nHand] : f.models[i];
+            if (auto && e.skip) continue; // (checked and given its base height by Environment.AutoFill)
             var m = Get(e.name); if (m == null) { Debug.LogWarning("Landmarks: no model " + e.name); continue; }
-            float px = e.x, pz = e.z, y = e.y, yaw = e.yaw; // world: as placed in the editor (what Adi saw there)
+            float px = e.x, pz = e.z, y = auto ? e.baseY : e.y, yaw = e.yaw; // world: as placed in the editor (what Adi saw there)
             if (e.alongTrack && t != null && t.N > 0)
             {
                 int ti = ((int)System.Math.Round(e.x / t.ds) % t.N + t.N) % t.N; var tp = t.pts[ti];
