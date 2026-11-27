@@ -16,7 +16,9 @@
 //   kmh      player speed shown (wheels / spray only: physics is frozen)  default 0
 //   haloback halo cam "helmet in view" setting, 0-100                        default the saved setting
 //   hud      1 = draw the race HUD                                        default 0 (clean frames)
-//   map      radar | track | off: the Map setting for this run (not saved; needs hud=1)  default the saved setting
+//   map      both | radar | full | off: the Map setting for this run (radar + full map, ...; not saved; needs hud=1)  default the saved setting
+//   twear    0..1: the player's tyre wear in every shot (front; rear x0.85), for the HUD's tyre widget   default as it is
+//   ttemp    C: the player's tyre temperature in every shot (rear +6 C)                                default as it is
 //   lookback 1 = LOOK BACK held in every shot (rear view; GameManagerLookBack.cs)   default 0
 //   tyrepick 1 = the starting-tyres card of a race start over every shot (TyrePit.cs; drawn without hud=1)  default 0
 //   tilt     1 = tilt-steering HUD layout (brake left, OVERTAKE / BOOST / LOOK BACK beside it)  default 0 (touch)

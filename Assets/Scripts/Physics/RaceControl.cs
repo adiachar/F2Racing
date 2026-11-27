@@ -75,6 +75,20 @@ namespace FormulaSim
             c.compound = TyreSets.Physics(set);
             if (Strong) c.tyreHeatShare = HeatShare[set < 0 || set >= HeatShare.Length ? 0 : set];
         }
+        // Scrub wear (the game applies it to the PLAYER's car only, with the rules on; the rivals and the physics stay as
+        // calibrated): while a tyre slides (a lock-up, wheelspin, or a slip angle past ~8 deg, well past the ~4-5 deg
+        // of peak grip) its tread wears SlideWearK times faster. The physics wear already follows the sliding energy,
+        // so this only sharpens it (Tools/PhysicsCheck "tyrefeel": lock-up 8.8x, power slide 6.8x, wheelspin 3.4x,
+        // understeer scrub 1.7x a racing lap's mean wear rate before; x3 of that while sliding). The game sets
+        // CarConfig.wearPerJ = the base x SlideWear(car) before each physics step (GameManager TyrePit.cs: TyreScrub).
+        public static double SlideWearK = 3;
+        public const double SlideAlpha = 0.14;   // rad, ~8 deg
+        public static double SlideWear(FormulaCar car)
+        {
+            if (!Strong || car == null) return 1;
+            bool slide = car.lockF || car.lockR || car.spinR || Math.Abs(car.alphaF) > SlideAlpha || Math.Abs(car.alphaR) > SlideAlpha;
+            return slide ? SlideWearK : 1;
+        }
         // laps a new set lasts before the cliff (wear 0.78) at this multiplier
         public static double LifeLaps(int set, double mult, string circuit) => TyreStrategy.CliffWear * TyreSets.Life(set) / Math.Max(1e-6, TyreStrategy.BaseSoftRate(circuit) * mult * (Strong ? PlanWear : 1));
     }

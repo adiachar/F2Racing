@@ -356,8 +356,8 @@ public partial class GameManager
             () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
         game.Choice("Driver read-out", "Tyres, brakes and fuel beside the steering-wheel display.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
-        game.Choice("Map", "Top right. Radar: the cars round you where they are on the road, turned with your car (amber / red = alongside, with a warning on that side). Track map: the track round your car (300 m ahead), turned to your heading.", MapModeNames, 0,
-            () => MapMode, v => MapMode = v); // (Radar.cs; PlayerPrefs "hudMapMode")
+        game.Choice("Map", "Top right. Radar: the cars round you where they are on the road, turned with your car (amber / red = alongside, with a warning on that side). Full map: the whole circuit with every car (you red, the others blue, the leader ringed white), no backdrop.", MapModeNames, MapBoth,
+            () => MapMode, v => MapMode = v); // (Radar.cs; PlayerPrefs "hudMapMode2")
         game.Toggle("Timing tower", "Order, gaps and tyres on the left in a race. Tap it for gap / interval, the arrow for all cars.", true, () => hudTower, v => hudTower = v);
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);

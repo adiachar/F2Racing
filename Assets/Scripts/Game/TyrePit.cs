@@ -13,8 +13,9 @@
 //    the current setting ("tyreSet") picked; START fits the set (tyreSet, carSet, the physics compound, the stripe) and
 //    saves it as the setting. Settings > Setup "Tyre compound" is locked in a race / qualifying (GameManagerSettings).
 //  * A wet-weather tyre on a dry track overheats and wears fast (Weather.DryRunning, the player's car: FitPlayerSet).
-//  * The HUD's tyre cue: worn % above the compound ring in the dash's tyre quad, COLD / HOT under it while the tyre
-//    temperature costs grip.
+//  * The HUD's tyre widget (Gran Turismo style, in the dash): car outline, a tread bar per wheel coloured by temperature,
+//    compound letters; a COLD / HOT chip above it while the tyre temperature costs grip.
+//  * Scrub wear: sliding wears the player's tread x3 (TyreScrub; TyreRules.SlideWear), with the tyre rules on.
 // No per-frame garbage: every string is made when the session starts (the start card's when it opens).
 using FormulaSim;
 using UnityEngine;
@@ -193,24 +194,104 @@ public partial class GameManager
         return true;
     }
 
-    // ---------------------------------------------------------------- the HUD's tyre cue (dash tyre quad)
-    readonly HudHold hTyreWear = new HudHold();
+    // ---------------------------------------------------------------- scrub wear (the player's car only)
+    // Before each physics step of the player's car (GameManager.Update): while a tyre slides (lock-up, wheelspin, slip
+    // angle past ~8 deg; the flags of the step before) the tread wears TyreRules.SlideWearK (x3) faster, with the tyre
+    // rules on (any "Tyre wear" setting but Real). Game-side config only (CarConfig.wearPerJ), the rivals and the physics
+    // stay as calibrated; grip and heat are untouched. Numbers: Tools/PhysicsCheck "tyrefeel".
+    // (Nothing else sets wearPerJ: every class runs the CarConfig default, so the base is that constant.)
+    static readonly double ScrubBaseWear = new CarConfig().wearPerJ;
+    void TyreScrub() => car.cfg.wearPerJ = ScrubBaseWear * TyreRules.SlideWear(car);
+
+    // ---------------------------------------------------------------- the HUD's tyre widget (Gran Turismo style)
+    // In the dash's right end (RaceHud.cs DrawWheel), r about 48 x 46 layout units: a top-down car outline (one cached
+    // texture), a vertical bar beside each wheel (filled height = tread left, 1 - wear; colour = the temperature the grip
+    // feels, the carcass plus the surface share as FormulaCar, against the FITTED compound's window: cold blue -> ideal
+    // green -> warm orange -> hot red; past the cliff (wear 0.78) the bar blinks) and the compound letter in its stripe
+    // colour above the front and below the rear. The physics keeps one temperature and one wear per axle, so the left
+    // and right bars of an axle match. COLD / HOT chip above it (in the chip row) while the temperature costs grip.
+    // Zero garbage: rects and colours only, the letters are constants.
+    static Texture2D tyreCarTex;
     int tyreCue;                                           // 0 none, -1 cold, 1 hot (with some hysteresis)
-    void DrawTyreCue(float dx, float dy)
+    static readonly Color TwCold = new Color(0.22f, 0.52f, 1f), TwIdeal = new Color(0.20f, 0.85f, 0.42f), TwWarm = new Color(1f, 0.62f, 0.12f), TwHot = new Color(1f, 0.18f, 0.14f);
+    static readonly Color TwTrack = new Color(0f, 0f, 0f, 0.5f), TwEdge = new Color(1f, 1f, 1f, 0.16f), TwCar = new Color(0.86f, 0.89f, 0.94f, 0.95f);
+    // k = (T - opt) / window: < -1 blue, -1 .. -0.35 blue -> green, +-0.35 green, 0.35 .. 1 green -> orange, 1 .. 2 orange -> red
+    static Color TyreTempCol(double k)
     {
-        if (double.IsNaN(car.tyreTF)) return;
-        double wear = System.Math.Max(car.wearF, car.wearR);
-        int pct = Mathf.Clamp(Mathf.RoundToInt((float)(wear * 100)), 0, 100);
-        Color wc = wear > 0.72 ? HudRed : wear > 0.5 ? HudAmber : Color.white;
-        TF(new Rect(dx + S(206), dy + S(11.5f), S(30), S(11)), hTyreWear.Get(HudNum.Pct(pct), 0.5f), UiKit.Bold, 6.2f, wc, TextAnchor.MiddleCenter);
-        // grip lost to temperature, the worse axle (as FormulaCar: the carcass plus a share of the surface)
-        var cd = CompoundTable.Get(car.cfg.compound); var c = car.cfg;
+        if (double.IsNaN(k)) return HudGrey;
+        float f = (float)k;
+        if (f <= -1f) return TwCold;
+        if (f < -0.35f) return Color.Lerp(TwCold, TwIdeal, (f + 1f) / 0.65f);
+        if (f <= 0.35f) return TwIdeal;
+        if (f < 1f) return Color.Lerp(TwIdeal, TwWarm, (f - 0.35f) / 0.65f);
+        return Color.Lerp(TwWarm, TwHot, Mathf.Clamp01(f - 1f));
+    }
+
+    void DrawTyreWidget(Rect r, float chipY, float chipH)
+    {
+        if (tyreCarTex == null) tyreCarTex = MakeTyreCar();
+        int set = Mathf.Clamp(carSet, 0, SetLetter.Length - 1);
+        Color sc = SetCol[set];
+        float cx = r.center.x;
+        // compound letters: above the nose, below the rear wing
+        TF(new Rect(cx - S(10), r.y - S(0.5f), S(20), S(8)), SetLetter[set], UiKit.Black, 6.6f, sc, TextAnchor.MiddleCenter);
+        TF(new Rect(cx - S(10), r.yMax - S(7.5f), S(20), S(8)), SetLetter[set], UiKit.Black, 6.6f, sc, TextAnchor.MiddleCenter);
+        // the car (wheels at 22 % and 78 % of its length)
+        float carW = S(15), carH = r.height - S(17), carY = r.y + S(8.5f);
+        Tex(new Rect(cx - carW * 0.5f, carY, carW, carH), tyreCarTex, TwCar);
+
+        var c = car.cfg; var cd = CompoundTable.Get(c.compound);
+        bool temps = c.chassis && !double.IsNaN(car.tyreTF);
         double gF = car.tyreTF, gR = car.tyreTR;
-        if (c.tyreSurface && !double.IsNaN(car.tyreSF)) { gF += c.tyreSurfGrip * (car.tyreSF - car.tyreTF); gR += c.tyreSurfGrip * (car.tyreSR - car.tyreTR); }
-        double eF = (gF - cd.opt) / cd.window, eR = (gR - cd.opt) / cd.window;
+        if (temps && c.tyreSurface && !double.IsNaN(car.tyreSF)) { gF += c.tyreSurfGrip * (car.tyreSF - car.tyreTF); gR += c.tyreSurfGrip * (car.tyreSR - car.tyreTR); }
+        double eF = temps ? (gF - cd.opt) / cd.window : double.NaN, eR = temps ? (gR - cd.opt) / cd.window : double.NaN;
+        float bw = S(3.4f), bh = carH * 0.42f, gap = S(2.2f);
+        bool blink = Mathf.Repeat(Time.unscaledTime * 2.5f, 1f) < 0.5f;
+        for (int wh = 0; wh < 4; wh++)
+        {
+            bool front = wh < 2, left = (wh & 1) == 0;
+            float wy = carY + carH * (front ? 0.22f : 0.78f);
+            var br = new Rect(left ? cx - carW * 0.5f - gap - bw : cx + carW * 0.5f + gap, wy - bh * 0.5f, bw, bh);
+            UiKit.Rect(new Rect(br.x - S(0.6f), br.y - S(0.6f), br.width + S(1.2f), br.height + S(1.2f)), TwTrack, 1.6f);
+            float tread = temps ? Mathf.Clamp01(1f - (float)(front ? car.wearF : car.wearR)) : 1f;
+            Color tc = TyreTempCol(front ? eF : eR);
+            if (tread < 1f - (float)TyreStrategy.CliffWear && blink) tc.a *= 0.35f;  // past the cliff
+            if (tread > 0.01f) UiKit.Rect(new Rect(br.x, br.yMax - bh * tread, bw, Mathf.Max(S(1f), bh * tread)), tc, 1.2f);
+            UiKit.Outline(br, TwEdge, 1.2f, 0.5f);
+        }
+        if (!temps) return;
+        // COLD / HOT: grip lost to temperature on the worse axle (as FormulaCar), with some hysteresis
         double lossF = c.tyreLoss * eF * eF, lossR = c.tyreLoss * eR * eR, loss = System.Math.Max(lossF, lossR), e = lossF >= lossR ? eF : eR;
         if (loss > 0.022) tyreCue = e < 0 ? -1 : 1; else if (loss < 0.012) tyreCue = 0;
         if (tyreCue != 0)
-            TF(new Rect(dx + S(206), dy + S(37), S(30), S(10)), tyreCue < 0 ? "COLD" : "HOT", UiKit.Bold, 5.6f, tyreCue < 0 ? HudBlue : HudRed, TextAnchor.MiddleCenter);
+            Chip(new Rect(cx - S(16), chipY, S(32), chipH), tyreCue < 0 ? "COLD" : "HOT", tyreCue < 0 ? TwCold : TwHot, Color.white);
+    }
+
+    // the car outline, top-down, nose up: white with alpha (tinted when drawn). Signed distances, built once.
+    static Texture2D MakeTyreCar()
+    {
+        const int W = 48, Hh = 96; const float Px = W; // pixels per unit (the car is 1 unit wide, 2 long)
+        var t = new Texture2D(W, Hh, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp, hideFlags = HideFlags.HideAndDontSave };
+        var px = new Color32[W * Hh];
+        for (int y = 0; y < Hh; y++) for (int x = 0; x < W; x++)
+        {
+            float u = (x + 0.5f) / Px - 0.5f, v = (y + 0.5f) / Px - 1f; // v up: the nose at +1 (texture row 0 is the bottom)
+            float au = Mathf.Abs(u);
+            // body: front wing, nose, tub and sidepods, engine cover, rear wing, suspension arms
+            float body = BoxSd(u, v - 0.86f, 0.40f, 0.05f, 0.02f);
+            body = Mathf.Min(body, BoxSd(u, v - 0.50f, 0.075f, 0.34f, 0.06f));
+            body = Mathf.Min(body, BoxSd(u, v + 0.08f, 0.23f, 0.36f, 0.11f));
+            body = Mathf.Min(body, BoxSd(u, v + 0.55f, 0.11f, 0.24f, 0.06f));
+            body = Mathf.Min(body, BoxSd(u, v + 0.90f, 0.34f, 0.06f, 0.02f));
+            body = Mathf.Min(body, BoxSd(au - 0.20f, v - 0.56f, 0.12f, 0.014f, 0.01f));
+            body = Mathf.Min(body, BoxSd(au - 0.20f, v + 0.56f, 0.12f, 0.014f, 0.01f));
+            float wheel = Mathf.Min(BoxSd(au - 0.385f, v - 0.56f, 0.095f, 0.16f, 0.035f), BoxSd(au - 0.375f, v + 0.56f, 0.115f, 0.18f, 0.035f));
+            float bodyIn = Mathf.Clamp01(0.5f - body * Px), bodyEdge = Mathf.Clamp01(1f - Mathf.Abs(body * Px + 0.7f) * 0.8f);
+            float wheelIn = Mathf.Clamp01(0.5f - wheel * Px);
+            float a = Mathf.Max(Mathf.Max(bodyIn * 0.22f, bodyEdge * 0.95f), wheelIn * 0.75f);
+            px[y * W + x] = new Color32(255, 255, 255, (byte)(255 * Mathf.Clamp01(a)));
+        }
+        t.SetPixels32(px); t.Apply(false);
+        return t;
     }
 }

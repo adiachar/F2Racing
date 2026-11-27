@@ -7,11 +7,12 @@
 //  * race card (top right): position P3/20, lap, lap clock, live delta to your best lap, three mini-sectors
 //    (purple / green / yellow, with the time), last and best lap; the lap time flashes at the line
 //  * dash (bottom centre): one slim glass bar: shift-light strip (green -> red -> blue), speed, big gear, battery
-//    with deploy / harvest state, tyre quad (temperature colour, tread fill). Beside it, when there is room,
+//    with deploy / harvest state, GT-style tyre widget (TyrePit.cs: car outline, a tread bar per wheel coloured by
+//    temperature, compound letters). Beside it, when there is room,
 //    tyre / brake temperatures and fuel. Above it: X-MODE, TOW, YELLOW, BOX chips
 //  * BOOST and OVERTAKE buttons (left beside the brake with tilt steering; right above the brake with touch): boost = full MGU-K power while held; Overtake Mode
 //    (2026, replaces DRS) lights up when armed at a detection point, a tap uses it, the ring is the energy left
-//  * local mini-map (GameManager.cs: DrawMiniMap) under the race card
+//  * radar and / or the full-circuit map (Radar.cs) under the race card
 //  * banners (top centre): fastest lap, pit stop, track limits, jump start, flags, penalties; they slide in and out.
 //    Above them a small toast (GameManagerProgress.cs): safety-rating drops and rivals' time penalties
 // Sector and gap bookkeeping is in Sectors.cs. Number strings come from tables filled once (HudNum) or are rebuilt only
@@ -44,7 +45,7 @@ public partial class GameManager
     static Texture2D hudTri, icoGear, icoCam, icoBack;
 
     // ---------------------------------------------------------------- layout (once per OnGUI, from GameManager.OnGUI)
-    float hudL, hudT, hudR, hudB; Rect cardRect, mapRect; float btnRight;
+    float hudL, hudT, hudR, hudB; Rect cardRect; float btnRight;
 
     // ---------------------------------------------------------------- timing state
     SectorTimer secTimer; Track secFor; readonly CarTiming myTime = new CarTiming(); CarTiming[] rivTime = new CarTiming[0]; DeltaTrace deltaTr;
@@ -91,8 +92,6 @@ public partial class GameManager
         float ch = playground ? S(42) : hudSectors ? S(85) : S(70);
         cardRect = new Rect(Mathf.Round(hudR - cw), hudT, cw, ch);
         btnRight = cardRect.x - S(8);
-        float mw = S(84), mh = S(92); // local mini-map: taller than wide (300 m ahead, 150 m behind); ends above the gas pedal
-        mapRect = new Rect(Mathf.Round(hudR - mw), cardRect.yMax + S(6), mw, mh);
     }
 
     void HudInit()
@@ -216,7 +215,7 @@ public partial class GameManager
         var a = new Rect(r.x, r.center.y - h * 0.5f, h, h); var b = new Rect(r.x + h, r.center.y - h * 0.5f, h, h);
         if (down) { Tri(a, 3, c); Tri(b, 2, c); } else { Tri(a, 1, c); Tri(b, 0, c); }
     }
-    // tyre compound: a thin ring in the compound colour with its letter
+    // tyre compound: a thin ring in the compound colour with its letter (tower rows, pit chips, start card)
     void TyreIcon(Rect r, int set)
     {
         set = Mathf.Clamp(set, 0, SetLetter.Length - 1);
@@ -699,10 +698,10 @@ public partial class GameManager
         if (car.tow > 0.3) { Chip(new Rect(cx, chipY, S(30), chipH), "TOW", HudPanel2, HudCyan); cx += S(34); }
         if (hudYellow) { Chip(new Rect(cx, chipY, S(42), chipH), "YELLOW", HudYellow, Color.black); cx += S(46); }
         if (boxArmed) Chip(new Rect(cx, chipY, S(30), chipH), "BOX", HudAccent, Color.white);
-        if (hudInfo && !wings && !double.IsNaN(car.fuel))
+        if (hudInfo && !wings && !double.IsNaN(car.fuel)) // (right-aligned left of the tyre widget's column: its COLD / HOT chip sits above it)
         {
-            TF(new Rect(dx, chipY, dw - S(6), chipH), hFuel.Get(HudNum.Tenths(car.fuel), 0.5f), UiKit.Bold, 7.5f, Color.white, TextAnchor.MiddleRight);
-            TF(new Rect(dx, chipY, dw - S(28), chipH), "FUEL", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
+            TF(new Rect(dx, chipY, dw - S(56), chipH), hFuel.Get(HudNum.Tenths(car.fuel), 0.5f), UiKit.Bold, 7.5f, Color.white, TextAnchor.MiddleRight);
+            TF(new Rect(dx, chipY, dw - S(78), chipH), "FUEL", UiKit.Semi, 6f, HudFaint, TextAnchor.MiddleRight);
         }
 
         Glass(dash, 12f);
@@ -711,7 +710,7 @@ public partial class GameManager
         int lit = Mathf.Clamp(Mathf.CeilToInt((float)frac * 15), 0, 15);
         bool limiter = car.rpm > red * 0.985 && !car.reverse;
         bool blinkOn = Mathf.Repeat(Time.unscaledTime * 10, 1) > 0.5f;
-        float sx0 = dx + S(12), sg = S(2.4f), segW = (dw - S(24) - 14 * sg) / 15f, segH = S(3.6f);
+        float sx0 = dx + S(12), sg = S(2.2f), segW = (S(180) - 14 * sg) / 15f, segH = S(3.6f); // (over speed, gear and battery: the tyre widget has the right end)
         for (int i = 0; i < 15; i++)
         {
             Color c = i < 5 ? HudGreen : i < 10 ? HudRed : HudBlue;
@@ -757,21 +756,11 @@ public partial class GameManager
             TF(new Rect(bx, dy + S(31), bw, S(9)), hKw.Get(HudNum.Kw(Mathf.RoundToInt((float)System.Math.Abs(kw))), 0.2f), UiKit.Semi, 5.8f, HudGrey, TextAnchor.MiddleRight);
         }
 
-        // tyre quad (temperature colour, the fill is the tread left) and the compound
-        var cd = CompoundTable.Defs[Mathf.Clamp((int)car.cfg.compound, 0, CompoundTable.Defs.Length - 1)];
+        // tyres, Gran Turismo style (TyrePit.cs): a top-down car with a bar beside each wheel (height = tread left,
+        // colour = temperature against the fitted compound's window) and the compound letter above and below
+        var cd = CompoundTable.Get(car.cfg.compound);
         bool temps = car.cfg.chassis && !double.IsNaN(car.tyreTF);
-        float tw = S(9), th = S(14), lx = dx + S(201), rx = dx + S(231), fy = dy + S(12), ry = dy + S(33);
-        for (int wh = 0; wh < 4; wh++)
-        {
-            bool front = wh < 2, left = (wh & 1) == 0;
-            var tr = new Rect(left ? lx : rx, front ? fy : ry, tw, th);
-            Color tc = temps ? TempCol(front ? car.tyreTF : car.tyreTR, cd.opt, cd.window) : HudGrey;
-            float tread = temps ? Mathf.Clamp01(1 - (float)(front ? car.wearF : car.wearR)) : 1f;
-            UiKit.Rect(tr, new Color(tc.r, tc.g, tc.b, 0.26f), 3f);
-            if (tread > 0.02f) UiKit.Rect(new Rect(tr.x, tr.yMax - th * tread, tw, th * tread), tread < 0.3f ? HudRed : tc, 3f);
-        }
-        TyreIcon(new Rect(dx + S(214.5f), dy + S(23.5f), S(13), S(13)), carSet);
-        DrawTyreCue(dx, dy); // worn % and COLD / HOT (TyrePit.cs)
+        DrawTyreWidget(new Rect(dx + S(197), dy + S(3), S(48), dh - S(6)), chipY, chipH);
         if (!wings) return;
 
         // left wing: tyre temperatures and tread, brake temperatures
@@ -785,7 +774,7 @@ public partial class GameManager
                 bool front = wh < 2, left = (wh & 1) == 0;
                 double t = front ? car.tyreTF : car.tyreTR, wear = front ? car.wearF : car.wearR;
                 var br = new Rect(left ? lw.x + S(8) : lw.xMax - S(8) - bw2, front ? dy + S(6) : dy + S(28), bw2, bh2);
-                UiKit.Rect(br, TempCol(t, cd.opt, cd.window), 3.5f);
+                UiKit.Rect(br, TyreTempCol((t - cd.opt) / cd.window), 3.5f); // (the tyre widget's colours, TyrePit.cs)
                 TF(br, hTyre[wh].Get(HudNum.Int(Mathf.RoundToInt((float)t)), 0.5f), UiKit.Bold, 6.2f, new Color(0.04f, 0.04f, 0.05f), TextAnchor.MiddleCenter);
                 float tread = Mathf.Clamp01(1 - (float)wear), wx = left ? br.x - S(4) : br.xMax + S(2);
                 UiKit.Rect(new Rect(wx, br.y, S(2), bh2), DimSeg, 1f);
@@ -847,7 +836,7 @@ public partial class GameManager
                 return new Rect(Mathf.Round(b.xMax + S(10)), Mathf.Round(Screen.height - S(64) - d), d, d);
             }
             float x = Mathf.Min(GasRect.x - S(10) - d, UiKit.Safe.xMax - S(8) - d);
-            return new Rect(Mathf.Round(x), Mathf.Round(Mathf.Max(UiKit.Safe.y + S(4), Screen.height - S(136) - d)), d, d);
+            return new Rect(Mathf.Round(x), Mathf.Round(Mathf.Max(UiKit.Safe.y + S(4), BrakeRect.y - S(6) - d)), d, d); // just above the brake's touch zone
         }
     }
     Rect BoostRect

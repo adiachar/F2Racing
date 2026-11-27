@@ -13,8 +13,9 @@
 //  * touch (drag) steering: left half, right of the timing tower (and the qualifying list), at mid height, above the
 //    steering thumb; a touch that starts on it looks back instead of steering
 // Setting: CAMERA > "Look back button" (PlayerPrefs "lookBackBtn", default shown). Key: E (desktop / WebGL).
-// Screenshots (DebugShots.cs): lookback=1 holds it in every shot; map=radar|track|off, tilt=1 (tilt layout),
-// side=<m> (rival 0 alongside the player, m to the left of the racing line; negative = right).
+// Screenshots (DebugShots.cs): lookback=1 holds it in every shot; map=both|radar|full|off, tilt=1 (tilt layout),
+// side=<m> (rival 0 alongside the player, m to the left of the racing line; negative = right), twear= / ttemp= (the
+// tyre widget: wear 0..1, carcass temperature C).
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -125,18 +126,23 @@ public partial class GameManager
     }
 
     // ---------------------------------------------------------------- screenshots (DebugShots.cs)
-    // ShotsBoot: lookback=1, map=radar|track|off (not saved), tilt=1, side=<m>
+    // ShotsBoot: lookback=1, map=both|radar|full|off (track = full; not saved), tilt=1, side=<m>, twear=<0..1>, ttemp=<C>
+    float shotTWear = -1f, shotTTemp = -1f;
     void ShotsHudParams(Dictionary<string, string> q)
     {
         shotLookBack = DebugShots.Get(q, "lookback", "0") == "1";
         string m = DebugShots.Get(q, "map", "").ToLowerInvariant();
-        if (m == "radar") mapModeCache = 0; else if (m == "track") mapModeCache = 1; else if (m == "off") mapModeCache = 2;
+        if (m == "both") mapModeCache = MapBoth; else if (m == "radar") mapModeCache = MapRadar; else if (m == "full" || m == "track") mapModeCache = MapFull; else if (m == "off") mapModeCache = MapOff;
         if (DebugShots.Get(q, "tilt", "0") == "1") tilt = true;
         shotSide = DebugShots.GetF(q, "side", 0f);
+        shotTWear = DebugShots.GetF(q, "twear", -1f); shotTTemp = DebugShots.GetF(q, "ttemp", -1f);
     }
-    // ShotPlace, after the rivals are spread: rival 0 level with the player (1.5 m ahead), shotSide m off the racing line
+    // ShotPlace, after the rivals are spread: the tyre widget's state (twear= wear 0..1 front, rear a little less;
+    // ttemp= carcass C, the surface the same), then rival 0 level with the player (1.5 m ahead), shotSide m off the line
     void ShotsAlongside(int i, double hw)
     {
+        if (shotTWear >= 0f) { car.wearF = Mathf.Clamp01(shotTWear); car.wearR = Mathf.Clamp01(shotTWear * 0.85f); }
+        if (shotTTemp > 0f) { car.tyreTF = shotTTemp; car.tyreTR = shotTTemp + 6f; car.tyreSF = car.tyreTF; car.tyreSR = car.tyreTR; }
         if (shotSide == 0f || rivals.Count == 0 || track == null || line == null) return;
         int N = track.N, j = (i + Mathf.Max(1, (int)System.Math.Round(1.5 / track.ds))) % N;
         double rl = System.Math.Max(-hw, System.Math.Min(hw, line.off[j] + shotSide));

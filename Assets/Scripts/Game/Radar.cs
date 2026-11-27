@@ -1,5 +1,8 @@
-// Radar.cs — the proximity radar (Gran Turismo style), the default of the "Map" setting, top right under the race card
-// where the local track map was (RaceHud.cs: HudLayout's cardRect; the track map itself is GameManager.cs: DrawMiniMap).
+// Radar.cs — the HUD maps, top right under the race card (RaceHud.cs: HudLayout's cardRect): the proximity radar (Gran
+// Turismo style) and the full-circuit map (no backdrop: the whole track as a light line with a thin dark outline, the
+// pit lane faint, the start line red, the cars as dots: you red, the rivals blue, the leader ringed white). Setting
+// "Map": Radar + full map (default: the map left of the radar) / Radar / Full map (in the radar's place) / Off.
+// The radar:
 //  * a round, translucent panel (one cached texture: dark glass, a hairline rim, faint centre lines); the player's car
 //    in the middle (a little below the centre: ~22 m ahead and ~14 m behind are in view), nose up, turned with the car
 //  * every rival within range as a small rounded car shape at its real place and angle relative to the player (the same
@@ -8,33 +11,43 @@
 //  * the road edges round the car (the track map's 4 m points, GameManager.cs BuildMiniMap) and the pit lane, faintly
 //  * side-warning arcs on the rim, left / right, while a car is alongside (amber -> red as it overlaps)
 // Drawn in OnGUI (Repaint only) with immediate GL triangles (RaceHud.cs: GlBegin / GlEnd); nothing is allocated per
-// frame: no strings, no arrays, no objects. Setting "Map": Radar / Track map / Off, PlayerPrefs "hudMapMode" (MapMode).
+// frame: no strings, no arrays, no objects. PlayerPrefs "hudMapMode2" (MapMode).
+// The full map: the track is drawn once per circuit and screen size into a texture of the map's own pixel size (signed
+// distances per segment, built in a few ms), then one DrawTexture plus ~20 GL discs per frame.
+using FormulaSim;
 using UnityEngine;
 
 public partial class GameManager
 {
     // ---------------------------------------------------------------- the "Map" setting
-    // 0 Radar (default), 1 Track map (the old local mini-map), 2 Off. Without a saved "hudMapMode" the old "hudMap"
-    // toggle decides (a map switched off stays off).
-    internal static readonly string[] MapModeNames = { "Radar", "Track map", "Off" };
-    const string MapModeKey = "hudMapMode";
+    // 0 Radar + full map (default), 1 Radar, 2 Full map, 3 Off. Without a saved "hudMapMode2" the older settings decide:
+    // "hudMapMode" (0 Radar -> Radar + full map, 1 the old local track map -> Full map, 2 Off -> Off), then the oldest
+    // "hudMap" toggle (a map switched off stays off).
+    internal const int MapBoth = 0, MapRadar = 1, MapFull = 2, MapOff = 3;
+    internal static readonly string[] MapModeNames = { "Radar + full map", "Radar", "Full map", "Off" };
+    const string MapModeKey = "hudMapMode2";
     int mapModeCache = -1;
     internal int MapMode
     {
         get
         {
-            if (mapModeCache < 0) mapModeCache = PlayerPrefs.HasKey(MapModeKey) ? Mathf.Clamp(PlayerPrefs.GetInt(MapModeKey, 0), 0, 2) : PlayerPrefs.GetInt("hudMap", 1) == 1 ? 0 : 2;
+            if (mapModeCache < 0)
+            {
+                if (PlayerPrefs.HasKey(MapModeKey)) mapModeCache = Mathf.Clamp(PlayerPrefs.GetInt(MapModeKey, MapBoth), 0, MapOff);
+                else if (PlayerPrefs.HasKey("hudMapMode")) { int o = PlayerPrefs.GetInt("hudMapMode", 0); mapModeCache = o == 1 ? MapFull : o == 2 ? MapOff : MapBoth; }
+                else mapModeCache = PlayerPrefs.GetInt("hudMap", 1) == 1 ? MapBoth : MapOff;
+            }
             return mapModeCache;
         }
-        set { mapModeCache = Mathf.Clamp(value, 0, 2); PlayerPrefs.SetInt(MapModeKey, mapModeCache); }
+        set { mapModeCache = Mathf.Clamp(value, 0, MapOff); PlayerPrefs.SetInt(MapModeKey, mapModeCache); }
     }
 
-    // OnGUI (GameManager.cs), where the track map was drawn
+    // OnGUI (GameManager.cs), after the race HUD
     void DrawMapHud()
     {
         int m = MapMode;
-        if (m == 0) DrawRadar();
-        else if (m == 1) DrawMiniMap();
+        if (m == MapBoth || m == MapRadar) DrawRadar();
+        if (m == MapBoth || m == MapFull) DrawFullMap(m == MapBoth);
     }
 
     // ---------------------------------------------------------------- radar
@@ -252,5 +265,125 @@ public partial class GameManager
             px[y * D + x] = new Color32((byte)(255 * Mathf.Lerp(0.02f, 1f, wht)), (byte)(255 * g), (byte)(255 * Mathf.Lerp(0.035f, 1f, wht)), (byte)(255 * Mathf.Clamp01(a * inside)));
         }
         radarBg.SetPixels32(px); radarBg.Apply(false);
+    }
+
+    // ---------------------------------------------------------------- full-circuit map
+    static readonly Color FmLine = new Color(0.95f, 0.96f, 0.98f, 0.95f), FmOutline = new Color(0.02f, 0.025f, 0.035f, 0.78f), FmPit = new Color(0.80f, 0.83f, 0.88f, 0.6f);
+    Texture2D fmTex; Track fmFor; PitLane fmLane; int fmW, fmH;
+    float fmK, fmCx, fmCy;                 // px per metre at the built size, the world centre of the map
+    float[] fmD;                           // scratch: distance per pixel (build only)
+
+    // beside the radar (Radar + full map) or in its place (Full map); the same height as the radar, below the pit chips
+    Rect FullMapRect(bool beside)
+    {
+        var rr = RadarRect();
+        float w = S(96), h = Mathf.Max(S(60), rr.height);
+        if (!beside) return new Rect(Mathf.Round(hudR - w), rr.y, Mathf.Round(w), Mathf.Round(h));
+        float y = Mathf.Max(rr.y, hudT + S(87)); // the S / M / H chips while boxing end at hudT + 83 (TyrePit.cs DrawPitChips)
+        return new Rect(Mathf.Round(rr.x - S(8) - w), Mathf.Round(y), Mathf.Round(w), Mathf.Round(h));
+    }
+
+    void DrawFullMap(bool beside)
+    {
+        if (playground || track == null || car == null) return;
+        if (Event.current.type != EventType.Repaint) return;
+        if (mmFor != track || mmX == null) BuildMiniMap();
+        if (mmLane != Trackside.Lane) BuildMmPit();
+        var r = FullMapRect(beside);
+        if (r.width < S(30)) return;
+        int w = Mathf.RoundToInt(r.width), h = Mathf.RoundToInt(r.height);
+        if (fmTex == null || fmFor != track || fmLane != mmLane || fmW != w || fmH != h) BuildFullMap(w, h);
+        if (fmTex == null) return;
+        GUI.DrawTexture(new Rect(r.x, r.y, w, h), fmTex);
+
+        // the cars: world -> screen (north up, as the texture)
+        float ox = r.x + w * 0.5f, oy = r.y + h * 0.5f, k = fmK;
+        if (!GlBegin(new Rect(r.x - S(6), r.y - S(6), w + S(12), h + S(12)))) return;
+        float rd = Mathf.Max(1.6f, S(2.1f)), edge = Mathf.Max(0.8f, S(0.7f));
+        int leader = ordN > 0 ? ord[0] - 1 : -1; // ord: 0 = you, i + 1 = rival i (HudTick)
+        for (int i = 0; i < rivals.Count; i++)
+        {
+            var c = rivals[i].car;
+            float sx = ox + ((float)c.x - fmCx) * k, sy = oy - ((float)c.y - fmCy) * k;
+            if (i == leader) { GlColor(Color.white); GlDisc(sx, sy, rd + edge + S(0.9f)); }
+            GlColor(FmOutline); GlDisc(sx, sy, rd + edge);
+            GlColor(RdBlue); GlDisc(sx, sy, rd);
+        }
+        {
+            float sx = ox + ((float)car.x - fmCx) * k, sy = oy - ((float)car.y - fmCy) * k, rm = rd * 1.3f;
+            GlColor(RdMeEdge); GlDisc(sx, sy, rm + edge + S(0.3f));
+            GlColor(RdMe); GlDisc(sx, sy, rm);
+        }
+        GlEnd();
+    }
+
+    // the track into a w x h texture: dark outline, pit lane, light line, red start line (anti-aliased distances)
+    void BuildFullMap(int w, int h)
+    {
+        fmFor = track; fmLane = mmLane; fmW = w; fmH = h;
+        if (mmN < 2) return;
+        float x0 = float.MaxValue, x1 = float.MinValue, y0 = float.MaxValue, y1 = float.MinValue;
+        for (int i = 0; i < mmN; i++) { x0 = Mathf.Min(x0, mmX[i]); x1 = Mathf.Max(x1, mmX[i]); y0 = Mathf.Min(y0, mmY[i]); y1 = Mathf.Max(y1, mmY[i]); }
+        for (int i = 0; i < mmPitN; i++) { x0 = Mathf.Min(x0, mmPitX[i]); x1 = Mathf.Max(x1, mmPitX[i]); y0 = Mathf.Min(y0, mmPitY[i]); y1 = Mathf.Max(y1, mmPitY[i]); }
+        float core = Mathf.Max(0.9f, S(0.8f)), outl = core + Mathf.Max(1.1f, S(1.0f)), pad = outl + Mathf.Max(3f, S(3.2f)); // half widths (px)
+        fmK = Mathf.Min((w - 2 * pad) / Mathf.Max(1f, x1 - x0), (h - 2 * pad) / Mathf.Max(1f, y1 - y0));
+        fmCx = (x0 + x1) * 0.5f; fmCy = (y0 + y1) * 0.5f;
+        int n = w * h;
+        fmD = new float[n * 3];
+        for (int i = 0; i < n * 3; i++) fmD[i] = 1e9f;
+        // 0: the track, 1: the pit lane, 2: the start line (a short cross bar)
+        for (int i = 0; i < mmN; i++) { int j = i + 1 == mmN ? 0 : i + 1; FmSeg(0, mmX[i], mmY[i], mmX[j], mmY[j], outl + 1.5f); }
+        for (int i = 0; i + 1 < mmPitN; i++) FmSeg(1, mmPitX[i], mmPitY[i], mmPitX[i + 1], mmPitY[i + 1], outl + 1.5f);
+        float bar = (outl + Mathf.Max(1.5f, S(1.6f))) / fmK;
+        FmSeg(2, mmX[0] - mmNx[0] * bar, mmY[0] - mmNy[0] * bar, mmX[0] + mmNx[0] * bar, mmY[0] + mmNy[0] * bar, outl + 1.5f);
+        var px = new Color32[n];
+        float pitCore = core * 0.7f;
+        for (int i = 0; i < n; i++)
+        {
+            float dT = fmD[i], dP = fmD[n + i], dS = fmD[2 * n + i];
+            float oT = Mathf.Clamp01(outl + 0.5f - dT), oP = Mathf.Clamp01(outl - 0.4f + 0.5f - dP), oS = Mathf.Clamp01(outl + 0.5f - dS);
+            float cT = Mathf.Clamp01(core + 0.5f - dT), cP = Mathf.Clamp01(pitCore + 0.5f - dP), cS = Mathf.Clamp01(core + 0.5f - dS);
+            float a = 0f, cr = 0f, cg = 0f, cb = 0f;
+            FmOver(ref a, ref cr, ref cg, ref cb, FmOutline, Mathf.Max(oT, Mathf.Max(oP * 0.8f, oS)));
+            FmOver(ref a, ref cr, ref cg, ref cb, FmPit, cP);
+            FmOver(ref a, ref cr, ref cg, ref cb, FmLine, cT);
+            FmOver(ref a, ref cr, ref cg, ref cb, HudAccent, cS);
+            px[i] = a <= 0.001f ? new Color32(0, 0, 0, 0) : new Color32((byte)(255 * Mathf.Clamp01(cr / a)), (byte)(255 * Mathf.Clamp01(cg / a)), (byte)(255 * Mathf.Clamp01(cb / a)), (byte)(255 * Mathf.Clamp01(a)));
+        }
+        if (fmTex == null || fmTex.width != w || fmTex.height != h)
+        {
+            if (fmTex != null) Destroy(fmTex);
+            fmTex = new Texture2D(w, h, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp, hideFlags = HideFlags.HideAndDontSave };
+        }
+        fmTex.SetPixels32(px); fmTex.Apply(false);
+        fmD = null; // (the scratch is only needed while building)
+    }
+    // source-over in premultiplied colour (a = coverage x the colour's alpha)
+    static void FmOver(ref float a, ref float r, ref float g, ref float b, Color c, float cov)
+    {
+        float sa = c.a * cov; if (sa <= 0f) return;
+        r = c.r * sa + r * (1f - sa); g = c.g * sa + g * (1f - sa); b = c.b * sa + b * (1f - sa); a = sa + a * (1f - sa);
+    }
+    // one world segment into distance layer L (texture pixels, row 0 at the bottom: north up), within reach px of it
+    void FmSeg(int L, float ax, float ay, float bx, float by, float reach)
+    {
+        int w = fmW, h = fmH, off = L * w * h;
+        float k = fmK, hx = w * 0.5f, hy = h * 0.5f;
+        float pax = (ax - fmCx) * k + hx, pay = (ay - fmCy) * k + hy, pbx = (bx - fmCx) * k + hx, pby = (by - fmCy) * k + hy;
+        int xa = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(pax, pbx) - reach)), xb = Mathf.Min(w - 1, Mathf.CeilToInt(Mathf.Max(pax, pbx) + reach));
+        int ya = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(pay, pby) - reach)), yb = Mathf.Min(h - 1, Mathf.CeilToInt(Mathf.Max(pay, pby) + reach));
+        float ex = pbx - pax, ey = pby - pay, ll = ex * ex + ey * ey;
+        for (int y = ya; y <= yb; y++)
+        {
+            float py = y + 0.5f;
+            for (int x = xa; x <= xb; x++)
+            {
+                float qx = x + 0.5f - pax, qy = py - pay;
+                float t = ll > 1e-6f ? Mathf.Clamp01((qx * ex + qy * ey) / ll) : 0f;
+                float dx = qx - ex * t, dy = qy - ey * t, d = Mathf.Sqrt(dx * dx + dy * dy);
+                int o = off + y * w + x;
+                if (d < fmD[o]) fmD[o] = d;
+            }
+        }
     }
 }

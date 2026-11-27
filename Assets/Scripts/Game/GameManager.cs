@@ -118,29 +118,21 @@ public partial class GameManager : MonoBehaviour
         if (lineGo != null) lineGo.SetActive(showLine && !playground);
     }
 
-    // Local mini-map (the panel under the race card, RaceHud.cs: mapRect): only the track round the car, MmAhead m ahead
-    // and MmBehind m behind, turned so the car's heading (filtered: no jitter) points up, the car low in the middle.
-    // Built once per circuit: the centre line every ~4 m with its normal and half width; the pit lane and grey blocks
-    // for the big buildings beside the track (grandstands, pit building: Trackside.Solids) as soon as they exist.
-    // Drawn with GL triangles clipped to the panel on the CPU (RaceHud.cs: GlBegin); nothing is allocated per frame.
-    const float MmAhead = 300f, MmBehind = 150f;
-    float[] mmX, mmY, mmNx, mmNy, mmHw, mmLx, mmLy, mmRx, mmRy; bool[] mmVis; int mmN; Track mmFor;
+    // Track geometry for the HUD's maps (Radar.cs: the radar's road edges and the full-circuit map): the centre line
+    // every ~4 m with its normal and half width, built once per circuit; the pit lane's fast lane once it exists.
+    float[] mmX, mmY, mmNx, mmNy, mmHw; int mmN; Track mmFor;
     float[] mmPitX, mmPitY; int mmPitN; PitLane mmLane;
-    float[] mmBlk; int mmBlkN, mmSolidsSeen = -1;
-    float mmHx = float.NaN, mmHy, mmCx, mmCy;            // filtered heading (unit vector), the car's last place
-    Color[] mmCol = new Color[0]; AiDriver[] mmOwner = new AiDriver[0];
     void BuildMiniMap()
     {
         int N = track.N, step = Mathf.Max(1, Mathf.RoundToInt(4f / (float)track.ds));
         mmN = N / step;
         mmX = new float[mmN]; mmY = new float[mmN]; mmNx = new float[mmN]; mmNy = new float[mmN]; mmHw = new float[mmN];
-        mmLx = new float[mmN]; mmLy = new float[mmN]; mmRx = new float[mmN]; mmRy = new float[mmN]; mmVis = new bool[mmN];
         for (int k = 0; k < mmN; k++)
         {
             var p = track.pts[k * step];
             mmX[k] = (float)p.x; mmY[k] = (float)p.y; mmNx[k] = (float)p.nx; mmNy[k] = (float)p.ny; mmHw[k] = (float)track.HalfWidth(k * step);
         }
-        mmFor = track; mmLane = null; mmPitN = 0; mmSolidsSeen = -1; mmBlkN = 0; mmHx = float.NaN;
+        mmFor = track; mmLane = null; mmPitN = 0;
     }
     // the pit lane's fast lane, entry to exit, every 4 m
     void BuildMmPit()
@@ -156,126 +148,6 @@ public partial class GameManager : MonoBehaviour
             mmPitX[i] = (float)x; mmPitY[i] = (float)y;
         }
         mmPitN = n;
-    }
-    // big boxes beside the track (stands, pit garages, buildings): their four corners (world x / z = physics x / y)
-    void BuildMmBlocks()
-    {
-        var sol = Trackside.Solids; mmSolidsSeen = sol.Count; mmBlkN = 0;
-        const int Max = 192;
-        if (mmBlk == null) mmBlk = new float[Max * 8];
-        for (int i = 0; i < sol.Count && mmBlkN < Max; i++)
-        {
-            var b = sol[i];
-            if (b.hl * b.hd < 20f || Mathf.Max(b.hl, b.hd) < 4f || Mathf.Min(b.hl, b.hd) < 2f) continue; // posts, boards, canopies, bridges
-            float tx = b.tx * b.hl, tz = b.tz * b.hl, nx = -b.tz * b.hd, nz = b.tx * b.hd;
-            int o = mmBlkN * 8;
-            mmBlk[o] = b.cx + tx + nx; mmBlk[o + 1] = b.cz + tz + nz; mmBlk[o + 2] = b.cx - tx + nx; mmBlk[o + 3] = b.cz - tz + nz;
-            mmBlk[o + 4] = b.cx - tx - nx; mmBlk[o + 5] = b.cz - tz - nz; mmBlk[o + 6] = b.cx + tx - nx; mmBlk[o + 7] = b.cz + tz - nz;
-            mmBlkN++;
-        }
-    }
-    void DrawMiniMap()
-    {
-        if (playground || track == null || car == null) return;
-        if (mmFor != track || mmX == null) BuildMiniMap();
-        var m = mapRect;                                     // no backdrop (Adi): just the track, under the race card, top right (RaceHud.cs: HudLayout)
-        if (Event.current.type != EventType.Repaint) return;
-        if (mmLane != Trackside.Lane) BuildMmPit();
-        if (mmSolidsSeen != Trackside.Solids.Count) BuildMmBlocks();
-        if (mmOwner.Length != rivals.Count) { mmOwner = new AiDriver[rivals.Count]; mmCol = new Color[rivals.Count]; }
-        for (int i = 0; i < rivals.Count; i++)
-            if (mmOwner[i] != rivals[i]) { mmOwner[i] = rivals[i]; mmCol[i] = Livery.TeamColour(TeamIndex(rivals[i].who)); }
-
-        // heading: a unit vector eased towards the car's (frame-rate independent), snapped after a reset or a jump
-        float ch = Mathf.Cos((float)car.heading), sh = Mathf.Sin((float)car.heading), px = (float)car.x, py = (float)car.y;
-        if (float.IsNaN(mmHx) || (px - mmCx) * (px - mmCx) + (py - mmCy) * (py - mmCy) > 2500f) { mmHx = ch; mmHy = sh; }
-        else
-        {
-            float e = 1f - Mathf.Exp(-Mathf.Min(Time.unscaledDeltaTime, 0.1f) * 4f);
-            float hx = mmHx + (ch - mmHx) * e, hy = mmHy + (sh - mmHy) * e, hl = Mathf.Sqrt(hx * hx + hy * hy);
-            if (hl > 1e-3f) { mmHx = hx / hl; mmHy = hy / hl; } else { mmHx = ch; mmHy = sh; }
-        }
-        mmCx = px; mmCy = py;
-
-        float pad = S(5);
-        var inner = new Rect(m.x + pad, m.y + pad, m.width - 2 * pad, m.height - 2 * pad);
-        float k = inner.height / (MmAhead + MmBehind), ox = inner.center.x, oy = inner.yMax - MmBehind * k;
-        float fx = mmHx, fy = mmHy;
-        // world -> panel: right of the car = +X, ahead = -Y
-        // X = ox + ((x - px) fy - (y - py) fx) k, Y = oy - ((x - px) fx + (y - py) fy) k
-        float qx = px + fx * (MmAhead - MmBehind) * 0.5f, qy = py + fy * (MmAhead - MmBehind) * 0.5f;
-        float halfW = inner.width * 0.5f / k, halfL = (MmAhead + MmBehind) * 0.5f;
-        float R = Mathf.Sqrt(halfW * halfW + halfL * halfL) + 25f, R2 = R * R;
-        if (!GlBegin(inner)) return;
-
-        // buildings
-        GlColor(new Color(0.55f, 0.58f, 0.64f, 0.38f));
-        for (int b = 0; b < mmBlkN; b++)
-        {
-            int o = b * 8; float cx = (mmBlk[o] + mmBlk[o + 4]) * 0.5f - qx, cy = (mmBlk[o + 1] + mmBlk[o + 5]) * 0.5f - qy;
-            if (cx * cx + cy * cy > R2) continue;
-            float ax = mmBlk[o] - px, ay = mmBlk[o + 1] - py, bx = mmBlk[o + 2] - px, by = mmBlk[o + 3] - py;
-            float cx2 = mmBlk[o + 4] - px, cy2 = mmBlk[o + 5] - py, dx = mmBlk[o + 6] - px, dy = mmBlk[o + 7] - py;
-            GlQuad(ox + (ax * fy - ay * fx) * k, oy - (ax * fx + ay * fy) * k, ox + (bx * fy - by * fx) * k, oy - (bx * fx + by * fy) * k,
-                   ox + (cx2 * fy - cy2 * fx) * k, oy - (cx2 * fx + cy2 * fy) * k, ox + (dx * fy - dy * fx) * k, oy - (dx * fx + dy * fy) * k);
-        }
-        // pit lane
-        GlColor(new Color(0.75f, 0.78f, 0.84f, 0.55f));
-        float wPit = Mathf.Max(1f, S(1.1f));
-        for (int i = 0; i + 1 < mmPitN; i++)
-        {
-            float ax = mmPitX[i] - qx, ay = mmPitY[i] - qy; if (ax * ax + ay * ay > R2) continue;
-            ax = mmPitX[i] - px; ay = mmPitY[i] - py; float bx = mmPitX[i + 1] - px, by = mmPitY[i + 1] - py;
-            GlLine(ox + (ax * fy - ay * fx) * k, oy - (ax * fx + ay * fy) * k, ox + (bx * fy - by * fx) * k, oy - (bx * fx + by * fy) * k, wPit);
-        }
-        // track: the edges of every point in range (at least ~4.4 units wide, so it reads on a phone)
-        float minHw = S(2.2f) / k;
-        for (int i = 0; i < mmN; i++)
-        {
-            float dx = mmX[i] - qx, dy = mmY[i] - qy;
-            bool v = dx * dx + dy * dy < R2; mmVis[i] = v; if (!v) continue;
-            float hw = Mathf.Max(mmHw[i], minHw);
-            float lx = mmX[i] + mmNx[i] * hw - px, ly = mmY[i] + mmNy[i] * hw - py, rx = mmX[i] - mmNx[i] * hw - px, ry = mmY[i] - mmNy[i] * hw - py;
-            mmLx[i] = ox + (lx * fy - ly * fx) * k; mmLy[i] = oy - (lx * fx + ly * fy) * k;
-            mmRx[i] = ox + (rx * fy - ry * fx) * k; mmRy[i] = oy - (rx * fx + ry * fy) * k;
-        }
-        GlColor(new Color(0.20f, 0.22f, 0.27f, 0.92f));
-        for (int i = 0; i < mmN; i++)
-        {
-            int j = i + 1 == mmN ? 0 : i + 1; if (!mmVis[i] || !mmVis[j]) continue;
-            GlQuad(mmLx[i], mmLy[i], mmLx[j], mmLy[j], mmRx[j], mmRy[j], mmRx[i], mmRy[i]);
-        }
-        GlColor(new Color(0.92f, 0.94f, 0.97f, 0.85f));
-        float wEdge = Mathf.Max(1f, S(0.8f));
-        for (int i = 0; i < mmN; i++)
-        {
-            int j = i + 1 == mmN ? 0 : i + 1; if (!mmVis[i] || !mmVis[j]) continue;
-            GlLine(mmLx[i], mmLy[i], mmLx[j], mmLy[j], wEdge);
-            GlLine(mmRx[i], mmRy[i], mmRx[j], mmRy[j], wEdge);
-        }
-        if (mmVis[0]) { GlColor(Color.white); GlLine(mmLx[0], mmLy[0], mmRx[0], mmRy[0], Mathf.Max(1.5f, S(1.4f))); } // start / finish
-
-        // rivals in team colours; the cars just ahead and behind in the running order get a white ring
-        int ahead = -1, behind = -1;
-        for (int r = 0; r < ordN; r++) if (ord[r] == 0) { if (r > 0) ahead = ord[r - 1] - 1; if (r + 1 < ordN) behind = ord[r + 1] - 1; break; }
-        float rd = S(2.7f), rr = S(4.1f);
-        for (int i = 0; i < rivals.Count; i++)
-        {
-            var c = rivals[i].car; float dx = (float)c.x - px, dy = (float)c.y - py;
-            float sx = ox + (dx * fy - dy * fx) * k, sy = oy - (dx * fx + dy * fy) * k;
-            if (sx < inner.xMin - rr || sx > inner.xMax + rr || sy < inner.yMin - rr || sy > inner.yMax + rr) continue;
-            if (i == ahead || i == behind) { GlColor(i == ahead ? Color.white : new Color(1f, 1f, 1f, 0.7f)); GlDisc(sx, sy, rr); }
-            GlColor(new Color(0.03f, 0.035f, 0.05f, 0.9f)); GlDisc(sx, sy, rd + S(0.6f));
-            GlColor(mmCol[i]); GlDisc(sx, sy, rd);
-        }
-        // the player: an arrow pointing up, white outline, racing red
-        float a = S(5.2f);
-        GlColor(Color.white);
-        GlTri(ox, oy - a * 1.25f, ox - a * 0.95f, oy + a, ox, oy + a * 0.45f); GlTri(ox, oy - a * 1.25f, ox, oy + a * 0.45f, ox + a * 0.95f, oy + a);
-        a *= 0.62f;
-        GlColor(new Color(1f, 0.16f, 0.1f));
-        GlTri(ox, oy - a * 1.25f, ox - a * 0.95f, oy + a, ox, oy + a * 0.45f); GlTri(ox, oy - a * 1.25f, ox, oy + a * 0.45f, ox + a * 0.95f, oy + a);
-        GlEnd();
     }
 
     // Graphics level (a setting). Auto starts at Medium and steps down if the phone cannot hold about 50 fps.
@@ -528,8 +400,14 @@ public partial class GameManager : MonoBehaviour
     // ---------------------------------------------------------------- input
     int steerFinger = -1; float steerAnchorX; float dragSteer;
     float pedalGas, pedalBrake;
-    Rect GasRect => new Rect(Screen.width - S(98), Screen.height - S(196), S(84), S(180));
-    Rect BrakeRect => tilt ? new Rect(S(14), Screen.height - S(196), S(100), S(180)) : new Rect(Screen.width - S(204), Screen.height - S(126), S(96), S(110));
+    // The pedals as drawn (GasDraw / BrakeDraw, ~72 % of the old 84 x 180 / 100 x 180 / 96 x 110: Adi, smaller) and
+    // their touch zones (GasRect / BrakeRect: the drawn pedal plus a margin, so a thumb that lands a little off still
+    // presses it; the two zones never overlap). The pedal travel is measured on the drawn pedal (PedalAmount).
+    Rect GasDraw => new Rect(Screen.width - S(74), Screen.height - S(146), S(60), S(130));
+    Rect BrakeDraw => tilt ? new Rect(S(14), Screen.height - S(146), S(72), S(130)) : new Rect(Screen.width - S(148), Screen.height - S(96), S(66), S(80));
+    Rect GasRect => PedalZone(GasDraw, tilt ? 16 : 4, 14);
+    Rect BrakeRect => tilt ? PedalZone(BrakeDraw, 14, 16) : PedalZone(BrakeDraw, 16, 4);
+    Rect PedalZone(Rect d, float left, float right) => new Rect(d.x - S(left), d.y - S(16), d.width + S(left + right), d.height + S(32));
     float S(float v) => v * Screen.height / 390f; // layout units match the web version (390 px tall landscape phone)
 
     int gasFinger = -1, brakeFinger = -1;
@@ -548,8 +426,8 @@ public partial class GameManager : MonoBehaviour
                 if (GasRect.Contains(p)) gasFinger = t.fingerId;
                 else if (BrakeRect.Contains(p)) brakeFinger = t.fingerId;
             }
-            if (t.fingerId == gasFinger) { if (!ended) { gasT = gasMode == 1 ? 1f : PedalAmount(GasRect, p); gasSeen = true; } continue; }
-            if (t.fingerId == brakeFinger) { if (!ended) { brkT = brakeMode == 1 ? 1f : PedalAmount(BrakeRect, p, 1.5f); brakeSeen = true; } continue; }
+            if (t.fingerId == gasFinger) { if (!ended) { gasT = gasMode == 1 ? 1f : PedalAmount(GasDraw, p); gasSeen = true; } continue; }
+            if (t.fingerId == brakeFinger) { if (!ended) { brkT = brakeMode == 1 ? 1f : PedalAmount(BrakeDraw, p, 1.5f); brakeSeen = true; } continue; }
             if (!tilt && p.x < Screen.width * 0.42f && p.y > S(60))
             {
                 if (t.phase == TouchPhase.Began || steerFinger < 0) { steerFinger = t.fingerId; steerAnchorX = p.x; }
@@ -858,6 +736,7 @@ public partial class GameManager : MonoBehaviour
                 LineCheck(simTime); // the timing line, every step (idx is before the step here)
                 if (WorldBuilder.Height != null) car.grade = playground ? 0 : WorldBuilder.Height.GradeAlong(car.x, car.y, car.heading, idx);
                 car.deployMap = !playground && line != null && line.deploy != null && idx >= 0 && idx < line.deploy.Length ? line.deploy[idx] : 1; // same energy strategy as the AI
+                TyreScrub(); // sliding wears the tread x3 (player only, TyrePit.cs)
                 car.Step(PostInput(PsInput(StartInput(input))), H); // the start: revs only on the grid, launch clutch after lights out; PsInput: serving a live penalty (PenaltyServe.cs); PostInput: the cool-down lap's autopilot (PostRace.cs)
                 StartAfterStep();
                 double preVx = car.vx, preVy = car.vy; // Wall does not turn the car, so the body-frame change is the real one
@@ -1548,9 +1427,9 @@ public partial class GameManager : MonoBehaviour
         DrawLookBack(); // LOOK BACK button (GameManagerLookBack.cs)
         DrawStartLights(); // the five red lights (GameManagerStart.cs)
 
-        // pedals (drawn inside their touch rects; the rects themselves are unchanged)
-        Pedal(GasRect, pedalGas, new Color(0.13f, 0.86f, 0.45f), "GAS");
-        Pedal(BrakeRect, pedalBrake, new Color(1f, 0.24f, 0.2f), "BRAKE");
+        // pedals (drawn smaller than their touch zones: GasDraw / BrakeDraw inside GasRect / BrakeRect)
+        Pedal(GasDraw, pedalGas, new Color(0.13f, 0.86f, 0.45f), "GAS");
+        Pedal(BrakeDraw, pedalBrake, new Color(1f, 0.24f, 0.2f), "BRAKE");
         if (!tilt) DrawSteerHint();
 
         if (Time.realtimeSinceStartup < 8f)
@@ -1599,7 +1478,7 @@ public partial class GameManager : MonoBehaviour
     void Pedal(Rect r, float v, Color c, string label)
     {
         v = Mathf.Clamp01(v);
-        float rad = 16f;
+        float rad = 13f;
         if (v > 0.02f) UiKit.Rect(new Rect(r.x - S(3), r.y - S(3), r.width + S(6), r.height + S(6)), new Color(c.r, c.g, c.b, 0.16f * v), rad + 3f); // glow
         UiKit.Rect(r, new Color(0.02f, 0.025f, 0.035f, 0.26f), rad);
         if (v > 0.01f)
@@ -1614,7 +1493,7 @@ public partial class GameManager : MonoBehaviour
         // no border (Adi): the fill, ribs and label show where the pedal is
         // grip ribs and the label
         float gx = r.x + r.width * 0.3f, gw = r.width * 0.4f;
-        for (int i = 0; i < 3; i++) UiKit.Rect(new Rect(gx, r.y + S(14) + i * S(6), gw, S(1.6f)), new Color(1f, 1f, 1f, 0.16f), 1f);
-        UiKit.TextShadow(new Rect(r.x, r.yMax - S(24), r.width, S(16)), label, UiKit.Bold, 8f, new Color(1f, 1f, 1f, 0.8f), TextAnchor.MiddleCenter);
+        for (int i = 0; i < 3; i++) UiKit.Rect(new Rect(gx, r.y + S(11) + i * S(5), gw, S(1.4f)), new Color(1f, 1f, 1f, 0.16f), 1f);
+        UiKit.TextShadow(new Rect(r.x, r.yMax - S(20), r.width, S(14)), label, UiKit.Bold, 7f, new Color(1f, 1f, 1f, 0.8f), TextAnchor.MiddleCenter);
     }
 }

@@ -960,6 +960,125 @@ if (args.Length > 0 && args[0] == "audit")
 //  out-lap: lap 1 from a rolling start on cold tyres (the blanket temperature) against the same lap on tyres at their
 //  best temperature; then a stint at the wear multiplier until the tyres are gone: lap times, wear, carcass temperature
 //  and the lowest grip factor of each lap (temperature x compound x wear).
+// ---- tyre feel: dotnet run -- tyrefeel [circuit] ----
+// Pure check, changes nothing. With the game's "Strong" tyre rules (TyreRules.Apply(strong): tyreLoss x1.5, heat
+// capacity x0.6, heat share per set), (a) the grip factor against the carcass temperature for S / M / H and the lap
+// time at a held temperature (heat capacity made huge so the temperature stays put; an AI "ace" lap, the 2nd of 2);
+// (b) tread worn per second (x1 wear, Soft) rolling normally, cornering, a racing lap's mean, heavy wheelspin, a
+// front lock-up, an understeer scrub and a power slide, on flat ground (the friction-power wear of FormulaCar).
+if (args.Length > 0 && args[0] == "tyrefeel")
+{
+    string cid = args.Length > 1 ? args[1] : "suzuka";
+    int ti = Array.FindIndex(FormulaSim.Circuits.All, d => d.id == cid); var def = FormulaSim.Circuits.All[ti]; var t2 = def.Build();
+    var line = RacingLine.Compute(t2, new CarConfig()); var hf = t2.h != null ? new HeightField(t2) : null;
+    var ace = new DriverProfile { name = "ace", pace = 1, consistency = 1, aggression = 0.5 };
+    TyreRules.Strong = true;
+    CarConfig Cfg(int s, double mult)
+    {
+        var c = new CarConfig { fuelStart = 30, fuelFlow = 0, compound = (Compound)s };
+        TyreRules.Apply(c, mult, true); TyreRules.Fit(c, s);
+        return c;
+    }
+    // laps from a rolling start: (lap time, wear gained in the lap, mean tyre C)
+    double slideShare = 0;
+    List<(double t, double w, double tc)> Drive(CarConfig c, int laps, bool scrub = false)
+    {
+        double baseJ = c.wearPerJ; int slideN = 0, allN = 0;
+        var d = new AiDriver(t2, line, c, ace, AiTuning.For(ti)); var res = new List<(double, double, double)>();
+        int i0 = t2.N - 40; d.Place(i0, line.off[i0], line.speed[i0] * 0.7);
+        double tt = 0, w0 = 0; int st = 0, lapSeen = d.lap;
+        while (d.lap <= laps && tt < laps * 200)
+        {
+            if (st++ % 4 == 0)
+            {
+                d.Think(4 * H, tt, null, null, -1, 0); WheelContact.Update(t2, line, d.car, d.idx, d.lateral, 1); if (hf != null) d.car.grade = hf.Grade(d.car.x, d.car.y, d.car.heading);
+                if (d.lap != lapSeen) { double w = Math.Max(d.car.wearF, d.car.wearR); if (lapSeen >= 1) res.Add((d.lastLap, w - w0, 0.5 * (d.car.tyreTF + d.car.tyreTR))); w0 = w; lapSeen = d.lap; }
+            }
+            if (d.lap >= laps) { allN++; if (TyreRules.SlideWear(d.car) > 1) slideN++; }
+            if (scrub) d.car.cfg.wearPerJ = baseJ * TyreRules.SlideWear(d.car); // (AiDriver drives a clone of c)
+            d.car.Step(d.LastInput, H); tt += H;
+        }
+        slideShare = allN > 0 ? (double)slideN / allN : 0;
+        return res;
+    }
+    var cs = Cfg(0, 1);
+    Console.WriteLine($"{def.name}: Strong rules: tyreLoss {cs.tyreLoss:F3} (x{TyreRules.TempLossK}), heat cap {cs.tyreHeatCap:F0} J/K, blanket {cs.tyreStart:F0} C, grip floor 0.75");
+    Console.WriteLine("(a) grip factor (compound grip x temperature factor, Soft at its best = 1.000) and AI lap time with the tyres held at that temperature");
+    double[] temps = { 50, 70, 85, 95, 105, 115, 130, 145 };
+    Console.WriteLine("  set  window       " + string.Join("", temps.Select(t => $"{t,8:F0}C")));
+    double softBest = double.NaN;
+    for (int s = 0; s < 3; s++)
+    {
+        var cmp = CompoundTable.Defs[s];
+        string g = "", lt = "";
+        double best = double.NaN; var times = new double[temps.Length];
+        for (int k = 0; k < temps.Length; k++)
+        {
+            double e = (temps[k] - cmp.opt) / cmp.window, f = cmp.grip * Math.Max(0.75, 1 - cs.tyreLoss * e * e);
+            g += $"{f,9:F3}";
+            var c = Cfg(s, 1e-3); c.tyreStart = temps[k]; c.tyreHeatCap = 1e15; c.tyreSurface = false;
+            var r = Drive(c, 2); times[k] = r.Count > 1 ? r[1].t : double.NaN;
+        }
+        var cOpt = Cfg(s, 1e-3); cOpt.tyreStart = cmp.opt; cOpt.tyreHeatCap = 1e15; cOpt.tyreSurface = false;
+        var ro = Drive(cOpt, 2); best = ro.Count > 1 ? ro[1].t : double.NaN; if (s == 0) softBest = best;
+        for (int k = 0; k < temps.Length; k++) lt += $"{times[k] - best,+9:+0.00;-0.00}";
+        Console.WriteLine($"  {TyreSets.Letter[s]}    {cmp.opt - cmp.window:F0}-{cmp.opt + cmp.window:F0} C  grip " + g.TrimStart() );
+        Console.WriteLine($"       at {cmp.opt:F0} C {best:F2} s ({best - softBest:+0.00;-0.00} vs S)  lap s vs best " + lt.TrimStart());
+    }
+
+    Console.WriteLine("(b) tread worn per second at x1 wear (Soft, Strong heat; %/s of the tread, the worse axle; multiply by the race's wear setting)");
+    double lastScrub = 0, steerC = 0.1;
+    double Rate(Func<FormulaCar, CarInput> setup, Func<FormulaCar, CarInput> act, CarConfig c, double settle, double dur, out string note)
+    {
+        double r0 = Rate1(setup, act, c, settle, dur, false, out note);
+        lastScrub = Rate1(setup, act, c, settle, dur, true, out _);
+        return r0;
+    }
+    double Rate1(Func<FormulaCar, CarInput> setup, Func<FormulaCar, CarInput> act, CarConfig c, double settle, double dur, bool scrub, out string note)
+    {
+        double baseJ = c.wearPerJ; double steer0 = steerC;
+        var car = new FormulaCar(c);
+        for (int i = 0; i < (int)(settle / H); i++) car.Step(setup(car), H);
+        double wF = car.wearF, wR = car.wearR, tMax = Math.Max(car.tyreTF, car.tyreTR); int lockN = 0, spinN = 0, n = (int)(dur / H);
+        for (int i = 0; i < n; i++) { if (scrub) c.wearPerJ = baseJ * TyreRules.SlideWear(car); car.Step(act(car), H); if (car.lockF || car.lockR) lockN++; if (car.spinR) spinN++; tMax = Math.Max(tMax, Math.Max(car.tyreTF, car.tyreTR)); }
+        double rF = (car.wearF - wF) / dur * 100, rR = (car.wearR - wR) / dur * 100;
+        c.wearPerJ = baseJ; steerC = steer0;
+        note = $"ay {car.ay / 9.81:F2} g, slip angle F {car.alphaF * 57.3:F1} R {car.alphaR * 57.3:F1} deg, front {rF:F4} rear {rR:F4} %/s, locked {lockN * 100 / n}% spin {spinN * 100 / n}% of the time, tyres up to {tMax:F0} C, end {Math.Sqrt(car.vx * car.vx + car.vy * car.vy) * 3.6:F0} km/h";
+        return Math.Max(rF, rR);
+    }
+    var lapS = Drive(Cfg(0, 1), 3, true); double lapRateS = lapS.Count > 2 ? lapS[2].w / lapS[2].t * 100 : double.NaN;
+    var lap = Drive(Cfg(0, 1), 3); double lapRate = lap.Count > 2 ? lap[2].w / lap[2].t * 100 : double.NaN;
+    var rows = new List<(string name, double rate, double scrub, string note)>();
+    rows.Add(("racing lap mean (AI ace, lap 3)", lapRate, lapRateS, lap.Count > 2 ? $"{lap[2].t:F1} s lap, {lap[2].w * 100:F2}% worn, tyres {lap[2].tc:F0} C, sliding {slideShare * 100:F1}% of the lap" : ""));
+    // cruise: hold 200 km/h on a straight
+    CarInput Hold(FormulaCar car, double v0) { double v = car.vx; return new CarInput(0, Math.Clamp(0.4 + (v0 - v) * 0.5, 0, 1), Math.Clamp((v - v0 - 1) * 0.3, 0, 1)); }
+    { var c = Cfg(0, 1); double r = Rate(car => { if (car.vx < 1) car.vx = 200 / 3.6; return Hold(car, 200 / 3.6); }, car => Hold(car, 200 / 3.6), c, 4, 5, out string nt); rows.Add(("rolling straight 200 km/h", r, lastScrub, nt)); }
+    // steady corner at (kmh, g): a yaw-rate controller holds the radius, throttle holds the speed
+    CarInput Corner(FormulaCar car, double v0, double glat)
+    {
+        double R = v0 * v0 / (glat * 9.81), v = Math.Sqrt(car.vx * car.vx + car.vy * car.vy);
+        steerC = Math.Clamp(steerC + 1.5 * (v / R + car.r) * H, -1, 1); // (steer + = right turns r negative)
+        return new CarInput(steerC, Math.Clamp(0.3 + (v0 - v) * 0.6, 0, 1), Math.Clamp((v - v0 - 1) * 0.3, 0, 1));
+    }
+    foreach (var (kmh, gl) in new[] { (130.0, 1.5), (130.0, 2.2) })
+    { var c = Cfg(0, 1); steerC = 0.1; double r = Rate(car => { if (car.vx < 1) car.vx = kmh / 3.6; return Corner(car, kmh / 3.6, gl); }, car => Corner(car, kmh / 3.6, gl), c, 4, 4, out string nt); rows.Add(($"steady corner {kmh:F0} km/h {gl:F1} g", r, lastScrub, nt)); }
+    // heavy wheelspin: 60 km/h in 2nd, TC off, full throttle for 1.5 s
+    { var c = Cfg(0, 1); c.tc = TcMode.Off; double r = Rate(car => { if (car.vx < 1) car.vx = 60 / 3.6; return Hold(car, 60 / 3.6); }, car => new CarInput(0, 1, 0), c, 2, 1.5, out string nt); rows.Add(("wheelspin: full throttle 60 km/h, TC off", r, lastScrub, nt)); }
+    // traction control on: the same launch
+    { var c = Cfg(0, 1); c.tc = TcMode.Low; double r = Rate(car => { if (car.vx < 1) car.vx = 60 / 3.6; return Hold(car, 60 / 3.6); }, car => new CarInput(0, 1, 0), c, 2, 1.5, out string nt); rows.Add(("same launch, TC Low", r, lastScrub, nt)); }
+    // lock-up: full brake from 200 km/h, ABS off, 1.2 s
+    { var c = Cfg(0, 1); c.abs = false; double r = Rate(car => { if (car.vx < 1) car.vx = 200 / 3.6; return Hold(car, 200 / 3.6); }, car => new CarInput(0, 0, 1), c, 3, 1.2, out string nt); rows.Add(("lock-up: full brake 200 km/h, ABS off", r, lastScrub, nt)); }
+    { var c = Cfg(0, 1); c.abs = true; double r = Rate(car => { if (car.vx < 1) car.vx = 200 / 3.6; return Hold(car, 200 / 3.6); }, car => new CarInput(0, 0, 1), c, 3, 1.2, out string nt); rows.Add(("same stop, ABS on", r, lastScrub, nt)); }
+    // understeer scrub: steady 100 km/h 1.8 g, then full lock for 1.5 s (throttle holding speed)
+    { var c = Cfg(0, 1); steerC = 0.1; double r = Rate(car => { if (car.vx < 1) car.vx = 100 / 3.6; return Corner(car, 100 / 3.6, 1.8); }, car => new CarInput(1, Math.Clamp(0.3 + (100 / 3.6 - car.vx) * 0.6, 0, 1), 0), c, 4, 1.5, out string nt); rows.Add(("understeer scrub: full lock at 100 km/h", r, lastScrub, nt)); }
+    // power slide: steady 100 km/h 1.8 g, then full throttle with the steering held, TC off, 1.5 s
+    { var c = Cfg(0, 1); c.tc = TcMode.Off; steerC = 0.1; double held = 0; double r = Rate(car => { if (car.vx < 1) car.vx = 100 / 3.6; var u = Corner(car, 100 / 3.6, 1.8); held = steerC; return u; }, car => new CarInput(held, 1, 0), c, 4, 1.5, out string nt); rows.Add(("power slide: full throttle mid-corner, TC off", r, lastScrub, nt)); }
+    double norm = rows[0].rate, roll = rows[1].rate;
+    Console.WriteLine($"  {"",-44} {"physics",8}        x lap  x roll | with the player's scrub rule (x{TyreRules.SlideWearK} while sliding)");
+    foreach (var (name, rate, scrub, note) in rows) Console.WriteLine($"  {name,-44} {rate,8:F4} %/s {rate / norm,6:F1} {rate / roll,6:F1} | {scrub,8:F4} %/s {scrub / norm,6:F1} x lap   ({note})");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "tyres")
 {
     var inv = CultureInfo.InvariantCulture;
