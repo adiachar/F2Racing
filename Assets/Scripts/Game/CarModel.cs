@@ -605,6 +605,7 @@ public partial class CarModel : MonoBehaviour
         // soft blob + a tighter, darker occlusion core under the floor + the four tyre contact patches, in one texture
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = ContactShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         AddSunShadow(root, res);
+        AddSunBlob(root);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer; // cars have their own sun (LightBake)
         if (!rival) root.AddComponent<CarEnvTarget>(); // the player's car picks the trackside reflection cube (CarEnv.cs)
         return cm;
@@ -793,6 +794,7 @@ public partial class CarModel : MonoBehaviour
         sh.transform.localScale = new Vector3(2.4f, 5.6f, 1);
         var sr = sh.GetComponent<MeshRenderer>(); sr.sharedMaterial = ContactShadowMat(); sr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         AddSunShadow(root, res);
+        AddSunBlob(root);
         foreach (var tr in root.GetComponentsInChildren<Transform>(true)) tr.gameObject.layer = LightBake.CarLayer;
         cm.blockBase = cm.blockR.Count;
         cm.Flush();
@@ -1234,6 +1236,94 @@ public partial class CarModel : MonoBehaviour
             pb.SetVector(SunId, new Vector4(s.x, s.y, s.z, a));
             pb.SetVector(AwayId, new Vector4(aw.x, aw.y, aw.z, Vector3.Dot(aw, cp)));
             r.SetPropertyBlock(pb);
+        }
+    }
+
+    // ---- sun blob (Adi, 27 Nov: "there should be light direction"): a second, softer quad with the car's floor plan
+    // blurred, pushed away from the sun by how high the sun is (~0.4 m at 48 deg, ~0.9 m low in the morning), so the
+    // shadow falls to one side of the car the way the light does. Not the silhouette (that projected shadow looked
+    // bad): a soft shape, one blended quad per car, no extra geometry. Off in shade, at night, in rain, near the
+    // horizon and when the car is off the ground (as SunShadowFollow). Rivals sample the bake every 4th frame.
+    public static bool SunBlob = true;
+    static Material sunBlobMat;
+    static Material SunBlobMat()
+    {
+        if (sunBlobMat != null) return sunBlobMat;
+        var blob = Resources.Load<Shader>("CarBlob");
+        if (blob == null || !blob.isSupported) return null;
+        sunBlobMat = new Material(blob) { name = "CarSunBlob" };
+        // texel -> car space: quad 2.8 m x 6.0 m centred at z = 0.25; the floor plan as ContactShadowMat, blurred ~0.4 m
+        var tex = WorldBuilder.Tex(64, 144, (u, v, px, py) =>
+        {
+            float x = (u - 0.5f) * 2.8f, z = 0.25f + (v - 0.5f) * 6.0f;
+            float hw = z > 1.1f ? Mathf.Lerp(0.62f, 0.25f, Mathf.Clamp01((z - 1.1f) / 1.6f)) : z < -1.5f ? Mathf.Lerp(0.66f, 0.45f, Mathf.Clamp01((-1.5f - z) / 0.7f)) : 0.72f;
+            float ex = Mathf.Abs(x) - hw, ez = Mathf.Max(z - 2.75f, -2.25f - z);
+            float d = Mathf.Sqrt(Mathf.Max(ex, 0) * Mathf.Max(ex, 0) + Mathf.Max(ez, 0) * Mathf.Max(ez, 0)) + Mathf.Min(Mathf.Max(ex, ez), 0);
+            float a = Mathf.Clamp01(1f - (d + 0.12f) / 0.5f); a = a * a * (3f - 2f * a);
+            return new Color(0.02f, 0.025f, 0.035f, a * 0.85f);
+        });
+        tex.wrapMode = TextureWrapMode.Clamp;
+        sunBlobMat.mainTexture = tex;
+        return sunBlobMat;
+    }
+    static void AddSunBlob(GameObject root)
+    {
+        if (!SunBlob || PlanarShadows) return;
+        var mat = SunBlobMat(); if (mat == null) return;
+        var q = GameObject.CreatePrimitive(PrimitiveType.Quad); Destroy(q.GetComponent<Collider>());
+        q.name = "SunBlob"; q.transform.SetParent(root.transform, false);
+        q.transform.localPosition = new Vector3(0, 0.03f, 0.25f); q.transform.localRotation = Quaternion.Euler(90, 0, 0);
+        q.transform.localScale = new Vector3(2.8f, 6.0f, 1);
+        var r = q.GetComponent<MeshRenderer>(); r.sharedMaterial = mat;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
+        r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off; r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+        r.enabled = false;
+        q.AddComponent<SunBlobFollow>();
+    }
+    sealed class SunBlobFollow : MonoBehaviour
+    {
+        static readonly int AlphaId = Shader.PropertyToID("_Alpha"), CarLitId = Shader.PropertyToID("_CarLit");
+        MeshRenderer r; MaterialPropertyBlock pb; Transform car, body; bool isRival, litSet; float lit = 1f, lastA = -1f; int phase;
+        Vector3 basePos;
+        void Awake()
+        {
+            r = GetComponent<MeshRenderer>(); car = transform.parent; pb = new MaterialPropertyBlock();
+            var cm = car != null ? car.GetComponent<CarModel>() : null;
+            if (cm != null) { body = cm.body; isRival = cm.rival; }
+            basePos = transform.localPosition;
+            phase = Random.Range(0, 4);
+        }
+        void OnDisable() { litSet = false; }
+        void LateUpdate()
+        {
+            if (!LightBake.Active || LightBake.Night || car == null) { r.enabled = false; return; }
+            Vector3 s = LightBake.ToSun;
+            float a = Mathf.Clamp01((s.y - 0.08f) / 0.12f);
+            a *= Mathf.Clamp01(Sky.SunShare / 1.1f) * Mathf.Clamp01((0.95f - Weather.Wetness) / 0.95f);
+            var cam = Camera.main;
+            if (a < 0.01f || (cam != null && (cam.transform.position - car.position).sqrMagnitude > 110f * 110f)) { r.enabled = false; litSet = false; return; }
+            Vector3 cp = car.position, n = car.up;
+            float gy = WorldBuilder.Height != null ? WorldBuilder.H(cp.x, cp.z) : cp.y;
+            float lift = Mathf.Max(0f, cp.y - gy);
+            if (body != null) lift += Mathf.Max(0f, Vector3.Dot(body.position - cp, n));
+            a *= 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.06f, 0.4f, lift));
+            if (!isRival) lit = Shader.GetGlobalFloat(CarLitId);
+            else if (!litSet || (Time.frameCount + phase) % 4 == 0)
+            {
+                float l = LightBake.Sun(cp.x, cp.z, cp.y + 0.6f);
+                lit = !litSet ? l : lit + (l - lit) * Mathf.Min(1f, Time.deltaTime * 16f);
+                litSet = true;
+            }
+            a *= Mathf.Clamp01(lit);
+            if (a < 0.01f) { r.enabled = false; return; }
+            r.enabled = true;
+            // pushed away from the sun: the body's shadow centre (~0.42 m up) along the rays, at most 1.3 m
+            float hl = Mathf.Sqrt(s.x * s.x + s.z * s.z);
+            float off = hl > 1e-4f ? Mathf.Min(0.42f * hl / Mathf.Max(s.y, 0.05f), 1.3f) : 0f;
+            Vector3 aw = hl > 1e-4f ? new Vector3(-s.x, 0f, -s.z) * (off / hl) : Vector3.zero;
+            Vector3 lp = car.InverseTransformVector(aw);
+            transform.localPosition = basePos + new Vector3(lp.x, 0f, lp.z);
+            if (Mathf.Abs(a - lastA) > 0.01f) { lastA = a; pb.SetFloat(AlphaId, a); r.SetPropertyBlock(pb); }
         }
     }
 

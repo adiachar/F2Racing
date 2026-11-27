@@ -1,12 +1,13 @@
 // The car's soft contact shadow (CarModel.ContactShadowMat): what Unity's Unlit/Transparent did (alpha-blended
 // texture, fog), plus the ghost fade (CarGhost.cs, penalty): the blob pales with _Ghost instead of dithering
-// (it is already transparent). Used only by the cars' blob quads.
+// (it is already transparent). Used only by the cars' blob quads: the contact blob and the sun blob (_Alpha).
 Shader "F2/CarBlob"
 {
     Properties
     {
         _MainTex ("Base (RGB) Trans (A)", 2D) = "white" {}
         _Ghost ("Ghost fade (penalty, CarGhost.cs)", Range(0, 1)) = 0
+        _Alpha ("Opacity (the sun blob: CarModel.SunBlobFollow)", Range(0, 1)) = 1
     }
     SubShader
     {
@@ -21,14 +22,14 @@ Shader "F2/CarBlob"
             #pragma fragment frag
             #pragma multi_compile_fog
             #include "UnityCG.cginc"
-            sampler2D _MainTex; float4 _MainTex_ST; float _Ghost;
+            sampler2D _MainTex; float4 _MainTex_ST; float _Ghost, _Alpha;
             struct appdata { float4 vertex : POSITION; float2 uv : TEXCOORD0; };
             struct v2f { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; UNITY_FOG_COORDS(1) };
             v2f vert(appdata v) { v2f o; o.pos = UnityObjectToClipPos(v.vertex); o.uv = TRANSFORM_TEX(v.uv, _MainTex); UNITY_TRANSFER_FOG(o, o.pos); return o; }
             fixed4 frag(v2f i) : SV_Target
             {
                 fixed4 c = tex2D(_MainTex, i.uv);
-                c.a *= (fixed)(1.0 - 0.6 * _Ghost); // (a multiply: nothing to branch on)
+                c.a *= (fixed)((1.0 - 0.6 * _Ghost) * _Alpha); // (multiplies: nothing to branch on)
                 UNITY_APPLY_FOG(i.fogCoord, c);
                 return c;
             }

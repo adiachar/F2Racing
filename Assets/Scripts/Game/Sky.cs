@@ -172,13 +172,17 @@ public class Sky : MonoBehaviour
         switch (t)
         {
             case TimeOfDay.Kind.Morning: // low, cool-gold sun
-                sun.transform.rotation = Quaternion.Euler(PhotoSunElev(t, 24f), -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.76f; carSun = 1.50f;
+                sun.transform.rotation = Quaternion.Euler(PhotoSunElev(t, 24f), -110, 0); sun.color = new Color(1f, 0.93f, 0.82f); sun.intensity = 1.85f; ambGain = 0.66f; carSun = 1.50f; // (shade 0.76 -> 0.66, cars' trilight -12 %: Adi, light direction)
                 sky = new Color(0.36f, 0.44f, 0.60f);
-                RenderSettings.ambientSkyColor = new Color(0.60f, 0.68f, 0.80f); RenderSettings.ambientEquatorColor = new Color(0.54f, 0.55f, 0.56f);
+                RenderSettings.ambientSkyColor = new Color(0.53f, 0.60f, 0.70f); RenderSettings.ambientEquatorColor = new Color(0.48f, 0.48f, 0.49f);
                 break;
             case TimeOfDay.Kind.Afternoon:
-                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.78f; ambGain = 0.70f; carSun = 1.55f; // ambGain 0.80 put shade at 59 % of sun; RR3 sits at 45-55 %
-                RenderSettings.ambientSkyColor = new Color(0.62f, 0.69f, 0.81f); RenderSettings.ambientEquatorColor = new Color(0.55f, 0.56f, 0.57f);
+                // (27 Nov, Adi: "flat lighting, no light direction"): the sun 48 -> 40 deg (side light on walls, trunks and car
+                // flanks, shadows reach further; the photo sky's own sun is 8 deg higher, not visible as a mismatch), shade
+                // 0.70 -> 0.60 of the bake's sky gain and the cars' trilight -12 %: a clearly lit side and a shaded side
+                sun.transform.rotation = Quaternion.Euler(40f, -35f, 0f);
+                sun.color = new Color(1f, 0.95f, 0.86f); sun.intensity = 1.78f; ambGain = 0.60f; carSun = 1.55f; // ambGain 0.80 put shade at 59 % of sun; RR3 sits at 45-55 %
+                RenderSettings.ambientSkyColor = new Color(0.55f, 0.61f, 0.72f); RenderSettings.ambientEquatorColor = new Color(0.48f, 0.49f, 0.50f);
                 break;
             case TimeOfDay.Kind.Evening: // golden hour: a strong, low, warm sun lights every wall that faces it
                 sun.transform.rotation = Quaternion.Euler(PhotoSunElev(t, 13f), 70, 0); sun.color = new Color(1f, 0.80f, 0.56f); sun.intensity = 2.0f; ambGain = 1.0f; carSun = 1.72f;

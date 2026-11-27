@@ -229,7 +229,7 @@ fixed4 frag (v2f i) : SV_Target
     half streak = (half)(0.5 + 0.5 * sin(xs * 21.0 + sin(xs * 6.3 + along * 0.013) * 1.7));
     rub *= lerp(1.0, 0.7 + 0.6 * streak, (half)saturate(1.0 - wl * 5.0));
 #endif
-    col *= 1.0 - 0.58 * rub; // rubbered, not black: in the sun the line reads as a clearly darker grey
+    col *= 1.0 - 0.63 * rub; // rubbered, not black: in the sun the line reads as a clearly darker grey
 #ifdef ROAD_HQ
     // ---- tyre marks: single cars' pairs of soft dark lines along and around the racing line, more where the line
     // carries more rubber
@@ -251,7 +251,7 @@ fixed4 frag (v2f i) : SV_Target
     half rimW = (half)min(1.5 * wl, 2.0); // (clamped: no half overflow at the horizon)
     col = lerp(col, _Dust.rgb * 0.45, 0.6 * (half)saturate((abs(lat) - (_HalfWidth - rimW)) / max(rimW, 1e-4)));
     // grime against the kerb / verge: the strip outside the white line is never swept by tyres (oil, rubber dust)
-    col *= 1.0 - 0.14 * Band(abs(lat), _HalfWidth - 0.16, _HalfWidth + 1.0, max(wl, 0.04)) * (1.0 - kerbF);
+    col *= 1.0 - 0.22 * Band(abs(lat), _HalfWidth - 0.16, _HalfWidth + 1.0, max(wl, 0.04)) * (1.0 - kerbF);
 
     // ---- marbles: off the line in the corners (where the rubber is heaviest) worn-off pellets darken the surface a
     // little (their mean only: single pellets boiled under the car at speed)
@@ -360,6 +360,8 @@ fixed4 frag (v2f i) : SV_Target
         // (kerb white 0.62 x the line paint: in the sun the blocks clipped to 251; the red is held down in _KerbRed)
         half3 kc = lerp(_Paint.rgb * 0.62, _KerbRed.rgb, red);
         kc = lerp(kc, _KerbYellow.rgb, (half)isSaus);
+        // (27 Nov, Adi: "too neat"): paint aged by sun and grime: a fifth less saturated, 8 % darker, slightly warm
+        kc = lerp(kc, (half3)dot(kc, half3(0.3, 0.59, 0.11)) * half3(1.0, 0.97, 0.92), 0.2) * 0.92;
         // the cast concrete under the paint (pores, trowel marks, hairline cracks; RoadDetail G, std 0.15 near the
         // camera, flat by ~5 cm per pixel) and a trace of the asphalt grain (stones the tyres dragged on)
         kc *= 0.96 + 0.42 * kgrain + 0.06 * grain;
@@ -391,8 +393,11 @@ fixed4 frag (v2f i) : SV_Target
         // (still under the car at speed), more at apexes and exits (wear)
         half wsk = (half)(0.5 + 0.5 * sin(ac * 17.0 + sin(along * 0.11 + ac * 3.0) * 1.3));
         half innerH = (half)saturate(1.0 - ac * 1.6);
-        half smear = (half)kwear * (0.3 + 0.7 * innerH * innerH) * lerp(0.75, 0.45 + 0.8 * wsk, (half)saturate(1.0 - wkm * 6.0)) * (0.6 + 0.8 * blotch);
-        kc *= 1.0 - 0.6 * saturate(smear) * (1.0 - 0.4 * (half)isSaus); // (0.45 -> 0.6: the kerbs looked new)
+        half smear = (half)(0.4 + 0.6 * kwear) * (0.3 + 0.7 * innerH * innerH) * lerp(0.75, 0.45 + 0.8 * wsk, (half)saturate(1.0 - wkm * 6.0)) * (0.6 + 0.8 * blotch);
+        kc *= 1.0 - 0.72 * saturate(smear) * (1.0 - 0.4 * (half)isSaus); // (0.45 -> 0.6 -> 0.72 and every kerb some: they looked new)
+        // grime smudges over the whole kerb (metre-scale, the asphalt clusters' layout): brown-grey road film
+        half smudge = saturate(0.35 + clus * 3.0) * (0.5 + 0.5 * blotch);
+        kc = lerp(kc, kc * half3(0.72, 0.68, 0.62), smudge * 0.5);
         // paint chipped off at the block edges (grey base showing), a ragged edge in ~6 cm cells across; near only
         float cell = floor(ac * 23.0);
         float blk = floor(along * 2.0 / per);
@@ -401,7 +406,7 @@ fixed4 frag (v2f i) : SV_Target
         kc = lerp(kc, half3(0.40, 0.39, 0.37) * (0.9 + 0.5 * grain), chip * 0.8);
         // dirt and gravel dust on the outer part: a soft film (more beside the traps and on exits), grit specks near
         half outerD = (half)saturate(ac * 2.6 - 1.45 + isSaus * 0.5);
-        kc = lerp(kc, _Dust.rgb * (0.72 + 0.5 * grain), saturate(outerD * (0.15 + 0.55 * (half)kDirt) * (0.5 + blotch)) * 0.55);
+        kc = lerp(kc, _Dust.rgb * (0.72 + 0.5 * grain), saturate(outerD * (0.25 + 0.6 * (half)kDirt) * (0.5 + blotch)) * 0.7);
         half spk = saturate((grain - 0.1) * 7.0) * (half)fine * outerD * (half)saturate(kDirt * 2.0 - 0.3);
         kc = lerp(kc, half3(0.60, 0.56, 0.50), spk * 0.55);
 #else
@@ -424,7 +429,7 @@ fixed4 frag (v2f i) : SV_Target
     half eb = (half)saturate((ae - (_HalfWidth - reach)) / max(reach * 0.7, 0.2));
     eb *= eb;
     half3 soil = _Dust.rgb * half3(0.98, 0.9, 0.78) * (0.95 + 0.3 * grain);
-    col = lerp(col, soil, eb * ed * (0.5 - 0.15 * kerbF) * (0.55 + 0.45 * blotch) * (1.0 - 0.6 * rub));
+    col = lerp(col, soil, eb * (half)max((float)ed, 0.35) * (0.6 - 0.15 * kerbF) * (0.55 + 0.45 * blotch) * (1.0 - 0.6 * rub)); // (every edge some dirt: Adi, 'too neat')
     half stoneP = saturate(eb * (ed - 0.25) * 0.75);
     col = lerp(col, half3(0.62, 0.58, 0.52), stoneP * 0.12);
 
