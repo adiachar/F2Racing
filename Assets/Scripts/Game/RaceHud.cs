@@ -222,6 +222,14 @@ public partial class GameManager
         UiKit.Outline(r, SetCol[set], 999f, 1.1f);
         TF(r, SetLetter[set], UiKit.Bold, r.height / S(1) * 0.56f, SetCol[set], TextAnchor.MiddleCenter);
     }
+    // tyre temperature box: blue when cold, white in the window, red when hot (k = (T - opt) / window)
+    static readonly Color HeatCold = new Color(0.25f, 0.55f, 1f), HeatOk = new Color(0.93f, 0.95f, 0.98f), HeatHot = new Color(1f, 0.2f, 0.16f);
+    static Color TyreHeatCol(double k)
+    {
+        if (double.IsNaN(k)) return HudGrey;
+        float f = Mathf.Clamp((float)k, -1f, 1f);
+        return f < 0f ? Color.Lerp(HeatOk, HeatCold, -f) : Color.Lerp(HeatOk, HeatHot, f);
+    }
     static Color TempCol(double t, double opt, double win)
     {
         if (double.IsNaN(t)) return HudGrey;
@@ -760,7 +768,7 @@ public partial class GameManager
         // colour = temperature against the fitted compound's window) and the compound letter above and below
         var cd = CompoundTable.Get(car.cfg.compound);
         bool temps = car.cfg.chassis && !double.IsNaN(car.tyreTF);
-        DrawTyreWidget(new Rect(dx + S(197), dy + S(3), S(48), dh - S(6)), chipY, chipH);
+        DrawTyreWidget(new Rect(dx + S(197), dy + S(3), S(48), dh - S(6)), chipY, chipH, wings && temps ? dx - gap - wingW * 0.5f : dx + S(221));
         if (!wings) return;
 
         // left wing: tyre temperatures and tread, brake temperatures
@@ -772,13 +780,12 @@ public partial class GameManager
             for (int wh = 0; wh < 4; wh++)
             {
                 bool front = wh < 2, left = (wh & 1) == 0;
-                double t = front ? car.tyreTF : car.tyreTR, wear = front ? car.wearF : car.wearR;
+                // the temperature grip feels (as the tyre widget and the COLD / HOT chip), not the bare carcass
+                double t = front ? (double.IsNaN(twGripTF) ? car.tyreTF : twGripTF) : (double.IsNaN(twGripTR) ? car.tyreTR : twGripTR);
                 var br = new Rect(left ? lw.x + S(8) : lw.xMax - S(8) - bw2, front ? dy + S(6) : dy + S(28), bw2, bh2);
-                UiKit.Rect(br, TyreTempCol((t - cd.opt) / cd.window), 3.5f); // (the tyre widget's colours, TyrePit.cs)
+                UiKit.Rect(br, TyreHeatCol((t - cd.opt) / cd.window), 3.5f); // blue cold -> white right -> red hot (Adi)
                 TF(br, hTyre[wh].Get(HudNum.Int(Mathf.RoundToInt((float)t)), 0.5f), UiKit.Bold, 6.2f, new Color(0.04f, 0.04f, 0.05f), TextAnchor.MiddleCenter);
-                float tread = Mathf.Clamp01(1 - (float)wear), wx = left ? br.x - S(4) : br.xMax + S(2);
-                UiKit.Rect(new Rect(wx, br.y, S(2), bh2), DimSeg, 1f);
-                UiKit.Rect(new Rect(wx, br.yMax - bh2 * tread, S(2), bh2 * tread), tread < 0.3f ? HudRed : Color.white, 1f);
+                // (no tread bar here: the tyre widget on the dash shows wear; Adi: keep this box simple)
             }
             if (!double.IsNaN(car.brakeTF))
             {
