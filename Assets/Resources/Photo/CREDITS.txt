@@ -9,3 +9,4 @@ sky_morning_hq.png  Poly Haven autumn_field_puresky    https://polyhaven.com/a/a
 sky_overcast.png    Poly Haven overcast_soil_puresky   https://polyhaven.com/a/overcast_soil_puresky
 means.txt      linear mean colour of each albedo (EnvTex.PhotoMean)
 lm_*.png       Adi's asset pack (RacingSim_Assets, CC0): shared materials of the landmark models (Tools/Models/pack_landmarks.py)
+crowd_standing.png  standing fans for the fence crowds (Tools/Photo/pack_standing.py): renders of Microsoft Rocketbox avatars from Adi's asset pack, MIT (licence text: Resources/Textures/CREDITS.txt)

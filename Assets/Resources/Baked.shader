@@ -24,6 +24,7 @@
 //           spectator bobs and sways by a texel or two (per-person phase, _Time), a cheap shimmer of movement.
 //  plain    (no keyword) with _WinGlow 1: the town facades (EnvTex.Facade, alpha 0 = glass) get the same lit windows
 //           at dusk / night (_F2Night) as F2_ATLAS, a share of the bays by hash.
+//  F2_PEOPLE standing spectators behind the catch fences (Trackside.Spectators): cut out (clip), shimmer as F2_CROWD.
 //  F2_CROWD the trackside crowd (TracksideArt.Crowd): uv1.rgb = the seat block's colour, applied where the crowd
 //           texture's alpha is 1 (empty seats, seat backs); people keep their colours. The same per-person shimmer
 //           (32 people per tile across, 4 bands), sampled with the unshifted gradients so no mip seams show.
@@ -51,7 +52,7 @@ Shader "F2/Baked"
             #pragma fragment frag
             #pragma target 3.0
             #pragma multi_compile __ F2_GRADE_LOW // Low graphics level: cheap grade (Grade.cginc)
-            #pragma multi_compile_local __ F2_LAND F2_ATLAS F2_GLASS F2_CROWD
+            #pragma multi_compile_local __ F2_LAND F2_ATLAS F2_GLASS F2_CROWD F2_PEOPLE
             #pragma multi_compile __ FOG_LINEAR // the game only uses linear fog (Sky.cs): 2 variants, not 4 (multi_compile_fog)
             #include "UnityCG.cginc"
             #include "Grade.cginc"
@@ -200,6 +201,13 @@ Shader "F2/Baked"
                 float ca = c.a;
                 c.rgb *= lerp(half3(1, 1, 1), tc, (half)saturate((ca - 0.06) * 1.064));
                 float gmA = ca < 0.03 ? 1.0 : 0.0;
+            #elif defined(F2_PEOPLE)
+                // standing spectators behind the catch fences (Trackside.Spectators, Photo/crowd_standing: 34 people
+                // per tile across, 2 bands): cut out, each person bobbing / swaying a little as in the stands. The only
+                // Baked variant with a clip: its own material, drawn after the opaque world (queue 2450)
+                float2 off = Shimmer(floor(i.uv * float2(34.0, 2.0)), float2(1.0 / 2048.0, 1.0 / 512.0));
+                fixed4 c = tex2Dgrad(_MainTex, i.uv + off, ddx(i.uv), ddy(i.uv));
+                clip((float)c.a - 0.45);
             #elif defined(F2_CROWD)
                 float2 cuv = i.uv * float2(32.0, 4.0);
                 float2 off = Shimmer(floor(cuv), float2(1.0 / 512.0, 1.0 / 128.0));

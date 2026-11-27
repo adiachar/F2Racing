@@ -45,12 +45,13 @@ public static class Trackside
     }
 
     // build state (load time only)
-    static Layer atlasL, crowdL, fenceL, grimeL, postL;
-    static MB A, C, F, G, Pm;       // the current chunk of each layer (P: thin posts, in short chunks culled by distance)
+    static Layer atlasL, crowdL, fenceL, grimeL, postL, peopleL;
+    static MB A, C, F, G, Pm, Pp;  // Pp: standing spectators behind the fences (cut-out people, Baked F2_PEOPLE)       // the current chunk of each layer (P: thin posts, in short chunks culled by distance)
     static int chunkPts = 125, postPts = 20;
     static Color tint = Color.white;
     static Vector4 seatTint = new Vector4(0.36f, 0.37f, 0.40f, 1f); // crowd quads: colour of the empty seats (F2_CROWD)
-    static Material crowdMat;
+    static Material crowdMat, peopleMat;
+    static readonly List<Renderer> peopleRs = new List<Renderer>();
     static readonly int[] BoldAds = { 1, 6, 4, 0, 15, 12, 3, 8, 13, 2 };
     // Per-circuit stand layouts (gap list item 18): where the real grandstands are, in priority order (the graphics
     // level takes the first 1 / 3 / 5, as the generic layout did). Each entry: { s (m along the lap, from the circuit's
@@ -76,7 +77,7 @@ public static class Trackside
     static void SetChunk(int i)
     {
         int c = i / chunkPts;
-        A = atlasL.Get(c); C = crowdL.Get(c); F = fenceL.Get(c); G = grimeL.Get(c); Pm = postL.Get(i / postPts);
+        A = atlasL.Get(c); C = crowdL.Get(c); F = fenceL.Get(c); G = grimeL.Get(c); Pm = postL.Get(i / postPts); Pp = peopleL.Get(c);
     }
 
     // a vertical face from p0 to p1 cut into equal pieces of about pieceLen, each showing the whole region r: one precast
@@ -126,6 +127,21 @@ public static class Trackside
         tint = ct; aoOn = false;
         Quad(C, a + up * y, b + up * y, b + back + up * (y + h), a + back + up * (y + h), -D + up * 0.2f,
              new Vector4(u0, band * 0.25f + 0.01f, u0 + len, band * 0.25f + 0.24f));
+        tint = keepT; aoOn = keepAo;
+    }
+
+    // spectators standing behind the catch fence: a cut-out card of real people (Photo/crowd_standing, 2 bands; one
+    // tile = 34 people x ~0.52 m = 17.7 m), feet at y, 2.24 m tall (the tile's 256 px), leaning back a touch. Unlit by
+    // AO (people, not walls). Band 1 = cheering.
+    const float PeopleTile = 17.7f, PeopleH = 2.24f;
+    static void Spectators(Vector3 a, Vector3 b, float y, Vector3 D, int band, int seed)
+    {
+        Vector3 up = Vector3.up, back = D * 0.12f;
+        float u0 = Rand(seed, 71), len = (b - a).magnitude / PeopleTile;
+        var keepT = tint; bool keepAo = aoOn;
+        tint = Color.white * (0.92f + 0.12f * Rand(seed, 72)); aoOn = false;
+        Quad(Pp, a + up * y, b + up * y, b + back + up * (y + PeopleH), a + back + up * (y + PeopleH), -D + up * 0.2f,
+             new Vector4(u0, band * 0.5f + 0.002f, u0 + len, band * 0.5f + 0.498f));
         tint = keepT; aoOn = keepAo;
     }
 
@@ -437,7 +453,7 @@ public static class Trackside
         bool fences = !low && WorldBuilder.BakeReady && cutSh != null && cutSh.isSupported;
         bool decals = !low && Resources.Load<Material>("Shadow") != null; decalsOn = decals;
         var grid = new Grid(t, 25f); var big = new Grid(t, 60f);
-        atlasL = new Layer(); crowdL = new Layer(); fenceL = new Layer(); grimeL = new Layer(); postL = new Layer();
+        atlasL = new Layer(); crowdL = new Layer(); fenceL = new Layer(); grimeL = new Layer(); postL = new Layer(); peopleL = new Layer();
         chunkPts = Mathf.Max(20, Mathf.RoundToInt(250f / ds)); postPts = Mathf.Max(8, Mathf.RoundToInt(40f / ds));
         tint = Color.white; aoOn = true;
         SetChunk(0);
@@ -1379,6 +1395,62 @@ public static class Trackside
             }
         }
 
+        // ---------------------------------------------------------------- fans behind the catch fences (every circuit)
+        // (Adi, 27 Nov: "add more people behind the fence watching the race ... it feels boring"): groups of standing
+        // fans, two deep, behind the catch fence wherever there is room: more at the corners and on the main straight,
+        // 20-70 m long, every 120-300 m round the lap, both sides. Real people (cut-out cards, one material, one draw per
+        // chunk that has them, Baked F2_PEOPLE), footprints keep the woods and the town's buildings off them.
+        // High: up to 26 groups; Medium: 14; Low: none. A street circuit (Monaco) keeps its balconies instead.
+        if (!low && !street && EnvTex.PhotoTex("crowd_standing") != null)
+        {
+            int maxG = high ? 26 : 14, groups = 0, segN = Mathf.Max(1, Mathf.RoundToInt(6f / ds));
+            var gFeet = new List<Vector4>();
+            int iStep = Mathf.Max(1, Mathf.RoundToInt(10f / ds));
+            int nextAt = Mathf.RoundToInt(60f / ds);
+            for (int i = 0; i < N && groups < maxG; i += iStep)
+            {
+                if (i < nextAt) continue;
+                // more where it is exciting: the corners (curvature) and the start straight (s < 400 m or the last 300 m)
+                float sAt = i * ds, hot = Mathf.Clamp01(curvAbs[i] * 150f) + ((sAt < 400f || sAt > N * ds - 300f) ? 0.6f : 0f);
+                if (Rand(i, 140) > 0.25f + 0.6f * hot) continue;
+                float glen = 20f + 50f * Rand(i, 141);
+                int gN = Mathf.Max(segN, Mathf.RoundToInt(glen / ds));
+                int placed = 0;
+                for (int pass = 0; pass < 2 && placed == 0; pass++)
+                {
+                    int sg = (Rand(i, 142) < 0.5f) == (pass == 0) ? 1 : -1, s = SI(sg);
+                    gFeet.Clear();
+                    for (int j = 0; j + segN <= gN; j += segN)
+                    {
+                        int i0 = W(i + j), i1 = W(i + j + segN);
+                        if (!fenceZ[s, i0] || !fenceZ[s, i1] || InPit(i0, sg) || InPit(i1, sg)) continue;
+                        var p0 = t.pts[i0]; var p1 = t.pts[i1];
+                        Vector3 D0 = Nrm(p0) * sg, D1 = Nrm(p1) * sg;
+                        SetChunk(i0);
+                        float back = 3.2f + 0.4f * Rand(i0, 143);
+                        float o0 = Off(i0, sg) + back, o1 = Off(i1, sg) + back;
+                        Vector3 a = P(p0) + D0 * o0, b = P(p1) + D1 * o1, mid = (a + b) * 0.5f;
+                        float len = (b - a).magnitude;
+                        if (len < 2f || len > 3f * segN * ds) continue;
+                        if (!Free(a, o0 - 2f) || !Free(b, o1 - 2f) || !Free(mid, (o0 + o1) * 0.5f - 2f)) continue;
+                        int band = Rand(i0, 144) < 0.3f + 0.3f * hot ? 1 : 0;
+                        // a stretch faces the track: a is at the viewer's left when looking out from the track
+                        if (sg > 0) Spectators(b, a, 0f, (D0 + D1).normalized, band, 9900 + i0);
+                        else Spectators(a, b, 0f, (D0 + D1).normalized, band, 9900 + i0);
+                        gFeet.Add(new Vector4(mid.x, mid.z, b.x - a.x, b.z - a.z));
+                        placed++;
+                    }
+                    foreach (var fp in gFeet)
+                    {
+                        var dir = new Vector3(fp.z, 0f, fp.w);
+                        AddFoot(new Vector3(fp.x, 0f, fp.y), dir, dir.magnitude * 0.5f, 1.4f);
+                    }
+                }
+                if (placed > 0) { groups++; nextAt = i + gN + Mathf.RoundToInt((120f + 180f * Rand(i, 145)) / ds); }
+                else nextAt = i + Mathf.RoundToInt(40f / ds);
+            }
+        }
+
         // ---------------------------------------------------------------- circuit furniture behind the barriers
         // What a real circuit is cluttered with, all in the atlas mesh (no draw calls): TV camera towers on the outside of
         // the corners (scaffold wrapped in mesh, a platform with a banner, the camera), a recovery crane parked behind the
@@ -1824,7 +1896,11 @@ public static class Trackside
         // ---------------------------------------------------------------- banner bridges over the straights
         if (!low)
         {
-            float[] want2 = monza ? new[] { 520f, 2650f, 4650f } : new[] { (float)t.length * 0.3f, (float)t.length * 0.65f };
+            // (Adi, 27 Nov: more overhead banner bridges, it should look lived in): 5 round the lap on High, 3 on Medium
+            // (each searches up to 300 m on for a straight; skipped where there is none)
+            float L = (float)t.length;
+            float[] want2 = monza ? (high ? new[] { 520f, 1180f, 2650f, 3950f, 4650f } : new[] { 520f, 2650f, 4650f })
+                                  : (high ? new[] { L * 0.14f, L * 0.31f, L * 0.48f, L * 0.65f, L * 0.82f } : new[] { L * 0.2f, L * 0.45f, L * 0.7f });
             int bn = 0;
             foreach (float sw2 in want2)
             {
@@ -2096,6 +2172,13 @@ public static class Trackside
         crowdMat = WorldBuilder.Mat(Color.white, TracksideArt.Crowd(), 0.1f);
         Emit(parent, "Trackside", atlasL, atlasMat, null);
         Emit(parent, "Crowd", crowdL, crowdMat, null);
+        var standTex = EnvTex.PhotoTex("crowd_standing");
+        if (standTex != null)
+        {
+            peopleMat = WorldBuilder.Mat(Color.white, standTex, 0.1f);
+            peopleRs.Clear();
+            Emit(parent, "Spectators", peopleL, peopleMat, peopleRs);
+        }
         Emit(parent, "Posts", postL, atlasMat, postRs); // thin posts: hidden beyond ~85 m (TracksideLod)
         if (fences)
         {
@@ -2108,7 +2191,7 @@ public static class Trackside
             var gm = new Material(Resources.Load<Material>("Shadow")) { mainTexture = TracksideArt.Grime() };
             Emit(Late.transform, "Grime", grimeL, gm, optional);
         }
-        atlasL = crowdL = fenceL = grimeL = postL = null; A = C = F = G = Pm = null;
+        atlasL = crowdL = fenceL = grimeL = postL = peopleL = null; A = C = F = G = Pm = Pp = null;
     }
 
     static void Emit(Transform parent, string name, Layer layer, Material mat, List<Renderer> collect)
@@ -2159,6 +2242,14 @@ public static class Trackside
         // the crowd on the baked shader: seat-block colours and the people's shimmer (Baked.shader F2_CROWD)
         if (crowdMat != null && crowdMat.shader != null && crowdMat.shader.name == "F2/Baked") crowdMat.EnableKeyword("F2_CROWD");
         crowdMat = null;
+        // fence spectators: cut out on the baked shader (F2_PEOPLE), after the opaque world; anything else would show
+        // the cards as solid rectangles, so they are hidden then
+        if (peopleMat != null)
+        {
+            if (peopleMat.shader != null && peopleMat.shader.name == "F2/Baked") { peopleMat.EnableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2450; }
+            else foreach (var r in peopleRs) if (r != null) r.enabled = false;
+        }
+        peopleMat = null; peopleRs.Clear();
         // glass reflections (Baked.shader F2_GLASS) once the atlas material is on the baked shader; TracksideLod switches them
         TracksideLod.Glass = glassMat != null && glassMat.shader != null && glassMat.shader.name == "F2/Baked" && WorldBuilder.Gfx >= 2 ? glassMat : null;
         if ((optional.Count > 0 || postRs.Count > 0) && root != null) TracksideLod.Attach(root, optional.ToArray(), postRs.ToArray());
