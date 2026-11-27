@@ -38,7 +38,7 @@ namespace FormulaSim
     public static class TyreRules
     {
         public const int Auto = 0, Real = 1;
-        public static double TempLossK = 1.5, HeatCapK = 0.6;
+        public static double TempLossK = 2.0, HeatCapK = 0.6; // 2.0 (was 1.5): Adi wants grip to clearly rise as the tyres warm
         // by tyre set (S, M, H, I, W); the default CarConfig.tyreHeatShare is 0.45
         public static readonly double[] HeatShare = { 0.39, 0.45, 0.52, 0.39, 0.39 };
         public static readonly double[] Fixed = { 0, 1, 3, 6, 10 };
