@@ -7,7 +7,9 @@
 //     roofs, the procedural Terrain, RealWorld's far tree lines, land chunks over 600 m) is one renderer, so Unity's
 //     frustum culling can never drop any of it: every vertex of it is shaded every frame, behind the camera too. Such
 //     a mesh is cut into tiles of 256 m or more (at least ~600 triangles each) by triangle centre; every vertex
-//     attribute is kept as it is (format and dimension), so the look is identical. The road ("Road") stays whole.
+//     attribute is kept as it is (format and dimension), so the look is identical. The road ("Road") is cut into tiles too (same
+//     positions, normals and UVs, so the seams are exact), so frustum culling drops the stretches behind and far ahead; it is never
+//     occlusion-culled by the terrain test (a wrongly hidden road tile would be a hole in the lap).
 //     Meshes under a LODGroup (RealWorld's culled blocks) or with scripts / children on them are left alone.
 //  2. View sets. The lap is cut into 50 m sectors. A sector's camera region is its centreline (plus 15 m either way)
 //     widened to half the track width + 30 m each side (the pit lane, chase and far-chase offsets) and from 3 m below
@@ -104,7 +106,7 @@ public class SectorVisibility : MonoBehaviour
         var list = root.GetComponentsInChildren<MeshRenderer>(true);
         foreach (var r in list)
         {
-            if (r == null || Skip(r.gameObject) || r.name == "Road") continue;
+            if (r == null || Skip(r.gameObject)) continue; // (the road is cut into tiles too: it was 50k triangles drawn whole every frame)
             var mf = r.GetComponent<MeshFilter>(); if (mf == null) continue;
             var m = mf.sharedMesh;
             if (m == null || !m.isReadable || m.subMeshCount != 1 || m.GetTopology(0) != MeshTopology.Triangles) continue;
@@ -317,6 +319,7 @@ public class SectorVisibility : MonoBehaviour
     void BuildSets()
     {
         int N = t.N, n = Rs.Length;
+        var isRoad = new bool[n]; for (int i = 0; i < n; i++) isRoad[i] = Rs[i].name == "Road";
         trackY = new float[N];
         for (int i = 0; i < N; i++) trackY[i] = WorldBuilder.H(t.pts[i].x, t.pts[i].y);
         sectorPts = Mathf.Max(1, Mathf.RoundToInt(SectorLen / (float)t.ds));
@@ -384,7 +387,7 @@ public class SectorVisibility : MonoBehaviour
                 float dx = Mathf.Max(0f, Mathf.Max(b.min.x - hi.x, lo.x - b.max.x)), dy = Mathf.Max(0f, Mathf.Max(b.min.y - hi.y, lo.y - b.max.y)), dz = Mathf.Max(0f, Mathf.Max(b.min.z - hi.z, lo.z - b.max.z));
                 float d = Mathf.Sqrt(dx * dx + dy * dy + dz * dz);
                 if (d > Reach[i]) continue;
-                if (Occlusion && d > OccNear && !SeenFromAny(eyes, prof, tops, tStart[i], tStart[i + 1])) continue;
+                if (Occlusion && d > OccNear && !isRoad[i] && !SeenFromAny(eyes, prof, tops, tStart[i], tStart[i + 1])) continue;
                 sets[baseW + (i >> 6)] |= 1UL << (i & 63); count++;
             }
             total += count;

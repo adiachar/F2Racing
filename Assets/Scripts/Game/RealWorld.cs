@@ -601,7 +601,9 @@ public static class RealWorld
                 }
                 float d = Mathf.Sqrt(best);
                 cDist[cj * cnx + ci] = d;
-                cStep[cj * cnx + ci] = d < 260f * k ? 1 : d < 800f * k ? 2 : d < 1600f * k ? 4 : 8;
+                // High (k = 1): full 8 m grid to 210 m (was 260), then 16 m to 600 m (was 800), 32 m to 1200 m (was 1600): the Medium rings; the
+                // 100 m round the car is unchanged. Medium / Low as before (k < 1)
+                cStep[cj * cnx + ci] = k >= 1f ? (d < 210f ? 1 : d < 600f ? 2 : d < 1200f ? 4 : 8) : d < 260f * k ? 1 : d < 800f * k ? 2 : d < 1600f * k ? 4 : 8;
             }
     }
     // height of the terrain mesh at (x, z): the same lattice and triangle split as the chunk's mesh
