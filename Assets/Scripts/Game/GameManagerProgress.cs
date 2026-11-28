@@ -101,6 +101,8 @@ public partial class GameManager
 
     // shot mode (DebugShots.cs menu=): a menu page over the loaded session
     internal void ShotMenu(bool driver) => ui.ShotPage(driver);
+    internal void ShotSetup(bool more) => ui.ShotSetup(more);
+    internal void ShotSettings(int tab) { menuOpen = true; if (settingsUi == null) settingsUi = new SettingsUI(BuildSettings(), Save); settingsUi.tab = tab; } // DebugShots menu=settings tab=0..6
 
     // a quit: scored as last behind every rival, plus DriverRating.QuitCost
     float PgQuitDelta()
