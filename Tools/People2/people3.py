@@ -179,16 +179,18 @@ def lods_of(body, targets):
 
 
 def build_drivers(repo, Q):
-    """public pack bodies: Driver (driver_01) and Driver2 (driver_02); atlas 2048 x 1024 (1024^2 each)"""
-    A = B.Atlas(2048, 1024); bodies = []
-    for i, (folder, name) in enumerate((('driver_01', 'Driver'), ('driver_02', 'Driver2'))):
-        src, body, _ = load(repo, folder, A, (1024 * i, 0, 1024, 1024), Q, driver=True)
-        print(' ', name, 'source tris', len(body[1]))
-        lods = lods_of(body, DRIVER_LODS)
-        var = [[B.finalize(*l) for l in lods]]
-        h = float(body[0][:, 1].max() - body[0][:, 1].min())
-        bodies.append(B.body_record(name, 2, src, Q, var, h))
-        print('   LOD tris', [len(m['I']) for m in var[0]], 'verts', [len(m['P']) for m in var[0]])
+    """public pack bodies: Driver (Adi's new suited driver + helmet, driver_new.py) and Driver2 (driver_02);
+    atlas 2048 x 1536 (Driver 1024^2 suit + tiles below, Driver2 1024^2 at the right)"""
+    import driver_new
+    A = B.Atlas(2048, 1536); bodies = []
+    src, lods, h = driver_new.build(repo, A, Q, (0, 0, 1024, 1024))
+    print('  Driver (driver_new) LOD tris', [len(m['I']) for m in lods], 'verts', [len(m['P']) for m in lods])
+    bodies.append(B.body_record('Driver', 2, src, Q, [lods], h))
+    src, body, _ = load(repo, 'driver_02', A, (1024, 0, 1024, 1024), Q, driver=True)
+    print('  Driver2 source tris', len(body[1]))
+    var = [[B.finalize(*l) for l in lods_of(body, DRIVER_LODS)]]
+    bodies.append(B.body_record('Driver2', 2, src, Q, var, float(body[0][:, 1].max() - body[0][:, 1].min())))
+    print('   LOD tris', [len(m['I']) for m in var[0]], 'verts', [len(m['P']) for m in var[0]])
     A.finish()
     return A, bodies
 
