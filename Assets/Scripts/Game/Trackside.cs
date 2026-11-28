@@ -795,7 +795,7 @@ public static class Trackside
                     float[] stepH = { 0.9f, 0.6f, 0.45f }, stepAt = { 0f, -1.9f, 1.9f };
                     for (int q = 0; q < 3; q++)
                         Box(A, front + D * 3.5f + T * stepAt[q] + up * (y + 0.45f + stepH[q] * 0.5f), T, up, D, 0.9f, stepH[q] * 0.5f, 0.8f, TracksideArt.PaintWhite);
-                    Box(A, mid + up * (y + 4.6f), T, up, D, hlP + 0.5f, 0.15f, hd + 0.5f, TracksideArt.RoofWhite, true);
+                    Box(A, mid + up * (y + 4.6f), T, up, D, hlP + 0.5f, 0.15f, hd + 0.5f, TracksideArt.BuildGrey, true); // (grey: from the heli the white roof glared)
                     // the slab seen from below (the chase and cockpit cameras pass right under it): cool-grey composite
                     // panels in a ~3 m grid, four steel beams across, rows of downlights; a dark shadow gap and a white
                     // trim round the advertiser fascia, sponsor boards on both ends
@@ -2277,7 +2277,7 @@ public static class Trackside
                 }
             }
             mesh.vertices = v; mesh.RecalculateNormals(); mesh.RecalculateBounds();
-            if (fitLog < 3 && v.Length >= 4)
+            if (fitLog < 3 && v.Length >= 4 && (v[0].y + v[1].y) * 0.5f < WorldBuilder.H(v[0].x, v[0].z) + 1.5f)
             {
                 // diagnostics (fans not showing): the land and H under the first card's feet, and which world meshes' boxes
                 // hold a point 1 m above them (what could hide them)
@@ -2322,10 +2322,30 @@ public static class Trackside
             if (peopleMat.shader != null && peopleMat.shader.name == "F2/Baked") { peopleMat.EnableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2450; }
             else foreach (var r in peopleRs) if (r != null) r.enabled = false;
         }
+        if (root != null && peopleRs.Count > 0) { var pr = root.AddComponent<FansProbe>(); pr.rs = peopleRs.ToArray(); } // diagnostics
         peopleMat = null; peopleRs.Clear();
         // glass reflections (Baked.shader F2_GLASS) once the atlas material is on the baked shader; TracksideLod switches them
         TracksideLod.Glass = glassMat != null && glassMat.shader != null && glassMat.shader.name == "F2/Baked" && WorldBuilder.Gfx >= 2 ? glassMat : null;
         if ((optional.Count > 0 || postRs.Count > 0) && root != null) TracksideLod.Attach(root, optional.ToArray(), postRs.ToArray());
         glassMat = null; fenceMat = null; fenceRs.Clear(); optional.Clear(); postRs.Clear();
+    }
+}
+
+// diagnostics (fans not showing, 28 Nov): 6 s into the session, the fence fans' renderers' state, logged once
+public class FansProbe : MonoBehaviour
+{
+    public Renderer[] rs; float t0 = -1f;
+    void Update()
+    {
+        if (t0 < 0f) t0 = Time.realtimeSinceStartup;
+        if (Time.realtimeSinceStartup - t0 < 6f || rs == null) return;
+        var cam = Camera.main; var sb = new System.Text.StringBuilder("Trackside fans probe: cam ");
+        sb.Append(cam != null ? cam.transform.position.ToString("F0") : "none");
+        int off = 0, vis = 0, dis = 0;
+        foreach (var r in rs) { if (r == null) continue; if (r.forceRenderingOff) off++; if (r.isVisible) vis++; if (!r.enabled) dis++; }
+        sb.Append(" renderers ").Append(rs.Length).Append(" forceOff ").Append(off).Append(" visible ").Append(vis).Append(" disabled ").Append(dis);
+        for (int k = 0; k < rs.Length && k < 6; k++) if (rs[k] != null) sb.Append(" [").Append(rs[k].name).Append(' ').Append(rs[k].bounds.center.ToString("F0")).Append(rs[k].forceRenderingOff ? " OFF" : "").Append(rs[k].isVisible ? " vis" : "").Append(" mat ").Append(rs[k].sharedMaterial != null ? rs[k].sharedMaterial.shader.name + " q" + rs[k].sharedMaterial.renderQueue : "null").Append(']');
+        Debug.Log(sb.ToString());
+        rs = null; enabled = false;
     }
 }
