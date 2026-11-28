@@ -38,7 +38,7 @@ namespace FormulaSim
     public static class TyreRules
     {
         public const int Auto = 0, Real = 1;
-        public static double TempLossK = 2.0, HeatCapK = 0.6; // 2.0 (was 1.5): Adi wants grip to clearly rise as the tyres warm
+        public static double TempLossK = 2.0, HeatCapK = 1.0; // 2.0 (was 1.5): Adi wants grip to clearly rise as the tyres warm
         // by tyre set (S, M, H, I, W); the default CarConfig.tyreHeatShare is 0.45
         public static readonly double[] HeatShare = { 0.39, 0.45, 0.52, 0.39, 0.39 };
         public static readonly double[] Fixed = { 0, 1, 3, 6, 10 };
@@ -81,13 +81,23 @@ namespace FormulaSim
         // so this only sharpens it (Tools/PhysicsCheck "tyrefeel": lock-up 8.8x, power slide 6.8x, wheelspin 3.4x,
         // understeer scrub 1.7x a racing lap's mean wear rate before; x3 of that while sliding). The game sets
         // CarConfig.wearPerJ = the base x SlideWear(car) before each physics step (GameManager TyrePit.cs: TyreScrub).
-        public static double SlideWearK = 3;
+        // Nov 27 (Adi: "a spin or a lock-up and the tyre is almost gone"): x8 while sliding (was x3), and an overheated
+        // tyre wears up to x4 more (1 + 2 per window past 0.5 windows over its best), so a hot, sliding tyre goes fast.
+        // HeatCapK 1.0 (was 0.6): temperatures move slower, a spin no longer cooks them in a second.
+        public static double SlideWearK = 8;
         public const double SlideAlpha = 0.14;   // rad, ~8 deg
         public static double SlideWear(FormulaCar car)
         {
             if (!Strong || car == null) return 1;
             bool slide = car.lockF || car.lockR || car.spinR || Math.Abs(car.alphaF) > SlideAlpha || Math.Abs(car.alphaR) > SlideAlpha;
-            return slide ? SlideWearK : 1;
+            double k = slide ? SlideWearK : 1;
+            if (!double.IsNaN(car.tyreTF))
+            {
+                var cd = CompoundTable.Get(car.cfg.compound);
+                double e = (Math.Max(car.tyreTF, car.tyreTR) - cd.opt) / cd.window;
+                if (e > 0.5) k *= Math.Min(4, 1 + 2 * (e - 0.5));
+            }
+            return k;
         }
         // laps a new set lasts before the cliff (wear 0.78) at this multiplier
         public static double LifeLaps(int set, double mult, string circuit) => TyreStrategy.CliffWear * TyreSets.Life(set) / Math.Max(1e-6, TyreStrategy.BaseSoftRate(circuit) * mult * (Strong ? PlanWear : 1));

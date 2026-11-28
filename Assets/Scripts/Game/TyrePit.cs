@@ -15,7 +15,7 @@
 //  * A wet-weather tyre on a dry track overheats and wears fast (Weather.DryRunning, the player's car: FitPlayerSet).
 //  * The HUD's tyre widget (Gran Turismo style, in the dash): car outline, a tread bar per wheel coloured by temperature,
 //    compound letters; a COLD / HOT chip above it while the tyre temperature costs grip.
-//  * Scrub wear: sliding wears the player's tread x3 (TyreScrub; TyreRules.SlideWear), with the tyre rules on.
+//  * Scrub wear: sliding wears the player's tread x8, an overheated tyre up to x4 more (TyreScrub; TyreRules.SlideWear), with the tyre rules on.
 // No per-frame garbage: every string is made when the session starts (the start card's when it opens).
 using FormulaSim;
 using UnityEngine;
