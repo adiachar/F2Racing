@@ -510,14 +510,20 @@ public static class People
         public void Dress(int outfit, Livery l, int seed) { Palette(pal, outfit, l, seed); mpb.SetVectorArray("_Pal", pal); smr.SetPropertyBlock(mpb); }
         // a race driver's suit in a livery (as MenuStudio / PreRace): team colour, a contrasting trim on the accent (stripes,
         // belt, cuffs), the helmet in `helmet` with the team colour as its second colour, dark visor
-        public void DressDriver(Livery l, Color helmet) { DriverPalette(pal, l, helmet); mpb.SetVectorArray("_Pal", pal); smr.SetPropertyBlock(mpb); }
+        public void DressDriver(Livery l, Color helmet) { stance = DriverStance; DriverPalette(pal, l, helmet); mpb.SetVectorArray("_Pal", pal); smr.SetPropertyBlock(mpb); }
         public void Show(bool on) { if (on != shown) { shown = on; go.SetActive(on); } }
         public void Place(Vector3 pos, float yaw) { tr.SetPositionAndRotation(pos, Quaternion.Euler(0, yaw, 0)); tr.localScale = Vector3.one * scale; }
 
         // the pose into the bones (pelvis height from the clip, scaled to this body)
+        public float stance; // degrees the thighs are brought together (drivers: the shared idle clip stands wide, like a fighter)
         public void Apply(PoseBuf p)
         {
             for (int j = 1; j < NJ; j++) b[j].localRotation = p.q[j];
+            if (stance != 0f)
+            {
+                b[JThighL].localRotation = Quaternion.AngleAxis(stance, Vector3.forward) * p.q[JThighL];
+                b[JThighR].localRotation = Quaternion.AngleAxis(-stance, Vector3.forward) * p.q[JThighR];
+            }
             b[JPelvis].localRotation = p.q[0];
             b[JPelvis].localPosition = p.p * body.pscale;
         }
@@ -602,6 +608,7 @@ public static class People
     // the material a body draws with (its pack's textured People2 material, else the palette one): for baked meshes
     public static Material MatOf(int body) => bodies != null && body >= 0 && body < bodies.Length && bodies[body].mat != null ? bodies[body].mat : Mat();
     public static bool IsReal(int body) => bodies != null && body >= 0 && body < bodies.Length && bodies[body].real;
+    public const float DriverStance = 6f; // (feet at hip width instead of ~0.42 m apart)
     public const float LodNear = 15f, LodMid = 45f, LodHero = 9f;
 
     static void P(Vector4[] pal, int i, Color c, float gloss) { var lc = c.linear; pal[i] = new Vector4(lc.r, lc.g, lc.b, gloss); }

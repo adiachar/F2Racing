@@ -8,7 +8,7 @@
 //  * Circuit: the circuit (type, big name, country) and its data rows on the left; the track map drawn as an ink line
 //    with a red start mark on the right, ‹ › beside it, a tap / swipe on the map = next / previous; page dots under it.
 //  * Setup: the session options as a clean 3 x 3 grid of label / value rows with − + text buttons: car, livery,
-//    rivals, rival level, grid, race length, qualifying, weather, time of day; then Start (race / weekend /
+//    rivals, rival level, grid, race length, qualifying, weather, time of day (car, length, grid, weather, time on the main grid; the rest behind "More options"); then Start (race / weekend /
 //    championship hub), Practice and, in a race weekend, Skip qualifying.
 // The content slides in from the side it was entered from (MenuUI.BeginNav); the masthead and the action row stay.
 using FormulaSim;
@@ -254,6 +254,10 @@ public sealed partial class MenuUI
 
     // ================================================================== 3 setup
     static readonly string[] TeamColours = { "Team colours" };
+    // Setup tiles: 0 car, 1 livery, 2 rivals, 3 rival level / difficulty, 4 grid, 5 race length, 6 qualifying, 7 weather, 8 time of day
+    static readonly int[] TilesQuickMain = { 0, 5, 4, 7, 8 }, TilesWeekendMain = { 0, 5, 6, 4, 7, 8 }, TilesChampMain = { 0, 3, 5, 7, 8 };
+    static readonly int[] TilesQuickMore = { 1, 2, 3 }, TilesChampMore = { 1, 2, 4 };
+    bool setupMore;
     Choice DrawSetupStep(ref int map, ref int cls, ref int riv, ref int diff, float x0, float x1, float cTop, float bottom)
     {
         float W = x1 - x0;
@@ -286,12 +290,19 @@ public sealed partial class MenuUI
         UiKit.PushAlpha(e1);
         UiKit.Hair(x0, x1, gy, UiKit.Ink);
         UiKit.PopAlpha();
-        for (int i = 0; i < 9; i++)
+        // the main tiles: car, race length, (qualifying in a weekend), grid, weather, time of day; the rest sits behind "More options"
+        int[] mainT = champ ? TilesChampMain : mode == ModeWeekend ? TilesWeekendMain : TilesQuickMain, moreT = champ ? TilesChampMore : TilesQuickMore;
+        int tileN = mainT.Length + (setupMore ? moreT.Length : 0);
+        float mw = UiKit.Width("More options", UiKit.Heavy, 11.5f) + U(8);
+        if (UiKit.Press(new Rect(x1 - Mathf.Max(mw, U(110)), cTop + U(14), Mathf.Max(mw, U(110)), U(30)), true, out float pm)) setupMore = !setupMore;
+        UiKit.Text(new Rect(x1 - Mathf.Max(mw, U(110)), cTop + U(14), Mathf.Max(mw, U(110)), U(30)), setupMore ? "Fewer options" : "More options", UiKit.Heavy, 11.5f, Color.Lerp(UiKit.Ink, UiKit.Red, pm), TextAnchor.MiddleRight);
+        for (int i = 0; i < tileN; i++)
         {
+            int t = i < mainT.Length ? mainT[i] : moreT[i - mainT.Length];
             int col = i % 3, row = i / 3;
             var r = new Rect(x0 + col * (tw + cg), gy + row * th, tw, th);
             float ei = UiKit.Enter(KeySetup, 1 + col + row);
-            switch (i)
+            switch (t)
             {
                 case 0:
                     if (champ) SetupTile(r, "Car  ·  tier", CarConfig.ClassNames[Season.Active ? Season.TierClass : CarConfig.ClassNames.Length - 1], 0, 1, false, 0, ei); // the career's tier decides

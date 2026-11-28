@@ -832,7 +832,7 @@ public partial class GameManager
                     liv = Livery.ForTeam(TeamIndex(w), new Color(w.r, w.g, w.b)); helm = liv.secondary; helmTop = liv.primary;
                 }
                 var r = new People.Rig(root.transform, body, People.GCap, "PodiumDriver" + q);
-                r.SetLod(0); DressDriver(r, liv, helm, helmTop, 31 + who * 7);
+                r.SetLod(0); r.stance = People.DriverStance; DressDriver(r, liv, helm, helmTop, 31 + who * 7);
                 drvYaw[q] = Yaw(F); r.Place(spot[q], drvYaw[q]);
                 drv[q] = r;
             }
@@ -1117,8 +1117,8 @@ public partial class GameManager
             {
                 // a crane pushing in on the three of them
                 float k = UiKit.EaseInOut(u / hand0);
-                pos = Vector3.Lerp(O + F * 15f + up * 5f + R * 3f, O + F * 10.5f + up * 3.2f + R * 1.6f, k);
-                look = O + up * 0.6f - F * 0.4f; fov = 36f;
+                pos = Vector3.Lerp(O + F * 8.6f + up * 3.3f + R * 1.8f, O + F * 6.2f + up * 2.2f + R * 0.9f, k);
+                look = O + up * 0.9f - F * 0.4f; fov = 33f;
             }
             else if (u < lift0)
             {
@@ -1142,14 +1142,14 @@ public partial class GameManager
             {
                 // the champagne: an orbit round the podium
                 float k = (u - champ) / (wide2 - champ), ang = Mathf.Lerp(-38f, 38f, UiKit.EaseInOut(k));
-                pos = O + (Quaternion.Euler(0f, ang, 0f) * F) * 7.2f + up * 1.9f;
+                pos = O + (Quaternion.Euler(0f, ang, 0f) * F) * 5.4f + up * 1.7f;
                 look = O + up * 0.7f - F * 0.2f; fov = 44f;
             }
             else
             {
                 // the high wide to end on
                 float k = (u - wide2) / Mathf.Max(0.1f, len - wide2);
-                pos = O + F * (17f + 3f * k) + up * (6f + 1.5f * k) - R * 4f;
+                pos = O + F * (9.5f + 2f * k) + up * (3.6f + 1f * k) - R * 2.6f;
                 look = O + up * 0.5f; fov = 34f;
             }
         }

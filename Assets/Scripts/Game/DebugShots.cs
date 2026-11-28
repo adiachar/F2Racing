@@ -250,9 +250,11 @@ public class DebugShots : MonoBehaviour
         bool ack = Get(q, "ack", "0") == "1";
         int drSet = GetInt(q, "dr", -1); if (drSet >= 0) MenuProfile.SetDr(drSet); // driver rating before the shots (DriverRating.cs)
         string menuPage = Get(q, "menu", "").ToLowerInvariant();
-        if (menuPage == "home" || menuPage == "driver")
+        if (menuPage == "home" || menuPage == "driver" || menuPage == "setup" || menuPage == "settings")
         {
-            gm.ShotMenu(menuPage == "driver");
+            if (menuPage == "setup") gm.ShotSetup(GetInt(q, "more", 0) == 1);
+            else if (menuPage == "settings") gm.ShotSettings(GetInt(q, "tab", 0));
+            else gm.ShotMenu(menuPage == "driver");
             float ts = Time.realtimeSinceStartup; int f0 = Time.frameCount;
             while (Time.frameCount - f0 < 8 || Time.realtimeSinceStartup - ts < settle + warm) yield return null;
             Title("SHOT_READY 0 1 s=0 cam=" + menuPage);

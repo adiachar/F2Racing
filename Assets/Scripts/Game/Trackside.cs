@@ -2255,10 +2255,8 @@ public static class Trackside
     // the fence fans stand on the land behind the barriers, which often rises above the circuit's height field (banks,
     // the real terrain): after Drape (cards at H), move every vertex by land - H at its spot (load time only).
     // land(x, z) = the land mesh's height, NaN where unknown (then the card stays at H).
-    static int fitLog;
     public static void FitFans(System.Func<float, float, float> land)
     {
-        fitLog = 0;
         int moved = 0; float most = 0f;
         foreach (var r in peopleRs)
         {
@@ -2277,18 +2275,6 @@ public static class Trackside
                 }
             }
             mesh.vertices = v; mesh.RecalculateNormals(); mesh.RecalculateBounds();
-            if (fitLog < 3 && v.Length >= 4 && (v[0].y + v[1].y) * 0.5f < WorldBuilder.H(v[0].x, v[0].z) + 1.5f)
-            {
-                // diagnostics (fans not showing): the land and H under the first card's feet, and which world meshes' boxes
-                // hold a point 1 m above them (what could hide them)
-                fitLog++;
-                var f0 = (v[0] + v[1]) * 0.5f; float g0 = land(f0.x, f0.z);
-                var sb = new System.Text.StringBuilder("Trackside fans fit: foot ").Append(f0.ToString("F1")).Append(" land ").Append(g0.ToString("F2")).Append(" H ").Append(WorldBuilder.H(f0.x, f0.z).ToString("F2")).Append(" in:");
-                var probe = f0 + Vector3.up;
-                foreach (var rr in Object.FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None))
-                    if (rr.enabled && rr.bounds.Contains(probe) && rr.bounds.size.x < 400f && rr.bounds.size.z < 400f) sb.Append(' ').Append(rr.name).Append(rr.bounds.min.y.ToString("F1")).Append('/').Append(rr.bounds.max.y.ToString("F1"));
-                Debug.Log(sb.ToString());
-            }
         }
         Debug.Log("Trackside fans: " + moved + " feet fitted to the land, largest move " + most.ToString("0.0") + " m");
     }
@@ -2296,16 +2282,6 @@ public static class Trackside
     // after LightBake.Apply: fences get the alpha-tested baked shader; the optional layers follow the graphics level
     public static void AfterBake(GameObject root)
     {
-        // diagnostics (fans not showing, 28 Nov): WebGL shot URL fantest=5 hides the catch fences, 6 = no sector culling
-        int ft = 0;
-        if (Application.platform == RuntimePlatform.WebGLPlayer)
-        {
-            string url = Application.absoluteURL; int at = url.IndexOf("fantest=");
-            if (at >= 0 && at + 8 < url.Length) ft = url[at + 8] - '0';
-        }
-        if (ft == 5) foreach (var r in fenceRs) if (r != null) { r.enabled = false; optional.Remove(r); }
-        if (ft == 6) SectorVisibility.Enabled = false;
-        if (ft > 0) Debug.Log("Trackside fans: fantest " + ft);
         if (fenceMat != null)
         {
             var sh = Resources.Load<Shader>("BakedCutout");
@@ -2332,7 +2308,22 @@ public static class Trackside
             if (peopleMat.shader != null && peopleMat.shader.name == "F2/Baked") { peopleMat.EnableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2450; }
             else foreach (var r in peopleRs) if (r != null) r.enabled = false;
         }
-        if (root != null && peopleRs.Count > 0) { var pr = root.AddComponent<FansProbe>(); pr.rs = peopleRs.ToArray(); } // diagnostics
+        // the bake lit the fence fans like walls: under the trees, in the fences' and stands' shade and with the contact
+        // shade at their feet most came out near black (0.04-0.08 of 0.5) and vanished into the dark woods. People are
+        // lit from the open sky and the track side: a floor of 60 % light, the bake's hue and sun kept above it.
+        int lifted = 0;
+        foreach (var r in peopleRs)
+        {
+            var mf = r != null ? r.GetComponent<MeshFilter>() : null; if (mf == null || mf.sharedMesh == null) continue;
+            var cols = mf.sharedMesh.colors; if (cols == null || cols.Length == 0) continue;
+            for (int k = 0; k < cols.Length; k++)
+            {
+                var c = cols[k]; float m = Mathf.Max(c.r, Mathf.Max(c.g, c.b));
+                if (m < 0.3f) { float f = 0.3f / Mathf.Max(m, 0.02f); c.r = Mathf.Lerp(0.3f, c.r * f, 0.5f); c.g = Mathf.Lerp(0.3f, c.g * f, 0.5f); c.b = Mathf.Lerp(0.3f, c.b * f, 0.5f); cols[k] = c; lifted++; }
+            }
+            mf.sharedMesh.colors = cols;
+        }
+        Debug.Log("Trackside fans: " + lifted + " vertices lifted out of the bake's shade");
         peopleMat = null; peopleRs.Clear();
         // glass reflections (Baked.shader F2_GLASS) once the atlas material is on the baked shader; TracksideLod switches them
         TracksideLod.Glass = glassMat != null && glassMat.shader != null && glassMat.shader.name == "F2/Baked" && WorldBuilder.Gfx >= 2 ? glassMat : null;
@@ -2341,21 +2332,3 @@ public static class Trackside
     }
 }
 
-// diagnostics (fans not showing, 28 Nov): 6 s into the session, the fence fans' renderers' state, logged once
-public class FansProbe : MonoBehaviour
-{
-    public Renderer[] rs; float t0 = -1f;
-    void Update()
-    {
-        if (t0 < 0f) t0 = Time.realtimeSinceStartup;
-        if (Time.realtimeSinceStartup - t0 < 6f || rs == null) return;
-        var cam = Camera.main; var sb = new System.Text.StringBuilder("Trackside fans probe: cam ");
-        sb.Append(cam != null ? cam.transform.position.ToString("F0") : "none");
-        int off = 0, vis = 0, dis = 0;
-        foreach (var r in rs) { if (r == null) continue; if (r.forceRenderingOff) off++; if (r.isVisible) vis++; if (!r.enabled) dis++; }
-        sb.Append(" renderers ").Append(rs.Length).Append(" forceOff ").Append(off).Append(" visible ").Append(vis).Append(" disabled ").Append(dis);
-        for (int k = 0; k < rs.Length && k < 6; k++) if (rs[k] != null) sb.Append(" [").Append(rs[k].name).Append(' ').Append(rs[k].bounds.center.ToString("F0")).Append(rs[k].forceRenderingOff ? " OFF" : "").Append(rs[k].isVisible ? " vis" : "").Append(" mat ").Append(rs[k].sharedMaterial != null ? rs[k].sharedMaterial.shader.name + " q" + rs[k].sharedMaterial.renderQueue : "null").Append(']');
-        Debug.Log(sb.ToString());
-        rs = null; enabled = false;
-    }
-}

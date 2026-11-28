@@ -16,18 +16,19 @@ public partial class GameManager
 {
     // ---------------------------------------------------------------- values (defaults = the game as it was)
     // controls
-    float steerGainPct = 100, steerCurve = 1, steerLockPct = 100, steerRate = 14, steerRet = 18;
-    float tiltDz = 0.5f, tiltRange = 20;                 // degrees
+    const float SteerRate = 30; // steering speed is always the fastest (33 ms); no setting
+    float steerGainPct = 90, steerCurve = 1, steerLockPct = 100, steerRate = SteerRate, steerRet = 18;
+    float tiltDz = 0.2f, tiltRange = 35;                 // degrees
     int gasMode, brakeMode;                              // 0 analog (height on the pedal), 1 on/off
     float brakeGainPct = 100, brakeCurve = 1;
     // assists
-    int steerAssist, brakeAssist;                        // 0 off, 1 low, 2 high
+    int steerAssist = 1, brakeAssist = 1;                // 0 off, 1 low, 2 high
     // car set-up
     float aeroBal = 45, brakeBiasPct = 57, brakeMigPct, engBrakePct = 100, diffPowerPct = 15, diffCoastPct = 25, rideFmm, rideRmm;
     float gripPct = 100, rearGripPct = 100, downPct = 100; bool handTest; // handling test (Adi, Nov 24): player's car only; 100 = the real car
     // camera
     float fovChase = 62, fovCockpit = 55, seatUpCm, seatFwdCm, camShakePct = 100;
-    internal float haloBackPct;                          // halo cam "helmet in view" 0-100 (GameManager.cs camera; DebugShots haloback=)
+    internal float haloBackPct = 50;                    // halo cam "helmet in view" 0-100 (GameManager.cs camera; DebugShots haloback=)
     bool haloInCockpit = true;                           // cockpit view draws the halo (hoop + pillar); false hides all of it
     int horizonMode = 0;                                 // Tilt lock: 0 off, 1 cockpit views, 2 all views
     // graphics
@@ -76,22 +77,47 @@ public partial class GameManager
         return best;
     }
 
+    // ---- new defaults, applied ONCE to existing players (Nov 28): everything else they set is kept
+    const int SettingsVer = 1;
+    void MigrateSettings()
+    {
+        if (PlayerPrefs.GetInt("setVer", 0) >= SettingsVer) return;
+        PlayerPrefs.SetInt("setVer", SettingsVer);
+        PlayerPrefs.SetFloat("steerLock", 100); PlayerPrefs.SetInt("speedSteer", 0);
+        PlayerPrefs.SetFloat("tiltDzF", 0.2f); PlayerPrefs.SetInt("tiltDz", Nearest(OldDeadZones, 0.2f));
+        PlayerPrefs.SetFloat("tiltRangeF", 35); PlayerPrefs.SetInt("tiltRange", Nearest(OldTiltRanges, 35));
+        PlayerPrefs.SetFloat("steerGain", 90); PlayerPrefs.SetInt("tiltRT", 1);
+        PlayerPrefs.SetFloat("haloBack", 50);
+        PlayerPrefs.SetInt("aeroPct", 60); PlayerPrefs.SetInt("tyreWear", TyreRules.Auto);
+        if (PlayerPrefs.GetInt("difficulty", Difficulty.Custom) == Difficulty.Custom) // a preset keeps its own assists
+        { PlayerPrefs.SetInt("tc", (int)TcMode.High); PlayerPrefs.SetInt("steerAssist", 1); PlayerPrefs.SetInt("brakeAssist", 1); }
+        if (PlayerPrefs.GetInt("gfx", 0) == 0) PlayerPrefs.SetInt("gfx", DefaultGfx());
+    }
+    // the graphics level picked once from the GPU (no "Auto" any more): Mali-G5x / G6x and Adreno 6xx class = Medium
+    static int DefaultGfx()
+    {
+        string g = SystemInfo.graphicsDeviceName ?? "";
+        if (g.Contains("Mali-4") || g.Contains("Mali-T") || g.Contains("Mali-G3") || g.Contains("Adreno (TM) 3") || g.Contains("Adreno (TM) 4") || g.Contains("Adreno (TM) 5") || g.Contains("PowerVR")) return 1;
+        if (g.Contains("Mali-G5") || g.Contains("Mali-G6") || g.Contains("Adreno (TM) 6")) return 2;
+        return 3;
+    }
+
     void LoadSettings()
     {
-        steerGainPct = LoadF("steerGain", 100, 50, 200); steerCurve = LoadF("steerCurve", 1, 1, 2.5f); steerLockPct = LoadF("steerLock", 100, 50, 100);
-        steerRate = LoadF("steerRate", 14, 4, 30); steerRet = LoadF("steerRet", 18, 4, 30);
-        tiltDz = LoadOld("tiltDzF", "tiltDz", OldDeadZones, 1, 0, 3); tiltRange = LoadOld("tiltRangeF", "tiltRange", OldTiltRanges, 2, 10, 35);
+        steerGainPct = LoadF("steerGain", 90, 10, 100); steerCurve = LoadF("steerCurve", 1, 1, 2.5f); steerLockPct = LoadF("steerLock", 100, 50, 100);
+        steerRate = SteerRate; steerRet = LoadF("steerRet", 18, 4, 30);
+        tiltDz = LoadOld("tiltDzF", "tiltDz", OldDeadZones, 1, 0, 3); tiltRange = LoadOld("tiltRangeF", "tiltRange", OldTiltRanges, 2, 10, 45);
         tiltRealtime = PlayerPrefs.GetInt("tiltRT", 1) == 1; // Real-time tilt response by default
         gasMode = LoadI("gasMode", 0, 1); brakeMode = LoadI("brakeMode", 0, 1);
         brakeGainPct = LoadF("brakeGain", 100, 50, 150); brakeCurve = LoadF("brakeCurve", 1, 0.5f, 2.5f);
-        steerAssist = LoadI("steerAssist", 0, 2); brakeAssist = LoadI("brakeAssist", 0, 2);
+        steerAssist = LoadI("steerAssist", 1, 2); brakeAssist = LoadI("brakeAssist", 1, 2);
         aeroBal = LoadOld("balF", "bal", OldBalances, 0, 44, 54); brakeBiasPct = LoadOld("brakeBiasF", "brakeBias", OldBiases, 2, 50, 65);
         brakeMigPct = LoadF("brakeMig", 0, 0, 6); engBrakePct = LoadF("engBrake", 100, 50, 150);
         diffPowerPct = LoadF("diffPower", 15, 5, 40); diffCoastPct = LoadF("diffCoast", 25, 5, 50);
         rideFmm = LoadF("rideF", 0, -5, 10); rideRmm = LoadF("rideR", 0, -10, 15);
         gripPct = LoadF("tstGrip", 100, 80, 110); rearGripPct = LoadF("tstRear", 100, 80, 110); downPct = LoadF("tstDown", 100, 60, 110); handTest = PlayerPrefs.GetInt("tstOn", 0) == 1;
         fovChase = LoadF("fovChase", 62, 50, 80); fovCockpit = LoadF("fovCockpit", 55, 45, 80);
-        seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200); haloBackPct = LoadF("haloBack", 0, 0, 100);
+        seatUpCm = LoadF("seatUp", 0, -8, 8); seatFwdCm = LoadF("seatFwd", 0, -10, 10); camShakePct = LoadF("camShake", 100, 0, 200); haloBackPct = LoadF("haloBack", 50, 0, 100);
         horizonMode = LoadI("tiltLock", 0, 2);
         haloInCockpit = PlayerPrefs.GetInt("haloCockpit", 1) == 1;
         damageMode = LoadI("damage", 1, 2);
@@ -107,7 +133,7 @@ public partial class GameManager
     void SaveSettings()
     {
         PlayerPrefs.SetFloat("steerGain", steerGainPct); PlayerPrefs.SetFloat("steerCurve", steerCurve); PlayerPrefs.SetFloat("steerLock", steerLockPct);
-        PlayerPrefs.SetFloat("steerRate", steerRate); PlayerPrefs.SetFloat("steerRet", steerRet);
+        PlayerPrefs.SetFloat("steerRet", steerRet);
         PlayerPrefs.SetFloat("tiltDzF", tiltDz); PlayerPrefs.SetInt("tiltDz", Nearest(OldDeadZones, tiltDz));
         PlayerPrefs.SetFloat("tiltRangeF", tiltRange); PlayerPrefs.SetInt("tiltRange", Nearest(OldTiltRanges, tiltRange));
         PlayerPrefs.SetInt("tiltRT", tiltRealtime ? 1 : 0);
@@ -157,8 +183,8 @@ public partial class GameManager
     int aeroIdxCache = -1, lineAero = -1;
     int AeroIdx
     {
-        get { if (aeroIdxCache < 0) { int p = PlayerPrefs.GetInt("aeroPct", 60); aeroIdxCache = 0; for (int i = 0; i < AeroVals.Length; i++) if (AeroVals[i] == p) aeroIdxCache = i; } return aeroIdxCache; }
-        set { aeroIdxCache = Mathf.Clamp(value, 0, AeroVals.Length - 1); PlayerPrefs.SetInt("aeroPct", AeroVals[aeroIdxCache]); }
+        get => 0; // fixed at Fun 60% for every car and every player (no setting): the code path stays, the value is forced
+        set { }
     }
     int AeroPct => AeroVals[AeroIdx];
     void ScaleAero(CarConfig c) { double k = AeroPct * 0.01; c.clA *= k; c.clAX *= k; }
@@ -229,6 +255,7 @@ public partial class GameManager
     }
     void CloseSettings() { menuOpen = false; ApplyScreenLock(); Save(); }
 
+    static readonly string[] GfxChoice = { "Low", "Medium", "High" };
     static string Pct(float v) => $"{v:0}%";
     static string Signed(float v, string fmt, string unit) => (v > 0.0001f ? "+" : "") + v.ToString(fmt) + unit;
 
@@ -241,20 +268,19 @@ public partial class GameManager
         var con = new SettingsUI.Tab("CONTROLS");
         con.Choice("Steering", "Drag a thumb on the left of the screen, or tilt the phone like a wheel.", new[] { "Drag", "Tilt" }, 0,
             () => tilt ? 1 : 0, v => { tilt = v == 1; tiltCenter = 0; ApplyScreenLock(); });
-        con.Slider("Steering sensitivity", "How far the wheel turns for the same drag or tilt.", 50, 200, 5, 100, () => steerGainPct, v => steerGainPct = v, Pct);
+        con.Slider("Steering sensitivity", "How far the wheel turns for the same drag or tilt.", 10, 100, 5, 90, () => steerGainPct, v => steerGainPct = v, Pct);
         con.Slider("Steering curve", "1.0 is linear. Higher = finer control near the centre, same full lock.", 1f, 2.5f, 0.05f, 1f, () => steerCurve, v => steerCurve = v, v => v.ToString("0.00"));
         con.Slider("Maximum steering lock", "Limits how far the front wheels can turn.", 50, 100, 1, 100, () => steerLockPct, v => { steerLockPct = v; SetupChanged(); },
             v => $"{v:0}% · {BaseCfg(classIdx).maxLockDeg * v * 0.01:0}°");
-        con.Slider("Steering speed", "How fast the wheel turns: time from straight to full lock.", 4, 30, 1, 14, () => steerRate, v => { steerRate = v; SetupChanged(); }, v => $"{1000f / v:0} ms");
         con.Slider("Return to centre", "How fast the wheel comes back when you let go: time from full lock.", 4, 30, 1, 18, () => steerRet, v => { steerRet = v; SetupChanged(); }, v => $"{1000f / v:0} ms");
-        con.Choice("Steering at speed", "Less steering lock as the speed rises, for a calmer car on the straights.", new[] { "Off", "Quick", "Normal", "Calm" }, 2,
+        con.Choice("Steering at speed", "Less steering lock as the speed rises, for a calmer car on the straights.", new[] { "Off", "Quick", "Normal", "Calm" }, 0,
             () => speedSteerIdx, v => { speedSteerIdx = v; if (car != null) car.cfg.speedSens = SpeedSteer[speedSteerIdx]; });
         con.Choice("Tilt direction", "Swap left and right if the car steers the wrong way.", new[] { "Normal", "Inverted" }, 0, () => invertTilt ? 1 : 0, v => invertTilt = v == 1).LockedWhen(tiltOnly);
-        con.Button("Tilt centre", "Hold the phone the way you want \"straight\" to be, then tap.",
+        con.Button("Tilt centre", "Hold the phone how you like, then tap.",
             () => Time.realtimeSinceStartup - centreSetT < 1.5f ? "Centre set" : "Set straight now", () => { tiltCenter = TiltRaw(); centreSetT = Time.realtimeSinceStartup; }).LockedWhen(tiltOnly);
-        con.Slider("Tilt dead zone", "Tilt around the centre that is ignored, so the car runs straight.", 0, 3, 0.1f, 0.5f, () => tiltDz, v => tiltDz = v, v => $"{v:0.0}°").LockedWhen(tiltOnly);
-        con.Slider("Tilt for full lock", "How far to tilt for full steering. Smaller = more sensitive.", 10, 35, 1, 20, () => tiltRange, v => tiltRange = v, v => $"{v:0}°").LockedWhen(tiltOnly);
-        con.Choice("Tilt response", "Real-time: the car steers the instant the phone turns; only a still hand's tremor is filtered. Smooth: filtered (Tilt smoothing).",
+        con.Slider("Tilt dead zone", "Small tilt that is ignored.", 0, 3, 0.1f, 0.2f, () => tiltDz, v => tiltDz = v, v => $"{v:0.0}°").LockedWhen(tiltOnly);
+        con.Slider("Tilt for full lock", "How far to tilt for full steering. Smaller = more sensitive.", 10, 45, 1, 35, () => tiltRange, v => tiltRange = v, v => $"{v:0}°").LockedWhen(tiltOnly);
+        con.Choice("Tilt response", "Real-time steers the instant the phone turns. Smooth filters a shaky hand.",
             new[] { "Real-time", "Smooth" }, 0, () => tiltRealtime ? 0 : 1, v => tiltRealtime = v == 0).LockedWhen(tiltOnly);
         con.Choice("Tilt smoothing", "Steadies a shaky hand. More smoothing = a little more delay.", SmoothNames, 1, () => smoothIdx, v => smoothIdx = v)
             .LockedWhen(() => !tilt ? "Used with tilt steering only." : tiltRealtime ? "Used with the Smooth tilt response only." : null);
@@ -265,18 +291,19 @@ public partial class GameManager
 
         // ---- ASSISTS
         var asst = new SettingsUI.Tab("ASSISTS");
-        asst.Choice("Difficulty", "Like GRID: Easy, Medium, Hard, Pro and Master set the rival level, damage, these assists and the racing line, and whether a career race can be restarted (Easy and Medium only; qualifying never). Harder = more XP: Easy \u00d70.8, Medium \u00d71, Hard \u00d71.25, Pro \u00d71.5, Master \u00d72. Change any of them yourself and it becomes Custom.",
+        asst.Choice("Difficulty", "Sets rivals, damage and assists. Change one yourself and it becomes Custom.",
             Difficulty.Names, Difficulty.Custom, () => Difficulty.Current, v => { Difficulty.Set(v); SyncDifficulty(); }).NoReset()
-            .LockedWhen(() => InRace && InSeasonRound ? "Change it on the career hub between sessions." : null);
-        asst.Choice("Career restarts", "Custom difficulty: may a career race be restarted (never qualifying)? The presets decide it themselves.", new[] { "Off", "On" }, 1,
+            .LockedWhen(() => InRace && InSeasonRound ? "Change it on the career hub." : null);
+        asst.Choice("Career restarts", "May a career race be restarted?", new[] { "Off", "On" }, 1,
             () => Difficulty.RestartsAllowed ? 1 : 0, v => Difficulty.CustomRestarts = v == 1).NoReset()
-            .LockedWhen(() => Difficulty.Current != Difficulty.Custom ? "Set by the difficulty preset." : InRace && InSeasonRound ? "Change it between sessions." : null);
-        asst.Choice("Traction control", "Cuts power when the rear wheels spin. Not allowed in top-tier racing.", offLowHigh, (int)TcMode.Low, () => (int)tc, v => { tc = (TcMode)v; if (car != null) car.cfg.tc = tc; Tweaked(); });
-        asst.Toggle("ABS brakes", "Stops the wheels locking under braking. Not allowed in top-tier racing.", true, () => absOn, v => { absOn = v; if (car != null) car.cfg.abs = absOn; Tweaked(); });
-        asst.Choice("Steering assist", "Steers into a slide for you when the rear steps out.", offLowHigh, 0, () => steerAssist, v => { steerAssist = v; Tweaked(); });
-        asst.Choice("Braking assist", "Brakes for corners by the racing line's speed. Low brakes later and softer.", offLowHigh, 0, () => brakeAssist, v => { brakeAssist = v; Tweaked(); })
+            .HiddenWhen(() => Difficulty.Current != Difficulty.Custom)
+            .LockedWhen(() => InRace && InSeasonRound ? "Change it between sessions." : null);
+        asst.Choice("Traction control", "Cuts power when the rear wheels spin.", offLowHigh, (int)TcMode.High, () => (int)tc, v => { tc = (TcMode)v; if (car != null) car.cfg.tc = tc; Tweaked(); });
+        asst.Toggle("ABS brakes", "Stops the wheels locking under braking.", true, () => absOn, v => { absOn = v; if (car != null) car.cfg.abs = absOn; Tweaked(); });
+        asst.Choice("Steering assist", "Helps catch a slide.", offLowHigh, 1, () => steerAssist, v => { steerAssist = v; Tweaked(); });
+        asst.Choice("Braking assist", "Brakes for corners for you.", offLowHigh, 1, () => brakeAssist, v => { brakeAssist = v; Tweaked(); })
             .LockedWhen(() => mapIdx == PlaygroundIdx ? "Circuits only: the playground has no racing line." : null);
-        asst.Choice("Racing line", "Chevrons on the ideal line, coloured live for your speed: green = no braking needed, yellow = brake soon, red = brake here.", new[] { "Off", "Braking only", "Full" }, RacingLineView.Full, () => lineMode,
+        asst.Choice("Racing line", "The ideal line: green go, yellow brake soon, red brake.", new[] { "Off", "Braking only", "Full" }, RacingLineView.Full, () => lineMode,
             v => { lineMode = Mathf.Clamp(v, 0, 2); if (lineGo != null) lineGo.SetActive(showLine && !playground); Tweaked(); });
 
         // ---- CAR SETUP
@@ -297,10 +324,10 @@ public partial class GameManager
         setup.Slider("Rear ride height", "Lower = more downforce and less drag-free rake. Too low bottoms out.", -10, 15, 1, 0, () => rideRmm, v => { rideRmm = v; SetupChanged(); },
             v => $"{BaseCfg(classIdx).rideR0 * 1000 + v:0} mm");
         // handling test (your car only; tell Claude the numbers that feel real)
-        setup.Toggle("Handling test", "Off = the original car, always. On = the three Test sliders below change your car (only yours). Tip: for power slides set Traction control Off.", false, () => handTest, v => { handTest = v; SetupChanged(); });
+        setup.Toggle("Handling test", "Off = the real car. On = the Test sliders change your car.", false, () => handTest, v => { handTest = v; SetupChanged(); });
         setup.Slider("Test: tyre grip", "Handling test, your car only. Grip of all four tyres at every speed. 100% = the real car.", 80, 110, 1, 100, () => gripPct, v => { gripPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
-        setup.Slider("Test: rear grip", "Handling test, your car only. Less = the rear steps out sooner, e.g. full throttle out of a medium-speed corner. 100% = the real car.", 80, 110, 1, 100, () => rearGripPct, v => { rearGripPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
-        setup.Slider("Test: downforce", "Handling test, your car only, on top of GAME > Downforce. 100% = no change.", 60, 110, 1, 100, () => downPct, v => { downPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
+        setup.Slider("Test: rear grip", "Handling test. Less = the rear steps out sooner.", 80, 110, 1, 100, () => rearGripPct, v => { rearGripPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
+        setup.Slider("Test: downforce", "Handling test, your car only. 100% = no change.", 60, 110, 1, 100, () => downPct, v => { downPct = v; SetupChanged(); }, Pct).LockedWhen(() => handTest ? null : "Turn Handling test on first.");
 
         // ---- CAMERA
         var camTab = new SettingsUI.Tab("CAMERA");
@@ -310,28 +337,28 @@ public partial class GameManager
         camTab.Slider("Cockpit seat height", "Raises or lowers the driver's eyes.", -8, 8, 0.5f, 0, () => seatUpCm, v => seatUpCm = v, v => Signed(v, "0.0", " cm"));
         camTab.Slider("Cockpit seat position", "Moves the driver's eyes forward (+) or back (-).", -10, 10, 0.5f, 0, () => seatFwdCm, v => seatFwdCm = v, v => Signed(v, "0.0", " cm"));
         camTab.Slider("Camera shake", "How much the camera moves with braking, cornering, kerbs and bumps.", 0, 200, 10, 100, () => camShakePct, v => camShakePct = v, Pct);
-        camTab.Slider("Halo cam: helmet in view", "Moves the halo camera back and up so your helmet shows at the bottom of the screen. 0 = just above the head.", 0, 100, 10, 0, () => haloBackPct, v => haloBackPct = v, Pct);
+        camTab.Slider("Halo cam: helmet in view", "Moves the halo camera back so your helmet shows at the bottom.", 0, 100, 10, 50, () => haloBackPct, v => haloBackPct = v, Pct);
         camTab.Choice("Halo in cockpit", "Show the halo in the cockpit view, as a real driver sees it, or hide all of it.", new[] { "Hide", "Show" }, 1, () => haloInCockpit ? 1 : 0, v => haloInCockpit = v == 1);
-        camTab.Choice("Lens flare", "Sun flare with ghosts and an anamorphic streak when you look toward the sun (off on Low graphics).", new[] { "Off", "On" }, 1, () => PlayerPrefs.GetInt(LensFlare.PrefKey, 1), v => PlayerPrefs.SetInt(LensFlare.PrefKey, v));
+        camTab.Choice("Lens flare", "Sun flare (off on Low graphics).", new[] { "Off", "On" }, 1, () => PlayerPrefs.GetInt(LensFlare.PrefKey, 1), v => PlayerPrefs.SetInt(LensFlare.PrefKey, v));
         camTab.Toggle("Look back button", "LOOK BACK on the left: hold it to see behind you, let go to look ahead (not in the TV view). Key: E.", true, () => LookBackBtn, v => LookBackBtn = v); // GameManagerLookBack.cs
         camTab.Choice("Tilt lock", "Keeps the picture level with your eyes when you tilt the phone, in real time.", new[] { "Off", "Cockpit", "All views" }, 0, () => horizonMode, v => horizonMode = v);
 
         // ---- GRAPHICS
         var gfx = new SettingsUI.Tab("GRAPHICS");
-        gfx.Choice("Graphics level", "Auto starts at Medium and steps down if the phone cannot keep up.", GfxNames, 0, () => gfxIdx, v => { gfxIdx = v; FpsForget(); ApplyGraphics(gfxIdx == 0 ? 2 : gfxIdx); });
-        gfx.Choice("Frame rate", "Always a steady rate the screen divides evenly. Auto: 60 fps, a steady 30 if the phone can't hold 60 or gets hot (40 only on a screen that really runs at 120 Hz). 40 needs 120 Hz: on a 60 Hz screen it runs at 30. 30 saves battery and heat.",
+        gfx.Choice("Graphics level", "Lower is faster. High looks best.", GfxChoice, 1, () => Mathf.Max(0, gfxIdx - 1), v => { gfxIdx = v + 1; FpsForget(); ApplyGraphics(gfxIdx); });
+        gfx.Choice("Frame rate", "Auto keeps a steady rate. 30 saves battery.",
             FpsNames, 0, () => fpsIdx, v => { fpsIdx = v; FpsForget(); ApplyFrameRate(); });
         // the base 3D render size (RenderScale.cs): Auto picks ~1.3 Mpx on Android; the Resolution scale below is on top of it
         int[] rsVals = { 0, 100, 85, 70 };
         string[] rsNames = { "Auto (" + Mathf.RoundToInt(RenderScale.AutoScale(RenderScale.NativeW, RenderScale.NativeH) * 100) + "%)", "100%", "85%", "70%" };
-        gfx.Choice("3D resolution", "Base size of the 3D picture against the screen (the HUD stays sharp). Auto suits most phones.", rsNames, 0,
+        gfx.Choice("3D resolution", "Size of the 3D picture. Auto suits most phones.", rsNames, 0,
             () => System.Math.Max(0, System.Array.IndexOf(rsVals, RenderScale.Pct)), v => { RenderScale.Pct = rsVals[v]; FpsForget(); });
         gfx.Slider("Resolution scale", "Sharpness of the 3D picture (the HUD stays sharp). Lower = faster.", 50, 100, 5, 100, () => resPct, v => { resPct = v; FpsForget(); ApplyResolution(); }, Pct);
         gfx.Toggle("Shadows", "Live shadows from cars and scenery. Off = faster.", true, () => shadowsOn, v => { shadowsOn = v; FpsForget(); ApplyGraphics(gfxLevel); })
             .LockedWhen(() => LightBake.Active ? "This circuit has its shadows baked in: nothing to switch." : gfxLevel <= 1 ? "Shadows are off at the Low graphics level." : null);
-        gfx.Toggle("Show FPS", "The frame-rate lock (\"40 FPS LOCK\"; the measured rate beside it while it doesn't hold) and the resolution share when it is lowered, top right under the buttons.", true, () => showFps, v => showFps = v);
-        gfx.Toggle("Render stats (debug)", "Draw calls, triangles, culling sectors, card overdraw and memory, top left. For testing only.", false, () => PerfStats.Show, v => PerfStats.Show = v);
-        gfx.Toggle("Performance graph (debug)", "Frame times of the last 5 s, CPU / GPU ms, garbage collections, physics, phone heat and clocks, top left; a 2-minute table on the race results. For testing only.", false, () => FrameLog.Show, v => FrameLog.Show = v);
+        gfx.Toggle("Show FPS", "Frame rate, top right.", true, () => showFps, v => showFps = v);
+        gfx.Toggle("Render stats (debug)", "For testing only.", false, () => PerfStats.Show, v => PerfStats.Show = v);
+        gfx.Toggle("Performance graph (debug)", "For testing only.", false, () => FrameLog.Show, v => FrameLog.Show = v);
 
         // ---- AUDIO
         var aud = new SettingsUI.Tab("AUDIO");
@@ -340,41 +367,28 @@ public partial class GameManager
         aud.Slider("Engine volume", "Engine, turbo and the hybrid motor.", 0, 100, 5, 100, () => volEngine, v => { volEngine = v; ApplyAudio(); }, Pct);
         aud.Slider("Tyre volume", "Scrub, squeal, lock-ups and wheelspin.", 0, 100, 5, 100, () => volTyres, v => { volTyres = v; ApplyAudio(); }, Pct);
         aud.Slider("Effects volume", "Wind, kerbs, gravel and grass.", 0, 100, 5, 100, () => volFx, v => { volFx = v; ApplyAudio(); }, Pct);
-        aud.Choice("Team radio", "Your race engineer. Full: gaps, tyres, pace and strategy. Key info: only what matters (pit calls, flags, damage, Overtake Mode). Off: silent.",
+        aud.Choice("Team radio", "Your race engineer: Full, Key info or Off.",
             TeamRadioNames, 0, () => teamRadioMode, v => { teamRadioMode = Mathf.Clamp(v, 0, 2); PlayerPrefs.SetInt("teamRadio", teamRadioMode); });
 
         // ---- GAME
         var game = new SettingsUI.Tab("GAME");
-        game.Choice("Track", "In a session this loads the circuit and restarts.", MapNames, 0, () => mapIdx, v => { mapIdx = v; if (InRace) { LoadMap(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
-        var rivalNames = new string[RivalCounts.Length]; for (int i = 0; i < rivalNames.Length; i++) rivalNames[i] = RivalCounts[i] == 0 ? "None" : RivalCounts[i].ToString();
-        game.Choice("Rivals", "Cars to race against. In a race this restarts it.", rivalNames, 1, () => rivalIdx, v => { rivalIdx = v; if (InRace) ResetCar(); }).NoReset().LockedWhen(CareerLock);
-        game.Choice("Rival level", "How fast the rivals drive. In a race this restarts it.", DiffNames, 0, () => diffIdx, v => { diffIdx = v; Tweaked(); if (InRace) ResetCar(); }).NoReset().LockedWhen(CareerLock);
-        game.Choice("Grid position", "Where you start a race: last, random, pole or a set place. In a race this restarts it.", MenuUI.GridNames, 0, () => ui.gridIdx, v => { ui.SetGrid(v); if (InRace) ResetCar(); }).NoReset().LockedWhen(CareerLock);
-        game.Choice("Weather", "Damp: a drying line, less grip off it. Wet: rain, spray, much less grip. Rivals fit the right tyres at the next restart.", Weather.Names, 0,
-            () => Weather.Index, v => { Weather.Index = v; ApplyWeather(); });
-        game.Choice("Time of day", "Sun height and colour, sky and shadows. Night is for street circuits (floodlit); elsewhere it is evening. In a session this reloads the circuit.", TimeOfDay.Names, TimeOfDay.Default,
-            () => TimeOfDay.Index, v => { TimeOfDay.Set(v, InRace); if (InRace) { LoadMap(); ResetCar(); } }).NoReset().LockedWhen(CareerLock);
         game.Choice("Speed units", "For the speedometer.", new[] { "km/h", "mph" }, 0, () => unitsIdx, v => unitsIdx = v);
         game.Choice("Driver read-out", "Tyres, brakes and fuel beside the steering-wheel display.", hideShow, 1, () => hudInfo ? 1 : 0, v => hudInfo = v == 1);
-        game.Choice("Map", "Top right. Radar: the cars round you where they are on the road, turned with your car (amber / red = alongside, with a warning on that side). Full map: the whole circuit with every car (you red, the others blue, the leader ringed white), no backdrop.", MapModeNames, MapBoth,
+        game.Choice("Map", "Top right: radar, full map or both.", MapModeNames, MapBoth,
             () => MapMode, v => MapMode = v); // (Radar.cs; PlayerPrefs "hudMapMode2")
         game.Toggle("Timing tower", "Order, gaps and tyres on the left in a race. Tap it for gap / interval, the arrow for all cars.", true, () => hudTower, v => hudTower = v);
         game.Toggle("Sector times", "Three sectors under the lap time: purple = fastest of all, green = your best, yellow = slower.", true, () => hudSectors, v => hudSectors = v);
         game.Toggle("Live delta", "Time up or down on your best lap, live.", true, () => hudDelta, v => hudDelta = v);
-        game.Choice("Damage", "Off: none. Visual only: parts break and fly off, the car drives the same. Full: lost downforce, bent steering, punctures; BOX fits a new wing (+8 s). Rivals follow at the next restart.", new[] { "Off", "Visual only", "Full" }, 1, () => InRace && InSeasonRound ? DamageNow : damageMode, v => { damageMode = v; SetupChanged(); Tweaked(); })
+        game.Choice("Damage", "Visual only: parts fly off. Full: damage hurts the car.", new[] { "Off", "Visual only", "Full" }, 1, () => InRace && InSeasonRound ? DamageNow : damageMode, v => { damageMode = v; SetupChanged(); Tweaked(); })
             .LockedWhen(() => InRace && InSeasonRound ? "A career round always has damage: Visual on Easy and Medium, Full from Hard." : null);
-        game.Choice("Flags & safety car", "On: yellow flags, Virtual Safety Car and Safety Car after crashes, blue flags and penalties: track limits (3 warnings, then +5 s), +5 / +10 s for causing a collision, +5 s for a place gained off track and not given back. Fitted at the next restart.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
-        game.Choice("Race start", "Full: like F1. You walk to your car in the garage, leave the pit lane, then a formation lap to warm your tyres (keep your place; SKIP TO START ends it), then the lights. Short: engine start on the grid, then the lights. Off: straight to the lights. A tap skips the film. From the next race.",
+        game.Choice("Flags & safety car", "Yellow flags, safety car and penalties.", new[] { "Off", "On" }, 1, () => flagsMode, v => flagsMode = v);
+        game.Choice("Race start", "Full: garage, pit exit and formation lap. Short: grid only. Off: straight to the lights.",
             PreRaceNames, 0, () => preRaceIdx, v => preRaceIdx = v);
-        game.Choice("Post-race", "Full: after the flag a slow-motion finish, a cool-down lap (the car drives itself, TV cameras, the classification), the podium with the cup and champagne, then your XP, level and safety rating. Short: the finish, the podium and your progress. Off: straight to the results. A tap skips ahead.",
+        game.Choice("Post-race", "Full: cool-down lap and podium. Short: podium only. Off: straight to results.",
             PostRaceNames, 0, () => PostRaceMode, v => PostRaceMode = v);
-        game.Choice("Story", "The career's story. Film: short 3D scenes with the game's own cars, people and circuits (a tap: next scene, SKIP ends it). Cards: the text cards. Off: only your goals.",
+        game.Choice("Story", "Career story: Film, Cards or Off.",
             StoryFilms.ModeNames, StoryFilms.ModeFilm, () => StoryFilms.Mode, v => StoryFilms.Mode = v); // (StoryFilm.cs)
-        game.Choice("Race distance", "Menu laps: the laps chosen on the start menu. Or a share of a full race weekend distance (305 km): the rivals plan real one- and two-stop strategies from 10 laps. From the next race.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
-        game.Choice("Downforce", "Grip that grows with speed, for every car (rivals and the racing line too). Fun 60%: you brake earlier for fast corners. Real 100%: the real 2026 car (laps match real pole times). A change restarts the session.", AeroNames, 0,
-            () => AeroIdx, v => { AeroIdx = v; if (InRace) { BuildLine(); ResetCar(); } }).NoReset();
-        game.Choice("Tyre wear", TyreWearHelp, TyreRules.Names, 0, () => InRace && InSeasonRound ? TyreRules.Auto : TyreWearPref, v => TyreWearPref = v)
-            .LockedWhen(() => InRace && InSeasonRound ? "A career round always uses Auto." : null); // TyrePit.cs
+        game.Choice("Race distance", "Menu laps, or a share of a full Grand Prix.", RaceDistNames, 0, () => raceDistIdx, v => raceDistIdx = v);
         game.Toggle("Vibration", "Kerbs, rough ground and wall hits shake the phone.", true, () => Haptics.enabled, v => { Haptics.enabled = v; if (v) Haptics.Pulse(40, 160); });
         var liveryNames = new string[Livery.Player.Length]; for (int i = 0; i < liveryNames.Length; i++) liveryNames[i] = Livery.Player[i].name;
         game.Choice("Livery", "Your car's colours.", liveryNames, 0, () => liveryIdx, v => { liveryIdx = v; if (model != null) model.SetLivery(Livery.Player[liveryIdx]); }).NoReset();
