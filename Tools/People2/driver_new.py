@@ -10,7 +10,8 @@
 #  * colour: every white texel of suit / gloves / boots / helmet shell is team-tinted (atlas alpha, People2 v2 encoding);
 #    the palette regions as before: suit RSuit, accent (side seam stripes, sleeve tops) RStripe, gloves RGlove, boots RBoot,
 #    shell RHelmet, helmet top stripe + chin + visor frame RHelmetTop (the team colour), visor RVisor, carbon RBelt, neck RNeck.
-#  * the helmet rides on the Head joint, the HANS collar on spine_03.
+#  * the helmet rides on the Head joint. No HANS collar (not worn walking round the garage / on the podium).
+#  * the file's Normal + ORM maps are baked into the atlas colour as cavity / AO shading (the People2 shader has no normal map).
 import numpy as np
 import cv2
 from PIL import Image
@@ -49,6 +50,38 @@ def raster_attr(A, uvc, attr, mask_out=None):
         v = w0[..., None] * attr[t, 0] + w1[..., None] * attr[t, 1] + w2[..., None] * attr[t, 2]
         sub = out[y0:y1 + 1, x0:x1 + 1]; sub[ins] = v[ins]; cov[y0:y1 + 1, x0:x1 + 1] |= ins
     return out, cov
+
+
+def mat_image(M, mat_name, slot):
+    """a material's normal / occlusion image (PIL, RGB) by material name; slot 'normal' | 'orm'"""
+    import io, os
+    g = M.G.g
+    for m in g.materials:
+        if m.name != mat_name: continue
+        if slot == 'normal': tx = m.normalTexture
+        else: tx = m.occlusionTexture or (m.pbrMetallicRoughness.metallicRoughnessTexture if m.pbrMetallicRoughness else None)
+        if tx is None: return None
+        im = g.images[g.textures[tx.index].source]
+        bv = g.bufferViews[im.bufferView]; raw = M.G.buffer(bv.buffer)[(bv.byteOffset or 0):(bv.byteOffset or 0) + bv.byteLength]
+        return Image.open(io.BytesIO(raw)).convert('RGB')
+    return None
+
+
+def bake_relief(A, key, M, d, k_cav=1.6, k_ao=0.9):
+    tx, ty, tw, th, *_ = A.tiles[key]
+    nrm = mat_image(M, d['mat'], 'normal'); orm = mat_image(M, d['mat'], 'orm')
+    shade = np.ones((th, tw), np.float32)
+    if nrm is not None:
+        n = np.asarray(nrm.resize((tw, th), Image.LANCZOS), np.float32) / 255.0 * 2 - 1
+        slope = np.clip(np.sqrt(n[..., 0] ** 2 + n[..., 1] ** 2), 0, 1)       # 0 = flat, 1 = steep (a seam / fold)
+        blur = cv2.GaussianBlur(slope, (0, 0), 3.0)
+        cav = np.clip(slope - blur, 0, None)                                      # the narrow creases, not the broad curves
+        shade *= 1.0 - np.clip(k_cav * cav * 3.0, 0, 0.45)
+    if orm is not None:
+        ao = np.asarray(orm.resize((tw, th), Image.LANCZOS), np.float32)[..., 0] / 255.0
+        shade *= 1.0 - k_ao * (1.0 - ao) * 0.6
+    A.rgb[ty:ty + th, tx:tx + tw] *= shade[..., None]
+    print('   relief', key, 'mean shade', round(float(shade.mean()), 3), 'min', round(float(shade.min()), 2))
 
 
 def smooth(x, a, b): return np.clip((x - a) / (b - a), 0, 1)
@@ -140,6 +173,9 @@ def build(repo, A, Q, rect):
     for k, r in sol.items(): A.place(k, None, r, solid=(0.5, 0.5, 0.5) if k in ('frame', 'neck') else (0.03, 0.03, 0.035) if k != 'visor' else (0.02, 0.025, 0.04))
 
     def tile_uv(key, n): rx, ry, rw, rh = A.tiles[key][:4]; return np.tile([(rx + rw / 2) / A.w, (ry + rh / 2) / A.h], (n, 1))
+    # ---- seams / quilting: cavity from the normal map + the ORM occlusion, multiplied into the colour (no shader cost)
+    for key, nm in (('suit', 'Suit'), ('gloves', 'Gloves'), ('boots', 'Boots')):
+        bake_relief(A, key, M, byname[f'{nm}_LOD0'])
     # ---- tint / accent masks from the textures and from the surface itself (stripes by position / normal)
     for key, part, thr, reg in (('suit', suit[0], 0.45, None), ('gloves', gloves[0], 0.55, None), ('boots', boots[0], 0.45, None)):
         tx, ty, tw, th, *_ = A.tiles[key]
@@ -180,8 +216,6 @@ def build(repo, A, Q, rect):
         rows.append((visor, tile_uv('visor', len(visor.P)), 'dvisor'))
         rows.append((trim, tile_uv('dark', len(trim.P)), 'dtrim'))
         rows.append((seal, tile_uv('dark', len(seal.P)), 'dtrim'))
-        rows.append((hans, tile_uv('dark', len(hans.P)), 'dtrim'))
-        rows.append((tether, tile_uv('dark', len(tether.P)), 'dtrim'))
         return rows
     H = hgroup()
     lods = []
