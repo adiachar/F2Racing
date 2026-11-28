@@ -134,6 +134,7 @@ public static class Trackside
     // tile = 34 people x ~0.52 m = 17.7 m), feet at y, 2.24 m tall (the tile's 256 px), leaning back a touch. Unlit by
     // AO (people, not walls). Band 1 = cheering.
     const float PeopleTile = 17.7f, PeopleH = 2.24f;
+    const bool DebugFanPoles = true; // TEMP (28 Nov): an 8 m red pole at the start of every fan group
     static void Spectators(Vector3 a, Vector3 b, float y, Vector3 D, int band, int seed)
     {
         Vector3 up = Vector3.up, back = D * 0.12f;
@@ -1469,6 +1470,7 @@ public static class Trackside
                         if (sg > 0) Spectators(b, a, 0f, (D0 + D1).normalized, band, 9900 + i0);
                         else Spectators(a, b, 0f, (D0 + D1).normalized, band, 9900 + i0);
                         gFeet.Add(new Vector4(mid.x, mid.z, b.x - a.x, b.z - a.z));
+                        if (DebugFanPoles && j == 0) Box(A, a + Vector3.up * 4f, Tan(p0), Vector3.up, D0, 0.25f, 4f, 0.25f, TracksideArt.PaintRed); // TEMP diagnostics
                         placed++;
                     }
                     foreach (var fp in gFeet)
