@@ -67,7 +67,7 @@ def mat_image(M, mat_name, slot):
     return None
 
 
-def bake_relief(A, key, M, d, k_cav=1.6, k_ao=0.9):
+def bake_relief(A, key, M, d, k_cav=0.5, k_ao=0.9):
     tx, ty, tw, th, *_ = A.tiles[key]
     nrm = mat_image(M, d['mat'], 'normal'); orm = mat_image(M, d['mat'], 'orm')
     shade = np.ones((th, tw), np.float32)
@@ -97,6 +97,85 @@ def grow(arr, cov, n=6):
 def lum_of(img_rgb):
     lin = srgb_dec(np.asarray(img_rgb, np.float32) / 255.0)
     return 0.2126 * lin[..., 0] + 0.7152 * lin[..., 1] + 0.0722 * lin[..., 2]
+
+
+# ---------------------------------------------------------------- sponsor stickers (made-up brands) projected on the suit
+BRANDS = [  # name, background, text, glyph
+    ('VOLTRA', (250, 204, 21), (20, 20, 24), 'bolt'), ('AXIOM', (245, 245, 245), (200, 30, 40), 'tri'),
+    ('KESTREL', (16, 28, 64), (245, 245, 245), 'bars'), ('ZENITH', (245, 245, 245), (22, 24, 30), 'ring'),
+    ('PULSAR', (245, 120, 30), (255, 255, 255), 'dot'), ('NIMBUS', (226, 232, 240), (30, 70, 160), 'bars'),
+    ('HELIX', (22, 160, 110), (255, 255, 255), 'tri'), ('TORQ', (14, 14, 18), (245, 245, 245), 'bolt'),
+    ('ORBIT', (20, 150, 170), (255, 255, 255), 'ring'), ('QUANTA', (236, 72, 120), (255, 255, 255), 'dot')]
+FONT = '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf'
+
+
+def sticker(brand, w_px, h_px):
+    """a neat flat sticker (RGBA, 4x supersampled): rounded plate, a small glyph, the name in bold caps"""
+    from PIL import ImageDraw, ImageFont
+    name, bg, fg, glyph = brand; S = 4; W, H = w_px * S, h_px * S
+    im = Image.new('RGBA', (W, H), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    d.rounded_rectangle((0, 0, W - 1, H - 1), radius=int(H * 0.22), fill=bg + (255,))
+    d.rounded_rectangle((int(H * 0.06), int(H * 0.06), W - 1 - int(H * 0.06), H - 1 - int(H * 0.06)), radius=int(H * 0.17), outline=fg + (255,), width=max(2, int(H * 0.04)))
+    g = int(H * 0.46); gx, gy = int(H * 0.32), H // 2
+    if glyph == 'bolt': d.polygon([(gx, gy - g), (gx - g // 2, gy + g // 8), (gx - g // 10, gy + g // 8), (gx - g // 3, gy + g), (gx + g // 2, gy - g // 8), (gx + g // 12, gy - g // 8)], fill=fg + (255,))
+    elif glyph == 'tri': d.polygon([(gx, gy - g), (gx + g, gy + g), (gx - g, gy + g)], fill=fg + (255,))
+    elif glyph == 'ring': d.ellipse((gx - g, gy - g, gx + g, gy + g), outline=fg + (255,), width=max(3, g // 3))
+    elif glyph == 'dot': d.ellipse((gx - g, gy - g, gx + g, gy + g), fill=fg + (255,))
+    else:
+        for i in range(3): d.rectangle((gx - g, gy - g + i * (g * 2 // 3), gx + g, gy - g + i * (g * 2 // 3) + g // 3), fill=fg + (255,))
+    x0 = int(H * 0.32 + g + H * 0.14); size = int(H * 0.5)
+    f = ImageFont.truetype(FONT, size)
+    while f.getlength(name) > W - x0 - H * 0.2 and size > 8: size -= 2; f = ImageFont.truetype(FONT, size)
+    d.text((x0, H // 2), name, font=f, fill=fg + (255,), anchor='lm')
+    return im.resize((w_px, h_px), Image.LANCZOS)
+
+
+# (brand index, approx centre (x, y, z) on the suit, outward direction, width m, height m, 'up' hint)
+DECALS = [
+    (0, (0.075, 1.30, 0.10), (0, 0.2, 1), 0.105, 0.034, (0, 1, 0)),   # left chest
+    (1, (-0.075, 1.30, 0.10), (0, 0.2, 1), 0.095, 0.032, (0, 1, 0)),  # right chest
+    (2, (0.0, 1.05, 0.12), (0, 0, 1), 0.10, 0.03, (0, 1, 0)),         # belly
+    (3, (0.10, 0.80, 0.09), (0, 0, 1), 0.10, 0.03, (0, 1, 0)),        # left thigh front
+    (4, (-0.10, 0.62, 0.09), (0, 0, 1), 0.085, 0.028, (0, 1, 0)),     # right thigh front (lower)
+    (5, (0.30, 1.46, 0.0), (0, 1, 0.1), 0.10, 0.03, (1, 0, 0)),       # left upper arm (top)
+    (6, (-0.30, 1.46, 0.0), (0, 1, 0.1), 0.095, 0.03, (1, 0, 0)),     # right upper arm (top)
+    (7, (0.0, 1.38, -0.09), (0, 0.1, -1), 0.16, 0.05, (0, 1, 0)),     # back, upper
+    (8, (0.08, 1.10, -0.09), (0, 0, -1), 0.09, 0.028, (0, 1, 0)),     # back, lower left
+    (9, (-0.10, 0.48, 0.06), (0, 0, 1), 0.08, 0.026, (0, 1, 0)),      # right shin front
+    (3, (0.12, 0.42, 0.06), (0, 0, 1), 0.075, 0.025, (0, 1, 0)),      # left shin front
+]
+
+
+def paint_decals(A, s0, key='suit'):
+    """project the stickers onto the suit's atlas tile through the surface position map: each texel knows its 3D point,
+    so a decal is a plane patch (centre, normal, up) sampled where the surface lies within it"""
+    uvc = A.map(key, s0.uv)[s0.I]
+    v, cov = raster_attr(A, uvc, np.concatenate([s0.P[s0.I], s0.N[s0.I]], axis=2))
+    p = v[..., :3]; n = v[..., 3:] / (np.linalg.norm(v[..., 3:], axis=2, keepdims=True) + 1e-6)
+    tx, ty, tw, th, *_ = A.tiles[key]
+    for bi, c, dr, w, h, up in DECALS:
+        w *= 1.7; h *= 1.7
+        c = np.array(c, float); dr = np.array(dr, float); dr /= np.linalg.norm(dr)
+        # snap the centre onto the surface: the suit vertices near it facing the decal's way
+        vs = s0.P; ns = s0.N
+        near = (np.linalg.norm(vs - c, axis=1) < 0.06) & (ns @ dr > 0.4)
+        if near.sum() < 3: print('  decal', BRANDS[bi][0], 'no surface at', c); continue
+        c = vs[near].mean(0); nm = ns[near].mean(0); nm /= np.linalg.norm(nm)
+        right = np.cross(nm, np.array(up, float)); right /= np.linalg.norm(right) + 1e-9; upv = np.cross(right, nm)
+        # (mirror: the model is mirrored in x for Unity, so a left-side sticker keeps reading left to right as seen from outside)
+        rel = p - c
+        u = rel @ right; vv = rel @ upv; dn = rel @ nm
+        inside = cov & (np.abs(u) < w / 2) & (np.abs(vv) < h / 2) & (np.abs(dn) < 0.03) & ((n @ nm) > 0.55)
+        if not inside.any(): print('  decal', BRANDS[bi][0], 'covers no texels'); continue
+        spx = int(max(64, w / 0.0035)); sh = int(max(24, spx * h / w))
+        img = np.asarray(sticker(BRANDS[bi], spx, sh), np.float32) / 255.0
+        su = (u / w + 0.5) * (spx - 1); sv = (0.5 - vv / h) * (sh - 1)
+        samp = cv2.remap(img, su.astype(np.float32), sv.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+        a = samp[..., 3] * inside
+        sl = (slice(ty, ty + th), slice(tx, tx + tw))
+        A.rgb[sl] = A.rgb[sl] * (1 - a[sl][..., None]) + samp[..., :3][sl] * a[sl][..., None]
+        A.tint[sl] *= (1 - a[sl]); A.acc[sl] *= (1 - a[sl])
+        print('   decal', BRANDS[bi][0], 'texels', int((a > 0.5).sum()))
 
 
 class Part:
@@ -162,14 +241,14 @@ def build(repo, A, Q, rect):
     seal = Part(hp['Helmet_VisorSeal:Helmet_Rubber'], src, HEAD)
     hans = Part(hp['HANS:HANS_Carbon'], src, SPINE3)
     tether = Part(hp['HANS:HANS_Tether'], src, SPINE3)
-    # ---- atlas tiles (atlas = 2048 x 1536: this driver's suit 1024^2 at rect, the rest below)
+    # ---- atlas tiles (atlas = 2048 x 1024: the suit 1024^2 at rect, gloves / boots / shell / solid tiles to its right)
     x, y, w, h = rect
     A.place('suit', suit[0].img, (x, y, 1024, 1024))
-    A.place('gloves', gloves[0].img, (x, y + 1024, 512, 512))
-    A.place('boots', boots[0].img, (x + 512, y + 1024, 512, 512))
-    A.place('shell', shell.img, (x + 1024, y + 1024, 512, 512))
-    sol = {'dark': (x + 1536, y + 1024, 32, 32), 'visor': (x + 1568, y + 1024, 32, 32), 'frame': (x + 1600, y + 1024, 32, 32),
-           'neck': (x + 1632, y + 1024, 32, 32)}
+    A.place('gloves', gloves[0].img, (x + 1024, y, 512, 512))
+    A.place('boots', boots[0].img, (x + 1536, y, 512, 512))
+    A.place('shell', shell.img, (x + 1024, y + 512, 512, 512))
+    sol = {'dark': (x + 1536, y + 512, 32, 32), 'visor': (x + 1568, y + 512, 32, 32), 'frame': (x + 1600, y + 512, 32, 32),
+           'neck': (x + 1632, y + 512, 32, 32)}
     for k, r in sol.items(): A.place(k, None, r, solid=(0.5, 0.5, 0.5) if k in ('frame', 'neck') else (0.03, 0.03, 0.035) if k != 'visor' else (0.02, 0.025, 0.04))
 
     def tile_uv(key, n): rx, ry, rw, rh = A.tiles[key][:4]; return np.tile([(rx + rw / 2) / A.w, (ry + rh / 2) / A.h], (n, 1))
@@ -208,6 +287,7 @@ def build(repo, A, Q, rect):
     tx, ty, tw, th, *_ = A.tiles['shell']
     m = np.zeros((A.h, A.w), np.float32); m[ty:ty + th, tx:tx + tw] = accs[ty:ty + th, tx:tx + tw]
     A.acc = np.maximum(A.acc, m)
+    paint_decals(A, suit[0])
     # ---- helmet group as faces with atlas uvs
     def hgroup():
         rows = []

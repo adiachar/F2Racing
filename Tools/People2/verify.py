@@ -118,10 +118,11 @@ def main():
             m = b['var'][min(gear, len(b['var']) - 1) if 'GEAR' not in os.environ else int(os.environ['GEAR'])][min(int(os.environ.get('LOD', '0')), len(b['var'][0]) - 1)]
             cl = None if cn == 'rest' else allc[cn]
             P, W = pose_mesh(Q, b, m, cl, 7)
-            c = np.array([0, 0.9, 0])
-            eye = c + np.array([1.6, 0.25, 3.2])
-            ims.append(render(textured(col, tint, m, P), look(eye, c), size=(260, 400), ortho=1.0)); tt.append(f"{b['name']} g{gear} {cn}")
-    save(ims, outp, tt)
+            c = np.array([float(v) for v in os.environ.get('C', '0,0.9,0').split(',')])
+            eye = c + np.array([float(v) for v in os.environ.get('EYE', '1.6,0.25,3.2').split(',')])
+            ims.append(render(textured(col, tint, m, P), look(eye, c), size=(int(os.environ.get('W', 260)), int(os.environ.get('H', 400))), ortho=float(os.environ.get('ORTHO', 1.0)))); tt.append(f"{b['name']} g{gear} {cn}")
+    if os.environ.get('RAW'): Image.fromarray((np.clip(np.concatenate(ims, 1), 0, 1) * 255).astype(np.uint8)).save(outp)
+    else: save(ims, outp, tt)
 
 
 if __name__ == '__main__':
