@@ -67,7 +67,7 @@ def mat_image(M, mat_name, slot):
     return None
 
 
-def bake_relief(A, key, M, d, k_cav=0.5, k_ao=0.9):
+def bake_relief(A, key, M, d, k_cav=0.22, k_ao=0.55):
     tx, ty, tw, th, *_ = A.tiles[key]
     nrm = mat_image(M, d['mat'], 'normal'); orm = mat_image(M, d['mat'], 'orm')
     shade = np.ones((th, tw), np.float32)
@@ -101,11 +101,11 @@ def lum_of(img_rgb):
 
 # ---------------------------------------------------------------- sponsor stickers (made-up brands) projected on the suit
 BRANDS = [  # name, background, text, glyph
-    ('VOLTRA', (250, 204, 21), (20, 20, 24), 'bolt'), ('AXIOM', (245, 245, 245), (200, 30, 40), 'tri'),
-    ('KESTREL', (16, 28, 64), (245, 245, 245), 'bars'), ('ZENITH', (245, 245, 245), (22, 24, 30), 'ring'),
-    ('PULSAR', (245, 120, 30), (255, 255, 255), 'dot'), ('NIMBUS', (226, 232, 240), (30, 70, 160), 'bars'),
-    ('HELIX', (22, 160, 110), (255, 255, 255), 'tri'), ('TORQ', (14, 14, 18), (245, 245, 245), 'bolt'),
-    ('ORBIT', (20, 150, 170), (255, 255, 255), 'ring'), ('QUANTA', (236, 72, 120), (255, 255, 255), 'dot')]
+    ('ZORVEX', (250, 204, 21), (20, 20, 24), 'bolt'), ('KALDRIX', (245, 245, 245), (200, 30, 40), 'tri'),
+    ('MYRELLO', (16, 28, 64), (245, 245, 245), 'bars'), ('QUINTAVO', (245, 245, 245), (22, 24, 30), 'ring'),
+    ('FLUXORA', (245, 120, 30), (255, 255, 255), 'dot'), ('VANTRYX', (226, 232, 240), (30, 70, 160), 'bars'),
+    ('GLORVEN', (22, 160, 110), (255, 255, 255), 'tri'), ('DRAXIO', (14, 14, 18), (245, 245, 245), 'bolt'),
+    ('NELVARA', (20, 150, 170), (255, 255, 255), 'ring'), ('SKORVIK', (236, 72, 120), (255, 255, 255), 'dot')]
 FONT = '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf'
 
 
