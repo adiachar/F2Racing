@@ -134,7 +134,6 @@ public static class Trackside
     // tile = 34 people x ~0.52 m = 17.7 m), feet at y, 2.24 m tall (the tile's 256 px), leaning back a touch. Unlit by
     // AO (people, not walls). Band 1 = cheering.
     const float PeopleTile = 17.7f, PeopleH = 2.24f;
-    const bool DebugFanPoles = true; // TEMP (28 Nov): an 8 m red pole at the start of every fan group
     static void Spectators(Vector3 a, Vector3 b, float y, Vector3 D, int band, int seed)
     {
         Vector3 up = Vector3.up, back = D * 0.12f;
@@ -143,6 +142,29 @@ public static class Trackside
         tint = Color.white * (0.92f + 0.12f * Rand(seed, 72)); aoOn = false;
         Quad(Pp, a + up * y, b + up * y, b + back + up * (y + PeopleH), a + back + up * (y + PeopleH), -D + up * 0.2f,
              new Vector4(u0, band * 0.5f + 0.002f, u0 + len, band * 0.5f + 0.498f));
+        tint = keepT; aoOn = keepAo;
+    }
+
+    // fence fans along a stretch a..b (D: out from the track, T: the direction of travel): short cards of ~7 people, each
+    // turned ~38 deg towards the cars coming up the track (a long card parallel to the track is seen edge-on from the
+    // car: the people squeezed into pale slivers, 28 Nov), staggered in depth, so a group reads as a crowd from the car.
+    static void SpectatorsSaw(Vector3 a, Vector3 b, Vector3 D, Vector3 T, int band, int seed)
+    {
+        const float W = 3.6f, Step = 3.0f, Yaw = 0.66f; // card width, spacing along the stretch, turn (rad)
+        Vector3 up = Vector3.up;
+        Vector3 n = (-D * Mathf.Cos(Yaw) - T * Mathf.Sin(Yaw)).normalized, right = Vector3.Cross(up, n).normalized;
+        float len = (b - a).magnitude; int cnt = Mathf.Max(1, Mathf.RoundToInt(len / Step));
+        var keepT = tint; bool keepAo = aoOn; aoOn = false;
+        for (int k = 0; k < cnt; k++)
+        {
+            float f = (k + 0.5f) / cnt;
+            Vector3 c = Vector3.Lerp(a, b, f) + D * (0.5f * (Rand(seed + k, 73) - 0.5f));
+            Vector3 p0 = c - right * (W * 0.5f), p1 = c + right * (W * 0.5f), back = -n * 0.12f;
+            float u0 = Rand(seed + k, 71) * 4f, du = W / PeopleTile;
+            tint = Color.white * (0.92f + 0.12f * Rand(seed + k, 72));
+            Quad(Pp, p0, p1, p1 + back + up * PeopleH, p0 + back + up * PeopleH, n + up * 0.2f,
+                 new Vector4(u0, band * 0.5f + 0.002f, u0 + du, band * 0.5f + 0.498f));
+        }
         tint = keepT; aoOn = keepAo;
     }
 
@@ -1467,10 +1489,8 @@ public static class Trackside
                         nOk++;
                         int band = Rand(i0, 144) < 0.3f + 0.3f * hot ? 1 : 0;
                         // a stretch faces the track: a is at the viewer's left when looking out from the track
-                        if (sg > 0) Spectators(b, a, 0f, (D0 + D1).normalized, band, 9900 + i0);
-                        else Spectators(a, b, 0f, (D0 + D1).normalized, band, 9900 + i0);
+                        SpectatorsSaw(a, b, (D0 + D1).normalized, (Tan(p0) + Tan(p1)).normalized, band, 9900 + i0);
                         gFeet.Add(new Vector4(mid.x, mid.z, b.x - a.x, b.z - a.z));
-                        if (DebugFanPoles && j == 0) Box(A, a + Vector3.up * 4f, Tan(p0), Vector3.up, D0, 0.25f, 4f, 0.25f, TracksideArt.PaintRed); // TEMP diagnostics
                         placed++;
                     }
                     foreach (var fp in gFeet)
