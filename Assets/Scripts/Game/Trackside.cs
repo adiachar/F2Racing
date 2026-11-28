@@ -2251,7 +2251,18 @@ public static class Trackside
         {
             if (peopleMat.shader != null && peopleMat.shader.name == "F2/Baked") { peopleMat.EnableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2450; }
             else foreach (var r in peopleRs) if (r != null) r.enabled = false;
-            // load-time diagnostics (fans not showing, 28 Nov)
+            // load-time diagnostics (fans not showing, 28 Nov): WebGL shot URL fantest=1 solid cards, 2 = solid + 4 m up,
+            // 3 = cut-out + 4 m up, 4 = Unlit/Transparent Cutout
+            int ft = 0;
+            if (Application.platform == RuntimePlatform.WebGLPlayer)
+            {
+                string url = Application.absoluteURL; int at = url.IndexOf("fantest=");
+                if (at >= 0 && at + 8 < url.Length) ft = url[at + 8] - '0';
+            }
+            if (ft == 1 || ft == 2) { peopleMat.DisableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2000; }
+            if (ft == 4) { var us = Shader.Find("Unlit/Transparent Cutout"); if (us != null) peopleMat.shader = us; }
+            if (ft == 2 || ft == 3) foreach (var r in peopleRs) if (r != null) r.transform.position += Vector3.up * 4f;
+            if (ft > 0) Debug.Log("Trackside fans: fantest " + ft);
             var tx = peopleMat.mainTexture as Texture2D;
             var sb = new System.Text.StringBuilder("Trackside fans draw: shader ").Append(peopleMat.shader != null ? peopleMat.shader.name : "null")
                 .Append(" kw ").Append(peopleMat.IsKeywordEnabled("F2_PEOPLE")).Append(" q ").Append(peopleMat.renderQueue)
