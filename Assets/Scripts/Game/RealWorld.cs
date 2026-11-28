@@ -665,6 +665,7 @@ public static class RealWorld
         }
         catch (System.Exception e) { Debug.LogError("RealWorld: " + e); }
         bufs.Clear();
+        if (Ready && gTop != null && cStep != null) Trackside.FitFans(MeshY); // the fence fans onto the real land
         FreeGrids(); D = null; // (the flags HasBuildings ... stay for the rest of this load)
         LoadMs += (float)sw.Elapsed.TotalMilliseconds;
         Debug.Log("RealWorld " + t.def.id + ": " + BuildingCount + " buildings, " + TreeCount + " trees, " + BandCount + " forest-edge cards, " + OutfieldCount + " hedge/copse plants, "

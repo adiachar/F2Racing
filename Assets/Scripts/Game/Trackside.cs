@@ -2223,6 +2223,33 @@ public static class Trackside
         }
     }
 
+    // the fence fans stand on the land behind the barriers, which often rises above the circuit's height field (banks,
+    // the real terrain): after Drape (cards at H), move every vertex by land - H at its spot (load time only).
+    // land(x, z) = the land mesh's height, NaN where unknown (then the card stays at H).
+    public static void FitFans(System.Func<float, float, float> land)
+    {
+        int moved = 0; float most = 0f;
+        foreach (var r in peopleRs)
+        {
+            var mf = r != null ? r.GetComponent<MeshFilter>() : null; if (mf == null || mf.sharedMesh == null) continue;
+            var mesh = mf.sharedMesh; var v = mesh.vertices;
+            for (int k = 0; k + 3 < v.Length; k += 4)
+            {
+                // one card = 4 vertices (Quad): feet a, b at the land under them; the top follows its own foot
+                for (int q = 0; q < 2; q++)
+                {
+                    var f = v[k + q]; float g = land(f.x, f.z);
+                    if (float.IsNaN(g)) continue;
+                    float d = Mathf.Clamp(Mathf.Max(g, WorldBuilder.H(f.x, f.z)) - 0.04f - f.y, -2f, 10f);
+                    v[k + q].y += d; v[k + 3 - q].y += d;
+                    most = Mathf.Max(most, Mathf.Abs(d)); moved++;
+                }
+            }
+            mesh.vertices = v; mesh.RecalculateNormals(); mesh.RecalculateBounds();
+        }
+        Debug.Log("Trackside fans: " + moved + " feet fitted to the land, largest move " + most.ToString("0.0") + " m");
+    }
+
     // after LightBake.Apply: fences get the alpha-tested baked shader; the optional layers follow the graphics level
     public static void AfterBake(GameObject root)
     {
@@ -2251,32 +2278,6 @@ public static class Trackside
         {
             if (peopleMat.shader != null && peopleMat.shader.name == "F2/Baked") { peopleMat.EnableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2450; }
             else foreach (var r in peopleRs) if (r != null) r.enabled = false;
-            // load-time diagnostics (fans not showing, 28 Nov): WebGL shot URL fantest=1 solid cards, 2 = solid + 4 m up,
-            // 3 = cut-out + 4 m up, 4 = Unlit/Transparent Cutout
-            int ft = 0;
-            if (Application.platform == RuntimePlatform.WebGLPlayer)
-            {
-                string url = Application.absoluteURL; int at = url.IndexOf("fantest=");
-                if (at >= 0 && at + 8 < url.Length) ft = url[at + 8] - '0';
-            }
-            if (ft == 1 || ft == 2) { peopleMat.DisableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2000; }
-            if (ft == 4) { var us = Shader.Find("Unlit/Transparent Cutout"); if (us != null) peopleMat.shader = us; }
-            if (ft == 2 || ft == 3) foreach (var r in peopleRs) if (r != null) r.transform.position += Vector3.up * 4f;
-            if (ft > 0) Debug.Log("Trackside fans: fantest " + ft);
-            var tx = peopleMat.mainTexture as Texture2D;
-            var sb = new System.Text.StringBuilder("Trackside fans draw: shader ").Append(peopleMat.shader != null ? peopleMat.shader.name : "null")
-                .Append(" kw ").Append(peopleMat.IsKeywordEnabled("F2_PEOPLE")).Append(" q ").Append(peopleMat.renderQueue)
-                .Append(" tex ").Append(tx != null ? tx.width + "x" + tx.height + " " + tx.format : "null").Append(" renderers ").Append(peopleRs.Count);
-            for (int k = 0; k < peopleRs.Count && k < 4; k++)
-            {
-                var r = peopleRs[k]; if (r == null) { sb.Append(" [null]"); continue; }
-                var mf = r.GetComponent<MeshFilter>();
-                sb.Append(" [").Append(r.name).Append(" on ").Append(r.enabled).Append(" active ").Append(r.gameObject.activeInHierarchy)
-                  .Append(" b ").Append(r.bounds.center.ToString("F0")).Append(r.bounds.size.ToString("F0"))
-                  .Append(" v ").Append(mf != null && mf.sharedMesh != null ? mf.sharedMesh.vertexCount : -1)
-                  .Append(" c0 ").Append(mf != null && mf.sharedMesh != null && mf.sharedMesh.colors.Length > 0 ? mf.sharedMesh.colors[0].ToString("F2") : "-").Append("]");
-            }
-            Debug.Log(sb.ToString());
         }
         peopleMat = null; peopleRs.Clear();
         // glass reflections (Baked.shader F2_GLASS) once the atlas material is on the baked shader; TracksideLod switches them

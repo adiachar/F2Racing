@@ -45,6 +45,17 @@ public static class WorldBuilder
     // ---------------------------------------------------------------- hills
     // Height of the ground at a point (0 everywhere on a flat circuit). The road, scenery and cars all use it.
     public static HeightField Height;
+    // the procedural land's mesh height at (x, z) (same grid and triangle split as BuildTerrain), or NaN without one
+    static float[] tgY; static float tgX0, tgY0, tgW, tgH; static int tgNx, tgNy;
+    public static float TerrainY(float x, float z)
+    {
+        if (tgY == null) return float.NaN;
+        float fx = (x - tgX0) / tgW * tgNx, fz = (z - tgY0) / tgH * tgNy;
+        if (fx < 0f || fz < 0f || fx >= tgNx || fz >= tgNy) return float.NaN;
+        int i = (int)fx, j = (int)fz, k = j * (tgNx + 1) + i; float a = fx - i, b = fz - j;
+        float y00 = tgY[k], y10 = tgY[k + 1], y01 = tgY[k + tgNx + 1], y11 = tgY[k + tgNx + 2];
+        return a + b <= 1f ? y00 + a * (y10 - y00) + b * (y01 - y00) : y11 + (1f - a) * (y01 - y11) + (1f - b) * (y10 - y11);
+    }
     public static float H(double x, double y) => Height == null ? 0f : (float)Height.Sample(x, y);
     // Bridges (HeightField: one leg over another, Suzuka). H is the top surface; where the two legs overlap, things
     // that belong to one of them take its own level: HOn for something built at track point i, HAlong for something
@@ -539,6 +550,7 @@ public static class WorldBuilder
         // own relief away from the track (Environment.Lift), coloured in patches through the vertex tint
         void BuildTerrain()
         {
+            tgY = null;
             if (RealWorld.Active) { RealWorld.Prepare(t); return; } // real terrain heights (meshes made after Drape)
             if (Height == null) return;
             float m = 400, w = (float)(bb.maxX - bb.minX) + 2 * m, hg = (float)(bb.maxY - bb.minY) + 2 * m, cell = Mathf.Max(Gfx <= 1 ? 12f : 8f, ext / 180f);
@@ -557,6 +569,9 @@ public static class WorldBuilder
                 if (i < nx && j < ny) { int k = j * (nx + 1) + i; tri.Add(k); tri.Add(k + nx + 1); tri.Add(k + 1); tri.Add(k + 1); tri.Add(k + nx + 1); tri.Add(k + nx + 2); }
             }
             var go = MeshObj("Terrain", v, uv, tri, grass); go.transform.SetParent(root);
+            // keep the grid's heights for TerrainY (Trackside.FitFans: things placed on the land behind the barriers)
+            tgX0 = x0; tgY0 = y0; tgW = w; tgH = hg; tgNx = nx; tgNy = ny; tgY = new float[v.Count];
+            for (int k = 0; k < v.Count; k++) tgY[k] = v[k].y;
             BakeTint.Add(go.GetComponent<MeshFilter>().sharedMesh, tint.ToArray());
         }
 
@@ -884,6 +899,7 @@ public static class WorldBuilder
         Drape(root.gameObject);
         var late = Trackside.Late; // fences and ground decals: lit by the bake, but kept out of its shadow map
         if (late != null) Drape(late);
+        if (!RealWorld.Active) Trackside.FitFans(TerrainY); // the fence fans onto the land (it rises behind the barriers)
         // the real surroundings' meshes, at their final heights (after Drape), lit by the bake below like the rest
         RealWorld.Build(t, root);
         Landmarks.Build(root, t); // Adi's hand-placed models (MapEdits.models), merged per material, lit by the bake below
