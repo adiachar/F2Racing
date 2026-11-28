@@ -179,12 +179,12 @@ def lods_of(body, targets):
 
 
 def build_drivers(repo, Q):
-    """public pack: "Driver" only = Adi's new suited driver + helmet (driver_new.py), used for the player AND the rivals
-    (People.Driver2Body = -1 falls back to it); atlas 2048 x 1024. driver_02 (old) is no longer in the pack."""
-    import driver_new
-    A = B.Atlas(2048, 1024)
-    src, lods, h = driver_new.build(repo, A, Q, (0, 0, 1024, 1024))
-    print('  Driver (driver_new) LOD tris', [len(m['I']) for m in lods], 'verts', [len(m['P']) for m in lods])
+    """EXPERIMENT (branch claude/driver-code): "Driver" = the fully code-generated driver (driver_code.py): no textures,
+    a 64 x 64 atlas. The shipped one (driver_new.py) is on main."""
+    import driver_code
+    A = B.Atlas(64, 64)
+    src, lods, h = driver_code.build(repo, A, Q)
+    print('  Driver (driver_code) LOD tris', [len(m['I']) for m in lods], 'verts', [len(m['P']) for m in lods])
     bodies = [B.body_record('Driver', 2, src, Q, [lods], h)]
     A.finish()
     return A, bodies
