@@ -249,7 +249,28 @@ public partial class GameManager
     {
         Thermal.WantLock(ui != null && ui.Showing && !replaying ? 0 : fpsLock);
         if (fpsLock == 40 && Thermal.Can120 == Thermal.No) FpsNo120();
+        MenuCapTick();
         FrameTimesTick();
+    }
+
+    // Menus, results and the pause / settings screen run at MenuStudio.MenuFps (30) or lower so the phone stays cool;
+    // the race keeps its own lock (fpsLock). MenuStudio caps its own pages too (same value, it saves / restores the
+    // rate itself); this covers the rest: loading, results, quali results, season hub, pause and settings.
+    // Not while the replay or a screenshot run is moving (replaying / shotFreeze). Once a frame, no allocations.
+    bool menuCapped;
+    void MenuCapTick()
+    {
+        bool want = (menuOpen || (ui != null && ui.Showing)) && !replaying && !shotFreeze;
+        if (want)
+        {
+            menuCapped = true;
+            if (Application.targetFrameRate > MenuStudio.MenuFps || Application.targetFrameRate <= 0) Application.targetFrameRate = MenuStudio.MenuFps;
+        }
+        else if (menuCapped)
+        {
+            menuCapped = false;
+            if (Application.targetFrameRate == MenuStudio.MenuFps && fpsLock != MenuStudio.MenuFps) Application.targetFrameRate = fpsLock; // the race lock back
+        }
     }
 
     // Unity's frame timing (FrameTimingManager, a few frames late), read once a frame for the frame pacing, the
