@@ -2255,8 +2255,10 @@ public static class Trackside
     // the fence fans stand on the land behind the barriers, which often rises above the circuit's height field (banks,
     // the real terrain): after Drape (cards at H), move every vertex by land - H at its spot (load time only).
     // land(x, z) = the land mesh's height, NaN where unknown (then the card stays at H).
+    static int fitLog;
     public static void FitFans(System.Func<float, float, float> land)
     {
+        fitLog = 0;
         int moved = 0; float most = 0f;
         foreach (var r in peopleRs)
         {
@@ -2275,6 +2277,18 @@ public static class Trackside
                 }
             }
             mesh.vertices = v; mesh.RecalculateNormals(); mesh.RecalculateBounds();
+            if (fitLog < 3 && v.Length >= 4)
+            {
+                // diagnostics (fans not showing): the land and H under the first card's feet, and which world meshes' boxes
+                // hold a point 1 m above them (what could hide them)
+                fitLog++;
+                var f0 = (v[0] + v[1]) * 0.5f; float g0 = land(f0.x, f0.z);
+                var sb = new System.Text.StringBuilder("Trackside fans fit: foot ").Append(f0.ToString("F1")).Append(" land ").Append(g0.ToString("F2")).Append(" H ").Append(WorldBuilder.H(f0.x, f0.z).ToString("F2")).Append(" in:");
+                var probe = f0 + Vector3.up;
+                foreach (var rr in Object.FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None))
+                    if (rr.enabled && rr.bounds.Contains(probe) && rr.bounds.size.x < 400f && rr.bounds.size.z < 400f) sb.Append(' ').Append(rr.name).Append(rr.bounds.min.y.ToString("F1")).Append('/').Append(rr.bounds.max.y.ToString("F1"));
+                Debug.Log(sb.ToString());
+            }
         }
         Debug.Log("Trackside fans: " + moved + " feet fitted to the land, largest move " + most.ToString("0.0") + " m");
     }
