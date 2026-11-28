@@ -2251,6 +2251,21 @@ public static class Trackside
         {
             if (peopleMat.shader != null && peopleMat.shader.name == "F2/Baked") { peopleMat.EnableKeyword("F2_PEOPLE"); peopleMat.renderQueue = 2450; }
             else foreach (var r in peopleRs) if (r != null) r.enabled = false;
+            // load-time diagnostics (fans not showing, 28 Nov)
+            var tx = peopleMat.mainTexture as Texture2D;
+            var sb = new System.Text.StringBuilder("Trackside fans draw: shader ").Append(peopleMat.shader != null ? peopleMat.shader.name : "null")
+                .Append(" kw ").Append(peopleMat.IsKeywordEnabled("F2_PEOPLE")).Append(" q ").Append(peopleMat.renderQueue)
+                .Append(" tex ").Append(tx != null ? tx.width + "x" + tx.height + " " + tx.format : "null").Append(" renderers ").Append(peopleRs.Count);
+            for (int k = 0; k < peopleRs.Count && k < 4; k++)
+            {
+                var r = peopleRs[k]; if (r == null) { sb.Append(" [null]"); continue; }
+                var mf = r.GetComponent<MeshFilter>();
+                sb.Append(" [").Append(r.name).Append(" on ").Append(r.enabled).Append(" active ").Append(r.gameObject.activeInHierarchy)
+                  .Append(" b ").Append(r.bounds.center.ToString("F0")).Append(r.bounds.size.ToString("F0"))
+                  .Append(" v ").Append(mf != null && mf.sharedMesh != null ? mf.sharedMesh.vertexCount : -1)
+                  .Append(" c0 ").Append(mf != null && mf.sharedMesh != null && mf.sharedMesh.colors.Length > 0 ? mf.sharedMesh.colors[0].ToString("F2") : "-").Append("]");
+            }
+            Debug.Log(sb.ToString());
         }
         peopleMat = null; peopleRs.Clear();
         // glass reflections (Baked.shader F2_GLASS) once the atlas material is on the baked shader; TracksideLod switches them
