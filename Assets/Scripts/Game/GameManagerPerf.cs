@@ -58,6 +58,9 @@ public partial class GameManager
     void PickPlayerModel()
     {
         ApplyCarCull();
+        // cockpit view: the part of the full car behind the driver's eyes is not drawn (CarCockpitTrim.cs); LOOK BACK, replays and every other view draw it all
+        // (judged by where the camera really is, so the post-race / intro / TV cameras, which can leave camMode at 2, see the whole car)
+        if (model != null) model.CockpitTrim(camMode == 2 && !lookBack && cam != null && CarModel.AtCockpitEye(model.transform, cam.transform.position));
         if (model == null || lodOff) return;
         if (!lodReady)
         {
