@@ -78,11 +78,16 @@ public partial class GameManager
     }
 
     // ---- new defaults, applied ONCE to existing players (Nov 28): everything else they set is kept
-    const int SettingsVer = 1;
+    const int SettingsVer = 2;
     void MigrateSettings()
     {
-        if (PlayerPrefs.GetInt("setVer", 0) >= SettingsVer) return;
+        int ver = PlayerPrefs.GetInt("setVer", 0);
+        if (ver >= SettingsVer) return;
         PlayerPrefs.SetInt("setVer", SettingsVer);
+        // v2 (Nov 28): Adi's final handling is now every car's default (downforce 36%, grip and rear grip 100%), so the
+        // handling test goes off and its sliders back to 100 (else the player's car would get 60% of 36%)
+        PlayerPrefs.SetInt("tstOn", 0); PlayerPrefs.SetFloat("tstGrip", 100); PlayerPrefs.SetFloat("tstRear", 100); PlayerPrefs.SetFloat("tstDown", 100);
+        if (ver >= 1) return; // v1 below already applied
         PlayerPrefs.SetFloat("steerLock", 100); PlayerPrefs.SetInt("speedSteer", 0);
         PlayerPrefs.SetFloat("tiltDzF", 0.2f); PlayerPrefs.SetInt("tiltDz", Nearest(OldDeadZones, 0.2f));
         PlayerPrefs.SetFloat("tiltRangeF", 35); PlayerPrefs.SetInt("tiltRange", Nearest(OldTiltRanges, 35));
@@ -178,12 +183,12 @@ public partial class GameManager
         c.clA = b.clA * td * 0.01 * AeroPct * 0.01; c.clAX = b.clAX * td * 0.01 * AeroPct * 0.01; // x Settings > Downforce (all cars)
     }
     // ---- Settings > Downforce: every car's aero (clA, clAX) x AeroPct; pref "aeroPct" (Adi, Nov 25: 60 % by default)
-    internal static readonly string[] AeroNames = { "Fun 60%", "70%", "80%", "Real 100%" };
-    static readonly int[] AeroVals = { 60, 70, 80, 100 };
+    internal static readonly string[] AeroNames = { "36%", "70%", "80%", "Real 100%" };
+    static readonly int[] AeroVals = { 36, 70, 80, 100 }; // [0] = Adi's final value (Nov 28: tested as Handling test downforce 60% on top of the old 60% = 36%)
     int aeroIdxCache = -1, lineAero = -1;
     int AeroIdx
     {
-        get => 0; // fixed at Fun 60% for every car and every player (no setting): the code path stays, the value is forced
+        get => 0; // fixed at 36% (AeroVals[0]) for every car and every player (no setting): the code path stays, the value is forced
         set { }
     }
     int AeroPct => AeroVals[AeroIdx];
