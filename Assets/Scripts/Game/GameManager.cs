@@ -49,13 +49,14 @@ public partial class GameManager : MonoBehaviour
         UnityEngine.Physics.simulationMode = SimulationMode.Script; // the game has its own physics: no PhysX step per FixedUpdate (no PhysX queries are used)
         QualitySettings.vSyncCount = 0; QualitySettings.shadowProjection = ShadowProjection.StableFit;
 
-        tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.Low);
+        MigrateSettings(); // new defaults, once (GameManagerSettings.cs)
+        tc = (TcMode)PlayerPrefs.GetInt("tc", (int)TcMode.High);
         tilt = PlayerPrefs.GetInt("tilt", 0) == 1; invertTilt = PlayerPrefs.GetInt("tiltInv", 0) == 1;
         mapIdx = Mathf.Clamp(PlayerPrefs.GetInt("map", 0), 0, MapNames.Length - 1); playground = mapIdx == PlaygroundIdx; camMode = Mathf.Clamp(PlayerPrefs.GetInt("cam", 0), 0, CamNames.Length - 1); sound = PlayerPrefs.GetInt("snd", 1) == 1; lineMode = Mathf.Clamp(PlayerPrefs.GetInt("lineMode", RacingLineView.Full), 0, 2); absOn = PlayerPrefs.GetInt("abs", 1) == 1; classIdx = Mathf.Clamp(PlayerPrefs.GetInt("class", 0), 0, CarConfig.ClassNames.Length - 1); compIdx = Mathf.Clamp(PlayerPrefs.GetInt("tyres", 0), 0, CompoundTable.Defs.Length - 1); gfxIdx = Mathf.Clamp(PlayerPrefs.GetInt("gfx", 0), 0, GfxNames.Length - 1);
         LoadSettings(); // everything the settings screen added (GameManagerSettings.cs)
         Weather.Load(); // before the world is built: the sky and fog are made for it
         tyreSet = Mathf.Clamp(PlayerPrefs.GetInt("tyreSet", compIdx), 0, Weather.Sets - 1); carSet = tyreSet;
-        smoothIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltSmooth", 1), 0, SmoothCut.Length - 1); speedSteerIdx = Mathf.Clamp(PlayerPrefs.GetInt("speedSteer", 2), 0, SpeedSteer.Length - 1);
+        smoothIdx = Mathf.Clamp(PlayerPrefs.GetInt("tiltSmooth", 1), 0, SmoothCut.Length - 1); speedSteerIdx = Mathf.Clamp(PlayerPrefs.GetInt("speedSteer", 0), 0, SpeedSteer.Length - 1);
         ApplyScreenLock();
         Haptics.enabled = PlayerPrefs.GetInt("haptics", 1) == 1;
         liveryIdx = Livery.PlayerIndex;
@@ -412,8 +413,9 @@ public partial class GameManager : MonoBehaviour
     // The pedals as drawn (GasDraw / BrakeDraw, ~72 % of the old 84 x 180 / 100 x 180 / 96 x 110: Adi, smaller) and
     // their touch zones (GasRect / BrakeRect: the drawn pedal plus a margin, so a thumb that lands a little off still
     // presses it; the two zones never overlap). The pedal travel is measured on the drawn pedal (PedalAmount).
-    Rect GasDraw => new Rect(Screen.width - S(74), Screen.height - S(146), S(60), S(130));
-    Rect BrakeDraw => tilt ? new Rect(S(14), Screen.height - S(146), S(72), S(130)) : new Rect(Screen.width - S(148), Screen.height - S(96), S(66), S(80));
+    const float PedalLift = 35; // layout units (~9% of the screen height): the pedals sit above the bottom edge so thumbs reach them (Adi, Nov 28)
+    Rect GasDraw => new Rect(Screen.width - S(74), Screen.height - S(146 + PedalLift), S(60), S(130));
+    Rect BrakeDraw => tilt ? new Rect(S(14), Screen.height - S(146 + PedalLift), S(72), S(130)) : new Rect(Screen.width - S(148), Screen.height - S(96 + PedalLift), S(66), S(80));
     Rect GasRect => PedalZone(GasDraw, tilt ? 16 : 4, 14);
     Rect BrakeRect => tilt ? PedalZone(BrakeDraw, 14, 16) : PedalZone(BrakeDraw, 16, 4);
     Rect PedalZone(Rect d, float left, float right) => new Rect(d.x - S(left), d.y - S(16), d.width + S(left + right), d.height + S(32));
@@ -507,7 +509,7 @@ public partial class GameManager : MonoBehaviour
     const float SensorLead = 0.0025f;    // s: average age of the newest gyro sample (half of the 5 ms interval)
     const double TiltOmega = 400;        // SteerFilter spring for Smooth tilt (rad/s; touch keeps SteerFilter.Omega)
     static readonly string[] SpeedSteerNames = { "Full lock always", "Quick", "Normal", "Calm" };
-    static readonly double[] SpeedSteer = { 0.0, 0.25, 0.5, 1.25 }; int speedSteerIdx = 2;
+    static readonly double[] SpeedSteer = { 0.0, 0.25, 0.5, 1.25 }; int speedSteerIdx;
 
     static float Lp(float hz, float dt) => 1f - Mathf.Exp(-2f * Mathf.PI * hz * dt); // exact one-pole step: frame-rate independent
 
