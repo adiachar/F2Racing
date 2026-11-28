@@ -832,7 +832,7 @@ public partial class GameManager
                     liv = Livery.ForTeam(TeamIndex(w), new Color(w.r, w.g, w.b)); helm = liv.secondary; helmTop = liv.primary;
                 }
                 var r = new People.Rig(root.transform, body, People.GCap, "PodiumDriver" + q);
-                r.SetLod(0); DressDriver(r, liv, helm, helmTop, 31 + who * 7);
+                r.SetLod(0); r.stance = People.DriverStance; DressDriver(r, liv, helm, helmTop, 31 + who * 7);
                 drvYaw[q] = Yaw(F); r.Place(spot[q], drvYaw[q]);
                 drv[q] = r;
             }
@@ -1117,7 +1117,7 @@ public partial class GameManager
             {
                 // a crane pushing in on the three of them
                 float k = UiKit.EaseInOut(u / hand0);
-                pos = Vector3.Lerp(O + F * 15f + up * 5f + R * 3f, O + F * 10.5f + up * 3.2f + R * 1.6f, k);
+                pos = Vector3.Lerp(O + F * 11.5f + up * 4f + R * 2.4f, O + F * 7.8f + up * 2.6f + R * 1.2f, k);
                 look = O + up * 0.6f - F * 0.4f; fov = 36f;
             }
             else if (u < lift0)
@@ -1149,7 +1149,7 @@ public partial class GameManager
             {
                 // the high wide to end on
                 float k = (u - wide2) / Mathf.Max(0.1f, len - wide2);
-                pos = O + F * (17f + 3f * k) + up * (6f + 1.5f * k) - R * 4f;
+                pos = O + F * (12.5f + 2.5f * k) + up * (4.6f + 1.2f * k) - R * 3.2f;
                 look = O + up * 0.5f; fov = 34f;
             }
         }
