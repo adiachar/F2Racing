@@ -348,6 +348,7 @@ public sealed partial class MenuUI
 
     // shot mode (DebugShots.cs menu=home|driver): open a menu page
     internal void ShotPage(bool driver) { if (driver) GoPage(Page.Driver); else GoHome(); }
+    internal void ShotSetup(bool more) { mode = ModeQuick; GoPlay(StepSetup, 1); setupMore = more; } // DebugShots menu=setup more=0|1
 
     // a career number (caption over a big value) placed to the left of x, centred on y; returns the next x
     static float StatLeft(float x, float y, string caption, string value)
