@@ -2296,6 +2296,16 @@ public static class Trackside
     // after LightBake.Apply: fences get the alpha-tested baked shader; the optional layers follow the graphics level
     public static void AfterBake(GameObject root)
     {
+        // diagnostics (fans not showing, 28 Nov): WebGL shot URL fantest=5 hides the catch fences, 6 = no sector culling
+        int ft = 0;
+        if (Application.platform == RuntimePlatform.WebGLPlayer)
+        {
+            string url = Application.absoluteURL; int at = url.IndexOf("fantest=");
+            if (at >= 0 && at + 8 < url.Length) ft = url[at + 8] - '0';
+        }
+        if (ft == 5) foreach (var r in fenceRs) if (r != null) { r.enabled = false; optional.Remove(r); }
+        if (ft == 6) SectorVisibility.Enabled = false;
+        if (ft > 0) Debug.Log("Trackside fans: fantest " + ft);
         if (fenceMat != null)
         {
             var sh = Resources.Load<Shader>("BakedCutout");
