@@ -23,6 +23,7 @@ SRC = 'Art/People3/driver_new'
 HEAD, SPINE3 = 5, 3
 NECK_Y = 1.55            # Body_Suited faces below this keep (neck); above is the face / skull inside the helmet
 HELMET_LODS = [None, 900, 400, 150]
+HELMET_SCALE = 1.08
 
 
 def srgb_dec(x): return np.where(x <= 0.04045, x / 12.92, np.power((x + 0.055) / 1.055, 2.4))
@@ -241,6 +242,9 @@ def build(repo, A, Q, rect):
     seal = Part(hp['Helmet_VisorSeal:Helmet_Rubber'], src, HEAD)
     hans = Part(hp['HANS:HANS_Carbon'], src, SPINE3)
     tether = Part(hp['HANS:HANS_Tether'], src, SPINE3)
+    # the helmet reads small over the narrow shoulders: 8% bigger about its centre (the model's own proportions otherwise)
+    hc = np.array([0.0, 1.62, 0.04])
+    for hpart in (shell, frame, visor, trim, seal): hpart.P = hc + (hpart.P - hc) * HELMET_SCALE
     # ---- atlas tiles (atlas = 2048 x 1024: the suit 1024^2 at rect, gloves / boots / shell / solid tiles to its right)
     x, y, w, h = rect
     A.place('suit', suit[0].img, (x, y, 1024, 1024))
@@ -270,7 +274,8 @@ def build(repo, A, Q, rect):
     v, cov = raster_attr(A, uvc, at)
     p, n = v[..., :3], v[..., 3:]
     nn = n / (np.linalg.norm(n, axis=2, keepdims=True) + 1e-6)
-    side = smooth(nn[..., 0] * np.sign(p[..., 0] + 1e-6), 0.80, 0.88) * smooth(np.abs(p[..., 0]), 0.045, 0.06) * smooth(p[..., 1], 0.12, 0.2) * smooth(1.40 - p[..., 1], 0.0, 0.05)
+    out = nn[..., 0] * np.sign(p[..., 0] + 1e-6)   # how far the surface faces outward (sideways)
+    side = smooth(out, 0.50, 0.57) * (1 - smooth(out, 0.74, 0.81)) * smooth(np.abs(p[..., 0]), 0.045, 0.06) * smooth(p[..., 1], 0.12, 0.2) * smooth(1.40 - p[..., 1], 0.0, 0.05)
     sleeve = smooth(nn[..., 1], 0.82, 0.9) * smooth(np.abs(p[..., 0]), 0.2, 0.24) * smooth(p[..., 1], 1.0, 1.05) * smooth(np.abs(p[..., 0]), 0.0, 0.02)
     # (the stripes are 1-2 cm wide bands: by the normal on the legs / torso, the top of the arm on the sleeves)
     acc = np.maximum(side, sleeve) * cov
@@ -281,8 +286,8 @@ def build(repo, A, Q, rect):
     uvh = A.map('shell', shell.uv)[shell.I]
     vh, covh = raster_attr(A, uvh, np.concatenate([shell.P[shell.I], shell.N[shell.I]], axis=2))
     ph = vh[..., :3]
-    stripe = smooth(0.024 - np.abs(ph[..., 0]), 0.0, 0.01) * smooth(ph[..., 1], 1.70, 1.72)
-    chin = smooth(1.585 - ph[..., 1], 0.0, 0.01) * smooth(ph[..., 2], 0.02, 0.04)
+    stripe = smooth(0.026 - np.abs(ph[..., 0]), 0.0, 0.01) * smooth(ph[..., 1], 1.706, 1.726)
+    chin = smooth(1.578 - ph[..., 1], 0.0, 0.01) * smooth(ph[..., 2], 0.02, 0.04)
     accs = grow((np.maximum(stripe, chin) * covh).astype(np.float32), covh, 5)
     tx, ty, tw, th, *_ = A.tiles['shell']
     m = np.zeros((A.h, A.w), np.float32); m[ty:ty + th, tx:tx + tw] = accs[ty:ty + th, tx:tx + tw]
