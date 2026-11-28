@@ -829,9 +829,37 @@ public static class Trackside
                         aoOn = true;
                     }
                     AddSolid(mid, T, hlP + 0.6f, hd + 0.6f, y - 1f, y + 4.9f, true);
-                    // spectators on the podium slab behind the balustrade, and along the pit-building roof terrace
-                    Standing(front + D * 0.7f - T * (hlP - 0.5f), front + D * 0.7f + T * (hlP - 0.5f), y + 0.45f, 1.7f, D, 1, 4242);
-                    Standing(front + D * 1.9f - T * (hlP - 1.5f), front + D * 1.9f + T * (hlP - 1.5f), y + 0.45f, 1.7f, D, 0, 4243);
+                    // the slab's top (Adi, 28 Nov: "very bad celebration graphics", a bare white sheet): a dark slate deck, a red
+                    // carpet from the balustrade to the steps, a step-and-repeat sponsor wall behind the steps, two flag poles;
+                    // all in the atlas mesh (no draw call, a few dozen quads)
+                    {
+                        float yt = y + 0.47f;
+                        aoOn = false;
+                        tint = new Color(0.78f, 0.82f, 0.9f);
+                        Quad(A, front - T * hlP + up * yt, front + T * hlP + up * yt, front + T * hlP + D * (2f * hd) + up * yt, front - T * hlP + D * (2f * hd) + up * yt, up, TracksideArt.Sw(TracksideArt.GlassDark));
+                        tint = new Color(0.85f, 0.8f, 0.8f);
+                        Quad(A, front + D * 0.25f - T * 3.4f + up * (yt + 0.01f), front + D * 0.25f + T * 3.4f + up * (yt + 0.01f), front + D * 4.6f + T * 3.4f + up * (yt + 0.01f), front + D * 4.6f - T * 3.4f + up * (yt + 0.01f), up, TracksideArt.Sw(TracksideArt.SeatRed));
+                        tint = Color.white;
+                        // sponsor wall: 4 x 6 boards on a dark frame, facing the track
+                        Vector3 wc = front + D * 5.4f; float bw = 1.1f, bh = 0.55f;
+                        Box(A, wc + D * 0.12f + up * (yt + 1.85f), T, up, D, 4.7f, 1.85f, 0.1f, TracksideArt.GantryDark);
+                        for (int row = 0; row < 6; row++)
+                            for (int col = 0; col < 4; col++)
+                                Panel(A, wc + T * ((col - 1.5f) * 2f * bw + (row % 2 == 0 ? 0f : 0.25f)), -D, bw - 0.04f, yt + 0.2f + row * bh, yt + 0.2f + row * bh + bh - 0.04f, TracksideArt.Ad((row * 5 + col * 3 + (row % 2) * 7) % TracksideArt.AdCount));
+                        Panel(A, wc - D * 0.01f, -D, 4.6f, yt + 0.2f + 6f * bh + 0.05f, yt + 0.2f + 6f * bh + 0.6f, TracksideArt.Sub(TracksideArt.StandBanner(1), 0f, 1f, 0f, 1f));
+                        aoOn = true;
+                        // two flag poles at the wall's ends
+                        for (int s2 = -1; s2 <= 1; s2 += 2) Flag(wc + T * (s2 * 5.4f) - D * 0.4f, T, D, yt, 1.4f, 0.9f, TracksideArt.StripeRed, TracksideArt.PaintWhite, TracksideArt.StripeTeal);
+                    }
+                    // team guests on the slab beside the steps (cut-out people, Baked F2_PEOPLE; the stand crowd cards if missing)
+                    bool cut = EnvTex.PhotoTex("crowd_standing") != null;
+                    for (int s2 = -1; s2 <= 1; s2 += 2)
+                        for (int row = 0; row < 2; row++)
+                        {
+                            Vector3 a0 = front + D * (0.8f + row * 1.2f) + T * (s2 * 3.9f), b0 = front + D * (0.8f + row * 1.2f) + T * (s2 * (hlP - 0.6f - row));
+                            if (cut) Spectators(a0, b0, y + 0.45f, D, row == 0 ? 1 : 0, 4242 + s2 * 7 + row);
+                            else Standing(a0, b0, y + 0.45f, 1.7f, D, 1 - row, 4242 + s2 * 7 + row);
+                        }
                     for (int s2 = -1; s2 <= 1; s2 += 2) for (int s3 = -1; s3 <= 1; s3 += 2)
                         Box(A, mid + T * (s2 * hlP) + D * (s3 * hd) + up * (y + 2.5f), T, up, D, 0.1f, 2.05f, 0.1f, TracksideArt.Steel);
                 }
@@ -849,7 +877,8 @@ public static class Trackside
                     int i = W(Mathf.RoundToInt(sc / ds)); var p = t.pts[i];
                     Vector3 T = Tan(p), D = Nrm(p) * sg, c = P(p) + D * (laneOut + 1.6f);
                     SetChunk(i);
-                    Standing(c - T * (step * 0.45f), c + T * (step * 0.45f), garH + 1.6f, 1.7f, D, Rand(k, 72) < 0.5f ? 0 : 1, 7000 + k);
+                    if (EnvTex.PhotoTex("crowd_standing") != null) Spectators(c - T * (step * 0.45f), c + T * (step * 0.45f), garH + 1.6f, D, Rand(k, 72) < 0.5f ? 0 : 1, 7000 + k);
+                    else Standing(c - T * (step * 0.45f), c + T * (step * 0.45f), garH + 1.6f, 1.7f, D, Rand(k, 72) < 0.5f ? 0 : 1, 7000 + k);
                 }
             }
             // the pit lane path (PitLane.cs): the fast lane's centre, every box by its track distance and offset
@@ -2239,7 +2268,7 @@ public static class Trackside
                 for (int q = 0; q < 2; q++)
                 {
                     var f = v[k + q]; float g = land(f.x, f.z);
-                    if (float.IsNaN(g)) continue;
+                    if (float.IsNaN(g) || f.y > WorldBuilder.H(f.x, f.z) + 1.5f) continue; // (raised: the podium, the roof terrace)
                     float d = Mathf.Clamp(Mathf.Max(g, WorldBuilder.H(f.x, f.z)) - 0.04f - f.y, -2f, 10f);
                     v[k + q].y += d; v[k + 3 - q].y += d;
                     most = Mathf.Max(most, Mathf.Abs(d)); moved++;
