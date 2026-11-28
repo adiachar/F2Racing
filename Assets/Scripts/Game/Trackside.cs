@@ -1404,6 +1404,7 @@ public static class Trackside
         if (!low && !street && EnvTex.PhotoTex("crowd_standing") != null)
         {
             int maxG = high ? 26 : 14, groups = 0, segN = Mathf.Max(1, Mathf.RoundToInt(6f / ds));
+            int nFence = 0, nLen = 0, nFree = 0, nOk = 0; var gAt = new System.Text.StringBuilder(); // load-time log only
             var gFeet = new List<Vector4>();
             int iStep = Mathf.Max(1, Mathf.RoundToInt(10f / ds));
             int nextAt = Mathf.RoundToInt(60f / ds);
@@ -1423,7 +1424,7 @@ public static class Trackside
                     for (int j = 0; j + segN <= gN; j += segN)
                     {
                         int i0 = W(i + j), i1 = W(i + j + segN);
-                        if (!fenceZ[s, i0] || !fenceZ[s, i1] || InPit(i0, sg) || InPit(i1, sg)) continue;
+                        if (!fenceZ[s, i0] || !fenceZ[s, i1] || InPit(i0, sg) || InPit(i1, sg)) { nFence++; continue; }
                         var p0 = t.pts[i0]; var p1 = t.pts[i1];
                         Vector3 D0 = Nrm(p0) * sg, D1 = Nrm(p1) * sg;
                         SetChunk(i0);
@@ -1431,8 +1432,9 @@ public static class Trackside
                         float o0 = Off(i0, sg) + back, o1 = Off(i1, sg) + back;
                         Vector3 a = P(p0) + D0 * o0, b = P(p1) + D1 * o1, mid = (a + b) * 0.5f;
                         float len = (b - a).magnitude;
-                        if (len < 2f || len > 3f * segN * ds) continue;
-                        if (!Free(a, o0 - 2f) || !Free(b, o1 - 2f) || !Free(mid, (o0 + o1) * 0.5f - 2f)) continue;
+                        if (len < 2f || len > 3f * segN * ds) { nLen++; continue; }
+                        if (!Free(a, o0 - 2f) || !Free(b, o1 - 2f) || !Free(mid, (o0 + o1) * 0.5f - 2f)) { nFree++; continue; }
+                        nOk++;
                         int band = Rand(i0, 144) < 0.3f + 0.3f * hot ? 1 : 0;
                         // a stretch faces the track: a is at the viewer's left when looking out from the track
                         if (sg > 0) Spectators(b, a, 0f, (D0 + D1).normalized, band, 9900 + i0);
@@ -1446,9 +1448,10 @@ public static class Trackside
                         AddFoot(new Vector3(fp.x, 0f, fp.y), dir, dir.magnitude * 0.5f, 1.4f);
                     }
                 }
-                if (placed > 0) { groups++; nextAt = i + gN + Mathf.RoundToInt((120f + 180f * Rand(i, 145)) / ds); }
+                if (placed > 0) { groups++; gAt.Append(' ').Append(Mathf.RoundToInt(sAt)); nextAt = i + gN + Mathf.RoundToInt((120f + 180f * Rand(i, 145)) / ds); }
                 else nextAt = i + Mathf.RoundToInt(40f / ds);
             }
+            Debug.Log("Trackside fans: " + groups + " groups, " + nOk + " cards (rejected: fence " + nFence + ", length " + nLen + ", not free " + nFree + "), wallLat " + wallLat.ToString("0.0") + ", s =" + gAt);
         }
 
         // ---------------------------------------------------------------- circuit furniture behind the barriers
