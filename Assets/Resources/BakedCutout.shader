@@ -73,9 +73,14 @@ Shader "F2/BakedCutout"
                 // the alpha-to-coverage output (an even veil), without it a fixed screen dither of the same mean (no
                 // texture-locked pattern left to alias). Anisotropic: the longer screen axis of the texel footprint
                 // (grazing TV views). Floats only (no half compares). The top cable is in the texture: the same.
-                float2 tx = i.uv * _MainTex_TexelSize.zw;
-                float2 dx = ddx(tx), dy = ddy(tx);
-                float rho = max(dot(dx, dx), dot(dy, dy));                     // (texels per pixel)^2
+                // beyond 60 m the distance term alone is 1: the texel-footprint derivatives are not needed (saved far away)
+                float rho = 0.0;
+                if (i.dist < 60.0 || _Veil < 0.5)
+                {
+                    float2 tx = i.uv * _MainTex_TexelSize.zw;
+                    float2 dx = ddx(tx), dy = ddy(tx);
+                    rho = max(dot(dx, dx), dot(dy, dy));                       // (texels per pixel)^2
+                }
                 float veil = max(saturate((rho - 1.0) * 0.5), saturate((i.dist - 22.0) / 38.0)) * _Veil;
                 float2 sp = i.pos.xy;
                 float ign = frac(52.9829189 * frac(dot(sp, float2(0.06711056, 0.00583715))));

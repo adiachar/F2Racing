@@ -445,6 +445,7 @@ public class Sky : MonoBehaviour
         {
             if (noiseTex == null) noiseTex = CloudNoise();
             if (domeMesh == null) domeMesh = Dome();
+            if (domeBand == null) domeBand = DomeBand();
             if (cloudMat == null) cloudMat = new Material(cs) { mainTexture = noiseTex };
             CloudParams(k);
             cloudMat.SetVector("_SunDir", new Vector4(sky.sunDir.x, sky.sunDir.y, sky.sunDir.z, 0));
@@ -452,6 +453,7 @@ public class Sky : MonoBehaviour
             dome.transform.SetParent(go.transform, false);
             dome.AddComponent<MeshFilter>().sharedMesh = domeMesh;
             sky.dome = dome.transform;
+            sky.domeFilter = dome.GetComponent<MeshFilter>();
             Plain(dome.AddComponent<MeshRenderer>(), cloudMat);
         }
         // else: no clouds; the procedural skybox and fog still look as before
@@ -514,6 +516,7 @@ public class Sky : MonoBehaviour
 
     // ---------------------------------------------------------------- per frame
     public static bool NoGlare; // Low graphics level (GameManagerPerf.cs): the additive glare quad is not drawn
+    static Mesh domeBand; static readonly int CloudOnId = Shader.PropertyToID("_CloudOn"); MeshFilter domeFilter;
     Transform dome; MeshRenderer glare; Vector3 sunDir; float glareMax, glareLast = -1f;
     Camera cam; ReflectionProbe probe, probeRef; int probeId, probeWait;
     const float DomeFill = 0.9f;     // sphere radius / far clip (its flat facets stay inside the far plane)
@@ -535,6 +538,11 @@ public class Sky : MonoBehaviour
         if (dome != null)
         {
             dome.position = pos;
+            if (domeFilter != null && cloudMat != null) // dry photo sky: only the haze band is drawn (DomeBand)
+            {
+                var want = cloudMat.GetFloat(CloudOnId) > 0.001f || domeBand == null ? domeMesh : domeBand;
+                if (domeFilter.sharedMesh != want) domeFilter.sharedMesh = want;
+            }
             float r = far * DomeFill;
             if (Mathf.Abs(dome.localScale.x - r) > 0.5f) dome.localScale = new Vector3(r, r, r);
         }
@@ -663,6 +671,35 @@ public class Sky : MonoBehaviour
             tri[n++] = i0; tri[n++] = i2; tri[n++] = i1; tri[n++] = i1; tri[n++] = i2; tri[n++] = i3;
         }
         var m = new Mesh { name = "SkyDome" };
+        m.vertices = v; m.triangles = tri;
+        m.bounds = new Bounds(Vector3.zero, Vector3.one * 2f);
+        return m;
+    }
+
+    // Haze-only dome (photo sky in the dry: _CloudOn 0): Clouds.shader outputs nothing above the haze height (<= 0.3), so the
+    // blended pass only needs the band round the horizon, not the whole sphere (a full-screen blended overdraw saved).
+    // From 30 degrees below the horizon to sin(lat) 0.4 (facets only bulge outwards in height, so the band covers it).
+    static Mesh DomeBand()
+    {
+        const int Seg = 16, Rings = 3;
+        float lo = -Mathf.PI / 6, hi = Mathf.Asin(0.4f);
+        var v = new Vector3[(Seg + 1) * (Rings + 1)];
+        for (int r = 0; r <= Rings; r++)
+        {
+            float lat = Mathf.Lerp(lo, hi, (float)r / Rings), cl = Mathf.Cos(lat), sl = Mathf.Sin(lat);
+            for (int a = 0; a <= Seg; a++)
+            {
+                float lon = Mathf.PI * 2 * a / Seg;
+                v[r * (Seg + 1) + a] = new Vector3(Mathf.Cos(lon) * cl, sl, Mathf.Sin(lon) * cl);
+            }
+        }
+        var tri = new int[Seg * Rings * 6]; int n = 0;
+        for (int r = 0; r < Rings; r++) for (int a = 0; a < Seg; a++)
+        {
+            int i0 = r * (Seg + 1) + a, i1 = i0 + 1, i2 = i0 + Seg + 1, i3 = i2 + 1;
+            tri[n++] = i0; tri[n++] = i2; tri[n++] = i1; tri[n++] = i1; tri[n++] = i2; tri[n++] = i3;
+        }
+        var m = new Mesh { name = "SkyDomeBand" };
         m.vertices = v; m.triangles = tri;
         m.bounds = new Bounds(Vector3.zero, Vector3.one * 2f);
         return m;

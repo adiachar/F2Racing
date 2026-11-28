@@ -67,8 +67,14 @@ half4 FoliageFragHi(v2f i)
     // texture is minified: the rim breaks into lobes and the gaps open to the sky. Tied to the texture (no
     // crawling), no extra read; the solid interior (alpha near 1) is untouched. Floats: no compares.
     float mid = saturate(tpp - 1.0) * saturate(3.0 - tpp * 0.08); // from ~2 texels per pixel, gone at the far LODs
-    float lum = saturate(dot((float3)t.rgb, float3(0.3, 0.59, 0.11)) * 4.0);
-    float cut = _Cutoff + (0.62 - lum) * 0.34 * mid;
+    float cut = _Cutoff;
+    // beyond ~140 m (view depth = 1 / the fragment's pos.w) the cards are a few pixels: no mid-distance cut-off shaping there
+    // (a uniform-ish branch: depth varies smoothly across a quad; no derivatives inside it)
+    if (i.pos.w > 0.0072)
+    {
+        float lum = saturate(dot((float3)t.rgb, float3(0.3, 0.59, 0.11)) * 4.0);
+        cut += (0.62 - lum) * 0.34 * mid;
+    }
     // alpha sharpened to a one-pixel ramp centred on the cut-off: the coverage of each MSAA sample
     float a = (t.a - cut) / max(fwidth((float)t.a), 0.0001) + 0.5; // (float: clip() is a compare)
     clip(a);
